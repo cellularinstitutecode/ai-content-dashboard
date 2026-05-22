@@ -45,7 +45,7 @@
             <p class="text-blue-500 text-sm">Dashboard</p>
           </div>
         </div>
-        <nav class="space-y-3" id="nav"></nav>
+        <nav class="space-y-1" id="nav"></nav>
       </div>
       <div class="border-t border-white/10 pt-5">
         <div class="flex items-center gap-3">
@@ -57,19 +57,19 @@
         </div>
       </div>
     </aside>
-    <section class="flex-1 p-6 lg:p-10 scroll-thin">
-      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 mb-10">
+    <section class="flex-1 p-6 lg:p-8 scroll-thin">
+      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 mb-8">
         <div>
           <h1 class="text-3xl font-bold tracking-tight">AI Content Dashboard</h1>
-          <p class="text-slate-400 mt-2">Generate a full multi-channel post pack in one click — ready to send to Metricool.</p>
+          <p class="text-slate-400 mt-1 text-sm">Generate a multi-channel post pack, then send it to Metricool.</p>
         </div>
         <div class="flex items-center gap-3">
-          <input class="w-full lg:w-72 rounded-full bg-[#0b1424] border border-white/10 px-5 py-3 text-sm outline-none placeholder:text-slate-500 focus:border-blue-500/50" placeholder="Search anything..." />
-          <button class="h-11 w-11 rounded-full bg-[#0b1424] border border-white/10 hover:border-blue-500/40 transition">🔔</button>
-          <button class="h-11 w-11 rounded-full bg-[#0b1424] border border-white/10 hover:border-blue-500/40 transition">◐</button>
+          <input class="w-full lg:w-64 rounded-lg bg-[#0b1424] border border-white/10 px-4 py-2 text-sm outline-none placeholder:text-slate-500 focus:border-blue-500/50" placeholder="Search..." />
+          <button class="h-9 w-9 rounded-lg bg-[#0b1424] border border-white/10 hover:bg-white/5 transition text-slate-400">🔔</button>
+          <button class="h-9 w-9 rounded-lg bg-[#0b1424] border border-white/10 hover:bg-white/5 transition text-slate-400" title="Settings">⚙</button>
         </div>
       </div>
-      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5 mb-8" id="stats"></div>
+      <div class="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-6" id="stats"></div>
       <div class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 mb-6">
         <h2 class="text-xl font-semibold mb-4">🔍 Content Intelligence</h2>
         <div class="flex flex-col sm:flex-row gap-4">
@@ -95,13 +95,13 @@
           <button id="opusSendBtn" class="bg-blue-500 hover:bg-blue-400 transition px-4 py-2 rounded-xl font-medium">🎬 Send to OpusClip</button>
         </div>
         <div class="mt-4">
-          <label class="text-sm text-slate-300">Paste back the short-clip URLs OpusClip produced (one per line) — they will ride along to Metricool:</label>
-          <textarea id="opusClips" rows="3" placeholder="https://clip.opus.pro/share/abc...\nhttps://clip.opus.pro/share/xyz..."
+          <label class="text-sm text-slate-300">OpusClip clip URLs (optional)</label>
+          <textarea id="opusClips" rows="2" placeholder="Paste clip URLs here, one per line"
             class="mt-2 w-full rounded-xl bg-[#07111f] border border-white/10 p-3 text-sm outline-none focus:border-blue-500/50 scroll-thin"></textarea>
-          <p class="text-xs text-slate-500 mt-2">OpusClip has no public API yet, so we use a one-click clipboard + deep-link handoff. When their official Make/Zapier connector is enabled on your plan, we swap this for an automated round-trip.</p>
+          <p class="text-xs text-slate-500 mt-2">Clipboard + deep-link handoff. Automatic round-trip available once your OpusClip plan supports webhooks.</p>
         </div>
       </div>
-      <div class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 lg:p-8 mb-8 shadow-xl shadow-black/20">
+      <div class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 mb-6">
         <div class="flex items-center gap-2 mb-6">
           <span class="text-blue-400">✣</span>
           <h2 class="text-lg font-semibold">Content Generator</h2>
@@ -232,20 +232,24 @@ navItems.forEach((item,idx)=>{
   const a = document.createElement("a");
   a.href = "#";
   if (id) a.id = id;
-  a.className = "nav-item flex items-center gap-3 px-4 py-3 rounded-xl " + (idx===0?"bg-blue-500/10 text-blue-400 border border-blue-500/30":"text-slate-300 hover:bg-white/5") + (enabled?"":" opacity-40 cursor-not-allowed");
-  a.innerHTML = name + (enabled?"":' <span class="ml-auto text-[10px] uppercase tracking-wider text-slate-500">soon</span>');
+  a.className = "nav-item flex items-center justify-between px-4 py-2.5 rounded-lg text-sm " + (idx===0?"bg-blue-500/10 text-blue-400":"text-slate-300 hover:bg-white/5");
+  a.innerHTML = `<span>${name}</span>`;
   if (!enabled) a.addEventListener("click", e=>{ e.preventDefault(); toast(name+" — coming soon"); });
+  document.getElementById("nav").appendChild(a);
+});
   document.getElementById("nav").appendChild(a);
 });
 const statsEl = document.getElementById("stats");
 stats.forEach(s=>{
   statsEl.insertAdjacentHTML("beforeend",
-    '<div class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 shadow-xl shadow-black/20">' +
-    '<div class="flex items-start justify-between">' +
-    '<div><p class="text-slate-400 text-sm">' + s.label + '</p><h3 class="text-4xl font-bold mt-3">' + s.value + '</h3></div>' +
-    '<div class="h-12 w-12 rounded-full bg-blue-500/10 text-blue-400 flex items-center justify-center text-xl border border-blue-500/20">' + s.icon + '</div>' +
-    '</div><div class="h-1 bg-white/10 rounded-full mt-5 overflow-hidden"><div class="h-full w-1/2 bg-blue-500 rounded-full"></div></div>' +
-    '<p class="text-blue-400 text-sm mt-3">' + s.change + '</p></div>'
+    `<div class="rounded-2xl bg-[#0b1424] border border-white/10 p-5">
+       <div class="flex items-center justify-between">
+         <p class="text-slate-400 text-sm">${s.label}</p>
+         <span class="text-slate-500">${s.icon}</span>
+       </div>
+       <h3 class="text-3xl font-bold mt-2">${s.value}</h3>
+       <p class="text-xs text-slate-500 mt-3">${s.change}</p>
+     </div>`
   );
 });
 const selectedChannels = new Set(["Instagram","Facebook","LinkedIn","Blog"]);
@@ -626,7 +630,7 @@ document.getElementById("settingsClear")?.addEventListener("click", ()=>{
 });
 document.getElementById("settingsNav")?.addEventListener("click", e=>{ e.preventDefault(); openSettings(); });
 /* Top-right ◐ icon opens settings */
-document.querySelectorAll("button").forEach(b=>{ if(b.textContent && b.textContent.trim()==="◐"){ b.addEventListener("click", openSettings); } });
+document.querySelectorAll("button").forEach(b=>{ if(b.textContent && b.textContent.trim()==="⚙"){ b.addEventListener("click", openSettings); } });
 updateWebhookStatus();
 
 /* OpusClip persistence */
