@@ -1,3 +1,4 @@
+// web/app/api/drafts/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 
@@ -23,12 +24,24 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const body = await req.json();
-  const { topic, audience, tone, goal, cta, channels, pack } = body || {};
-  if (!topic || !pack) return NextResponse.json({ error: 'topic+pack required' }, { status: 400 });
+  const { topic, audience, tone, goal, cta, channels, pack, provider } = body || {};
+  if (!topic || !pack) {
+    return NextResponse.json({ error: 'topic+pack required' }, { status: 400 });
+  }
 
   const { data, error } = await sb
     .from('drafts')
-    .insert({ user_id: user.id, topic, audience, tone, goal, cta, channels, pack })
+    .insert({
+      user_id: user.id,
+      topic,
+      audience: audience ?? null,
+      tone: tone ?? null,
+      goal: goal ?? null,
+      cta: cta ?? null,
+      channels: channels ?? null,
+      pack,
+      provider: provider ?? null,
+    })
     .select()
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
