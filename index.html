@@ -27,9 +27,13 @@
   @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
   .nav-item{transition:background .15s ease,color .15s ease}
   pre{font-family:'Plus Jakarta Sans',sans-serif}
+  .tab-btn[aria-selected="true"]{background:rgba(59,130,246,.15);color:#fff;border-color:rgba(59,130,246,.4)}
+  .channel-card{transition:transform .15s ease}
+  .channel-card:hover{transform:translateY(-1px)}
 </style>
 </head>
 <body class="min-h-screen text-white glow">
+<div id="toast" class="fixed top-6 right-6 z-50 hidden rounded-xl bg-blue-500 text-white px-4 py-2 text-sm shadow-lg shadow-black/30"></div>
 <main class="relative z-10 min-h-screen">
   <div class="flex min-h-screen">
     <aside class="w-72 border-r border-white/10 bg-[#07111f] p-6 hidden lg:flex flex-col justify-between">
@@ -57,7 +61,7 @@
       <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 mb-10">
         <div>
           <h1 class="text-3xl font-bold tracking-tight">AI Content Dashboard</h1>
-          <p class="text-slate-400 mt-2">Create, approve, and compare AI content across your brand channels.</p>
+          <p class="text-slate-400 mt-2">Generate a full multi-channel post pack in one click — ready to send to Metricool.</p>
         </div>
         <div class="flex items-center gap-3">
           <input class="w-full lg:w-72 rounded-full bg-[#0b1424] border border-white/10 px-5 py-3 text-sm outline-none placeholder:text-slate-500 focus:border-blue-500/50" placeholder="Search anything..." />
@@ -92,7 +96,7 @@
                 class="mt-2 w-full rounded-xl bg-[#07111f] border border-white/10 px-4 py-3 text-sm outline-none placeholder:text-slate-600 focus:border-blue-500/50" />
             </div>
             <div>
-              <label class="text-sm text-slate-300">Channels</label>
+              <label class="text-sm text-slate-300">Channels (post pack)</label>
               <div class="mt-2 grid grid-cols-2 lg:grid-cols-4 gap-3" id="channels"></div>
             </div>
             <div>
@@ -126,43 +130,29 @@
             <div class="text-center py-6">
               <div class="text-5xl mb-5">🧠</div>
               <h3 class="font-semibold">AI is ready to help</h3>
-              <p class="text-sm text-slate-400 mt-3">Generate and compare OpenAI and Claude versions.</p>
+              <p class="text-sm text-slate-400 mt-3">One click → Instagram + Facebook + LinkedIn + Blog.</p>
             </div>
             <button id="generateBtn"
               class="w-full rounded-xl bg-blue-500 text-white font-semibold py-3 hover:bg-blue-400 transition disabled:opacity-50 flex items-center justify-center gap-2">
               <span id="genSpin" class="hidden h-4 w-4 border-2 border-white/40 border-t-white rounded-full spin"></span>
-              <span id="genLabel">✨ Generate Content</span>
+              <span id="genLabel">✨ Generate Post Pack</span>
             </button>
           </div>
         </div>
       </div>
-      <div class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 lg:p-8 mb-8 shadow-xl shadow-black/20">
+      <div id="packSection" class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 lg:p-8 mb-8 shadow-xl shadow-black/20 hidden">
         <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
           <div>
-            <h2 class="text-lg font-semibold">AI Comparison Results</h2>
-            <p class="text-sm text-slate-400 mt-1">Compare OpenAI and Claude outputs before approving a final draft.</p>
+            <h2 class="text-lg font-semibold">Multi-Channel Post Pack</h2>
+            <p class="text-sm text-slate-400 mt-1">One topic, tailored for every channel. Copy each post or grab the whole pack for Metricool.</p>
           </div>
-          <button class="rounded-xl border border-blue-500/30 text-blue-400 px-4 py-2 text-sm hover:bg-blue-500/10 transition">Combine Best Version</button>
-        </div>
-        <div class="rounded-xl border border-blue-500/20 bg-blue-500/5 text-blue-200/80 text-xs px-4 py-3 mb-5">
-          Demo mode: this static deploy uses local mock content so the buttons feel end-to-end. In the production app, the left panel is powered by OpenAI <code>gpt-4o-mini</code> via <code>/api/generate-content</code> and the right by Claude via <code>/api/claude-content</code>.
-        </div>
-        <div class="grid grid-cols-1 xl:grid-cols-2 gap-5">
-          <div class="rounded-2xl bg-[#07111f] border border-white/10 p-6">
-            <div class="flex items-center justify-between mb-4">
-              <h3 class="text-xl font-bold">OpenAI</h3>
-              <span class="text-xs rounded-full bg-white/5 border border-white/10 px-3 py-1 text-slate-300">Fast + structured</span>
-            </div>
-            <pre id="openaiResult" class="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">OpenAI result will appear here...</pre>
-          </div>
-          <div class="rounded-2xl bg-[#07111f] border border-white/10 p-6">
-            <div class="flex items-center justify-between mb-4">
-              <h3 class="text-xl font-bold">Claude</h3>
-              <span class="text-xs rounded-full bg-blue-500/10 border border-blue-500/20 px-3 py-1 text-blue-300">Natural + refined</span>
-            </div>
-            <pre id="claudeResult" class="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">Claude result will appear here...</pre>
+          <div class="flex gap-2">
+            <button id="copyAllBtn" class="rounded-xl bg-blue-500 hover:bg-blue-400 text-white px-4 py-2 text-sm font-medium transition">📋 Copy All for Metricool</button>
+            <button id="downloadBtn" class="rounded-xl border border-blue-500/30 text-blue-400 px-4 py-2 text-sm hover:bg-blue-500/10 transition">⬇ Download .txt</button>
           </div>
         </div>
+        <div id="tabBar" class="flex flex-wrap gap-2 mb-5"></div>
+        <div id="tabPanels"></div>
       </div>
       <div class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 shadow-xl shadow-black/20">
         <div class="flex items-center justify-between mb-5">
@@ -172,9 +162,7 @@
         <div class="overflow-x-auto rounded-xl border border-white/10">
           <table class="w-full text-left text-sm">
             <thead class="bg-white/5 text-slate-400">
-              <tr>
-                <th class="p-4">Title</th><th class="p-4">Channel</th><th class="p-4">Status</th><th class="p-4">Last Edited</th><th class="p-4">Actions</th>
-              </tr>
+              <tr><th class="p-4">Title</th><th class="p-4">Channel</th><th class="p-4">Status</th><th class="p-4">Last Edited</th><th class="p-4">Actions</th></tr>
             </thead>
             <tbody id="draftsBody"></tbody>
           </table>
@@ -184,6 +172,7 @@
   </div>
 </main>
 <script>
+/* ===== Static data ===== */
 const navItems = ["Dashboard","Brand Brain","Content Generator","Drafts","Calendar","Settings"];
 const stats = [
   { label:"Drafts", value:"12", change:"+3 this week", icon:"▣" },
@@ -198,6 +187,8 @@ const drafts = [
   { title:"Why Exosomes Are the Future of Aesthetics", channel:"LinkedIn", status:"Scheduled", edited:"May 8, 2025" },
   { title:"Exosome Therapy: The Ultimate Guide", channel:"Blog", status:"Draft", edited:"May 7, 2025" },
 ];
+
+/* ===== UI render ===== */
 const nav = document.getElementById("nav");
 navItems.forEach((item,i)=>{
   const d=document.createElement("div");
@@ -207,17 +198,16 @@ navItems.forEach((item,i)=>{
 });
 const statsEl = document.getElementById("stats");
 stats.forEach(s=>{
-  statsEl.insertAdjacentHTML("beforeend", `
-    <div class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 shadow-xl shadow-black/20">
-      <div class="flex items-start justify-between">
-        <div><p class="text-slate-400 text-sm">${s.label}</p><h3 class="text-4xl font-bold mt-3">${s.value}</h3></div>
-        <div class="h-12 w-12 rounded-full bg-blue-500/10 text-blue-400 flex items-center justify-center text-xl border border-blue-500/20">${s.icon}</div>
-      </div>
-      <div class="h-1 bg-white/10 rounded-full mt-5 overflow-hidden"><div class="h-full w-1/2 bg-blue-500 rounded-full"></div></div>
-      <p class="text-blue-400 text-sm mt-3">${s.change}</p>
-    </div>`);
+  statsEl.insertAdjacentHTML("beforeend",
+    '<div class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 shadow-xl shadow-black/20">' +
+    '<div class="flex items-start justify-between">' +
+    '<div><p class="text-slate-400 text-sm">' + s.label + '</p><h3 class="text-4xl font-bold mt-3">' + s.value + '</h3></div>' +
+    '<div class="h-12 w-12 rounded-full bg-blue-500/10 text-blue-400 flex items-center justify-center text-xl border border-blue-500/20">' + s.icon + '</div>' +
+    '</div><div class="h-1 bg-white/10 rounded-full mt-5 overflow-hidden"><div class="h-full w-1/2 bg-blue-500 rounded-full"></div></div>' +
+    '<p class="text-blue-400 text-sm mt-3">' + s.change + '</p></div>'
+  );
 });
-const selectedChannels = new Set(["Instagram"]);
+const selectedChannels = new Set(["Instagram","Facebook","LinkedIn","Blog"]);
 const channelsEl = document.getElementById("channels");
 channels.forEach(c=>{
   const b=document.createElement("button");
@@ -232,133 +222,256 @@ drafts.forEach(d=>{
   const cls = d.status==="Approved" ? "bg-blue-500/15 text-blue-400"
             : d.status==="Scheduled" ? "bg-yellow-400/15 text-yellow-300"
             : "bg-slate-400/15 text-slate-300";
-  draftsBody.insertAdjacentHTML("beforeend", `
-    <tr class="border-t border-white/10">
-      <td class="p-4">${d.title}</td>
-      <td class="p-4 text-slate-300">${d.channel}</td>
-      <td class="p-4"><span class="rounded-full px-3 py-1 text-xs ${cls}">${d.status}</span></td>
-      <td class="p-4 text-slate-400">${d.edited}</td>
-      <td class="p-4 text-slate-400">...</td>
-    </tr>`);
+  draftsBody.insertAdjacentHTML("beforeend",
+    '<tr class="border-t border-white/10">' +
+    '<td class="p-4">' + d.title + '</td>' +
+    '<td class="p-4 text-slate-300">' + d.channel + '</td>' +
+    '<td class="p-4"><span class="rounded-full px-3 py-1 text-xs ' + cls + '">' + d.status + '</span></td>' +
+    '<td class="p-4 text-slate-400">' + d.edited + '</td>' +
+    '<td class="p-4 text-slate-400">...</td></tr>'
+  );
 });
 
-// ===== MOCK BACKENDS (no external calls) =====
+/* ===== Helpers ===== */
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 function titleCase(s){ return s.replace(/\b\w/g, c=>c.toUpperCase()); }
+function toast(msg){
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.remove("hidden");
+  clearTimeout(window.__toastT);
+  window.__toastT = setTimeout(()=>t.classList.add("hidden"), 1800);
+}
+async function copyText(text){
+  try{ await navigator.clipboard.writeText(text); toast("Copied to clipboard"); }
+  catch(e){
+    const ta=document.createElement("textarea"); ta.value=text; document.body.appendChild(ta);
+    ta.select(); document.execCommand("copy"); ta.remove(); toast("Copied to clipboard");
+  }
+}
+
+/* ===== Research (mock) ===== */
 function mockResearch(topic){
   const t = topic.trim();
   const T = titleCase(t);
   return {
-    keywords: [
-      `${t}`, `${t} benefits`, `${t} cost`, `${t} near me`, `${t} treatment`,
-      `best ${t}`, `${t} results`, `${t} side effects`, `${t} review`, `${t} clinic`
-    ],
-    longTail: [
-      `how does ${t} work`,
-      `is ${t} safe for sensitive skin`,
-      `how long does ${t} last`,
-      `${t} vs traditional treatments`,
-      `what to expect after ${t}`,
-      `how much does ${t} cost in 2026`,
-      `${t} recovery time and aftercare`,
-      `who is a good candidate for ${t}`,
-      `${t} before and after results`,
-      `combining ${t} with microneedling`
-    ],
-    questions: [
-      `What is ${t} and how does it work?`,
-      `Is ${t} FDA approved?`,
-      `How many ${t} sessions do I need?`,
-      `Are there any side effects of ${t}?`,
-      `How soon will I see results from ${t}?`
-    ],
-    angles: [
-      `Before/after carousel: real ${t} patient results`,
-      `Myth-busting reel: 5 misconceptions about ${t}`,
-      `Expert Q&A: provider answers top ${t} questions`,
-      `Behind-the-scenes: what a ${t} appointment actually looks like`,
-      `Comparison post: ${t} vs the alternatives, side by side`
-    ],
-    titles: [
-      `${T}: The Complete 2026 Guide for Patients`,
-      `How ${T} Works (And Why Aestheticians Are Recommending It)`,
-      `Is ${T} Worth It? Benefits, Risks, and Real Results`,
-      `${T} vs Traditional Treatments: What Patients Should Know`,
-      `The Science Behind ${T}: A Provider-Backed Breakdown`
-    ]
+    keywords: [t, t+" benefits", t+" cost", t+" near me", t+" treatment", "best "+t, t+" results", t+" side effects", t+" review", t+" clinic"],
+    longTail: ["how does "+t+" work","is "+t+" safe for sensitive skin","how long does "+t+" last",t+" vs traditional treatments","what to expect after "+t,"how much does "+t+" cost in 2026",t+" recovery time and aftercare","who is a good candidate for "+t,t+" before and after results","combining "+t+" with microneedling"],
+    questions: ["What is "+t+" and how does it work?","Is "+t+" FDA approved?","How many "+t+" sessions do I need?","Are there any side effects of "+t+"?","How soon will I see results from "+t+"?"],
+    angles: ["Before/after carousel: real "+t+" patient results","Myth-busting reel: 5 misconceptions about "+t,"Expert Q&A: provider answers top "+t+" questions","Behind-the-scenes: what a "+t+" appointment actually looks like","Comparison post: "+t+" vs the alternatives"],
+    titles: [T+": The Complete 2026 Guide for Patients","How "+T+" Works (And Why Aestheticians Are Recommending It)","Is "+T+" Worth It? Benefits, Risks, and Real Results",T+" vs Traditional Treatments: What Patients Should Know","The Science Behind "+T+": A Provider-Backed Breakdown"]
   };
 }
-function mockContent({topic,audience,tone,goal,cta}, style){
-  const t = topic || "your topic";
-  const a = audience || "your ideal patient";
-  const to = tone || "professional and approachable";
-  const g = goal || "educate and convert";
-  const c = cta || "book your consultation today";
-  const T = titleCase(t);
-  const tag = "#" + t.toLowerCase().replace(/[^a-z0-9]+/g,"");
-  const sharp = style === "fast";
-
-  const title = sharp
-    ? `${T}: What ${a} Needs to Know in 2026`
-    : `The Patient's Guide to ${T}: How It Actually Works`;
-
-  const caption = sharp
-    ? `${T} — the science, the benefits, the truth. Built for ${a}. → ${c}.`
-    : `If you've been curious about ${t}, here's a clear, no-hype look at what it does, who it's for, and what to expect. → ${c}.`;
-
-  const post = sharp
-    ? `${T} — a quick breakdown\n\n• What it is: an evidence-backed approach to ${t}.\n• Who it's for: ${a}.\n• Why it matters: real, measurable results without unnecessary downtime.\n• What we use: provider-grade protocols, screened products, clear aftercare.\n\nTone: ${to}. Goal: ${g}.\n\n${c.toUpperCase()}.`
-    : `A lot of people ask us about ${t} — and honestly, the marketing around it can feel overwhelming.\n\nHere's the simple version: ${t} is designed to support skin and tissue at a deeper level, which is why so many of our ${a} are asking about it this year. It pairs beautifully with the work you're already doing, and the results compound over time.\n\nWhat we love: it's evidence-based, it's gentle enough for sensitive skin, and the recovery is minimal.\nWhat to expect: a personalized plan, a clear timeline, and honest conversations about what ${t} can — and can't — do for you.\n\nIf this sounds like you, ${c}.`;
-
-  const blog = `# ${title}\n\n## What is ${t}?\nA clear, expert explanation of ${t} for ${a}, written in a ${to} tone.\n\n## How does ${t} work?\nA step-by-step breakdown of the mechanism, the science, and what makes it different.\n\n## Who is a good candidate?\nIdeal for ${a}. We cover contraindications, expectations, and consultation steps.\n\n## What results can you expect?\nRealistic, evidence-based outcomes — timeline, maintenance, and pairing options.\n\n## FAQ\n- Is ${t} safe?\n- How many sessions are needed?\n- What's the recovery like?\n- How much does ${t} cost?\n\n## Ready to take the next step?\n${c}.`;
-
-  const hashtags = `${tag} #aesthetics #skinhealth #medspa #regenerativemedicine #patienteducation #beforeandafter #skinrejuvenation`;
-
-  return [
-    `TITLE\n${title}\n\nSHORT CAPTION\n${caption}\n\nFULL POST\n${post}\n\nBLOG VERSION\n${blog}\n\nHASHTAGS\n${hashtags}`
-  ].join("");
-}
-
-const researchBtn   = document.getElementById("researchBtn");
-const researchSpin  = document.getElementById("researchSpin");
-const researchLabel = document.getElementById("researchLabel");
-const researchResults = document.getElementById("researchResults");
+const researchBtn=document.getElementById("researchBtn");
+const researchSpin=document.getElementById("researchSpin");
+const researchLabel=document.getElementById("researchLabel");
+const researchResults=document.getElementById("researchResults");
 researchBtn.onclick = async ()=>{
-  const topic = document.getElementById("researchTopic").value.trim();
+  const topic=document.getElementById("researchTopic").value.trim();
   if(!topic){ document.getElementById("researchTopic").focus(); return; }
   researchBtn.disabled=true; researchSpin.classList.remove("hidden"); researchLabel.textContent="Analyzing...";
   researchResults.classList.add("hidden");
-  await sleep(900 + Math.random()*600);
-  const data = mockResearch(topic);
-  renderResearch(data);
+  await sleep(900+Math.random()*500);
+  const d=mockResearch(topic);
+  researchResults.classList.remove("hidden");
+  researchResults.innerHTML =
+    block("Keywords", d.keywords) + block("Long Tail", d.longTail) +
+    block("Questions", d.questions) + block("SEO Titles", d.titles, true);
+  document.querySelectorAll(".seo-title").forEach(el=>{
+    el.onclick=()=>{ document.getElementById("topic").value = el.dataset.title;
+      document.getElementById("topic").scrollIntoView({behavior:"smooth", block:"center"});};
+  });
   researchBtn.disabled=false; researchSpin.classList.add("hidden"); researchLabel.textContent="Find Opportunities";
 };
 function block(title, items, clickable=false){
-  const rows = (items||[]).map(v=>{
-    if(clickable){
-      return `<div data-title="${String(v).replace(/"/g,'&quot;')}" class="seo-title text-sm text-blue-400 cursor-pointer hover:underline py-0.5">${v}</div>`;
-    }
-    return `<div class="text-sm text-slate-300 py-0.5">${v}</div>`;
+  const rows=(items||[]).map(v=>{
+    if(clickable) return '<div data-title="'+String(v).replace(/"/g,'&quot;')+'" class="seo-title text-sm text-blue-400 cursor-pointer hover:underline py-0.5">'+v+'</div>';
+    return '<div class="text-sm text-slate-300 py-0.5">'+v+'</div>';
   }).join("");
-  return `<div class="bg-[#07111f] p-4 rounded-xl fade-in"><h3 class="font-semibold mb-2">${title}</h3>${rows}</div>`;
+  return '<div class="bg-[#07111f] p-4 rounded-xl fade-in"><h3 class="font-semibold mb-2">'+title+'</h3>'+rows+'</div>';
 }
-function renderResearch(d){
-  researchResults.classList.remove("hidden");
-  researchResults.innerHTML =
-    block("Keywords", d.keywords) +
-    block("Long Tail", d.longTail) +
-    block("Questions", d.questions) +
-    block("SEO Titles", d.titles, true);
-  document.querySelectorAll(".seo-title").forEach(el=>{
-    el.onclick=()=>{
-      document.getElementById("topic").value = el.dataset.title;
-      document.getElementById("topic").scrollIntoView({behavior:"smooth", block:"center"});
-    };
+</script>
+<script>
+/* ===== Post pack generator (mock, channel-tailored) ===== */
+function fmtTag(s){ return "#" + s.toLowerCase().replace(/[^a-z0-9]+/g,""); }
+function commonHashtags(t){
+  const base=fmtTag(t);
+  return [base,"#aesthetics","#skinhealth","#medspa","#regenerativemedicine","#beforeandafter","#skinrejuvenation","#patienteducation"];
+}
+function nicheHashtags(t, channel){
+  if(channel==="Instagram") return [...commonHashtags(t),"#reels","#beforeafter","#skincaretips","#aestheticclinic","#glowup","#injectables","#skintok","#selfcare","#beauty","#luxuryskincare","#aestheticmedicine","#confidence"];
+  if(channel==="Facebook")  return [...commonHashtags(t),"#consultation","#patientstory","#educate","#wellness","#healthyaging"];
+  if(channel==="LinkedIn")  return [fmtTag(t),"#aestheticindustry","#medspa","#healthcare","#regenerativemedicine","#leadership","#patientcare","#innovation"];
+  return commonHashtags(t);
+}
+function buildPack(input){
+  const t = input.topic || "your topic";
+  const a = input.audience || "your ideal patient";
+  const to = input.tone || "professional, educational, friendly";
+  const g = input.goal || "Educate";
+  const c = input.cta || "Book your consultation today";
+  const T = titleCase(t);
+
+  const hook = "Curious about " + t + "? Here's the straight-forward version most clinics won't tell you.";
+
+  const instagram = {
+    channel: "Instagram",
+    icon: "📷",
+    limit: 2200,
+    title: T + " — Reel + Carousel pack",
+    formats: [
+      { name:"Feed caption", body:
+        hook + "\n\nWhat it is: " + t + " is a modern, evidence-based approach designed for " + a + ".\nWhy it matters: real results without the downtime.\nWho it's for: " + a + " who care about long-term skin health.\n\n✨ DM us 'INFO' or tap the link in bio to " + c.toLowerCase() + ".\n\n" + nicheHashtags(t,"Instagram").join(" ")
+      },
+      { name:"3-slide carousel", body:
+        "Slide 1 (Hook): \"Everything you've been told about " + t + " is half the story.\"\nSlide 2 (Science): \"" + T + " explained in 30 seconds — what it does, what it doesn't.\"\nSlide 3 (CTA): \"Ready to see if it's right for you? " + c + ".\""
+      },
+      { name:"15s Reel script", body:
+        "[0-2s] Hook: \"Stop scrolling if you've ever wondered about " + t + ".\"\n[2-7s] Quick win: 3 fast facts on the screen.\n[7-12s] Provider on-camera: 1 myth + 1 truth about " + t + ".\n[12-15s] CTA: \"" + c + " — link in bio.\""
+      },
+      { name:"Story poll", body:
+        "Sticker question: \"Would you try " + t + "?\" — Options: Yes 👍 / Tell me more 🧐\nFollow-up sticker: \"" + c + " — swipe up\""
+      }
+    ],
+    hashtags: nicheHashtags(t,"Instagram").join(" ")
+  };
+
+  const facebook = {
+    channel: "Facebook",
+    icon: "📘",
+    limit: 63206,
+    title: T + " — Facebook post + Community variant",
+    formats: [
+      { name:"Main post", body:
+        "If you've been hearing the buzz around " + t + ", here's the honest, no-marketing-fluff version for " + a + ".\n\nWhat is " + t + "?\n" + T + " is a modern protocol designed to support real, measurable improvement — not a quick fix, not a fad. It works alongside the skincare and wellness routines you already trust.\n\nWhy our patients ask about it:\n• Minimal downtime\n• Evidence-based, provider-supervised\n• Pairs well with the treatments you already love\n• Personalized to your skin and goals\n\nWhat to expect at your consultation: a real conversation about your goals, your medical history, and whether " + t + " is actually the right tool — because sometimes the honest answer is \"not yet.\"\n\nReady to find out if " + t + " fits your plan? " + c + " — our team will walk you through every step.\n\n" + nicheHashtags(t,"Facebook").slice(0,6).join(" ")
+      },
+      { name:"Patient-story version", body:
+        "\"I almost didn't book my " + t + " consultation — and I'm so glad I did.\"\n\nThat's how one of our recent patients started the conversation. Here's what we learned working with them, and what we want every " + a + " thinking about " + t + " to know:\n\n1. There's no one-size-fits-all answer.\n2. The best results come from a real plan, not a single session.\n3. The right provider will tell you when " + t + " is NOT the right call.\n\nIf you've been quietly researching " + t + ", we'd love to give you a clear, no-pressure consultation. " + c + "."
+      }
+    ],
+    hashtags: nicheHashtags(t,"Facebook").join(" ")
+  };
+
+  const linkedin = {
+    channel: "LinkedIn",
+    icon: "💼",
+    limit: 3000,
+    title: T + " — Thought-leadership post",
+    formats: [
+      { name:"Thought-leadership post", body:
+        "Most conversations about " + t + " skip the part that actually matters to patients.\n\nAfter years working with " + a + ", three patterns stand out:\n\n1. The science is moving faster than the marketing.\nClinics that lead with hype lose trust. Clinics that lead with education win the long game.\n\n2. " + T + " is a tool, not a promise.\nThe providers who consistently see the best outcomes are the ones honest enough to say, \"this isn't the right call for you right now.\"\n\n3. Patient education is the new growth channel.\nWe've seen 3x conversion rates simply by switching from \"book now\" copy to \"learn first\" copy on " + t + " landing pages.\n\nIf you're a provider, operator, or aesthetic industry professional rethinking how you talk about " + t + " — happy to compare notes.\n\nGoal: " + g + ". Tone: " + to + ".\n\n" + nicheHashtags(t,"LinkedIn").slice(0,5).join(" ")
+      },
+      { name:"Short text update", body:
+        "A short observation on " + t + ":\n\nThe clinics outperforming the market right now aren't the ones with the loudest ads — they're the ones treating " + a + " like adults who want real information.\n\nWhat's working: long-form education, transparent pricing, honest expectation-setting.\nWhat's not: countdown timers and \"limited slots.\"\n\nIf you're in the aesthetic space and rethinking your " + t + " strategy, I'd love to hear what's working for you."
+      }
+    ],
+    hashtags: nicheHashtags(t,"LinkedIn").join(" ")
+  };
+
+  const blog = {
+    channel: "Blog",
+    icon: "✍️",
+    limit: 0,
+    title: T + ": The Complete Guide for " + titleCase(a),
+    formats: [
+      { name:"SEO blog draft", body:
+        "# " + T + ": The Complete Guide for " + titleCase(a) + "\n\n" +
+        "## What is " + t + "?\nAn evidence-based introduction to " + t + " written in a " + to + " tone, designed for " + a + " who want clarity before they book.\n\n" +
+        "## How does " + t + " work?\nA step-by-step walk-through: the mechanism, the science, and what makes it different from older treatments. Include 2–3 internal references to authoritative sources.\n\n" +
+        "## Who is a good candidate for " + t + "?\nDetailed candidacy criteria, contraindications, and the consultation process. This is the section that ranks for \"" + t + " near me\" intent.\n\n" +
+        "## What results can you expect?\nRealistic outcomes with a timeline (week 1, week 4, month 3). Include a 'what " + t + " can and can't do' callout box.\n\n" +
+        "## How much does " + t + " cost?\nA transparent pricing range plus a note on package vs single-session value. Address insurance coverage if relevant.\n\n" +
+        "## FAQ\n- Is " + t + " safe?\n- How many sessions are needed?\n- What is the recovery like?\n- How does " + t + " compare to alternatives?\n- Is " + t + " right for sensitive skin?\n\n" +
+        "## Ready to take the next step?\n" + c + " — our team will build a personalized plan around your goals.\n\n" +
+        "*Meta description (155 chars):* " + T + " explained for " + a + ": how it works, who it's for, real results, costs, and FAQs. " + c + "."
+      }
+    ],
+    hashtags: ""
+  };
+
+  return { instagram, facebook, linkedin, blog };
+}
+function lenBadge(text, limit){
+  if(!limit) return "";
+  const n=text.length;
+  const cls = n<=limit ? "bg-blue-500/15 text-blue-300 border-blue-500/30" : "bg-red-500/15 text-red-300 border-red-500/30";
+  return '<span class="text-xs rounded-full px-2 py-0.5 border ' + cls + '">' + n + " / " + limit + " chars</span>";
+}
+function escapeHtml(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function renderPack(pack){
+  const order=["instagram","facebook","linkedin","blog"];
+  const enabled=order.filter(k=>{
+    const ch=pack[k].channel;
+    return selectedChannels.has(ch);
   });
+  const tabBar=document.getElementById("tabBar"); tabBar.innerHTML="";
+  const tabPanels=document.getElementById("tabPanels"); tabPanels.innerHTML="";
+  enabled.forEach((key, idx)=>{
+    const ch=pack[key];
+    const btn=document.createElement("button");
+    btn.className="tab-btn rounded-xl border border-white/10 bg-[#07111f] text-slate-300 px-4 py-2 text-sm transition hover:border-white/20";
+    btn.setAttribute("aria-selected", idx===0 ? "true" : "false");
+    btn.innerHTML = ch.icon + " " + ch.channel;
+    btn.onclick=()=>{
+      document.querySelectorAll(".tab-btn").forEach(b=>b.setAttribute("aria-selected","false"));
+      btn.setAttribute("aria-selected","true");
+      document.querySelectorAll(".tab-panel").forEach(p=>p.classList.add("hidden"));
+      document.getElementById("panel-"+key).classList.remove("hidden");
+    };
+    tabBar.appendChild(btn);
+
+    const panel=document.createElement("div");
+    panel.id="panel-"+key;
+    panel.className = "tab-panel fade-in " + (idx===0?"":"hidden");
+    const formatsHtml = ch.formats.map((f,i)=>{
+      return '<div class="rounded-xl bg-[#07111f] border border-white/10 p-5 mb-4">' +
+        '<div class="flex items-center justify-between mb-3 gap-3 flex-wrap">' +
+          '<h4 class="font-semibold">' + f.name + '</h4>' +
+          '<div class="flex items-center gap-2">' + lenBadge(f.body, ch.limit) +
+            '<button class="copy-btn rounded-lg border border-blue-500/30 text-blue-400 px-3 py-1 text-xs hover:bg-blue-500/10 transition" data-key="'+key+'" data-idx="'+i+'">Copy</button>' +
+          '</div>' +
+        '</div>' +
+        '<pre class="text-sm text-slate-200 whitespace-pre-wrap leading-relaxed">' + escapeHtml(f.body) + '</pre>' +
+      '</div>';
+    }).join("");
+    const hashtagsHtml = ch.hashtags ?
+      '<div class="rounded-xl bg-[#07111f] border border-blue-500/20 p-4 mb-2">' +
+        '<div class="flex items-center justify-between mb-2"><span class="text-xs uppercase tracking-wider text-blue-300">Hashtags</span>' +
+        '<button class="copy-hash-btn rounded-lg border border-blue-500/30 text-blue-400 px-3 py-1 text-xs hover:bg-blue-500/10 transition" data-key="'+key+'">Copy hashtags</button></div>' +
+        '<p class="text-sm text-blue-200/90 break-words">' + ch.hashtags + '</p></div>' : "";
+    panel.innerHTML =
+      '<div class="mb-4"><h3 class="text-lg font-semibold">' + ch.title + '</h3>' +
+      '<p class="text-xs text-slate-400 mt-1">Channel: ' + ch.channel + (ch.limit?(" · character limit "+ch.limit):"") + '</p></div>' +
+      formatsHtml + hashtagsHtml;
+    tabPanels.appendChild(panel);
+  });
+  document.querySelectorAll(".copy-btn").forEach(b=>{
+    b.onclick=()=>{ const k=b.dataset.key, i=+b.dataset.idx; copyText(pack[k].formats[i].body); };
+  });
+  document.querySelectorAll(".copy-hash-btn").forEach(b=>{
+    b.onclick=()=>{ copyText(pack[b.dataset.key].hashtags); };
+  });
+  document.getElementById("packSection").classList.remove("hidden");
 }
-const generateBtn = document.getElementById("generateBtn");
-const genSpin  = document.getElementById("genSpin");
-const genLabel = document.getElementById("genLabel");
+function packToText(pack){
+  const order=["instagram","facebook","linkedin","blog"];
+  return order.filter(k=>selectedChannels.has(pack[k].channel)).map(k=>{
+    const ch=pack[k];
+    let s = "============================================================\n" +
+            "CHANNEL: " + ch.channel.toUpperCase() + "\n" +
+            "TITLE:   " + ch.title + "\n" +
+            "============================================================\n";
+    ch.formats.forEach(f=>{
+      s += "\n--- " + f.name + " ---\n" + f.body + "\n";
+    });
+    if(ch.hashtags) s += "\n--- Hashtags ---\n" + ch.hashtags + "\n";
+    return s + "\n";
+  }).join("\n");
+}
+
+const generateBtn=document.getElementById("generateBtn");
+const genSpin=document.getElementById("genSpin");
+const genLabel=document.getElementById("genLabel");
+let currentPack=null;
 generateBtn.onclick = async ()=>{
   const payload = {
     topic: document.getElementById("topic").value.trim(),
@@ -368,13 +481,28 @@ generateBtn.onclick = async ()=>{
     cta: document.getElementById("cta").value.trim(),
   };
   if(!payload.topic){ document.getElementById("topic").focus(); return; }
+  if(selectedChannels.size===0){ toast("Pick at least one channel"); return; }
   generateBtn.disabled=true; genSpin.classList.remove("hidden"); genLabel.textContent="Generating...";
-  document.getElementById("openaiResult").textContent="Generating...";
-  document.getElementById("claudeResult").textContent="Generating...";
-  await sleep(1100 + Math.random()*700);
-  document.getElementById("openaiResult").textContent = mockContent(payload, "fast");
-  document.getElementById("claudeResult").textContent = mockContent(payload, "refined");
-  generateBtn.disabled=false; genSpin.classList.add("hidden"); genLabel.textContent="✨ Generate Content";
+  await sleep(1100+Math.random()*600);
+  currentPack = buildPack(payload);
+  renderPack(currentPack);
+  generateBtn.disabled=false; genSpin.classList.add("hidden"); genLabel.textContent="✨ Generate Post Pack";
+  document.getElementById("packSection").scrollIntoView({behavior:"smooth", block:"start"});
+};
+document.getElementById("copyAllBtn").onclick = ()=>{
+  if(!currentPack){ toast("Generate a pack first"); return; }
+  copyText(packToText(currentPack));
+};
+document.getElementById("downloadBtn").onclick = ()=>{
+  if(!currentPack){ toast("Generate a pack first"); return; }
+  const text = packToText(currentPack);
+  const blob = new Blob([text], {type:"text/plain"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  const slug = (document.getElementById("topic").value.trim() || "post-pack").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+  a.download = slug + "-post-pack.txt";
+  document.body.appendChild(a); a.click(); a.remove();
+  toast("Download started");
 };
 </script>
 </body>
