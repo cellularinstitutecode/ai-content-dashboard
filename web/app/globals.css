@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #050914;
+  --panel: #0b1424;
+  --panel-2: #07111f;
+  --line: rgba(255,255,255,.10);
+  --accent: #3b82f6;
+}
+html, body { background: var(--bg); color: #e5e7eb; }
+body { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+h1,h2,h3,.display { font-family: 'Sora', sans-serif; letter-spacing: -0.01em; }
+.glow::before {
+  content:''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(600px 320px at 78% -5%, rgba(59,130,246,.18), transparent 60%),
+    radial-gradient(520px 300px at 5% 8%, rgba(59,130,246,.08), transparent 60%);
+}
