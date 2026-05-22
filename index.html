@@ -145,8 +145,7 @@
           <button class="rounded-xl border border-blue-500/30 text-blue-400 px-4 py-2 text-sm hover:bg-blue-500/10 transition">Combine Best Version</button>
         </div>
         <div class="rounded-xl border border-blue-500/20 bg-blue-500/5 text-blue-200/80 text-xs px-4 py-3 mb-5">
-          Preview note: this static page can only reach the Anthropic API, so both panels generate live via Claude.
-          In your deployed app the left panel is powered by OpenAI <code>gpt-4o-mini</code> through <code>/api/generate-content</code>.
+          Demo mode: this static deploy uses local mock content so the buttons feel end-to-end. In the production app, the left panel is powered by OpenAI <code>gpt-4o-mini</code> via <code>/api/generate-content</code> and the right by Claude via <code>/api/claude-content</code>.
         </div>
         <div class="grid grid-cols-1 xl:grid-cols-2 gap-5">
           <div class="rounded-2xl bg-[#07111f] border border-white/10 p-6">
@@ -242,23 +241,84 @@ drafts.forEach(d=>{
       <td class="p-4 text-slate-400">...</td>
     </tr>`);
 });
-async function callClaude(prompt, maxTokens=1200){
-  const res = await fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",
-    headers:{ "Content-Type":"application/json" },
-    body: JSON.stringify({
-      model:"claude-sonnet-4-20250514",
-      max_tokens:maxTokens,
-      messages:[{ role:"user", content:prompt }]
-    })
-  });
-  const data = await res.json();
-  return (data.content || [])
-    .filter(b=>b.type==="text")
-    .map(b=>b.text)
-    .join("\n")
-    .trim();
+
+// ===== MOCK BACKENDS (no external calls) =====
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+function titleCase(s){ return s.replace(/\b\w/g, c=>c.toUpperCase()); }
+function mockResearch(topic){
+  const t = topic.trim();
+  const T = titleCase(t);
+  return {
+    keywords: [
+      `${t}`, `${t} benefits`, `${t} cost`, `${t} near me`, `${t} treatment`,
+      `best ${t}`, `${t} results`, `${t} side effects`, `${t} review`, `${t} clinic`
+    ],
+    longTail: [
+      `how does ${t} work`,
+      `is ${t} safe for sensitive skin`,
+      `how long does ${t} last`,
+      `${t} vs traditional treatments`,
+      `what to expect after ${t}`,
+      `how much does ${t} cost in 2026`,
+      `${t} recovery time and aftercare`,
+      `who is a good candidate for ${t}`,
+      `${t} before and after results`,
+      `combining ${t} with microneedling`
+    ],
+    questions: [
+      `What is ${t} and how does it work?`,
+      `Is ${t} FDA approved?`,
+      `How many ${t} sessions do I need?`,
+      `Are there any side effects of ${t}?`,
+      `How soon will I see results from ${t}?`
+    ],
+    angles: [
+      `Before/after carousel: real ${t} patient results`,
+      `Myth-busting reel: 5 misconceptions about ${t}`,
+      `Expert Q&A: provider answers top ${t} questions`,
+      `Behind-the-scenes: what a ${t} appointment actually looks like`,
+      `Comparison post: ${t} vs the alternatives, side by side`
+    ],
+    titles: [
+      `${T}: The Complete 2026 Guide for Patients`,
+      `How ${T} Works (And Why Aestheticians Are Recommending It)`,
+      `Is ${T} Worth It? Benefits, Risks, and Real Results`,
+      `${T} vs Traditional Treatments: What Patients Should Know`,
+      `The Science Behind ${T}: A Provider-Backed Breakdown`
+    ]
+  };
 }
+function mockContent({topic,audience,tone,goal,cta}, style){
+  const t = topic || "your topic";
+  const a = audience || "your ideal patient";
+  const to = tone || "professional and approachable";
+  const g = goal || "educate and convert";
+  const c = cta || "book your consultation today";
+  const T = titleCase(t);
+  const tag = "#" + t.toLowerCase().replace(/[^a-z0-9]+/g,"");
+  const sharp = style === "fast";
+
+  const title = sharp
+    ? `${T}: What ${a} Needs to Know in 2026`
+    : `The Patient's Guide to ${T}: How It Actually Works`;
+
+  const caption = sharp
+    ? `${T} — the science, the benefits, the truth. Built for ${a}. → ${c}.`
+    : `If you've been curious about ${t}, here's a clear, no-hype look at what it does, who it's for, and what to expect. → ${c}.`;
+
+  const post = sharp
+    ? `${T} — a quick breakdown\n\n• What it is: an evidence-backed approach to ${t}.\n• Who it's for: ${a}.\n• Why it matters: real, measurable results without unnecessary downtime.\n• What we use: provider-grade protocols, screened products, clear aftercare.\n\nTone: ${to}. Goal: ${g}.\n\n${c.toUpperCase()}.`
+    : `A lot of people ask us about ${t} — and honestly, the marketing around it can feel overwhelming.\n\nHere's the simple version: ${t} is designed to support skin and tissue at a deeper level, which is why so many of our ${a} are asking about it this year. It pairs beautifully with the work you're already doing, and the results compound over time.\n\nWhat we love: it's evidence-based, it's gentle enough for sensitive skin, and the recovery is minimal.\nWhat to expect: a personalized plan, a clear timeline, and honest conversations about what ${t} can — and can't — do for you.\n\nIf this sounds like you, ${c}.`;
+
+  const blog = `# ${title}\n\n## What is ${t}?\nA clear, expert explanation of ${t} for ${a}, written in a ${to} tone.\n\n## How does ${t} work?\nA step-by-step breakdown of the mechanism, the science, and what makes it different.\n\n## Who is a good candidate?\nIdeal for ${a}. We cover contraindications, expectations, and consultation steps.\n\n## What results can you expect?\nRealistic, evidence-based outcomes — timeline, maintenance, and pairing options.\n\n## FAQ\n- Is ${t} safe?\n- How many sessions are needed?\n- What's the recovery like?\n- How much does ${t} cost?\n\n## Ready to take the next step?\n${c}.`;
+
+  const hashtags = `${tag} #aesthetics #skinhealth #medspa #regenerativemedicine #patienteducation #beforeandafter #skinrejuvenation`;
+
+  return [
+    `TITLE\n${title}\n\nSHORT CAPTION\n${caption}\n\nFULL POST\n${post}\n\nBLOG VERSION\n${blog}\n\nHASHTAGS\n${hashtags}`
+  ].join("");
+}
+
 const researchBtn   = document.getElementById("researchBtn");
 const researchSpin  = document.getElementById("researchSpin");
 const researchLabel = document.getElementById("researchLabel");
@@ -268,26 +328,10 @@ researchBtn.onclick = async ()=>{
   if(!topic){ document.getElementById("researchTopic").focus(); return; }
   researchBtn.disabled=true; researchSpin.classList.remove("hidden"); researchLabel.textContent="Analyzing...";
   researchResults.classList.add("hidden");
-  const prompt = `You are an SEO and GEO (AI search) expert.
-Given the topic: "${topic}", generate:
-1. 10 high-intent SEO keywords
-2. 10 long-tail keywords
-3. 5 common questions (People Also Ask style)
-4. 5 trending content angles for social media
-5. 5 SEO-optimized blog titles
-Return ONLY valid JSON, no markdown, no preamble, exactly this shape:
-{"keywords":[],"longTail":[],"questions":[],"angles":[],"titles":[]}`;
-  try{
-    let text = await callClaude(prompt, 1500);
-    text = text.replace(/```json|```/g,"").trim();
-    const data = JSON.parse(text);
-    renderResearch(data);
-  }catch(e){
-    researchResults.classList.remove("hidden");
-    researchResults.innerHTML = `<div class="bg-[#07111f] p-4 rounded-xl text-sm text-red-300 lg:col-span-2">Could not parse results. ${e.message}</div>`;
-  }finally{
-    researchBtn.disabled=false; researchSpin.classList.add("hidden"); researchLabel.textContent="Find Opportunities";
-  }
+  await sleep(900 + Math.random()*600);
+  const data = mockResearch(topic);
+  renderResearch(data);
+  researchBtn.disabled=false; researchSpin.classList.add("hidden"); researchLabel.textContent="Find Opportunities";
 };
 function block(title, items, clickable=false){
   const rows = (items||[]).map(v=>{
@@ -315,20 +359,6 @@ function renderResearch(d){
 const generateBtn = document.getElementById("generateBtn");
 const genSpin  = document.getElementById("genSpin");
 const genLabel = document.getElementById("genLabel");
-function buildPrompt({topic,audience,tone,goal,cta}){
-  return `You are an expert in SEO (Google ranking) and GEO (AI search optimization).
-Create high-quality content based on:
-Topic: ${topic}
-Audience: ${audience}
-Tone: ${tone}
-Goal: ${goal}
-CTA: ${cta}
-Requirements:
-1. SEO Optimization: use primary keyword naturally; include 3-5 secondary keywords; structure with clear headings (H1, H2, H3); make it scannable.
-2. GEO Optimization (AI Search): answer key questions directly; clear factual explanations; authoritative tone like a medical expert; avoid fluff.
-3. Output format: Title; Short caption (social); Full post (Instagram/LinkedIn style); Blog version (SEO optimized); 5-10 hashtags.
-Make it highly engaging but structured for discoverability.`;
-}
 generateBtn.onclick = async ()=>{
   const payload = {
     topic: document.getElementById("topic").value.trim(),
@@ -341,14 +371,9 @@ generateBtn.onclick = async ()=>{
   generateBtn.disabled=true; genSpin.classList.remove("hidden"); genLabel.textContent="Generating...";
   document.getElementById("openaiResult").textContent="Generating...";
   document.getElementById("claudeResult").textContent="Generating...";
-  const prompt = buildPrompt(payload);
-  const openaiPrompt = prompt + "\n\nWrite in a fast, tightly structured, punchy style.";
-  const claudePrompt = prompt + "\n\nWrite in a natural, refined, human style.";
-  const [a,b] = await Promise.allSettled([ callClaude(openaiPrompt), callClaude(claudePrompt) ]);
-  document.getElementById("openaiResult").textContent =
-    a.status==="fulfilled" ? a.value : "Error: "+(a.reason?.message||"could not generate");
-  document.getElementById("claudeResult").textContent =
-    b.status==="fulfilled" ? b.value : "Error: "+(b.reason?.message||"could not generate");
+  await sleep(1100 + Math.random()*700);
+  document.getElementById("openaiResult").textContent = mockContent(payload, "fast");
+  document.getElementById("claudeResult").textContent = mockContent(payload, "refined");
   generateBtn.disabled=false; genSpin.classList.add("hidden"); genLabel.textContent="✨ Generate Content";
 };
 </script>
