@@ -489,10 +489,23 @@ generateBtn.onclick = async ()=>{
   generateBtn.disabled=false; genSpin.classList.add("hidden"); genLabel.textContent="✨ Generate Post Pack";
   document.getElementById("packSection").scrollIntoView({behavior:"smooth", block:"start"});
 };
-document.getElementById("copyAllBtn").onclick = ()=>{
-  if(!currentPack){ toast("Generate a pack first"); return; }
-  copyText(packToText(currentPack));
+/* --- Metricool integration (deep-link + clipboard handoff) --- */
+const METRICOOL_CONFIG = {
+  blogId: "4308292",
+  userId: "3377431",
+  composerUrl: function(){
+    return "https://app.metricool.com/evolution/planning?blogId=" + this.blogId + "&userId=" + this.userId;
+  }
+  /* TODO: when ci-metricool-proxy is live on Vercel, set proxy: "https://<your-vercel>.vercel.app" and switch sendToMetricool() to POST /api/metricool/schedule */
 };
+async function sendToMetricool(){
+  if(!currentPack){ toast("Generate a pack first"); return; }
+  const text = packToText(currentPack);
+  try { await navigator.clipboard.writeText(text); toast("✅ Copied — opening Metricool"); }
+  catch(e){ copyText(text); toast("Copied — opening Metricool"); }
+  window.open(METRICOOL_CONFIG.composerUrl(), "_blank", "noopener,noreferrer");
+}
+document.getElementById("copyAllBtn").onclick = sendToMetricool;
 document.getElementById("downloadBtn").onclick = ()=>{
   if(!currentPack){ toast("Generate a pack first"); return; }
   const text = packToText(currentPack);
