@@ -188,31 +188,54 @@
       </div>
     </section>
   </div>
-</main>
+    <!-- Settings drawer -->
+    <div id="settingsDrawer" class="fixed inset-0 z-40 hidden">
+      <div class="absolute inset-0 bg-black/60" id="settingsBackdrop"></div>
+      <aside class="absolute right-0 top-0 h-full w-full max-w-md bg-[#0b1424] border-l border-white/10 p-6 overflow-y-auto scroll-thin">
+        <div class="flex items-center justify-between mb-6">
+          <h2 class="text-xl font-semibold">⚙ Settings</h2>
+          <button id="settingsClose" class="h-9 w-9 rounded-full bg-white/5 hover:bg-white/10">✕</button>
+        </div>
+        <label class="text-sm text-slate-300">Make.com webhook URL</label>
+        <input id="makeWebhookInput" placeholder="https://hook.us2.make.com/..." class="mt-2 w-full rounded-xl bg-[#07111f] border border-white/10 px-4 py-3 text-sm outline-none focus:border-blue-500/50" />
+        <p class="text-xs text-slate-500 mt-2">When set, Send to Metricool POSTs the post pack to this webhook (so your Make scenario can schedule it to blog 4308292). Stored only in your browser (localStorage).</p>
+        <div class="flex gap-3 mt-6">
+          <button id="settingsSave" class="bg-blue-500 hover:bg-blue-400 px-4 py-2 rounded-xl text-sm font-medium">Save</button>
+          <button id="settingsClear" class="border border-white/10 text-slate-300 px-4 py-2 rounded-xl text-sm hover:bg-white/5">Clear</button>
+        </div>
+        <hr class="border-white/10 my-6"/>
+        <div class="text-xs text-slate-500">
+          Metricool blog: <span class="text-slate-300">4308292</span><br/>
+          Status: <span id="webhookStatus" class="text-slate-300">—</span>
+        </div>
+      </aside>
+    </div>
+  </main>
 <script>
 /* ===== Static data ===== */
-const navItems = ["Dashboard","Brand Brain","Content Generator","Drafts","Calendar","Settings"];
+const navItems = [{name:"Dashboard",enabled:true},{name:"Brand Brain",enabled:false},{name:"Content Generator",enabled:true},{name:"Drafts",enabled:false},{name:"Calendar",enabled:false},{name:"Settings",enabled:true,id:"settingsNav"}];
 const stats = [
-  { label:"Drafts", value:"12", change:"+3 this week", icon:"▣" },
-  { label:"Approved", value:"8", change:"+2 this week", icon:"✓" },
-  { label:"Scheduled", value:"5", change:"+1 this week", icon:"◷" },
-  { label:"Published", value:"21", change:"+7 this week", icon:"↗" },
+  { label:"Drafts",    value:"—", change:"Connect Metricool to enable", icon:"▣" },
+  { label:"Approved",  value:"—", change:"Connect Metricool to enable", icon:"✓" },
+  { label:"Scheduled", value:"—", change:"Connect Metricool to enable", icon:"◷" },
+  { label:"Published", value:"—", change:"Connect Metricool to enable", icon:"↗" }
 ];
 const channels = ["Instagram","Facebook","LinkedIn","Blog"];
-const drafts = [
-  { title:"Exosome Therapy: What You Need to Know", channel:"Instagram", status:"Draft", edited:"Today, 10:30 AM" },
-  { title:"Benefits of Exosome Therapy for Skin Rejuvenation", channel:"Facebook", status:"Approved", edited:"Yesterday, 4:15 PM" },
-  { title:"Why Exosomes Are the Future of Aesthetics", channel:"LinkedIn", status:"Scheduled", edited:"May 8, 2025" },
-  { title:"Exosome Therapy: The Ultimate Guide", channel:"Blog", status:"Draft", edited:"May 7, 2025" },
-];
+const drafts = JSON.parse(localStorage.getItem("aicd.drafts") || "[]");
 
 /* ===== UI render ===== */
 const nav = document.getElementById("nav");
-navItems.forEach((item,i)=>{
-  const d=document.createElement("div");
-  d.className = "nav-item rounded-xl px-4 py-3 text-sm font-medium cursor-pointer " +
-    (i===0 ? "bg-blue-500/15 text-blue-400 border border-blue-500/20" : "text-slate-300 hover:bg-white/5");
-  d.textContent=item; nav.appendChild(d);
+navItems.forEach((item,idx)=>{
+  const name = typeof item === "string" ? item : item.name;
+  const enabled = typeof item === "string" ? true : item.enabled !== false;
+  const id = (typeof item === "object" && item.id) ? item.id : "";
+  const a = document.createElement("a");
+  a.href = "#";
+  if (id) a.id = id;
+  a.className = "nav-item flex items-center gap-3 px-4 py-3 rounded-xl " + (idx===0?"bg-blue-500/10 text-blue-400 border border-blue-500/30":"text-slate-300 hover:bg-white/5") + (enabled?"":" opacity-40 cursor-not-allowed");
+  a.innerHTML = name + (enabled?"":' <span class="ml-auto text-[10px] uppercase tracking-wider text-slate-500">soon</span>');
+  if (!enabled) a.addEventListener("click", e=>{ e.preventDefault(); toast(name+" — coming soon"); });
+  document.getElementById("nav").appendChild(a);
 });
 const statsEl = document.getElementById("stats");
 stats.forEach(s=>{
@@ -529,16 +552,44 @@ document.getElementById("opusSendBtn")?.addEventListener("click", async () => {
   catch(e){ toast("Opening OpusClip"); }
   window.open("https://clip.opus.pro/dashboard", "_blank", "noopener,noreferrer");
 });
+function getWebhookUrl(){ return (localStorage.getItem("aicd.makeWebhook")||"").trim(); }
+function setWebhookUrl(u){ if(u){ localStorage.setItem("aicd.makeWebhook",u); } else { localStorage.removeItem("aicd.makeWebhook"); } updateWebhookStatus(); }
+function updateWebhookStatus(){ const el=document.getElementById("webhookStatus"); if(!el) return; const u=getWebhookUrl(); el.textContent = u ? "Webhook configured" : "Webhook not set — using clipboard fallback"; el.className = u ? "text-emerald-400" : "text-amber-400"; }
 async function sendToMetricool(){
   if(!currentPack){ toast("Generate a pack first"); return; }
   const text = packToText(currentPack);
   const clips = getOpusClipUrls();
+  const meta = {
+    topic: document.getElementById("topic")?.value || "",
+    audience: document.getElementById("audience")?.value || "",
+    tone: document.getElementById("tone")?.value || "",
+    goal: document.getElementById("goal")?.value || "",
+    cta: document.getElementById("cta")?.value || ""
+  };
+  const webhook = getWebhookUrl();
+  if (webhook){
+    try {
+      const r = await fetch(webhook, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...meta,
+          text,
+          mediaUrls: clips,
+          networks: ["instagram","facebook","linkedin"],
+          blogId: METRICOOL_CONFIG.blogId,
+          userId: METRICOOL_CONFIG.userId,
+          sentAt: new Date().toISOString()
+        })
+      });
+      if (!r.ok) throw new Error("HTTP "+r.status);
+      toast("✅ Sent to Make → Metricool");
+      return;
+    } catch(e){ toast("Webhook failed: "+e.message+" — falling back to clipboard"); }
+  }
   const fullText = clips.length
     ? text + "\n\n=== VIDEO CLIPS (OpusClip) ===\n" + clips.join("\n")
     : text;
-  /* TODO: when Make webhook is live, swap this for:
-     await fetch(METRICOOL_CONFIG.makeWebhook, { method:"POST", headers:{"Content-Type":"application/json"},
-       body: JSON.stringify({ text, mediaUrls: clips, networks:["instagram","facebook","linkedin"] }) }); */
   try { await navigator.clipboard.writeText(fullText); toast(clips.length ? "✅ Copied with " + clips.length + " clip URL(s) — opening Metricool" : "✅ Copied — opening Metricool"); }
   catch(e){ copyText(fullText); toast("Copied — opening Metricool"); }
   window.open(METRICOOL_CONFIG.composerUrl(), "_blank", "noopener,noreferrer");
@@ -555,6 +606,58 @@ document.getElementById("downloadBtn").onclick = ()=>{
   document.body.appendChild(a); a.click(); a.remove();
   toast("Download started");
 };
+
+/* Settings drawer wiring */
+function openSettings(){
+  const d = document.getElementById("settingsDrawer");
+  document.getElementById("makeWebhookInput").value = getWebhookUrl();
+  updateWebhookStatus();
+  d.classList.remove("hidden");
+}
+function closeSettings(){ document.getElementById("settingsDrawer").classList.add("hidden"); }
+document.getElementById("settingsClose")?.addEventListener("click", closeSettings);
+document.getElementById("settingsBackdrop")?.addEventListener("click", closeSettings);
+document.getElementById("settingsSave")?.addEventListener("click", ()=>{
+  const v = document.getElementById("makeWebhookInput").value.trim();
+  setWebhookUrl(v); toast(v?"Webhook saved":"Webhook cleared");
+});
+document.getElementById("settingsClear")?.addEventListener("click", ()=>{
+  document.getElementById("makeWebhookInput").value=""; setWebhookUrl(""); toast("Webhook cleared");
+});
+document.getElementById("settingsNav")?.addEventListener("click", e=>{ e.preventDefault(); openSettings(); });
+/* Top-right ◐ icon opens settings */
+document.querySelectorAll("button").forEach(b=>{ if(b.textContent && b.textContent.trim()==="◐"){ b.addEventListener("click", openSettings); } });
+updateWebhookStatus();
+
+/* OpusClip persistence */
+(function(){
+  const src = document.getElementById("opusSource");
+  const clips = document.getElementById("opusClips");
+  if (src){ src.value = localStorage.getItem("aicd.opus.source")||""; src.addEventListener("input", ()=>localStorage.setItem("aicd.opus.source", src.value)); }
+  if (clips){ clips.value = localStorage.getItem("aicd.opus.clips")||""; clips.addEventListener("input", ()=>localStorage.setItem("aicd.opus.clips", clips.value)); }
+})();
+
+/* Persist generated pack into Recent Drafts (localStorage) */
+function saveDraftFromPack(pack){
+  if (!pack) return;
+  const title = (document.getElementById("topic")?.value || "Untitled").trim().slice(0,80);
+  const channelsPresent = Object.values(pack).map(p=>p.channel).filter(Boolean);
+  const channel = channelsPresent[0] || "Multi";
+  const entry = { title, channel, status:"Draft", edited:new Date().toLocaleString() };
+  const list = JSON.parse(localStorage.getItem("aicd.drafts")||"[]");
+  list.unshift(entry);
+  localStorage.setItem("aicd.drafts", JSON.stringify(list.slice(0,20)));
+}
+/* Wrap the existing generateBtn handler so it also saves a draft */
+(function(){
+  const btn = document.getElementById("generateBtn");
+  if (!btn) return;
+  const prev = btn.onclick;
+  btn.onclick = async function(ev){
+    if (prev) { await prev.call(btn, ev); }
+    setTimeout(()=>{ saveDraftFromPack(currentPack); }, 100);
+  };
+})();
 </script>
 </body>
 </html>
