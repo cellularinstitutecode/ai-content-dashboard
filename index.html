@@ -237,8 +237,6 @@ navItems.forEach((item,idx)=>{
   if (!enabled) a.addEventListener("click", e=>{ e.preventDefault(); toast(name+" — coming soon"); });
   document.getElementById("nav").appendChild(a);
 });
-  document.getElementById("nav").appendChild(a);
-});
 const statsEl = document.getElementById("stats");
 stats.forEach(s=>{
   statsEl.insertAdjacentHTML("beforeend",
