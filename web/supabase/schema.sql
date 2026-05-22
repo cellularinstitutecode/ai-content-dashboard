@@ -66,3 +66,6 @@ begin new.updated_at = now(); return new; end; $$ language plpgsql;
 drop trigger if exists trg_drafts_updated on public.drafts;
 create trigger trg_drafts_updated before update on public.drafts
 for each row execute function public.touch_updated_at();
+
+-- Provider column for drafts: tracks which AI generated the pack ('anthropic' | 'openai')
+alter table public.drafts add column if not exists provider text;
