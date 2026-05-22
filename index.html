@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Content Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root { --bg:#050914; --panel:#0b1424; --panel-2:#07111f; --line:rgba(255,255,255,.10); --accent:#3b82f6; }
+  * { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+  h1,h2,h3,.display { font-family: 'Sora', sans-serif; letter-spacing: -0.01em; }
+  body { background: var(--bg); }
+  .glow::before{
+    content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+    background:
+      radial-gradient(600px 320px at 78% -5%, rgba(59,130,246,.18), transparent 60%),
+      radial-gradient(520px 300px at 5% 8%, rgba(59,130,246,.08), transparent 60%);
+  }
+  .scroll-thin::-webkit-scrollbar{width:8px;height:8px}
+  .scroll-thin::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:99px}
+  .spin{animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .fade-in{animation:fade .4s ease both}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .nav-item{transition:background .15s ease,color .15s ease}
+  pre{font-family:'Plus Jakarta Sans',sans-serif}
+</style>
+</head>
+<body class="min-h-screen text-white glow">
+<main class="relative z-10 min-h-screen">
+  <div class="flex min-h-screen">
+    <aside class="w-72 border-r border-white/10 bg-[#07111f] p-6 hidden lg:flex flex-col justify-between">
+      <div>
+        <div class="flex items-center gap-3 mb-12">
+          <div class="h-12 w-12 rounded-2xl bg-blue-500/10 border border-blue-500/40 flex items-center justify-center text-blue-400 text-xl">✦</div>
+          <div>
+            <h2 class="font-bold text-lg">AI Content</h2>
+            <p class="text-blue-500 text-sm">Dashboard</p>
+          </div>
+        </div>
+        <nav class="space-y-3" id="nav"></nav>
+      </div>
+      <div class="border-t border-white/10 pt-5">
+        <div class="flex items-center gap-3">
+          <div class="h-10 w-10 rounded-full bg-blue-600 flex items-center justify-center text-sm font-bold">LN</div>
+          <div>
+            <p class="text-sm font-medium">Liliana Nacimino</p>
+            <p class="text-xs text-slate-400">Admin</p>
+          </div>
+        </div>
+      </div>
+    </aside>
+    <section class="flex-1 p-6 lg:p-10 scroll-thin">
+      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 mb-10">
+        <div>
+          <h1 class="text-3xl font-bold tracking-tight">AI Content Dashboard</h1>
+          <p class="text-slate-400 mt-2">Create, approve, and compare AI content across your brand channels.</p>
+        </div>
+        <div class="flex items-center gap-3">
+          <input class="w-full lg:w-72 rounded-full bg-[#0b1424] border border-white/10 px-5 py-3 text-sm outline-none placeholder:text-slate-500 focus:border-blue-500/50" placeholder="Search anything..." />
+          <button class="h-11 w-11 rounded-full bg-[#0b1424] border border-white/10 hover:border-blue-500/40 transition">🔔</button>
+          <button class="h-11 w-11 rounded-full bg-[#0b1424] border border-white/10 hover:border-blue-500/40 transition">◐</button>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5 mb-8" id="stats"></div>
+      <div class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 mb-6">
+        <h2 class="text-xl font-semibold mb-4">🔍 Content Intelligence</h2>
+        <div class="flex flex-col sm:flex-row gap-4">
+          <input id="researchTopic" placeholder="e.g. exosome therapy"
+            class="flex-1 rounded-xl bg-[#07111f] border border-white/10 p-3 outline-none focus:border-blue-500/50" />
+          <button id="researchBtn"
+            class="bg-blue-500 hover:bg-blue-400 transition px-4 py-2 rounded-xl font-medium disabled:opacity-50 flex items-center justify-center gap-2">
+            <span id="researchSpin" class="hidden h-4 w-4 border-2 border-white/40 border-t-white rounded-full spin"></span>
+            <span id="researchLabel">Find Opportunities</span>
+          </button>
+        </div>
+        <div id="researchResults" class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6 hidden"></div>
+      </div>
+      <div class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 lg:p-8 mb-8 shadow-xl shadow-black/20">
+        <div class="flex items-center gap-2 mb-6">
+          <span class="text-blue-400">✣</span>
+          <h2 class="text-lg font-semibold">Content Generator</h2>
+        </div>
+        <div class="grid grid-cols-1 xl:grid-cols-[1fr_280px] gap-8">
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div>
+              <label class="text-sm text-slate-300">Topic</label>
+              <input id="topic" placeholder="e.g. Exosome therapy benefits"
+                class="mt-2 w-full rounded-xl bg-[#07111f] border border-white/10 px-4 py-3 text-sm outline-none placeholder:text-slate-600 focus:border-blue-500/50" />
+            </div>
+            <div>
+              <label class="text-sm text-slate-300">Channels</label>
+              <div class="mt-2 grid grid-cols-2 lg:grid-cols-4 gap-3" id="channels"></div>
+            </div>
+            <div>
+              <label class="text-sm text-slate-300">Target Audience</label>
+              <input id="audience" placeholder="e.g. Aesthetic patients"
+                class="mt-2 w-full rounded-xl bg-[#07111f] border border-white/10 px-4 py-3 text-sm outline-none placeholder:text-slate-600 focus:border-blue-500/50" />
+            </div>
+            <div>
+              <label class="text-sm text-slate-300">Tone</label>
+              <input id="tone" placeholder="e.g. Professional, educational, friendly"
+                class="mt-2 w-full rounded-xl bg-[#07111f] border border-white/10 px-4 py-3 text-sm outline-none placeholder:text-slate-600 focus:border-blue-500/50" />
+            </div>
+            <div>
+              <label class="text-sm text-slate-300">Content Goal</label>
+              <select id="goal"
+                class="mt-2 w-full rounded-xl bg-[#07111f] border border-white/10 px-4 py-3 text-sm outline-none text-slate-300 focus:border-blue-500/50">
+                <option value="">Select a goal</option>
+                <option value="Educate">Educate</option>
+                <option value="Generate leads">Generate leads</option>
+                <option value="Promote a service">Promote a service</option>
+                <option value="Build authority">Build authority</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-sm text-slate-300">CTA / Call to Action</label>
+              <input id="cta" placeholder="e.g. Book your consultation today"
+                class="mt-2 w-full rounded-xl bg-[#07111f] border border-white/10 px-4 py-3 text-sm outline-none placeholder:text-slate-600 focus:border-blue-500/50" />
+            </div>
+          </div>
+          <div class="rounded-2xl bg-[#07111f] border border-white/10 p-6 flex flex-col justify-between">
+            <div class="text-center py-6">
+              <div class="text-5xl mb-5">🧠</div>
+              <h3 class="font-semibold">AI is ready to help</h3>
+              <p class="text-sm text-slate-400 mt-3">Generate and compare OpenAI and Claude versions.</p>
+            </div>
+            <button id="generateBtn"
+              class="w-full rounded-xl bg-blue-500 text-white font-semibold py-3 hover:bg-blue-400 transition disabled:opacity-50 flex items-center justify-center gap-2">
+              <span id="genSpin" class="hidden h-4 w-4 border-2 border-white/40 border-t-white rounded-full spin"></span>
+              <span id="genLabel">✨ Generate Content</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 lg:p-8 mb-8 shadow-xl shadow-black/20">
+        <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+          <div>
+            <h2 class="text-lg font-semibold">AI Comparison Results</h2>
+            <p class="text-sm text-slate-400 mt-1">Compare OpenAI and Claude outputs before approving a final draft.</p>
+          </div>
+          <button class="rounded-xl border border-blue-500/30 text-blue-400 px-4 py-2 text-sm hover:bg-blue-500/10 transition">Combine Best Version</button>
+        </div>
+        <div class="rounded-xl border border-blue-500/20 bg-blue-500/5 text-blue-200/80 text-xs px-4 py-3 mb-5">
+          Preview note: this static page can only reach the Anthropic API, so both panels generate live via Claude.
+          In your deployed app the left panel is powered by OpenAI <code>gpt-4o-mini</code> through <code>/api/generate-content</code>.
+        </div>
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-5">
+          <div class="rounded-2xl bg-[#07111f] border border-white/10 p-6">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-xl font-bold">OpenAI</h3>
+              <span class="text-xs rounded-full bg-white/5 border border-white/10 px-3 py-1 text-slate-300">Fast + structured</span>
+            </div>
+            <pre id="openaiResult" class="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">OpenAI result will appear here...</pre>
+          </div>
+          <div class="rounded-2xl bg-[#07111f] border border-white/10 p-6">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-xl font-bold">Claude</h3>
+              <span class="text-xs rounded-full bg-blue-500/10 border border-blue-500/20 px-3 py-1 text-blue-300">Natural + refined</span>
+            </div>
+            <pre id="claudeResult" class="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">Claude result will appear here...</pre>
+          </div>
+        </div>
+      </div>
+      <div class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 shadow-xl shadow-black/20">
+        <div class="flex items-center justify-between mb-5">
+          <h2 class="font-semibold">Recent Drafts</h2>
+          <button class="text-sm border border-white/10 rounded-xl px-4 py-2 text-slate-300 hover:bg-white/5 transition">View All Drafts →</button>
+        </div>
+        <div class="overflow-x-auto rounded-xl border border-white/10">
+          <table class="w-full text-left text-sm">
+            <thead class="bg-white/5 text-slate-400">
+              <tr>
+                <th class="p-4">Title</th><th class="p-4">Channel</th><th class="p-4">Status</th><th class="p-4">Last Edited</th><th class="p-4">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="draftsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+<script>
+const navItems = ["Dashboard","Brand Brain","Content Generator","Drafts","Calendar","Settings"];
+const stats = [
+  { label:"Drafts", value:"12", change:"+3 this week", icon:"▣" },
+  { label:"Approved", value:"8", change:"+2 this week", icon:"✓" },
+  { label:"Scheduled", value:"5", change:"+1 this week", icon:"◷" },
+  { label:"Published", value:"21", change:"+7 this week", icon:"↗" },
+];
+const channels = ["Instagram","Facebook","LinkedIn","Blog"];
+const drafts = [
+  { title:"Exosome Therapy: What You Need to Know", channel:"Instagram", status:"Draft", edited:"Today, 10:30 AM" },
+  { title:"Benefits of Exosome Therapy for Skin Rejuvenation", channel:"Facebook", status:"Approved", edited:"Yesterday, 4:15 PM" },
+  { title:"Why Exosomes Are the Future of Aesthetics", channel:"LinkedIn", status:"Scheduled", edited:"May 8, 2025" },
+  { title:"Exosome Therapy: The Ultimate Guide", channel:"Blog", status:"Draft", edited:"May 7, 2025" },
+];
+const nav = document.getElementById("nav");
+navItems.forEach((item,i)=>{
+  const d=document.createElement("div");
+  d.className = "nav-item rounded-xl px-4 py-3 text-sm font-medium cursor-pointer " +
+    (i===0 ? "bg-blue-500/15 text-blue-400 border border-blue-500/20" : "text-slate-300 hover:bg-white/5");
+  d.textContent=item; nav.appendChild(d);
+});
+const statsEl = document.getElementById("stats");
+stats.forEach(s=>{
+  statsEl.insertAdjacentHTML("beforeend", `
+    <div class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 shadow-xl shadow-black/20">
+      <div class="flex items-start justify-between">
+        <div><p class="text-slate-400 text-sm">${s.label}</p><h3 class="text-4xl font-bold mt-3">${s.value}</h3></div>
+        <div class="h-12 w-12 rounded-full bg-blue-500/10 text-blue-400 flex items-center justify-center text-xl border border-blue-500/20">${s.icon}</div>
+      </div>
+      <div class="h-1 bg-white/10 rounded-full mt-5 overflow-hidden"><div class="h-full w-1/2 bg-blue-500 rounded-full"></div></div>
+      <p class="text-blue-400 text-sm mt-3">${s.change}</p>
+    </div>`);
+});
+const selectedChannels = new Set(["Instagram"]);
+const channelsEl = document.getElementById("channels");
+channels.forEach(c=>{
+  const b=document.createElement("button");
+  const paint=()=> b.className = "rounded-xl border px-4 py-3 text-sm transition " +
+    (selectedChannels.has(c) ? "border-blue-500/60 bg-blue-500/10 text-white" : "border-white/10 bg-[#07111f] text-slate-300 hover:border-white/20");
+  b.textContent=c; paint();
+  b.onclick=()=>{ selectedChannels.has(c)?selectedChannels.delete(c):selectedChannels.add(c); paint(); };
+  channelsEl.appendChild(b);
+});
+const draftsBody = document.getElementById("draftsBody");
+drafts.forEach(d=>{
+  const cls = d.status==="Approved" ? "bg-blue-500/15 text-blue-400"
+            : d.status==="Scheduled" ? "bg-yellow-400/15 text-yellow-300"
+            : "bg-slate-400/15 text-slate-300";
+  draftsBody.insertAdjacentHTML("beforeend", `
+    <tr class="border-t border-white/10">
+      <td class="p-4">${d.title}</td>
+      <td class="p-4 text-slate-300">${d.channel}</td>
+      <td class="p-4"><span class="rounded-full px-3 py-1 text-xs ${cls}">${d.status}</span></td>
+      <td class="p-4 text-slate-400">${d.edited}</td>
+      <td class="p-4 text-slate-400">...</td>
+    </tr>`);
+});
+async function callClaude(prompt, maxTokens=1200){
+  const res = await fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({
+      model:"claude-sonnet-4-20250514",
+      max_tokens:maxTokens,
+      messages:[{ role:"user", content:prompt }]
+    })
+  });
+  const data = await res.json();
+  return (data.content || [])
+    .filter(b=>b.type==="text")
+    .map(b=>b.text)
+    .join("\n")
+    .trim();
+}
+const researchBtn   = document.getElementById("researchBtn");
+const researchSpin  = document.getElementById("researchSpin");
+const researchLabel = document.getElementById("researchLabel");
+const researchResults = document.getElementById("researchResults");
+researchBtn.onclick = async ()=>{
+  const topic = document.getElementById("researchTopic").value.trim();
+  if(!topic){ document.getElementById("researchTopic").focus(); return; }
+  researchBtn.disabled=true; researchSpin.classList.remove("hidden"); researchLabel.textContent="Analyzing...";
+  researchResults.classList.add("hidden");
+  const prompt = `You are an SEO and GEO (AI search) expert.
+Given the topic: "${topic}", generate:
+1. 10 high-intent SEO keywords
+2. 10 long-tail keywords
+3. 5 common questions (People Also Ask style)
+4. 5 trending content angles for social media
+5. 5 SEO-optimized blog titles
+Return ONLY valid JSON, no markdown, no preamble, exactly this shape:
+{"keywords":[],"longTail":[],"questions":[],"angles":[],"titles":[]}`;
+  try{
+    let text = await callClaude(prompt, 1500);
+    text = text.replace(/```json|```/g,"").trim();
+    const data = JSON.parse(text);
+    renderResearch(data);
+  }catch(e){
+    researchResults.classList.remove("hidden");
+    researchResults.innerHTML = `<div class="bg-[#07111f] p-4 rounded-xl text-sm text-red-300 lg:col-span-2">Could not parse results. ${e.message}</div>`;
+  }finally{
+    researchBtn.disabled=false; researchSpin.classList.add("hidden"); researchLabel.textContent="Find Opportunities";
+  }
+};
+function block(title, items, clickable=false){
+  const rows = (items||[]).map(v=>{
+    if(clickable){
+      return `<div data-title="${String(v).replace(/"/g,'&quot;')}" class="seo-title text-sm text-blue-400 cursor-pointer hover:underline py-0.5">${v}</div>`;
+    }
+    return `<div class="text-sm text-slate-300 py-0.5">${v}</div>`;
+  }).join("");
+  return `<div class="bg-[#07111f] p-4 rounded-xl fade-in"><h3 class="font-semibold mb-2">${title}</h3>${rows}</div>`;
+}
+function renderResearch(d){
+  researchResults.classList.remove("hidden");
+  researchResults.innerHTML =
+    block("Keywords", d.keywords) +
+    block("Long Tail", d.longTail) +
+    block("Questions", d.questions) +
+    block("SEO Titles", d.titles, true);
+  document.querySelectorAll(".seo-title").forEach(el=>{
+    el.onclick=()=>{
+      document.getElementById("topic").value = el.dataset.title;
+      document.getElementById("topic").scrollIntoView({behavior:"smooth", block:"center"});
+    };
+  });
+}
+const generateBtn = document.getElementById("generateBtn");
+const genSpin  = document.getElementById("genSpin");
+const genLabel = document.getElementById("genLabel");
+function buildPrompt({topic,audience,tone,goal,cta}){
+  return `You are an expert in SEO (Google ranking) and GEO (AI search optimization).
+Create high-quality content based on:
+Topic: ${topic}
+Audience: ${audience}
+Tone: ${tone}
+Goal: ${goal}
+CTA: ${cta}
+Requirements:
+1. SEO Optimization: use primary keyword naturally; include 3-5 secondary keywords; structure with clear headings (H1, H2, H3); make it scannable.
+2. GEO Optimization (AI Search): answer key questions directly; clear factual explanations; authoritative tone like a medical expert; avoid fluff.
+3. Output format: Title; Short caption (social); Full post (Instagram/LinkedIn style); Blog version (SEO optimized); 5-10 hashtags.
+Make it highly engaging but structured for discoverability.`;
+}
+generateBtn.onclick = async ()=>{
+  const payload = {
+    topic: document.getElementById("topic").value.trim(),
+    audience: document.getElementById("audience").value.trim(),
+    tone: document.getElementById("tone").value.trim(),
+    goal: document.getElementById("goal").value,
+    cta: document.getElementById("cta").value.trim(),
+  };
+  if(!payload.topic){ document.getElementById("topic").focus(); return; }
+  generateBtn.disabled=true; genSpin.classList.remove("hidden"); genLabel.textContent="Generating...";
+  document.getElementById("openaiResult").textContent="Generating...";
+  document.getElementById("claudeResult").textContent="Generating...";
+  const prompt = buildPrompt(payload);
+  const openaiPrompt = prompt + "\n\nWrite in a fast, tightly structured, punchy style.";
+  const claudePrompt = prompt + "\n\nWrite in a natural, refined, human style.";
+  const [a,b] = await Promise.allSettled([ callClaude(openaiPrompt), callClaude(claudePrompt) ]);
+  document.getElementById("openaiResult").textContent =
+    a.status==="fulfilled" ? a.value : "Error: "+(a.reason?.message||"could not generate");
+  document.getElementById("claudeResult").textContent =
+    b.status==="fulfilled" ? b.value : "Error: "+(b.reason?.message||"could not generate");
+  generateBtn.disabled=false; genSpin.classList.add("hidden"); genLabel.textContent="✨ Generate Content";
+};
+</script>
+</body>
+</html>
