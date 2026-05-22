@@ -83,6 +83,24 @@
         </div>
         <div id="researchResults" class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6 hidden"></div>
       </div>
+      <!-- OpusClip Video Generator -->
+      <div class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 mb-6">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-xl font-semibold">🎬 Video Generator (OpusClip)</h2>
+          <a href="https://clip.opus.pro/dashboard" target="_blank" rel="noopener" class="text-xs text-blue-400 hover:underline">Open OpusClip ↗</a>
+        </div>
+        <div class="flex flex-col sm:flex-row gap-4">
+          <input id="opusSource" placeholder="Paste long-form video URL (YouTube, Vimeo, MP4, etc.)"
+            class="flex-1 rounded-xl bg-[#07111f] border border-white/10 p-3 outline-none focus:border-blue-500/50" />
+          <button id="opusSendBtn" class="bg-blue-500 hover:bg-blue-400 transition px-4 py-2 rounded-xl font-medium">🎬 Send to OpusClip</button>
+        </div>
+        <div class="mt-4">
+          <label class="text-sm text-slate-300">Paste back the short-clip URLs OpusClip produced (one per line) — they will ride along to Metricool:</label>
+          <textarea id="opusClips" rows="3" placeholder="https://clip.opus.pro/share/abc...\nhttps://clip.opus.pro/share/xyz..."
+            class="mt-2 w-full rounded-xl bg-[#07111f] border border-white/10 p-3 text-sm outline-none focus:border-blue-500/50 scroll-thin"></textarea>
+          <p class="text-xs text-slate-500 mt-2">OpusClip has no public API yet, so we use a one-click clipboard + deep-link handoff. When their official Make/Zapier connector is enabled on your plan, we swap this for an automated round-trip.</p>
+        </div>
+      </div>
       <div class="rounded-2xl bg-[#0b1424] border border-white/10 p-6 lg:p-8 mb-8 shadow-xl shadow-black/20">
         <div class="flex items-center gap-2 mb-6">
           <span class="text-blue-400">✣</span>
@@ -498,11 +516,31 @@ const METRICOOL_CONFIG = {
   }
   /* TODO: when ci-metricool-proxy is live on Vercel, set proxy: "https://<your-vercel>.vercel.app" and switch sendToMetricool() to POST /api/metricool/schedule */
 };
+/* OpusClip integration: collect clip URLs and pipe them into the Metricool handoff */
+function getOpusClipUrls(){
+  const ta = document.getElementById("opusClips");
+  if(!ta) return [];
+  return ta.value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+}
+document.getElementById("opusSendBtn")?.addEventListener("click", async () => {
+  const src = (document.getElementById("opusSource")?.value || "").trim();
+  if(!src){ toast("Paste a video URL first"); return; }
+  try { await navigator.clipboard.writeText(src); toast("✅ Video URL copied — opening OpusClip"); }
+  catch(e){ toast("Opening OpusClip"); }
+  window.open("https://clip.opus.pro/dashboard", "_blank", "noopener,noreferrer");
+});
 async function sendToMetricool(){
   if(!currentPack){ toast("Generate a pack first"); return; }
   const text = packToText(currentPack);
-  try { await navigator.clipboard.writeText(text); toast("✅ Copied — opening Metricool"); }
-  catch(e){ copyText(text); toast("Copied — opening Metricool"); }
+  const clips = getOpusClipUrls();
+  const fullText = clips.length
+    ? text + "\n\n=== VIDEO CLIPS (OpusClip) ===\n" + clips.join("\n")
+    : text;
+  /* TODO: when Make webhook is live, swap this for:
+     await fetch(METRICOOL_CONFIG.makeWebhook, { method:"POST", headers:{"Content-Type":"application/json"},
+       body: JSON.stringify({ text, mediaUrls: clips, networks:["instagram","facebook","linkedin"] }) }); */
+  try { await navigator.clipboard.writeText(fullText); toast(clips.length ? "✅ Copied with " + clips.length + " clip URL(s) — opening Metricool" : "✅ Copied — opening Metricool"); }
+  catch(e){ copyText(fullText); toast("Copied — opening Metricool"); }
   window.open(METRICOOL_CONFIG.composerUrl(), "_blank", "noopener,noreferrer");
 }
 document.getElementById("copyAllBtn").onclick = sendToMetricool;
