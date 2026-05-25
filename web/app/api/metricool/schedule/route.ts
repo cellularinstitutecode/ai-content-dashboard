@@ -13,6 +13,20 @@ const NETWORK_MAP: Record<string, string> = {
   threads: 'threads',
 };
 
+// Metricool requires ISO datetime with seconds: YYYY-MM-DDTHH:MM:SS
+// datetime-local inputs in browsers produce YYYY-MM-DDTHH:MM (no seconds)
+function normalizePublishAt(input: string): string {
+  let s = String(input || '').trim();
+  if (!s) return s;
+  // Strip trailing Z or timezone offset; Metricool wants naive datetime + timezone field
+  s = s.replace(/Z$/, '').replace(/[+-]\d{2}:?\d{2}$/, '');
+  // If matches YYYY-MM-DDTHH:MM (16 chars, no seconds), append :00
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) s = s + ':00';
+  // If matches YYYY-MM-DDTHH:MM:SS.xxx, strip ms
+  s = s.replace(/\.\d+$/, '');
+  return s;
+}
+
 // POST /api/metricool/schedule
 // body: { network, text, publishAt (ISO datetime string), blogId?, mediaUrl? }
 export async function POST(req: NextRequest) {
@@ -25,7 +39,7 @@ export async function POST(req: NextRequest) {
   try { payload = await req.json(); } catch { payload = {}; }
   const network = String(payload.network || '').toLowerCase();
   const text = String(payload.text || '').trim();
-  const publishAt = String(payload.publishAt || '').trim();
+  const publishAt = normalizePublishAt(payload.publishAt);
   const blogId = String(payload.blogId || '4308292');
   if (!publishAt) return NextResponse.json({ error: 'publishAt is required (ISO datetime)' }, { status: 400 });
   const provider = NETWORK_MAP[network];
@@ -43,45 +57,40 @@ export async function POST(req: NextRequest) {
   }
 
   const base = 'https://app.metricool.com';
-  const candidates = [
-    base + '/api/v2/scheduler/posts?blogId=' + encodeURIComponent(blogId) + '&userId=' + encodeURIComponent(userId),
-  ];
+  const url = base + '/api/v2/scheduler/posts?blogId=' + encodeURIComponent(blogId) + '&userId=' + encodeURIComponent(userId);
 
   let lastErr: any = null;
-  for (const url of candidates) {
-    try {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'X-Mc-Auth': token,
-        },
-        body: JSON.stringify(body),
-      });
-      const rawText = await r.text();
-      let parsed: any = null;
-      try { parsed = JSON.parse(rawText); } catch { parsed = { raw: rawText }; }
-      if (!r.ok) {
-        lastErr = { url: url, status: r.status, body: parsed };
-        continue;
-      }
-      // Metricool wraps the scheduled post in { data: {...} } - unwrap it
-      const post = (parsed && parsed.data) ? parsed.data : parsed;
-      const id = post && (post.id || post.postId) ? (post.id || post.postId) : null;
-      const status = (post && post.providers && post.providers[0] && post.providers[0].status) || null;
-      const publicationDate = post && post.publicationDate ? post.publicationDate : null;
-      const providers = post && post.providers ? post.providers : [];
-      return NextResponse.json({
-        ok: true,
-        id: id,
-        status: status,
-        publicationDate: publicationDate,
-        providers: providers,
-        post: post,
-      });
-    } catch (err: any) {
-      lastErr = { url: url, error: err && err.message ? err.message : String(err) };
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'X-Mc-Auth': token,
+      },
+      body: JSON.stringify(body),
+    });
+    const rawText = await r.text();
+    let parsed: any = null;
+    try { parsed = JSON.parse(rawText); } catch { parsed = { raw: rawText }; }
+    if (!r.ok) {
+      return NextResponse.json({ error: 'Metricool API error', status: r.status, detail: parsed, publishAtSent: publishAt }, { status: 502 });
     }
+    // Metricool wraps the scheduled post in { data: {...} } - unwrap it
+    const post = (parsed && parsed.data) ? parsed.data : parsed;
+    const id = post && (post.id || post.postId) ? (post.id || post.postId) : null;
+    const status = (post && post.providers && post.providers[0] && post.providers[0].status) || null;
+    const publicationDate = post && post.publicationDate ? post.publicationDate : null;
+    const providers = post && post.providers ? post.providers : [];
+    return NextResponse.json({
+      ok: true,
+      id: id,
+      status: status,
+      publicationDate: publicationDate,
+      providers: providers,
+      post: post,
+    });
+  } catch (err: any) {
+    lastErr = err && err.message ? err.message : String(err);
+    return NextResponse.json({ error: 'Metricool API error', detail: lastErr }, { status: 502 });
   }
-  return NextResponse.json({ error: 'Metricool API error', detail: lastErr }, { status: 502 });
 }
