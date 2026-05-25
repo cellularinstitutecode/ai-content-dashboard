@@ -26,6 +26,15 @@ const CONTENT_TYPES: { id: ContentType; label: string; hint: string }[] = [
   { id: 'ad',     label: 'Ad Copy', hint: 'Headline variations + body + CTA for Meta/Google Ads.' },
 ];
 
+function toArray(x: any): any[] {
+  if (Array.isArray(x)) return x;
+  if (x && Array.isArray(x.data)) return x.data;
+  if (x && Array.isArray(x.drafts)) return x.drafts;
+  if (x && Array.isArray(x.rows)) return x.rows;
+  if (x && Array.isArray(x.items)) return x.items;
+  return [];
+}
+
 export default function Dashboard() {
   const [provider, setProvider] = useState<Provider>('anthropic');
   const [model, setModel] = useState<string>('claude-sonnet-4-5');
@@ -55,7 +64,14 @@ export default function Dashboard() {
   useEffect(() => { refreshDrafts(); }, []);
 
   async function refreshDrafts() {
-    try { const r = await fetch('/api/drafts'); if (r.ok) setDrafts(await r.json()); } catch {}
+    try {
+      const r = await fetch('/api/drafts');
+      if (!r.ok) return;
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) return;
+      const j = await r.json().catch(() => null);
+      setDrafts(toArray(j));
+    } catch {}
   }
 
   async function generate() {
@@ -65,21 +81,21 @@ export default function Dashboard() {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ provider, model, type, prompt, brand: 'Cellular Hope Institute' }),
       });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data?.error || 'Generation failed');
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.error || ('Generation failed ('+r.status+')'));
       setOutput(data.text || data.output || JSON.stringify(data, null, 2));
       refreshDrafts();
-    } catch (e: any) { setErr(e.message); } finally { setLoading(false); }
+    } catch (e: any) { setErr(e?.message || 'Generation failed'); } finally { setLoading(false); }
   }
 
   async function loadAnalytics() {
     setMLoading(true); setMStatus(null);
     try {
       const r = await fetch('/api/metricool?blogId=4308292');
-      const data = await r.json();
-      if (!r.ok) throw new Error(data?.error || 'Metricool fetch failed');
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.error || ('Metricool fetch failed ('+r.status+')'));
       setMAnalytics(data);
-    } catch (e: any) { setMStatus('Error: ' + e.message); } finally { setMLoading(false); }
+    } catch (e: any) { setMStatus('Error: ' + (e?.message || 'failed')); } finally { setMLoading(false); }
   }
 
   async function schedulePost() {
@@ -89,10 +105,10 @@ export default function Dashboard() {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ network: mNetwork, text: mText, publishAt: mDate, blogId: 4308292 }),
       });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data?.error || 'Schedule failed');
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.error || ('Schedule failed ('+r.status+')'));
       setMStatus('Scheduled ' + (data.id ? '(id: ' + data.id + ')' : ''));
-    } catch (e: any) { setMStatus('Error: ' + e.message); }
+    } catch (e: any) { setMStatus('Error: ' + (e?.message || 'failed')); }
   }
 
   async function clipVideo() {
@@ -102,13 +118,14 @@ export default function Dashboard() {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ url: opUrl }),
       });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data?.error || 'OpusClip failed');
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.error || ('OpusClip failed ('+r.status+')'));
       setOpStatus('Clip job started ' + (data.jobId || ''));
-    } catch (e: any) { setOpStatus('Error: ' + e.message); }
+    } catch (e: any) { setOpStatus('Error: ' + (e?.message || 'failed')); }
   }
 
   const currentModels = PROVIDERS.find(p => p.id === provider)!.models;
+  const safeDrafts = Array.isArray(drafts) ? drafts : [];
 
   return (
     <main style={{ minHeight:'100vh', background:'#0a0e1a', color:'#e6edf3', fontFamily:'-apple-system,Segoe UI,sans-serif' }}>
@@ -171,12 +188,12 @@ export default function Dashboard() {
 
         <section style={{ background:'#0f172a', border:'1px solid #1f2937', borderRadius:12, padding:20, gridColumn:'1 / -1' }}>
           <h2 style={{ marginTop:0, fontSize:16 }}>4. Recent Drafts</h2>
-          {drafts.length===0 ? <div style={{ fontSize:13, opacity:.6 }}>No drafts yet. Generate something above.</div> : (
+          {safeDrafts.length===0 ? <div style={{ fontSize:13, opacity:.6 }}>No drafts yet. Generate something above.</div> : (
             <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:12 }}>
-              {drafts.slice(0,12).map((d:any,i:number)=>(
-                <div key={d.id||i} style={{ padding:12, background:'#0a0e1a', border:'1px solid #1f2937', borderRadius:8 }}>
-                  <div style={{ fontSize:11, opacity:.6, marginBottom:4 }}>{d.provider||'-'} - {d.type||'-'}</div>
-                  <div style={{ fontSize:13, maxHeight:80, overflow:'hidden' }}>{(d.text||d.output||'').substring(0,200)}...</div>
+              {safeDrafts.slice(0,12).map((d:any,i:number)=>(
+                <div key={(d && d.id) || i} style={{ padding:12, background:'#0a0e1a', border:'1px solid #1f2937', borderRadius:8 }}>
+                  <div style={{ fontSize:11, opacity:.6, marginBottom:4 }}>{(d && d.provider)||'-'} - {(d && d.type)||'-'}</div>
+                  <div style={{ fontSize:13, maxHeight:80, overflow:'hidden' }}>{String((d && (d.text||d.output))||'').substring(0,200)}...</div>
                 </div>
               ))}
             </div>
