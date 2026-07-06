@@ -92,19 +92,6 @@ async function generate() {
       refreshDrafts();
     } catch (e) { setErr(e?.message || 'Generation failed'); } finally { setLoading(false); }
   }
-  async function generate() {body: JSON.stringify({ provider, model, type, prompt, brand: 'Cellular Hope Institute' }),
-    setLoading(true); setErr(null); setOutput('');
-    try {
-      const r = await fetch('/api/generate', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider, model, type, prompt, brand: 'Cellular Hope Institute' }),
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data?.error || ('Generation failed ('+r.status+')'));
-      setOutput(data.text || data.output || JSON.stringify(data, null, 2));
-      refreshDrafts();
-    } catch (e: any) { setErr(e?.message || 'Generation failed'); } finally { setLoading(false); }
-  }
 
   async function loadAnalytics() {
     setMLoading(true); setMStatus(null);
