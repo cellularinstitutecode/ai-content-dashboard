@@ -92,7 +92,7 @@ async function generate() {
       refreshDrafts();
     } catch (e) { setErr(e?.message || 'Generation failed'); } finally { setLoading(false); }
   }
-  async function generate() {
+  async function generate() {body: JSON.stringify({ provider, model, type, prompt, brand: 'Cellular Hope Institute' }),
     setLoading(true); setErr(null); setOutput('');
     try {
       const r = await fetch('/api/generate', {
