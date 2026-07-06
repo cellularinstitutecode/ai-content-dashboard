@@ -78,7 +78,7 @@ async function generate() {
     try {
       const r = await fetch('/api/generate', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ topic: prompt, provider }),
+        body: JSON.stringify({ topic: prompt, provider, model, type }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data?.error || ('Generation failed ('+r.status+')'));
