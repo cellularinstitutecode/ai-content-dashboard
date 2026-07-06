@@ -90,7 +90,7 @@ async function generate() {
         'BLOG', pack.blog || ''
       ].join('\n'));
       refreshDrafts();
-    } catch (e) { setErr(e?.message || 'Generation failed'); } finally { setLoading(false); }
+    } catch (e: any) { setErr(e?.message || 'Generation failed'); } finally { setLoading(false); }
   }
 
   async function loadAnalytics() {
