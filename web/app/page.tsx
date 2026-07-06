@@ -73,7 +73,25 @@ export default function Dashboard() {
       setDrafts(toArray(j));
     } catch {}
   }
-
+async function generate() {
+    setLoading(true); setErr(null); setOutput('');
+    try {
+      const r = await fetch('/api/generate', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ topic: prompt, provider }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.error || ('Generation failed ('+r.status+')'));
+      const pack = data.pack || {};
+      setOutput([
+        'INSTAGRAM', pack.instagram || '', '',
+        'FACEBOOK', pack.facebook || '', '',
+        'LINKEDIN', pack.linkedin || '', '',
+        'BLOG', pack.blog || ''
+      ].join('\n'));
+      refreshDrafts();
+    } catch (e) { setErr(e?.message || 'Generation failed'); } finally { setLoading(false); }
+  }
   async function generate() {
     setLoading(true); setErr(null); setOutput('');
     try {
