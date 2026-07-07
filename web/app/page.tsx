@@ -121,11 +121,11 @@ async function generate() {
     try {
       const r = await fetch('/api/opus/clip', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ url: opUrl }),
+        body: JSON.stringify({ videoUrl: opUrl }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data?.error || ('OpusClip failed ('+r.status+')'));
-      setOpStatus('Clip job started ' + (data.jobId || ''));
+      setOpStatus('Clip job started ' + ((data && data.project && (data.project.projectId || data.project.id)) || ''));
     } catch (e: any) { setOpStatus('Error: ' + (e?.message || 'failed')); }
   }
 
