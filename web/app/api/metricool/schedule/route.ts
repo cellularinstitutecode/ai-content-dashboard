@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseServer, supabaseAdmin } from '@/lib/supabase';
 
 export const runtime = 'nodejs';
 
@@ -13,23 +14,27 @@ const NETWORK_MAP: Record<string, string> = {
   threads: 'threads',
 };
 
+const TIMEZONE = process.env.METRICOOL_TIMEZONE || 'America/Cancun';
+
 // Metricool requires ISO datetime with seconds: YYYY-MM-DDTHH:MM:SS
 // datetime-local inputs in browsers produce YYYY-MM-DDTHH:MM (no seconds)
 function normalizePublishAt(input: string): string {
   let s = String(input || '').trim();
   if (!s) return s;
-  // Strip trailing Z or timezone offset; Metricool wants naive datetime + timezone field
   s = s.replace(/Z$/, '').replace(/[+-]\d{2}:?\d{2}$/, '');
-  // If matches YYYY-MM-DDTHH:MM (16 chars, no seconds), append :00
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) s = s + ':00';
-  // If matches YYYY-MM-DDTHH:MM:SS.xxx, strip ms
   s = s.replace(/\.\d+$/, '');
   return s;
 }
 
 // POST /api/metricool/schedule
-// body: { network, text, publishAt (ISO datetime string), blogId?, mediaUrl? }
+// body: { network, text, publishAt (ISO datetime string), blogId?, mediaUrl?, draftId? }
 export async function POST(req: NextRequest) {
+  // --- Auth guard (defense in depth; matches drafts/opus routes) ---
+  const sb = supabaseServer();
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
   const token = process.env.METRICOOL_USER_TOKEN;
   const userId = process.env.METRICOOL_USER_ID || '3377431';
   if (!token) {
@@ -41,6 +46,7 @@ export async function POST(req: NextRequest) {
   const text = String(payload.text || '').trim();
   const publishAt = normalizePublishAt(payload.publishAt);
   const blogId = String(payload.blogId || '4308292');
+  const draftId = payload.draftId ? String(payload.draftId) : null;
   if (!publishAt) return NextResponse.json({ error: 'publishAt is required (ISO datetime)' }, { status: 400 });
   const provider = NETWORK_MAP[network];
   if (!provider) return NextResponse.json({ error: 'Unsupported network: ' + network }, { status: 400 });
@@ -48,7 +54,7 @@ export async function POST(req: NextRequest) {
 
   const body: any = {
     text: text,
-    publicationDate: { dateTime: publishAt, timezone: 'America/Cancun' },
+    publicationDate: { dateTime: publishAt, timezone: TIMEZONE },
     providers: [{ network: provider }],
     autoPublish: true,
   };
@@ -59,7 +65,6 @@ export async function POST(req: NextRequest) {
   const base = 'https://app.metricool.com';
   const url = base + '/api/v2/scheduler/posts?blogId=' + encodeURIComponent(blogId) + '&userId=' + encodeURIComponent(userId);
 
-  let lastErr: any = null;
   try {
     const r = await fetch(url, {
       method: 'POST',
@@ -75,12 +80,26 @@ export async function POST(req: NextRequest) {
     if (!r.ok) {
       return NextResponse.json({ error: 'Metricool API error', status: r.status, detail: parsed, publishAtSent: publishAt }, { status: 502 });
     }
-    // Metricool wraps the scheduled post in { data: {...} } - unwrap it
     const post = (parsed && parsed.data) ? parsed.data : parsed;
     const id = post && (post.id || post.postId) ? (post.id || post.postId) : null;
     const status = (post && post.providers && post.providers[0] && post.providers[0].status) || null;
     const publicationDate = post && post.publicationDate ? post.publicationDate : null;
     const providers = post && post.providers ? post.providers : [];
+
+    // --- Persist to posts table (best-effort; scheduling already succeeded) ---
+    try {
+      const admin = supabaseAdmin();
+      await admin.from('posts').insert({
+        user_id: user.id,
+        draft_id: draftId,
+        providers: [provider],
+        text: text,
+        publication_date: publishAt,
+        metricool_post_id: id,
+        status: status || 'scheduled',
+      });
+    } catch { /* logging-only */ }
+
     return NextResponse.json({
       ok: true,
       id: id,
@@ -90,7 +109,7 @@ export async function POST(req: NextRequest) {
       post: post,
     });
   } catch (err: any) {
-    lastErr = err && err.message ? err.message : String(err);
+    const lastErr = err && err.message ? err.message : String(err);
     return NextResponse.json({ error: 'Metricool API error', detail: lastErr }, { status: 502 });
   }
 }

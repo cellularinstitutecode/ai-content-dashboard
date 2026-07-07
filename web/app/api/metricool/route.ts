@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseServer } from '@/lib/supabase';
 
 export const runtime = 'nodejs';
 
 // GET /api/metricool?blogId=4308292
 // Probes multiple Metricool endpoints; returns the full upstream body so we can see exactly what's rejected.
 export async function GET(req: NextRequest) {
+  // --- Auth guard (defense in depth; matches drafts/opus routes) ---
+  const sb = supabaseServer();
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
   const token = process.env.METRICOOL_USER_TOKEN;
   const userId = process.env.METRICOOL_USER_ID || '3377431';
   if (!token) {

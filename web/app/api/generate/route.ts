@@ -7,6 +7,11 @@ export const runtime = 'nodejs';
 
 const ALLOWED_TYPES: ContentType[] = ['social', 'blog', 'email', 'video', 'ad'];
 
+const ALLOWED_MODELS: Record<Provider, string[]> = {
+  anthropic: ['claude-sonnet-4-5', 'claude-opus-4-1', 'claude-haiku-4-5'],
+  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
+};
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -23,13 +28,21 @@ export async function POST(req: NextRequest) {
     const contentType: ContentType | undefined =
       type && ALLOWED_TYPES.includes(type) ? type : undefined;
 
+    // Only forward a model if it's a known model for the resolved provider.
+    const resolvedProvider: Provider =
+      p || (process.env.AI_PROVIDER === 'openai' ? 'openai' : 'anthropic');
+    const safeModel =
+      typeof model === 'string' && ALLOWED_MODELS[resolvedProvider].includes(model)
+        ? model
+        : undefined;
+
     const { provider: used, pack } = await generateContentPack({
       topic,
       audience,
       tone,
       channels,
       provider: p,
-      model: typeof model === 'string' ? model : undefined,
+      model: safeModel,
       contentType,
     });
     return NextResponse.json({ provider: used, pack });
