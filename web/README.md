@@ -83,8 +83,9 @@ npm run dev
 - Live Metricool metrics (followers / reach / impressions / engagement) surface as extra cards in the dashboard counter row when analytics are loaded.
 - `/sign-in` page with Supabase email auth and `/auth/callback` handler.
 - Stat counters (Drafts / Scheduled / Upcoming / Clip jobs) wired to `/api/stats`.
-- Content Calendar (`/calendar`) listing scheduled posts from `/api/posts`, grouped by day.
+- Content Calendar (`/calendar`) with a month-grid layout and drag-to-reschedule — dropping a post onto another day PATCHes `/api/posts` to move it (keeping its time of day).
 - Brand Brain (`/brand`) profile editor backed by the `brand_profiles` table via `/api/brand`.
+- `PATCH /api/posts` reschedules a single post's `publication_date` (used by calendar drag-and-drop).
 
 ## Known gaps to wire next
-- Optional: month-grid calendar layout and drag-to-reschedule.
+- Nothing outstanding from the original scope — all planned features are shipped. Future ideas: recurring-schedule templates and multi-account team roles.
