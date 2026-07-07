@@ -55,13 +55,23 @@ export default function Dashboard() {
   const [opStatus, setOpStatus] = useState<string | null>(null);
 
   const [drafts, setDrafts] = useState<any[]>([]);
+  const [stats, setStats] = useState<any>(null);
 
   useEffect(() => {
     const first = PROVIDERS.find(p => p.id === provider)!;
     if (!first.models.some(m => m.id === model)) setModel(first.models[0].id);
   }, [provider]);
 
-  useEffect(() => { refreshDrafts(); }, []);
+  useEffect(() => { refreshDrafts(); refreshStats(); }, []);
+
+  async function refreshStats() {
+    try {
+      const r = await fetch('/api/stats');
+      if (!r.ok) return;
+      const j = await r.json().catch(() => null);
+      if (j) setStats(j);
+    } catch {}
+  }
 
   async function refreshDrafts() {
     try {
@@ -139,10 +149,28 @@ async function generate() {
           <h1 style={{ margin:0, fontSize:22 }}>AI Content Dashboard</h1>
           <div style={{ fontSize:13, opacity:.7 }}>Cellular Hope Institute - marketing command center</div>
         </div>
-        <a href='/sign-out' style={{ color:'#9ca3af', fontSize:13, textDecoration:'none', border:'1px solid #1f2937', padding:'6px 12px', borderRadius:6 }}>Sign out</a>
+        <nav style={{ display:'flex', gap:12, alignItems:'center' }}>
+          <a href='/calendar' style={{ color:'#9ca3af', fontSize:13, textDecoration:'none' }}>Calendar</a>
+          <a href='/brand' style={{ color:'#9ca3af', fontSize:13, textDecoration:'none' }}>Brand Brain</a>
+          <a href='/sign-out' style={{ color:'#9ca3af', fontSize:13, textDecoration:'none', border:'1px solid #1f2937', padding:'6px 12px', borderRadius:6 }}>Sign out</a>
+        </nav>
       </header>
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, padding:24, maxWidth:1400, margin:'0 auto' }}>
+
+        <section style={{ gridColumn:'1 / -1', display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:12 }}>
+          {[
+            { label:'Drafts', value: stats ? stats.drafts : '-' },
+            { label:'Scheduled posts', value: stats ? stats.scheduledPosts : '-' },
+            { label:'Upcoming', value: stats ? stats.upcomingPosts : '-' },
+            { label:'Clip jobs', value: stats ? stats.clips : '-' },
+          ].map((s) => (
+            <div key={s.label} style={{ background:'#0f172a', border:'1px solid #1f2937', borderRadius:12, padding:'16px 18px' }}>
+              <div style={{ fontSize:26, fontWeight:600 }}>{s.value}</div>
+              <div style={{ fontSize:12, opacity:.65, marginTop:2 }}>{s.label}</div>
+            </div>
+          ))}
+        </section>
 
         <section style={{ background:'#0f172a', border:'1px solid #1f2937', borderRadius:12, padding:20, gridColumn:'1 / -1' }}>
           <h2 style={{ marginTop:0, fontSize:16 }}>1. Content Generator</h2>
