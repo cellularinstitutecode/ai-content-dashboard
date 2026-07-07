@@ -69,3 +69,23 @@ for each row execute function public.touch_updated_at();
 
 -- Provider column for drafts: tracks which AI generated the pack ('anthropic' | 'openai')
 alter table public.drafts add column if not exists provider text;
+
+-- Brand Brain: one profile per user that steers generation (voice, audience, guidelines).
+create table if not exists public.brand_profiles (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null unique references auth.users(id) on delete cascade,
+  name text default '',
+  mission text default '',
+  voice text default '',
+  audience text default '',
+  keywords text[] default '{}',
+  guidelines text default '',
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+alter table public.brand_profiles enable row level security;
+
+create policy if not exists "brand: owner read" on public.brand_profiles for select using (auth.uid() = user_id);
+create policy if not exists "brand: owner insert" on public.brand_profiles for insert with check (auth.uid() = user_id);
+create policy if not exists "brand: owner update" on public.brand_profiles for update using (auth.uid() = user_id);
