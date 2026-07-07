@@ -26,6 +26,36 @@ const CONTENT_TYPES: { id: ContentType; label: string; hint: string }[] = [
   { id: 'ad',     label: 'Ad Copy', hint: 'Headline variations + body + CTA for Meta/Google Ads.' },
 ];
 
+// Best-effort extraction of a few headline numbers from the Metricool analytics
+// response. The upstream shape varies, so we scan known keys and only surface
+// whatever we actually find (fails silently to an empty list).
+function metricoolMetrics(a: any): { label: string; value: any }[] {
+  if (!a || typeof a !== 'object') return [];
+  const found: { label: string; value: any }[] = [];
+  const seen = new Set<string>();
+  const wanted: [string, RegExp][] = [
+    ['Followers', /followers|fans|subscribers/i],
+    ['Reach', /reach/i],
+    ['Impressions', /impressions|views/i],
+    ['Engagement', /engagement|interactions/i],
+  ];
+  const walk = (obj: any, depth: number) => {
+    if (!obj || depth > 4 || typeof obj !== 'object') return;
+    for (const k of Object.keys(obj)) {
+      const v = obj[k];
+      if (typeof v === 'number' && isFinite(v)) {
+        for (const [label, re] of wanted) {
+          if (!seen.has(label) && re.test(k)) { found.push({ label, value: v }); seen.add(label); }
+        }
+      } else if (v && typeof v === 'object') {
+        walk(v, depth + 1);
+      }
+    }
+  };
+  walk(a, 0);
+  return found.slice(0, 4);
+}
+
 function toArray(x: any): any[] {
   if (Array.isArray(x)) return x;
   if (x && Array.isArray(x.data)) return x.data;
@@ -164,6 +194,7 @@ async function generate() {
             { label:'Scheduled posts', value: stats ? stats.scheduledPosts : '-' },
             { label:'Upcoming', value: stats ? stats.upcomingPosts : '-' },
             { label:'Clip jobs', value: stats ? stats.clips : '-' },
+            ...metricoolMetrics(mAnalytics),
           ].map((s) => (
             <div key={s.label} style={{ background:'#0f172a', border:'1px solid #1f2937', borderRadius:12, padding:'16px 18px' }}>
               <div style={{ fontSize:26, fontWeight:600 }}>{s.value}</div>

@@ -14,6 +14,15 @@ export type ContentPack = {
   blog: string;
 };
 
+export type BrandContext = {
+  name?: string;
+  mission?: string;
+  voice?: string;
+  audience?: string;
+  keywords?: string[];
+  guidelines?: string;
+};
+
 export type GenerateInput = {
   topic: string;
   audience?: string;
@@ -22,6 +31,7 @@ export type GenerateInput = {
   provider?: Provider;
   model?: string;
   contentType?: ContentType;
+  brand?: BrandContext;
 };
 
 const BASE_VOICE = `You are the marketing content writer for Cellular Hope Institute, a regenerative medicine clinic in Cancún, Mexico. You write in the brand voice: warm, expert, science-backed, never hype.`;
@@ -41,9 +51,22 @@ function systemPrompt(type: ContentType) {
   return `${BASE_VOICE} You always return STRICT JSON with exactly the keys: instagram, facebook, linkedin, blog. Each value is a finished, ready-to-use string. ${TYPE_INSTRUCTIONS[type]} Return strict JSON only. No prose, no markdown fences.`;
 }
 
+function brandBlock(brand?: BrandContext): string {
+  if (!brand) return '';
+  const parts: string[] = [];
+  if (brand.name) parts.push(`Brand name: ${brand.name}`);
+  if (brand.mission) parts.push(`Mission: ${brand.mission}`);
+  if (brand.voice) parts.push(`Voice & tone: ${brand.voice}`);
+  if (brand.audience) parts.push(`Primary audience: ${brand.audience}`);
+  if (brand.keywords && brand.keywords.length) parts.push(`Preferred keywords: ${brand.keywords.join(', ')}`);
+  if (brand.guidelines) parts.push(`Guidelines (must follow): ${brand.guidelines}`);
+  if (!parts.length) return '';
+  return `Follow this brand profile strictly when writing:\n${parts.join('\n')}\n\n`;
+}
+
 function buildUserPrompt(input: GenerateInput) {
   const channels = input.channels?.length ? input.channels.join(', ') : 'instagram, facebook, linkedin, blog';
-  return `Topic: ${input.topic}
+  return `${brandBlock(input.brand)}Topic: ${input.topic}
 Target audience: ${input.audience || 'aesthetic and wellness patients considering regenerative therapy'}
 Tone: ${input.tone || 'professional, friendly'}
 Channels to produce: ${channels}

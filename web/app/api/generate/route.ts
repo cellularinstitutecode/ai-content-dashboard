@@ -1,7 +1,8 @@
 // web/app/api/generate/route.ts
 // Thin route — delegates to lib/ai.ts so we can swap providers.
 import { NextRequest, NextResponse } from 'next/server';
-import { generateContentPack, type Provider, type ContentType } from '@/lib/ai';
+import { generateContentPack, type Provider, type ContentType, type BrandContext } from '@/lib/ai';
+import { supabaseServer } from '@/lib/supabase';
 
 export const runtime = 'nodejs';
 
@@ -36,6 +37,23 @@ export async function POST(req: NextRequest) {
         ? model
         : undefined;
 
+    // Load the signed-in user's Brand Brain profile (optional — generation still works without it).
+    let brand: BrandContext | undefined;
+    try {
+      const sb = supabaseServer();
+      const { data: { user } } = await sb.auth.getUser();
+      if (user) {
+        const { data: bp } = await sb
+          .from('brand_profiles')
+          .select('name, mission, voice, audience, keywords, guidelines')
+          .eq('user_id', user.id)
+          .maybeSingle();
+        if (bp) brand = bp as BrandContext;
+      }
+    } catch {
+      // ignore brand-load failures; fall back to the default brand voice.
+    }
+
     const { provider: used, pack } = await generateContentPack({
       topic,
       audience,
@@ -44,6 +62,7 @@ export async function POST(req: NextRequest) {
       provider: p,
       model: safeModel,
       contentType,
+      brand,
     });
     return NextResponse.json({ provider: used, pack });
   } catch (e: any) {
