@@ -79,12 +79,12 @@ npm run dev
 - The auth middleware redirects unauthenticated users to \`/sign-in\` (the `/sign-in` page and Supabase auth callback are implemented).
 
 ## Recently shipped
+- Brand Brain profile is now threaded into `/api/generate` — generations follow the stored voice, audience, keywords and guidelines.
+- Live Metricool metrics (followers / reach / impressions / engagement) surface as extra cards in the dashboard counter row when analytics are loaded.
 - `/sign-in` page with Supabase email auth and `/auth/callback` handler.
 - Stat counters (Drafts / Scheduled / Upcoming / Clip jobs) wired to `/api/stats`.
 - Content Calendar (`/calendar`) listing scheduled posts from `/api/posts`, grouped by day.
 - Brand Brain (`/brand`) profile editor backed by the `brand_profiles` table via `/api/brand`.
 
 ## Known gaps to wire next
-- Feed the saved Brand Brain profile into `/api/generate` so generations use the stored voice/guidelines.
-- Surface live Metricool analytics (reach / engagement) alongside the local counters.
 - Optional: month-grid calendar layout and drag-to-reschedule.
