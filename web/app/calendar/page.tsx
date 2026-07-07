@@ -117,7 +117,7 @@ export default function CalendarPage() {
   async function reschedule(id: string, targetDay: Date) {
     const post = posts.find((p) => p.id === id);
     if (!post) return;
-    const orig = new Date(post.publication_date);
+    const orig = new Date(post.publication_date ?? '');
     const next = new Date(targetDay);
     if (!isNaN(orig.getTime())) {
       next.setHours(orig.getHours(), orig.getMinutes(), 0, 0);
