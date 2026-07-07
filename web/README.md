@@ -8,6 +8,7 @@ Full-stack rebuild of the dashboard at \`/index.html\`. Lives in this \`web/\` s
 - **Scheduling proxy:** Metricool (\`/api/metricool/schedule\`) — token never leaves the server
 - **Video clips proxy:** OpusClip (\`/api/opus/clip\`) — key never leaves the server
 - **Drafts + Auth:** Supabase (Postgres + RLS + email auth)
+- **Dashboard data:** stat counters (`/api/stats`), scheduled posts (`/api/posts`), Content Calendar (`/calendar`) and Brand Brain (`/api/brand`, `/brand`)
 
 ## One-time setup (do these yourself — I cannot create accounts on your behalf)
 
@@ -75,9 +76,15 @@ npm run dev
 - All third-party API keys (Anthropic, OpenAI, Metricool, OpusClip, Supabase service role) live **only** in Vercel env vars.
 - The browser never sees them — every external call goes through a server route.
 - Supabase Row Level Security ensures users only see their own drafts/posts/clips.
-- The auth middleware redirects unauthenticated users to \`/sign-in\` (sign-in page is **not** in this commit — add it before going live, or comment out the middleware matcher for a first smoke test).
+- The auth middleware redirects unauthenticated users to \`/sign-in\` (the `/sign-in` page and Supabase auth callback are implemented).
+
+## Recently shipped
+- `/sign-in` page with Supabase email auth and `/auth/callback` handler.
+- Stat counters (Drafts / Scheduled / Upcoming / Clip jobs) wired to `/api/stats`.
+- Content Calendar (`/calendar`) listing scheduled posts from `/api/posts`, grouped by day.
+- Brand Brain (`/brand`) profile editor backed by the `brand_profiles` table via `/api/brand`.
 
 ## Known gaps to wire next
-- \`/sign-in\` page (Supabase email magic link).
-- Stat counters (Approved / Scheduled / Published) need Metricool GET endpoints.
-- Calendar view + Brand Brain pages are still placeholders.
+- Feed the saved Brand Brain profile into `/api/generate` so generations use the stored voice/guidelines.
+- Surface live Metricool analytics (reach / engagement) alongside the local counters.
+- Optional: month-grid calendar layout and drag-to-reschedule.
