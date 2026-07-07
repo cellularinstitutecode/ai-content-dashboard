@@ -121,11 +121,11 @@ async function generate() {
     try {
       const r = await fetch('/api/opus/clip', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ url: opUrl }),
+        body: JSON.stringify({ videoUrl: opUrl }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data?.error || ('OpusClip failed ('+r.status+')'));
-      setOpStatus('Clip job started ' + (data.jobId || ''));
+      setOpStatus('Clip job started ' + ((data && data.project && (data.project.projectId || data.project.id)) || ''));
     } catch (e: any) { setOpStatus('Error: ' + (e?.message || 'failed')); }
   }
 
@@ -197,8 +197,8 @@ async function generate() {
             <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:12 }}>
               {safeDrafts.slice(0,12).map((d:any,i:number)=>(
                 <div key={(d && d.id) || i} style={{ padding:12, background:'#0a0e1a', border:'1px solid #1f2937', borderRadius:8 }}>
-                  <div style={{ fontSize:11, opacity:.6, marginBottom:4 }}>{(d && d.provider)||'-'} - {(d && d.type)||'-'}</div>
-                  <div style={{ fontSize:13, maxHeight:80, overflow:'hidden' }}>{String((d && (d.text||d.output))||'').substring(0,200)}...</div>
+                  <div style={{ fontSize:11, opacity:.6, marginBottom:4 }}>{(d && d.provider)||'-'} - {(d && d.topic)||'-'}</div>
+                  <div style={{ fontSize:13, maxHeight:80, overflow:'hidden' }}>{String((d && d.pack && (d.pack.instagram || d.pack.blog || d.pack.facebook || d.pack.linkedin)) || (d && (d.text||d.output)) || '').substring(0,200)}...</div>
                 </div>
               ))}
             </div>
