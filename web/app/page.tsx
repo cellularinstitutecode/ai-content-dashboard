@@ -182,6 +182,7 @@ async function generate() {
         <nav style={{ display:'flex', gap:12, alignItems:'center' }}>
           <a href='/calendar' style={{ color:'#9ca3af', fontSize:13, textDecoration:'none' }}>Calendar</a>
           <a href='/brand' style={{ color:'#9ca3af', fontSize:13, textDecoration:'none' }}>Brand Brain</a>
+          <a href='/templates' style={{ color:'#9ca3af', fontSize:13, textDecoration:'none' }}>Templates</a>
           <a href='/sign-out' style={{ color:'#9ca3af', fontSize:13, textDecoration:'none', border:'1px solid #1f2937', padding:'6px 12px', borderRadius:6 }}>Sign out</a>
         </nav>
       </header>
