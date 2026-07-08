@@ -89,3 +89,29 @@ alter table public.brand_profiles enable row level security;
 create policy if not exists "brand: owner read" on public.brand_profiles for select using (auth.uid() = user_id);
 create policy if not exists "brand: owner insert" on public.brand_profiles for insert with check (auth.uid() = user_id);
 create policy if not exists "brand: owner update" on public.brand_profiles for update using (auth.uid() = user_id);
+-- Schedule templates: reusable recurring posting cadences.
+-- A template describes what to post (text + providers) and when (weekly on
+-- chosen weekdays at a given local time). Users "apply" a template to
+-- materialize upcoming rows into public.posts.
+create table if not exists public.schedule_templates (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null default 'Untitled template',
+  providers text[] not null default '{}',
+  text text not null default '',
+  -- 0=Sun .. 6=Sat; which weekdays this template posts on.
+  weekdays int[] not null default '{}',
+  -- local time-of-day, "HH:MM" 24h.
+  time_of_day text not null default '09:00',
+  active boolean not null default true,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+alter table public.schedule_templates enable row level security;
+
+create policy if not exists "templates: owner read" on public.schedule_templates for select using (auth.uid() = user_id);
+create policy if not exists "templates: owner insert" on public.schedule_templates for insert with check (auth.uid() = user_id);
+create policy if not exists "templates: owner update" on public.schedule_templates for update using (auth.uid() = user_id);
+create policy if not exists "templates: owner delete" on public.schedule_templates for delete using (auth.uid() = user_id);
+

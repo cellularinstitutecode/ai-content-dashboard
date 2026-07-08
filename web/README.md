@@ -8,7 +8,7 @@ Full-stack rebuild of the dashboard at \`/index.html\`. Lives in this \`web/\` s
 - **Scheduling proxy:** Metricool (\`/api/metricool/schedule\`) — token never leaves the server
 - **Video clips proxy:** OpusClip (\`/api/opus/clip\`) — key never leaves the server
 - **Drafts + Auth:** Supabase (Postgres + RLS + email auth)
-- **Dashboard data:** stat counters (`/api/stats`), scheduled posts (`/api/posts`), Content Calendar (`/calendar`) and Brand Brain (`/api/brand`, `/brand`)
+- **Dashboard data:** stat counters (`/api/stats`), scheduled posts (`/api/posts`), Content Calendar (`/calendar`) and Brand Brain (`/api/brand`, `/brand`), and Schedule Templates (`/templates`, `/api/templates`)
 
 ## One-time setup (do these yourself — I cannot create accounts on your behalf)
 
@@ -86,6 +86,8 @@ npm run dev
 - Content Calendar (`/calendar`) with a month-grid layout and drag-to-reschedule — dropping a post onto another day PATCHes `/api/posts` to move it (keeping its time of day).
 - Brand Brain (`/brand`) profile editor backed by the `brand_profiles` table via `/api/brand`.
 - `PATCH /api/posts` reschedules a single post's `publication_date` (used by calendar drag-and-drop).
+- Schedule Templates (`/templates`) — save a reusable weekly posting cadence (providers, weekdays, time, text) via `/api/templates`.
+- Apply a template with `POST /api/templates/apply` to materialize the next N weeks of scheduled posts into the `posts` table.
 
 ## Known gaps to wire next
-- Nothing outstanding from the original scope — all planned features are shipped. Future ideas: recurring-schedule templates and multi-account team roles.
+- Nothing outstanding from the original scope — all planned features are shipped. Future idea: multi-account team roles.
