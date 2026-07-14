@@ -34,6 +34,38 @@ export type GenerateInput = {
   brand?: BrandContext;
 };
 
+// Retryable transient statuses: 408 timeout, 409 conflict, 429 rate limit, 5xx overloaded/errors
+const RETRYABLE = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
+async function fetchWithRetry(url: string, init: RequestInit, opts: { retries?: number; timeoutMs?: number } = {}): Promise<Response> {
+  const retries = opts.retries ?? 2;
+  const timeoutMs = opts.timeoutMs ?? 30000;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...init, signal: controller.signal });
+      clearTimeout(timer);
+      if (RETRYABLE.has(res.status) && attempt < retries) {
+        await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+        continue;
+      }
+      return res;
+    } catch (e) {
+      clearTimeout(timer);
+      lastErr = e;
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+        continue;
+      }
+    }
+  }
+  throw new Error(`request to ${url} failed after ${retries + 1} attempts: ${(lastErr as any)?.message || 'network/timeout error'}`);
+}
+function maxTokensFor(type: ContentType): number {
+  return type === 'blog' || type === 'email' ? 4000 : 2000;
+}
+
 const BASE_VOICE = `You are the marketing content writer for Cellular Hope Institute, a regenerative medicine clinic in Cancún, Mexico. You write in the brand voice: warm, expert, science-backed, never hype.`;
 
 // Each content type keeps the SAME four JSON keys (instagram, facebook, linkedin, blog)
@@ -78,7 +110,7 @@ async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
   if (!key) throw new Error('ANTHROPIC_API_KEY missing');
   const model = input.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
   const type = input.contentType || 'social';
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -87,7 +119,7 @@ async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
     },
     body: JSON.stringify({
       model,
-      max_tokens: 2000,
+      max_tokens: maxTokensFor(type),
       system: systemPrompt(type),
       messages: [{ role: 'user', content: buildUserPrompt(input) }],
     }),
@@ -103,7 +135,7 @@ async function callOpenAI(input: GenerateInput): Promise<ContentPack> {
   if (!key) throw new Error('OPENAI_API_KEY missing');
   const model = input.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
   const type = input.contentType || 'social';
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+  const res = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {   
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -127,7 +159,9 @@ async function callOpenAI(input: GenerateInput): Promise<ContentPack> {
 function parseJsonStrict(text: string): ContentPack {
   // Tolerate accidental markdown fences
   const cleaned = text.replace(/^\s*```(?:json)?/i, '').replace(/```\s*$/, '').trim();
-  const obj = JSON.parse(cleaned);
+  let obj: any;
+  try { obj = JSON.parse(cleaned); }
+  catch { throw new Error('AI returned malformed JSON; please try again.'); }
   return {
     instagram: String(obj.instagram ?? ''),
     facebook: String(obj.facebook ?? ''),
