@@ -71,6 +71,7 @@ export default function Dashboard() {
   const [type, setType] = useState<ContentType>('social');
   const [prompt, setPrompt] = useState('');
   const [output, setOutput] = useState('');
+  const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -223,6 +224,7 @@ async function generate() {
           <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} placeholder='What should we create? e.g. 3 Instagram captions about exosome therapy benefits for athletes' rows={4} style={{ width:'100%', padding:12, borderRadius:8, background:'#0a0e1a', border:'1px solid #1f2937', color:'#e6edf3', fontFamily:'inherit', resize:'vertical' }} />
           <button onClick={generate} disabled={loading||!prompt.trim()} style={{ marginTop:10, padding:'10px 20px', borderRadius:8, background:loading?'#374151':'#3b82f6', color:'#fff', border:0, cursor:loading?'wait':'pointer', fontWeight:600 }}>{loading?'Generating...':'Generate with '+(provider==='anthropic'?'Claude':'OpenAI')}</button>
           {err && <div style={{ marginTop:10, padding:10, background:'#7f1d1d', borderRadius:6, fontSize:13 }}>{err}</div>}
+          {output && <button onClick={()=>{navigator.clipboard.writeText(output).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),1500);}).catch(()=>setErr('Could not copy to clipboard'));}} style={{ marginTop:12, marginRight:8, padding:'6px 12px', borderRadius:6, border:'1px solid #1f2937', background:'#10b981', color:'#fff', cursor:'pointer' }}>{copied?'Copied!':'Copy output'}</button>}
           {output && <pre style={{ marginTop:12, padding:14, background:'#0a0e1a', border:'1px solid #1f2937', borderRadius:8, whiteSpace:'pre-wrap', wordBreak:'break-word', fontFamily:'inherit', fontSize:14, lineHeight:1.6 }}>{output}</pre>}
         </section>
 
