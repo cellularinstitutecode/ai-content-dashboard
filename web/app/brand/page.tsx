@@ -8,7 +8,7 @@ type Brand = {
   voice?: string;
   audience?: string;
   keywords?: string[];
-  guidelines?: string;
+  guidelines?: string;h
 };
 
 const inputStyle: React.CSSProperties = {
@@ -93,7 +93,7 @@ export default function BrandPage() {
             <label style={{ fontSize: 13 }}>Keywords (comma separated)
               <input style={inputStyle} value={keywordsText} onChange={(e) => setKeywordsText(e.target.value)} placeholder="wellness, research, community" />
             </label>
-            <label style={{ fontSize: 13 }}>Guidelines / do's and don'ts
+            <label style={{ fontSize: 13 }}>Guidelines / do&apos;s and don&apos;ts
               <textarea style={{ ...inputStyle, minHeight: 90 }} value={brand.guidelines || ''} onChange={(e) => update('guidelines', e.target.value)} placeholder="Avoid medical claims, always include a CTA..." />
             </label>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
