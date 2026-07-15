@@ -8,7 +8,7 @@ type Brand = {
   voice?: string;
   audience?: string;
   keywords?: string[];
-  guidelines?: string;h
+  guidelines?: string;
 };
 
 const inputStyle: React.CSSProperties = {
