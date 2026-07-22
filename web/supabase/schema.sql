@@ -54,6 +54,7 @@ create policy if not exists "drafts: owner delete" on public.drafts for delete u
 
 create policy if not exists "posts: owner read" on public.posts for select using (auth.uid() = user_id);
 create policy if not exists "posts: owner write" on public.posts for insert with check (auth.uid() = user_id);
+create policy if not exists "posts: owner update" on public.posts for update using (auth.uid() = user_id);
 
 create policy if not exists "clips: owner read" on public.clips for select using (auth.uid() = user_id);
 create policy if not exists "clips: owner write" on public.clips for insert with check (auth.uid() = user_id);

@@ -6,8 +6,7 @@ export async function middleware(req: NextRequest) {
 
   // Only enforce auth on app routes; let /sign-in and /api/public pass.
   const { pathname } = req.nextUrl;
-  if (pathname.startsWith('/sign-in') || pathname.startsWith('/sign-up') || pathname.startsWith('/api/public')) {
-    return res;
+  if (pathname.startsWith('/sign-in') || pathname.startsWith('/sign-up') || pathname.startsWith('/auth') || pathname.startsWith('/api/public')) {    return res;
   }
 
   const supabase = createServerClient(
