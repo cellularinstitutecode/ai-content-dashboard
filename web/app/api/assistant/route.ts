@@ -30,7 +30,7 @@ type Session = {
   channels?: string[];
   provider?: string;
   model?: string;
-  pack?: any;
+  pack?: Record<string, any>;
   draftId?: string;
   schedule?: { network: string; publishAt: string }[];
   links?: LinkItem[];
@@ -119,7 +119,7 @@ export async function POST(req: Request) {
         session.provider = /openai|gpt/i.test(input) ? "openai" : "anthropic";
         session.model = MODELS[session.provider];
 
-        const pack = await generateContentPack({
+        const result = await generateContentPack({
           topic: session.topic!,
           audience: session.audience,
           tone: session.tone,
@@ -128,6 +128,7 @@ export async function POST(req: Request) {
           model: session.model,
           contentType: "social" as any,
         });
+        const pack = (result?.pack || result) as Record<string, any>;
         session.pack = pack;
 
         const supabase = supabaseServer();
@@ -160,7 +161,7 @@ export async function POST(req: Request) {
         session.step = "review";
         const preview = (session.channels || [])
           .map((c) => {
-            const p = pack?.[c];
+            const p = pack[c];
             const body = typeof p === "string" ? p : p?.body || JSON.stringify(p);
             return "\u2022 " + c.toUpperCase() + ": " + String(body || "").slice(0, 180);
           })
