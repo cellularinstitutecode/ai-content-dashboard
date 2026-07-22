@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase";
+import { supabaseServer } from "@/lib/supabase";
 import { generateContentPack } from "@/lib/ai";
 
 // Embedded drafting assistant.
@@ -14,10 +14,11 @@ type Step =
   | "tone"
   | "channels"
   | "provider"
-  | "generating"
   | "review"
   | "scheduling"
   | "done";
+
+type LinkItem = { label: string; url: string };
 
 type Session = {
   step: Step;
@@ -31,13 +32,13 @@ type Session = {
   model?: string;
   pack?: any;
   draftId?: string;
-  schedule?: { network: string; publishAt: string; blogId?: string }[];
-  links?: { label: string; url: string }[];
+  schedule?: { network: string; publishAt: string }[];
+  links?: LinkItem[];
   confirmations?: string[];
 };
 
 const NETWORKS = ["instagram", "facebook", "linkedin", "blog"];
-const PROVIDERS: Record<string, string> = {
+const MODELS: Record<string, string> = {
   anthropic: "claude-sonnet-4-5",
   openai: "gpt-4o-mini",
 };
@@ -49,7 +50,9 @@ function reply(session: Session, message: string, options?: string[]) {
 function parseChannels(text: string): string[] {
   const t = text.toLowerCase();
   if (/\ball\b|everything|every/.test(t)) return [...NETWORKS];
-  const picked = NETWORKS.filter((n) => t.includes(n) || (n === "instagram" && t.includes("ig")));
+  const picked = NETWORKS.filter(
+    (n) => t.includes(n) || (n === "instagram" && t.includes("ig"))
+  );
   return picked.length ? picked : ["instagram", "linkedin"];
 }
 
@@ -58,7 +61,11 @@ export async function POST(req: Request) {
     session?: Session;
     text?: string;
   };
-  const session: Session = incoming || { step: "greet", links: [], confirmations: [] };
+  const session: Session = incoming || {
+    step: "greet",
+    links: [],
+    confirmations: [],
+  };
   session.links = session.links || [];
   session.confirmations = session.confirmations || [];
   const input = (text || "").trim();
@@ -76,7 +83,10 @@ export async function POST(req: Request) {
         if (!input) return reply(session, "Give me a topic to start with.");
         session.topic = input;
         session.step = "audience";
-        return reply(session, "Who is the audience? (e.g. patients, clinicians, general public)");
+        return reply(
+          session,
+          "Who is the audience? (e.g. patients, clinicians, general public)"
+        );
       }
       case "audience": {
         session.audience = input || "general audience";
@@ -93,7 +103,7 @@ export async function POST(req: Request) {
         session.step = "channels";
         return reply(
           session,
-          "Which channels? You can say 'all' or pick from Instagram, Facebook, LinkedIn, Blog.",
+          "Which channels? Say 'all' or pick from Instagram, Facebook, LinkedIn, Blog.",
           ["All channels", "Instagram", "LinkedIn", "Blog"]
         );
       }
@@ -107,17 +117,20 @@ export async function POST(req: Request) {
       }
       case "provider": {
         session.provider = /openai|gpt/i.test(input) ? "openai" : "anthropic";
-        session.model = PROVIDERS[session.provider];
-        session.step = "generating";
+        session.model = MODELS[session.provider];
+
         const pack = await generateContentPack({
           topic: session.topic!,
-          provider: session.provider,
+          audience: session.audience,
+          tone: session.tone,
+          channels: session.channels,
+          provider: session.provider as any,
           model: session.model,
-          type: "social",
-        } as any);
+          contentType: "social" as any,
+        });
         session.pack = pack;
 
-        const supabase = createClient();
+        const supabase = supabaseServer();
         const {
           data: { user },
         } = await supabase.auth.getUser();
@@ -172,7 +185,8 @@ export async function POST(req: Request) {
         );
       }
       case "scheduling": {
-        const publishAt = input || new Date(Date.now() + 86400000).toISOString();
+        const publishAt =
+          input || new Date(Date.now() + 86400000).toISOString();
         session.schedule = [];
         for (const network of session.channels || []) {
           session.schedule.push({ network, publishAt });
@@ -198,7 +212,9 @@ export async function POST(req: Request) {
 }
 
 function finish(session: Session) {
-  const conf = (session.confirmations || []).map((c) => "\u2713 " + c).join("\n");
+  const conf = (session.confirmations || [])
+    .map((c) => "\u2713 " + c)
+    .join("\n");
   const links = (session.links || [])
     .map((l) => "\u2022 " + l.label + ": " + l.url)
     .join("\n");
