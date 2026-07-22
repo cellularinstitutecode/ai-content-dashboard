@@ -74,7 +74,8 @@ export default function Dashboard() {
 
   const [mLoading, setMLoading] = useState(false);
   const [mAnalytics, setMAnalytics] = useState<any>(null);
-  const [mNetwork, setMNetwork] = useState('facebook');
+  const [mNetworks, setMNetworks] = useState<string[]>(["facebook"]);
+  const toggleNetwork = (n: string) => setMNetworks((prev) => prev.includes(n) ? prev.filter((x) => x !== n) : [...prev, n]);
   const [mText, setMText] = useState('');
   const [mDate, setMDate] = useState('');
   const [mStatus, setMStatus] = useState<string | null>(null);
@@ -143,16 +144,33 @@ export default function Dashboard() {
   }
 
   async function schedulePost() {
+    if (!mNetworks.length) { setMStatus('Pick at least one network.'); return; }
+    if (!mDate) { setMStatus('Pick a date & time.'); return; }
     setMStatus(null);
     try {
-      const r = await fetch('/api/metricool/schedule', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ network: mNetwork, text: mText, publishAt: mDate, blogId: 4308292 }),
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data?.error || ('Schedule failed ('+r.status+')'));
-      setMStatus('Scheduled ' + (data.id ? '(id: ' + data.id + ')' : ''));
-    } catch (e: any) { setMStatus('Error: ' + (e?.message || 'failed')); }
+      const results = await Promise.all(
+        mNetworks.map(async (network) => {
+          const r = await fetch('/api/metricool/schedule', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ network, text: mText, publishAt: mDate, blogId: 4308292 }),
+          });
+          const data = await r.json().catch(() => ({}));
+          return { network, ok: r.ok, status: r.status, data };
+        })
+      );
+      const ok = results.filter((x) => x.ok).map((x) => x.network);
+      const failed = results.filter((x) => !x.ok).map((x) => x.network);
+      if (failed.length === 0) {
+        setMStatus('Scheduled on ' + ok.join(', ') + '.');
+      } else if (ok.length === 0) {
+        setMStatus('Error: failed on ' + failed.join(', ') + '.');
+      } else {
+        setMStatus('Scheduled on ' + ok.join(', ') + '; failed on ' + failed.join(', ') + '.');
+      }
+    } catch (e: any) {
+      setMStatus('Error: ' + (e?.message || 'failed'));
+    }
   }
 
   async function clipVideo() {
@@ -349,13 +367,64 @@ export default function Dashboard() {
               <div className="border-t border-line pt-5">
                 <label className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Schedule a post</label>
                 <div className="mb-3 flex flex-wrap gap-2">
-                  <select value={mNetwork} onChange={e => setMNetwork(e.target.value)}
-                    className="rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink ring-1 ring-line focus:ring-accent">
-                    <option value="facebook">Facebook</option>
-                    <option value="instagram">Instagram</option>
-                    <option value="linkedin">LinkedIn</option>
-                    <option value="twitter">X / Twitter</option>
-                  </select>
+                  <div className="flex flex-wrap gap-2" role="group" aria-label="Networks to post to">
+            <button
+              type="button"
+              key="facebook"
+              onClick={() => toggleNetwork("facebook")}
+              aria-pressed={mNetworks.includes("facebook")}
+              className={
+                "rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " +
+                (mNetworks.includes("facebook")
+                  ? "bg-accent text-white ring-accent"
+                  : "bg-subtle text-ink ring-line hover:ring-accent/50")
+              }
+            >
+              Facebook
+            </button>
+            <button
+              type="button"
+              key="instagram"
+              onClick={() => toggleNetwork("instagram")}
+              aria-pressed={mNetworks.includes("instagram")}
+              className={
+                "rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " +
+                (mNetworks.includes("instagram")
+                  ? "bg-accent text-white ring-accent"
+                  : "bg-subtle text-ink ring-line hover:ring-accent/50")
+              }
+            >
+              Instagram
+            </button>
+            <button
+              type="button"
+              key="linkedin"
+              onClick={() => toggleNetwork("linkedin")}
+              aria-pressed={mNetworks.includes("linkedin")}
+              className={
+                "rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " +
+                (mNetworks.includes("linkedin")
+                  ? "bg-accent text-white ring-accent"
+                  : "bg-subtle text-ink ring-line hover:ring-accent/50")
+              }
+            >
+              LinkedIn
+            </button>
+            <button
+              type="button"
+              key="twitter"
+              onClick={() => toggleNetwork("twitter")}
+              aria-pressed={mNetworks.includes("twitter")}
+              className={
+                "rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " +
+                (mNetworks.includes("twitter")
+                  ? "bg-accent text-white ring-accent"
+                  : "bg-subtle text-ink ring-line hover:ring-accent/50")
+              }
+            >
+              X / Twitter
+            </button>
+          </div>
                   <input type="datetime-local" value={mDate} onChange={e => setMDate(e.target.value)}
                     className="rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink ring-1 ring-line focus:ring-accent" />
                 </div>

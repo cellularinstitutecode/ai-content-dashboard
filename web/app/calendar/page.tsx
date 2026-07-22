@@ -20,6 +20,12 @@ function toArray(x: any): any[] {
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const NETWORKS: { id: string; label: string }[] = [
+  { id: 'facebook', label: 'Facebook' },
+  { id: 'instagram', label: 'Instagram' },
+  { id: 'linkedin', label: 'LinkedIn' },
+  { id: 'twitter', label: 'X / Twitter' },
+];
 
 // Local YYYY-MM-DD key for a Date (avoids UTC drift).
 function dateKey(d: Date) {
@@ -63,6 +69,14 @@ export default function CalendarPage() {
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
+
+  // Click-a-day scheduling panel state
+  const [scheduleDay, setScheduleDay] = useState<Date | null>(null);
+  const [pNetworks, setPNetworks] = useState<string[]>(['facebook']);
+  const [pTime, setPTime] = useState('09:00');
+  const [pText, setPText] = useState('');
+  const [pBusy, setPBusy] = useState(false);
+  const [pStatus, setPStatus] = useState<string | null>(null);
 
   const today = new Date();
   const [cursor, setCursor] = useState(() => ({ year: today.getFullYear(), month: today.getMonth() }));
@@ -145,6 +159,60 @@ export default function CalendarPage() {
     }
   }
 
+  // Open the scheduling panel for a given day.
+  function openScheduler(day: Date) {
+    setScheduleDay(day);
+    setPNetworks(['facebook']);
+    setPTime('09:00');
+    setPText('');
+    setPStatus(null);
+  }
+
+  function togglePNetwork(id: string) {
+    setPNetworks((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  // Schedule a new post on the selected day across all chosen networks.
+  async function submitSchedule() {
+    if (!scheduleDay) return;
+    if (!pNetworks.length) { setPStatus('Pick at least one network.'); return; }
+    if (!pText.trim()) { setPStatus('Add some post text.'); return; }
+    const [hh, mm] = pTime.split(':').map((x) => parseInt(x, 10));
+    const when = new Date(scheduleDay);
+    when.setHours(isNaN(hh) ? 9 : hh, isNaN(mm) ? 0 : mm, 0, 0);
+    const publishAt = when.toISOString();
+
+    setPBusy(true);
+    setPStatus(null);
+    try {
+      const results = await Promise.all(
+        pNetworks.map(async (network) => {
+          const r = await fetch('/api/metricool/schedule', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ network, text: pText, publishAt, blogId: 4308292 }),
+          });
+          return { network, ok: r.ok };
+        })
+      );
+      const ok = results.filter((x) => x.ok).map((x) => x.network);
+      const failed = results.filter((x) => !x.ok).map((x) => x.network);
+      await refresh();
+      if (failed.length === 0) {
+        setPStatus('Scheduled on ' + ok.join(', ') + '.');
+        setScheduleDay(null);
+      } else if (ok.length === 0) {
+        setPStatus('Error: failed on ' + failed.join(', ') + '.');
+      } else {
+        setPStatus('Scheduled on ' + ok.join(', ') + '; failed on ' + failed.join(', ') + '.');
+      }
+    } catch (e: any) {
+      setPStatus('Error: ' + (e?.message || 'failed'));
+    } finally {
+      setPBusy(false);
+    }
+  }
+
   const monthLabel = `${MONTHS[cursor.month]} ${cursor.year}`;
   const todayKey = dateKey(today);
 
@@ -153,7 +221,7 @@ export default function CalendarPage() {
       <header className="flex items-center justify-between border-b border-black/5 bg-surface px-8 py-5">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Content Calendar</h1>
-          <p className="mt-1 text-sm text-ink/50">Drag a post to another day to reschedule it.</p>
+          <p className="mt-1 text-sm text-ink/50">Click a day to schedule a post, or drag a post to another day to reschedule it.</p>
         </div>
         <a
           href="/"
@@ -166,24 +234,9 @@ export default function CalendarPage() {
       <div className="mx-auto max-w-[1100px] px-6 py-8">
         <div className="mb-5 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <button
-              onClick={prevMonth}
-              className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5"
-            >
-              &lsaquo; Prev
-            </button>
-            <button
-              onClick={goToday}
-              className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5"
-            >
-              Today
-            </button>
-            <button
-              onClick={nextMonth}
-              className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5"
-            >
-              Next &rsaquo;
-            </button>
+            <button onClick={prevMonth} className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5">&lsaquo; Prev</button>
+            <button onClick={goToday} className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5">Today</button>
+            <button onClick={nextMonth} className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5">Next &rsaquo;</button>
           </div>
           <h2 className="text-lg font-semibold">{monthLabel}</h2>
           <div className="min-w-[90px] text-right text-xs text-ink/40">
@@ -192,16 +245,12 @@ export default function CalendarPage() {
         </div>
 
         {err && (
-          <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">
-            Error: {err}
-          </div>
+          <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">Error: {err}</div>
         )}
 
         <div className="grid grid-cols-7 gap-2">
           {DOW.map((d) => (
-            <div key={d} className="py-1 text-center text-xs font-medium text-ink/40">
-              {d}
-            </div>
+            <div key={d} className="py-1 text-center text-xs font-medium text-ink/40">{d}</div>
           ))}
           {grid.map((day) => {
             const k = dateKey(day);
@@ -211,33 +260,26 @@ export default function CalendarPage() {
             return (
               <div
                 key={k}
-                onDragOver={(e) => {
-                  if (dragId) e.preventDefault();
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (dragId) reschedule(dragId, day);
-                }}
+                onClick={() => openScheduler(day)}
+                onDragOver={(e) => { if (dragId) e.preventDefault(); }}
+                onDrop={(e) => { e.preventDefault(); if (dragId) reschedule(dragId, day); }}
                 className={
-                  'flex min-h-[104px] flex-col rounded-xl border p-2 transition ' +
+                  'group flex min-h-[104px] cursor-pointer flex-col rounded-xl border p-2 transition ' +
                   (inMonth ? 'bg-surface ' : 'bg-canvas ') +
                   (isToday ? 'border-accent ring-1 ring-accent/40 ' : 'border-black/5 ') +
-                  (dragId ? 'hover:border-accent/60 hover:bg-accent/5 ' : '')
+                  'hover:border-accent/60 hover:bg-accent/5 '
                 }
               >
-                <div
-                  className={
-                    'mb-1 text-right text-xs ' +
-                    (isToday ? 'font-semibold text-accent ' : inMonth ? 'text-ink/60 ' : 'text-ink/25 ')
-                  }
-                >
-                  {day.getDate()}
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-[11px] text-accent opacity-0 transition group-hover:opacity-100">+ Add</span>
+                  <span className={'text-xs ' + (isToday ? 'font-semibold text-accent ' : inMonth ? 'text-ink/60 ' : 'text-ink/25 ')}>{day.getDate()}</span>
                 </div>
                 <div className="flex flex-1 flex-col gap-1">
                   {dayPosts.map((p) => (
                     <div
                       key={p.id}
                       draggable
+                      onClick={(e) => e.stopPropagation()}
                       onDragStart={() => setDragId(p.id || null)}
                       onDragEnd={() => setDragId(null)}
                       title={p.text || ''}
@@ -249,9 +291,7 @@ export default function CalendarPage() {
                       <div className="font-medium text-accent">{timeLabel(p.publication_date)}</div>
                       <div className="truncate">{p.text || 'Untitled post'}</div>
                       {p.providers && p.providers.length > 0 && (
-                        <div className="mt-0.5 truncate text-[10px] text-ink/40">
-                          {p.providers.join(', ')}
-                        </div>
+                        <div className="mt-0.5 truncate text-[10px] text-ink/40">{p.providers.join(', ')}</div>
                       )}
                     </div>
                   ))}
@@ -262,9 +302,79 @@ export default function CalendarPage() {
         </div>
 
         {!loading && posts.length === 0 && (
-          <p className="mt-6 text-sm text-ink/50">No scheduled posts yet. Schedule one from the dashboard.</p>
+          <p className="mt-6 text-sm text-ink/50">No scheduled posts yet. Click any day above to schedule one.</p>
         )}
       </div>
+
+      {scheduleDay && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
+          onClick={() => { if (!pBusy) setScheduleDay(null); }}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl bg-surface p-5 shadow-2xl ring-1 ring-black/10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-start justify-between">
+              <div>
+                <h3 className="text-base font-semibold text-ink">Schedule a post</h3>
+                <p className="mt-0.5 text-sm text-ink/50">
+                  {scheduleDay.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                </p>
+              </div>
+              <button onClick={() => setScheduleDay(null)} aria-label="Close" className="rounded-full p-1 text-ink/40 hover:bg-black/5 hover:text-ink">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
+              </button>
+            </div>
+
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink/40">Networks</label>
+            <div className="mb-4 flex flex-wrap gap-2">
+              {NETWORKS.map((n) => (
+                <button
+                  key={n.id}
+                  type="button"
+                  onClick={() => togglePNetwork(n.id)}
+                  aria-pressed={pNetworks.includes(n.id)}
+                  className={
+                    'rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition ' +
+                    (pNetworks.includes(n.id) ? 'bg-accent text-white ring-accent' : 'bg-canvas text-ink ring-black/10 hover:ring-accent/50')
+                  }
+                >
+                  {n.label}
+                </button>
+              ))}
+            </div>
+
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink/40">Time</label>
+            <input
+              type="time"
+              value={pTime}
+              onChange={(e) => setPTime(e.target.value)}
+              className="mb-4 w-full rounded-xl bg-canvas px-3 py-2 text-sm text-ink outline-none ring-1 ring-black/10 focus:ring-accent/40"
+            />
+
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink/40">Post text</label>
+            <textarea
+              value={pText}
+              onChange={(e) => setPText(e.target.value)}
+              rows={4}
+              placeholder="What should this post say?"
+              className="mb-4 w-full resize-none rounded-xl bg-canvas px-3 py-2 text-sm text-ink outline-none ring-1 ring-black/10 focus:ring-accent/40"
+            />
+
+            {pStatus && (
+              <div className={'mb-3 text-sm ' + (pStatus.startsWith('Error') ? 'text-red-600' : 'text-ink/60')}>{pStatus}</div>
+            )}
+
+            <div className="flex items-center justify-end gap-2">
+              <button onClick={() => setScheduleDay(null)} disabled={pBusy} className="rounded-full border border-black/10 px-4 py-2 text-sm text-ink/70 transition hover:bg-black/5 disabled:opacity-50">Cancel</button>
+              <button onClick={submitSchedule} disabled={pBusy} className="rounded-full bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50">
+                {pBusy ? 'Scheduling…' : 'Schedule'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
