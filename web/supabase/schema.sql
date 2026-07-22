@@ -47,18 +47,28 @@ alter table public.drafts enable row level security;
 alter table public.posts enable row level security;
 alter table public.clips enable row level security;
 
-create policy if not exists "drafts: owner read" on public.drafts for select using (auth.uid() = user_id);
-create policy if not exists "drafts: owner write" on public.drafts for insert with check (auth.uid() = user_id);
-create policy if not exists "drafts: owner update" on public.drafts for update using (auth.uid() = user_id);
-create policy if not exists "drafts: owner delete" on public.drafts for delete using (auth.uid() = user_id);
+drop policy if exists "drafts: owner read" on public.drafts;
+create policy "drafts: owner read" on public.drafts for select using (auth.uid() = user_id);
+drop policy if exists "drafts: owner write" on public.drafts;
+create policy "drafts: owner write" on public.drafts for insert with check (auth.uid() = user_id);
+drop policy if exists "drafts: owner update" on public.drafts;
+create policy "drafts: owner update" on public.drafts for update using (auth.uid() = user_id);
+drop policy if exists "drafts: owner delete" on public.drafts;
+create policy "drafts: owner delete" on public.drafts for delete using (auth.uid() = user_id);
 
-create policy if not exists "posts: owner read" on public.posts for select using (auth.uid() = user_id);
-create policy if not exists "posts: owner write" on public.posts for insert with check (auth.uid() = user_id);
-create policy if not exists "posts: owner update" on public.posts for update using (auth.uid() = user_id);
+drop policy if exists "posts: owner read" on public.posts;
+create policy "posts: owner read" on public.posts for select using (auth.uid() = user_id);
+drop policy if exists "posts: owner write" on public.posts;
+create policy "posts: owner write" on public.posts for insert with check (auth.uid() = user_id);
+drop policy if exists "posts: owner update" on public.posts;
+create policy "posts: owner update" on public.posts for update using (auth.uid() = user_id);
 
-create policy if not exists "clips: owner read" on public.clips for select using (auth.uid() = user_id);
-create policy if not exists "clips: owner write" on public.clips for insert with check (auth.uid() = user_id);
-create policy if not exists "clips: owner update" on public.clips for update using (auth.uid() = user_id);
+drop policy if exists "clips: owner read" on public.clips;
+create policy "clips: owner read" on public.clips for select using (auth.uid() = user_id);
+drop policy if exists "clips: owner write" on public.clips;
+create policy "clips: owner write" on public.clips for insert with check (auth.uid() = user_id);
+drop policy if exists "clips: owner update" on public.clips;
+create policy "clips: owner update" on public.clips for update using (auth.uid() = user_id);
 
 -- Updated_at trigger for drafts
 create or replace function public.touch_updated_at() returns trigger as $$
@@ -87,9 +97,12 @@ create table if not exists public.brand_profiles (
 
 alter table public.brand_profiles enable row level security;
 
-create policy if not exists "brand: owner read" on public.brand_profiles for select using (auth.uid() = user_id);
-create policy if not exists "brand: owner insert" on public.brand_profiles for insert with check (auth.uid() = user_id);
-create policy if not exists "brand: owner update" on public.brand_profiles for update using (auth.uid() = user_id);
+drop policy if exists "brand: owner read" on public.brand_profiles;
+create policy "brand: owner read" on public.brand_profiles for select using (auth.uid() = user_id);
+drop policy if exists "brand: owner insert" on public.brand_profiles;
+create policy "brand: owner insert" on public.brand_profiles for insert with check (auth.uid() = user_id);
+drop policy if exists "brand: owner update" on public.brand_profiles;
+create policy "brand: owner update" on public.brand_profiles for update using (auth.uid() = user_id);
 -- Schedule templates: reusable recurring posting cadences.
 -- A template describes what to post (text + providers) and when (weekly on
 -- chosen weekdays at a given local time). Users "apply" a template to
@@ -111,8 +124,12 @@ create table if not exists public.schedule_templates (
 
 alter table public.schedule_templates enable row level security;
 
-create policy if not exists "templates: owner read" on public.schedule_templates for select using (auth.uid() = user_id);
-create policy if not exists "templates: owner insert" on public.schedule_templates for insert with check (auth.uid() = user_id);
-create policy if not exists "templates: owner update" on public.schedule_templates for update using (auth.uid() = user_id);
-create policy if not exists "templates: owner delete" on public.schedule_templates for delete using (auth.uid() = user_id);
+drop policy if exists "templates: owner read" on public.schedule_templates;
+create policy "templates: owner read" on public.schedule_templates for select using (auth.uid() = user_id);
+drop policy if exists "templates: owner insert" on public.schedule_templates;
+create policy "templates: owner insert" on public.schedule_templates for insert with check (auth.uid() = user_id);
+drop policy if exists "templates: owner update" on public.schedule_templates;
+create policy "templates: owner update" on public.schedule_templates for update using (auth.uid() = user_id);
+drop policy if exists "templates: owner delete" on public.schedule_templates;
+create policy "templates: owner delete" on public.schedule_templates for delete using (auth.uid() = user_id);
 
