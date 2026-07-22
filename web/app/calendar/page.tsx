@@ -149,72 +149,110 @@ export default function CalendarPage() {
   const todayKey = dateKey(today);
 
   return (
-    <main style={{ minHeight: '100vh', background: '#0a0e1a', color: '#e6edf3', fontFamily: '-apple-system,Segoe UI,sans-serif' }}>
-      <header style={{ padding: '20px 32px', borderBottom: '1px solid #1f2937', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <main className="min-h-screen bg-canvas text-ink">
+      <header className="flex items-center justify-between border-b border-black/5 bg-surface px-8 py-5">
         <div>
-          <h1 style={{ margin: 0, fontSize: 22 }}>Content Calendar</h1>
-          <div style={{ fontSize: 13, opacity: .6, marginTop: 4 }}>Drag a post to another day to reschedule it.</div>
+          <h1 className="text-xl font-semibold tracking-tight">Content Calendar</h1>
+          <p className="mt-1 text-sm text-ink/50">Drag a post to another day to reschedule it.</p>
         </div>
-        <a href="/" style={{ color: '#9ca3af', fontSize: 13, textDecoration: 'none', border: '1px solid #1f2937', padding: '6px 12px', borderRadius: 6 }}>Back to dashboard</a>
+        <a
+          href="/"
+          className="rounded-full border border-black/10 px-4 py-2 text-sm text-ink/70 transition hover:bg-black/5 hover:text-ink"
+        >
+          Back to dashboard
+        </a>
       </header>
 
-      <div style={{ maxWidth: 1100, margin: '0 auto', padding: 24 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button onClick={prevMonth} style={{ background: '#0f172a', color: '#e6edf3', border: '1px solid #1f2937', borderRadius: 6, padding: '6px 12px', cursor: 'pointer' }}>‹ Prev</button>
-            <button onClick={goToday} style={{ background: '#0f172a', color: '#e6edf3', border: '1px solid #1f2937', borderRadius: 6, padding: '6px 12px', cursor: 'pointer' }}>Today</button>
-            <button onClick={nextMonth} style={{ background: '#0f172a', color: '#e6edf3', border: '1px solid #1f2937', borderRadius: 6, padding: '6px 12px', cursor: 'pointer' }}>Next ›</button>
+      <div className="mx-auto max-w-[1100px] px-6 py-8">
+        <div className="mb-5 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={prevMonth}
+              className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5"
+            >
+              &lsaquo; Prev
+            </button>
+            <button
+              onClick={goToday}
+              className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5"
+            >
+              Today
+            </button>
+            <button
+              onClick={nextMonth}
+              className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5"
+            >
+              Next &rsaquo;
+            </button>
           </div>
-          <h2 style={{ margin: 0, fontSize: 18 }}>{monthLabel}</h2>
-          <div style={{ fontSize: 12, opacity: .6, minWidth: 90, textAlign: 'right' }}>{saving ? 'Saving…' : loading ? 'Loading…' : ''}</div>
+          <h2 className="text-lg font-semibold">{monthLabel}</h2>
+          <div className="min-w-[90px] text-right text-xs text-ink/40">
+            {saving ? 'Saving…' : loading ? 'Loading…' : ''}
+          </div>
         </div>
 
-        {err && <div style={{ color: '#f87171', fontSize: 14, marginBottom: 12 }}>Error: {err}</div>}
+        {err && (
+          <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">
+            Error: {err}
+          </div>
+        )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6 }}>
+        <div className="grid grid-cols-7 gap-2">
           {DOW.map((d) => (
-            <div key={d} style={{ fontSize: 12, opacity: .6, textAlign: 'center', padding: '4px 0' }}>{d}</div>
+            <div key={d} className="py-1 text-center text-xs font-medium text-ink/40">
+              {d}
+            </div>
           ))}
           {grid.map((day) => {
             const k = dateKey(day);
             const inMonth = day.getMonth() === cursor.month;
             const isToday = k === todayKey;
-            const items = byDay[k] || [];
+            const dayPosts = byDay[k] || [];
             return (
               <div
                 key={k}
-                onDragOver={(e) => { e.preventDefault(); }}
-                onDrop={(e) => { e.preventDefault(); if (dragId) reschedule(dragId, day); setDragId(null); }}
-                style={{
-                  minHeight: 96,
-                  background: inMonth ? '#0f172a' : '#0b1220',
-                  border: '1px solid ' + (isToday ? '#3b82f6' : '#1f2937'),
-                  borderRadius: 8,
-                  padding: 6,
-                  opacity: inMonth ? 1 : .5,
+                onDragOver={(e) => {
+                  if (dragId) e.preventDefault();
                 }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (dragId) reschedule(dragId, day);
+                }}
+                className={
+                  'flex min-h-[104px] flex-col rounded-xl border p-2 transition ' +
+                  (inMonth ? 'bg-surface ' : 'bg-canvas ') +
+                  (isToday ? 'border-accent ring-1 ring-accent/40 ' : 'border-black/5 ') +
+                  (dragId ? 'hover:border-accent/60 hover:bg-accent/5 ' : '')
+                }
               >
-                <div style={{ fontSize: 11, opacity: .7, marginBottom: 4, textAlign: 'right' }}>{day.getDate()}</div>
-                <div style={{ display: 'grid', gap: 4 }}>
-                  {items.map((p, i) => (
+                <div
+                  className={
+                    'mb-1 text-right text-xs ' +
+                    (isToday ? 'font-semibold text-accent ' : inMonth ? 'text-ink/60 ' : 'text-ink/25 ')
+                  }
+                >
+                  {day.getDate()}
+                </div>
+                <div className="flex flex-1 flex-col gap-1">
+                  {dayPosts.map((p) => (
                     <div
-                      key={(p.id) || i}
+                      key={p.id}
                       draggable
                       onDragStart={() => setDragId(p.id || null)}
                       onDragEnd={() => setDragId(null)}
                       title={p.text || ''}
-                      style={{
-                        background: '#1e293b',
-                        border: '1px solid #334155',
-                        borderRadius: 6,
-                        padding: '4px 6px',
-                        cursor: 'grab',
-                        fontSize: 11,
-                        opacity: saving === p.id ? .5 : 1,
-                      }}
+                      className={
+                        'cursor-grab rounded-lg border border-accent/20 bg-accent/5 px-2 py-1 text-[11px] leading-tight text-ink transition hover:bg-accent/10 active:cursor-grabbing ' +
+                        (saving === p.id ? 'opacity-50 ' : '')
+                      }
                     >
-                      <div style={{ opacity: .7, marginBottom: 2 }}>{timeLabel(p.publication_date)} · {(p.providers && p.providers.join(', ')) || '-'}</div>
-                      <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.text || '(no text)'}</div>
+                      <div className="font-medium text-accent">{timeLabel(p.publication_date)}</div>
+                      <div className="truncate">{p.text || 'Untitled post'}</div>
+                      {p.providers && p.providers.length > 0 && (
+                        <div className="mt-0.5 truncate text-[10px] text-ink/40">
+                          {p.providers.join(', ')}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -223,8 +261,8 @@ export default function CalendarPage() {
           })}
         </div>
 
-        {!loading && !err && posts.length === 0 && (
-          <div style={{ opacity: .6, fontSize: 14, marginTop: 16 }}>No scheduled posts yet. Schedule one from the dashboard.</div>
+        {!loading && posts.length === 0 && (
+          <p className="mt-6 text-sm text-ink/50">No scheduled posts yet. Schedule one from the dashboard.</p>
         )}
       </div>
     </main>
