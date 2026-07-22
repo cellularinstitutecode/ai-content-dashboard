@@ -67,9 +67,13 @@ export default function DraftingAssistant() {
       {open && (
         <div className="fixed bottom-6 right-6 z-50 flex h-[560px] w-[380px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-surface shadow-2xl ring-1 ring-black/10">
           <header className="flex items-center justify-between border-b border-black/5 px-4 py-3">
-            <div className="flex items-center gap-2">
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-accent/10 text-accent">\u2726</span>
-              <div>
+            <div className="flex items-center gap-3">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M12 2.5l1.9 5.1a4 4 0 0 0 2.5 2.5l5.1 1.9-5.1 1.9a4 4 0 0 0-2.5 2.5L12 21.5l-1.9-5.1a4 4 0 0 0-2.5-2.5L2.5 12l5.1-1.9a4 4 0 0 0 2.5-2.5L12 2.5z" />
+                </svg>
+              </span>
+              <div className="leading-tight">
                 <p className="text-sm font-semibold text-ink">Drafting Assistant</p>
                 <p className="text-xs text-ink/50">Draft, review &amp; schedule</p>
               </div>
@@ -98,7 +102,7 @@ export default function DraftingAssistant() {
                 )}
               </div>
             ))}
-            {busy && <div className="text-xs text-ink/40">Thinking\u2026</div>}
+            {busy && <div className="text-xs text-ink/40">Thinking…</div>}
             <div ref={endRef} />
           </div>
 
@@ -112,7 +116,7 @@ export default function DraftingAssistant() {
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Type your message\u2026"
+              placeholder="Type your message…"
               className="flex-1 rounded-full bg-canvas px-4 py-2 text-sm text-ink outline-none ring-1 ring-black/5 focus:ring-accent/40"
             />
             <button type="submit" disabled={busy || !input.trim()} className="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-white transition hover:scale-105 disabled:opacity-40">
