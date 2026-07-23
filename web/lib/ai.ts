@@ -211,3 +211,114 @@ export async function chatAssistant(
   const data = await res.json();
   return String(data?.choices?.[0]?.message?.content ?? '').trim();
 }
+
+
+// ---------------------------------------------------------------------------
+// Agentic assistant: lets the chatbot take real actions via tool-calling.
+// chatWithTools() runs one Anthropic turn where the model may request a tool.
+// It does NOT execute anything itself; it returns the requested action so the
+// server (assistant route) can run it with the authed user + confirmation gate.
+// ---------------------------------------------------------------------------
+
+export type ToolName = "generate_content" | "save_draft" | "schedule_post";
+
+export type ToolCall = {
+  name: ToolName;
+  input: Record<string, any>;
+};
+
+export type ToolTurn = {
+  message: string;
+  toolCall: ToolCall | null;
+  toolUseId: string | null;
+};
+
+const TOOLS_SYSTEM = `You are the built-in AI assistant for Content Studio, the marketing dashboard for Cellular Hope Institute, a physician-led regenerative and stem cell medicine clinic in Cancun, Mexico.
+
+You can hold a normal conversation AND take actions for the user using tools. When the user asks you to create, draft, or schedule content, use the tools rather than only describing what to do.
+
+Tool guidance:
+- generate_content: produce a ready-to-post content pack for a topic. Use this first when the user wants a post/article/email/etc. Infer a sensible format (social/blog/email/video/ad) from the request.
+- save_draft: save a generated pack to the drafts feed. Call after generate_content when the user wants to keep or later schedule the content.
+- schedule_post: schedule a post to a social network at a date/time via the connected scheduler. Networks: facebook, instagram, linkedin, twitter (x), tiktok, youtube, threads. publishAt must be an ISO datetime (YYYY-MM-DDTHH:MM). The server will ask the user to confirm before anything goes live, so it is fine to call this when the user asks; do not refuse.
+
+Keep replies concise and friendly. Only reference the clinic own website and YouTube content. Never invent medical claims; keep language compliant and non-exaggerated. If a scheduling request is missing the network or the date/time, ask a brief clarifying question instead of calling schedule_post.`;
+
+const TOOL_DEFS = [
+  {
+    name: "generate_content",
+    description: "Generate a ready-to-post content pack (instagram, facebook, linkedin, blog) for a topic.",
+    input_schema: {
+      type: "object",
+      properties: {
+        topic: { type: "string", description: "What the content should be about." },
+        format: { type: "string", enum: ["social", "blog", "email", "video", "ad"], description: "Content format. Default social." },
+        audience: { type: "string", description: "Target audience, if specified." },
+        tone: { type: "string", description: "Desired tone, if specified." },
+        provider: { type: "string", enum: ["anthropic", "openai"], description: "Which AI model to draft with. Default anthropic." },
+      },
+      required: ["topic"],
+    },
+  },
+  {
+    name: "save_draft",
+    description: "Save the most recently generated content pack to the drafts feed.",
+    input_schema: {
+      type: "object",
+      properties: {
+        topic: { type: "string", description: "Topic label for the draft (usually same as the generated topic)." },
+      },
+      required: ["topic"],
+    },
+  },
+  {
+    name: "schedule_post",
+    description: "Schedule a post to a social network at a specific date and time. The server requires user confirmation before it goes live.",
+    input_schema: {
+      type: "object",
+      properties: {
+        network: { type: "string", enum: ["facebook", "instagram", "linkedin", "twitter", "x", "tiktok", "youtube", "threads"], description: "Target social network." },
+        text: { type: "string", description: "The post text to publish. Use generated content if available." },
+        publishAt: { type: "string", description: "ISO datetime YYYY-MM-DDTHH:MM in the clinic timezone." },
+      },
+      required: ["network", "text", "publishAt"],
+    },
+  },
+];
+
+export type ToolMessage = { role: "user" | "assistant"; content: any };
+
+export async function chatWithTools(messages: ToolMessage[]): Promise<ToolTurn> {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) throw new Error("ANTHROPIC_API_KEY missing");
+  const model = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
+  const res = await fetchWithRetry("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 1500,
+      system: TOOLS_SYSTEM,
+      tools: TOOL_DEFS,
+      messages,
+    }),
+  });
+  if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const blocks: any[] = Array.isArray(data?.content) ? data.content : [];
+  let message = "";
+  let toolCall: ToolCall | null = null;
+  let toolUseId: string | null = null;
+  for (const b of blocks) {
+    if (b.type === "text") message += (message ? "\n" : "") + String(b.text || "");
+    else if (b.type === "tool_use") {
+      toolCall = { name: b.name as ToolName, input: (b.input || {}) as Record<string, any> };
+      toolUseId = String(b.id || "");
+    }
+  }
+  return { message: message.trim(), toolCall, toolUseId };
+}
