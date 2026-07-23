@@ -182,8 +182,9 @@ export default function TemplatesPage() {
             ))}
           </div>
 
-          <label style={{ display: 'block', marginTop: 22, fontSize: 13, opacity: .8 }}>Time of day
-            <input style={{ ...inputStyle, width: 140 }} type="time" value={draft.time_of_day || '09:00'} onChange={(e) => setDraft({ ...draft, time_of_day: e.target.value })} />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 22 }}>
+            <span style={{ fontSize: 13, opacity: .8 }}>Time of day</span>
+            <input style={{ ...inputStyle, width: 140, marginTop: 0 }} type="time" value={draft.time_of_day || '09:00'} onChange={(e) => setDraft({ ...draft, time_of_day: e.target.value })} />
           </label>
 
           <div style={{ marginTop: 18, marginBottom: 6, padding: 14, borderRadius: 12, background: '#f5f5f7', border: '1px solid rgba(0,0,0,0.06)' }}>
