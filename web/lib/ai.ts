@@ -177,3 +177,37 @@ export async function generateContentPack(input: GenerateInput): Promise<{ provi
   const pack = provider === 'openai' ? await callOpenAI(input) : await callAnthropic(input);
   return { provider, pack };
 }
+
+// Free-form conversational assistant for the dashboard chatbot.
+// Answers questions, explains the product, and proposes content ideas. Returns plain text.
+const ASSISTANT_SYSTEM = `You are the built-in AI assistant for Content Studio, a marketing content dashboard used by Cellular Hope Institute, a physician-led regenerative and stem cell medicine clinic in Cancun, Mexico.
+\nWhat the dashboard does:\n- Content Generator: pick a model (Claude or OpenAI) and a format (Social Post, Blog Article, Email Campaign, Video Script, Ad Copy), describe an idea, and it produces a ready-to-post content pack.\n- Long-form to Shorts (OpusClip): paste a YouTube URL from the clinic's own channel to auto-generate short clips; these appear as clip drafts with video stills.\n- Recent Drafts: all generated text drafts and clip drafts in one feed. Clicking a draft opens it; clip drafts play an embedded video.\n- Analytics & Scheduling (Metricool): load analytics and schedule posts to Facebook, Instagram, LinkedIn, or X.\n- Brand Brain: stores the clinic's brand name, mission, voice, audience, keywords and guidelines, which shape all generated content.\n- Templates: reusable posting schedules.\n\nHow to help: explain how features work, walk the user through the process step by step, and proactively propose concrete content ideas grounded in regenerative medicine (stem cells, exosomes, peptide therapy, NK cells, EBOO, longevity) and the clinic's own videos. Only ever reference the clinic's own website and YouTube content. Keep answers concise, friendly, and practical. Never invent medical claims; keep language compliant and non-exaggerated.`;
+
+export async function chatAssistant(
+  messages: { role: 'user' | 'assistant'; content: string }[],
+  provider?: Provider,
+): Promise<string> {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
+  const useProvider: Provider = provider || (anthropicKey ? 'anthropic' : 'openai');
+  const trimmed = messages.slice(-12).map((m) => ({ role: m.role, content: String(m.content || '').slice(0, 4000) }));
+  if (useProvider === 'anthropic' && anthropicKey) {
+    const res = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 1024, system: ASSISTANT_SYSTEM, messages: trimmed }),
+    });
+    if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    return String(data?.content?.[0]?.text ?? '').trim();
+  }
+  if (!openaiKey) throw new Error('No AI provider key configured');
+  const res = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${openaiKey}` },
+    body: JSON.stringify({ model: 'gpt-4o-mini', max_tokens: 1024, messages: [{ role: 'system', content: ASSISTANT_SYSTEM }, ...trimmed] }),
+  });
+  if (!res.ok) throw new Error(`openai ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  return String(data?.choices?.[0]?.message?.content ?? '').trim();
+}

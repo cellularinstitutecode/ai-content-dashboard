@@ -279,7 +279,7 @@ export default function Dashboard() {
           <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
             <div>
               <h1 className="text-title font-semibold">Good to see you</h1>
-              <p className="mt-1 text-[15px] text-ink-muted">Create, schedule, and repurpose content â all in one place.</p>
+              <p className="mt-1 text-[15px] text-ink-muted">Create, schedule, and repurpose content — all in one place.</p>
             </div>
             <div className="flex items-center gap-2 lg:hidden">
               {nav.map(n => (
@@ -346,7 +346,7 @@ export default function Dashboard() {
                 <div className="flex items-center gap-3">
                   <button onClick={generate} disabled={loading || !prompt.trim()}
                     className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">
-                    {loading ? 'Generatingâ¦' : 'Generate'}
+                    {loading ? 'Generating...' : 'Generate'}
                   </button>
                   {err && <span className="text-[13px] text-danger">{err}</span>}
                 </div>
@@ -382,11 +382,11 @@ export default function Dashboard() {
                 <h2 className="text-headline font-semibold">Analytics &amp; Scheduling</h2>
                 <span className="rounded-full bg-subtle px-2.5 py-1 text-[11px] font-medium text-ink-muted ring-1 ring-line">Metricool</span>
               </div>
-              <p className="mb-4 text-[13px] text-ink-muted">Brand: Cellular Hope Institute Â· blogId 4308292</p>
+              <p className="mb-4 text-[13px] text-ink-muted">Brand: Cellular Hope Institute · blogId 4308292</p>
 
               <button onClick={loadAnalytics} disabled={mLoading}
                 className="mb-4 rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40">
-                {mLoading ? 'Loadingâ¦' : 'Load latest analytics'}
+                {mLoading ? 'Loading...' : 'Load latest analytics'}
               </button>
 
               {metrics.length > 0 && (
@@ -464,7 +464,7 @@ export default function Dashboard() {
                   <input type="datetime-local" value={mDate} onChange={e => setMDate(e.target.value)}
                     className="rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink ring-1 ring-line focus:ring-accent" />
                 </div>
-                <textarea value={mText} onChange={e => setMText(e.target.value)} rows={3} placeholder="Post textâ¦"
+                <textarea value={mText} onChange={e => setMText(e.target.value)} rows={3} placeholder="Post text..."
                   className="mb-3 w-full resize-none rounded-2xl bg-subtle p-3 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
                 <div className="flex items-center gap-3">
                   <button onClick={schedulePost} className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-white shadow-soft transition-colors hover:bg-accent-hover">Schedule via Metricool</button>
@@ -480,7 +480,7 @@ export default function Dashboard() {
                 <span className="rounded-full bg-subtle px-2.5 py-1 text-[11px] font-medium text-ink-muted ring-1 ring-line">OpusClip</span>
               </div>
               <p className="mb-4 text-[13px] text-ink-muted">Paste a YouTube or Vimeo URL to auto-generate short clips.</p>
-              <input value={opUrl} onChange={e => setOpUrl(e.target.value)} placeholder="https://youtube.com/watch?v=â¦"
+              <input value={opUrl} onChange={e => setOpUrl(e.target.value)} placeholder="https://youtube.com/watch?v=..."
                 className="mb-3 w-full rounded-2xl bg-subtle px-4 py-3 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
               <div className="flex items-center gap-3">
                 <button onClick={clipVideo} disabled={!opUrl.trim()}
@@ -493,6 +493,42 @@ export default function Dashboard() {
           {/* Recent Drafts */}
           <section className="rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7">
             <h2 className="mb-4 text-headline font-semibold">Recent Drafts</h2>
+            {/* Clips from Opus — long-form to Shorts */}
+            {(() => {
+              const opusClips = safeDrafts.filter((d: any) => d?.pack?.kind === 'clip');
+              if (opusClips.length === 0) return null;
+              return (
+                <div className="mb-6">
+                  <div className="mb-3 flex items-center gap-2">
+                    <h3 className="text-[15px] font-semibold text-ink">Clips from Opus</h3>
+                    <span className="rounded-full bg-subtle px-2 py-0.5 text-[11px] font-medium text-ink-muted ring-1 ring-line">{opusClips.length}</span>
+                    <span className="text-[12px] text-ink-faint">Long-form to Shorts</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {opusClips.map((d: any, i: number) => (
+                      <button
+                        key={(d?.id || d?._id || i) + '-opus'}
+                        onClick={() => setSelectedDraft(d)}
+                        className="group overflow-hidden rounded-2xl text-left ring-1 ring-line/60 transition hover:ring-black/20"
+                      >
+                        <div className="relative">
+                          {d?.pack?.thumb ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={d.pack.thumb} alt="Clip still" className="h-28 w-full object-cover" />
+                          ) : (
+                            <div className="flex h-28 w-full items-center justify-center bg-subtle text-[12px] text-ink-faint">Clip</div>
+                          )}
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition group-hover:opacity-100">
+                            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-ink shadow-card">▶</span>
+                          </div>
+                        </div>
+                        <div className="truncate px-3 py-2 text-[12px] font-medium text-ink">{String(d?.topic || d?.title || 'Clip')}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
             {safeDrafts.length === 0 ? (
               <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-line py-12 text-center">
                 <div className="text-[14px] font-medium text-ink-muted">No drafts yet</div>
