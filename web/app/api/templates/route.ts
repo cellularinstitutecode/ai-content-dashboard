@@ -30,7 +30,7 @@ function cleanTime(x: any): string {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(s) ? s : '09:00';
 }
 
-// GET /api/templates — list the user's templates.
+// GET /api/templates â list the user's templates.
 export async function GET() {
   const sb = supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
@@ -41,11 +41,19 @@ export async function GET() {
     .select('*')
     .eq('user_id', user.id)
     .order('created_at', { ascending: true });
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) {
+    // If the schedule_templates table hasn't been created yet, treat it as no templates
+    // rather than surfacing a 500 to the UI.
+    const code = (error as any)?.code;
+    const msg = String((error as any)?.message || '');
+    const missingTable = code === '42P01' || code === 'PGRST205' || /schema cache|does not exist|could not find the table/i.test(msg);
+    if (missingTable) return NextResponse.json({ templates: [] });
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
   return NextResponse.json({ templates: data ?? [] });
 }
 
-// POST /api/templates — create or update a template (upsert when id is present).
+// POST /api/templates â create or update a template (upsert when id is present).
 export async function POST(req: NextRequest) {
   const sb = supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
@@ -74,7 +82,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ template: data });
 }
 
-// DELETE /api/templates?id=... — remove a template the user owns.
+// DELETE /api/templates?id=... â remove a template the user owns.
 export async function DELETE(req: NextRequest) {
   const sb = supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
