@@ -60,6 +60,15 @@ function ytThumb(url: string): string {
   } catch { return ''; }
 }
 
+// Video IDs from Cellular Hope Institute's OWN YouTube channel (allowlist — nothing external can be embedded)
+const OWN_VIDEO_IDS = new Set<string>(['N0x4zSdIoL8','Slh2u-aNbsA','P9eVqXAlOX0','Jp-4LoYjg9c','si7cwDqh87E','Lg4i2gZ3h9A','W9dGgIlm1D8','Lm54IKoWagY','REKxqVAgojQ','dJmkZffjnc8','NIxBmJX5Ofo','FyLyGD3tsOU','5cT8jnA6yy0','PUdDRDQ5o0Y','d5j1wPu0wqA','_HTcG6Ct8R0','SvZvrpZO24I','ZlAh066wph4','K8sZpsNOe2I','2-0fzkVIiSc','fNGee0Ax4Q0','kJd2yPHq3I0','1sHPntPRQm8','Fp-ArLlh__E','sNkFdy1b4Mo','39IV4hnJ3bc','y370BBoyE-0','GR3SoM0ZcNE','GHI6oX03JB8','6emvqez-1Gg']);
+function ytId(url: string): string {
+  try {
+    const m = String(url).match(/(?:v=|be\/|shorts\/|embed\/)([\w-]{11})/);
+    return m ? m[1] : '';
+  } catch { return ''; }
+}
+
 function toArray(x: any): any[] {
   if (Array.isArray(x)) return x;
   if (x && Array.isArray(x.data)) return x.data;
@@ -92,6 +101,7 @@ export default function Dashboard() {
 
   const [drafts, setDrafts] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
+  const [selectedDraft, setSelectedDraft] = useState<any>(null);
 
   useEffect(() => {
     const first = PROVIDERS.find(p => p.id === provider)!;
@@ -494,7 +504,7 @@ export default function Dashboard() {
                   const title = (d && (d.title || d.topic || d.name)) || 'Untitled draft';
                   const body = (d && (d.body || d.instagram || d.text || d.content)) || '';
                   return (
-                    <li key={(d && (d.id || d._id)) || i} className="flex items-start gap-4 py-4">
+                    <li onClick={() => setSelectedDraft(d)} role="button" tabIndex={0} key={(d && (d.id || d._id)) || i} className="cursor-pointer rounded-xl transition hover:bg-subtle/60 flex items-start gap-4 py-4">
                       {d?.pack?.kind === 'clip' && d?.pack?.thumb ? (
                         <div className="mb-2 overflow-hidden rounded-lg ring-1 ring-black/10">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -512,6 +522,34 @@ export default function Dashboard() {
               </ul>
             )}
           </section>
+          {/* Draft detail modal — click a draft to view / play */}
+          {selectedDraft ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" onClick={() => setSelectedDraft(null)}>
+              <div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7" onClick={(e) => e.stopPropagation()}>
+                <div className="mb-4 flex items-start justify-between gap-4">
+                  <h3 className="text-headline font-semibold text-ink">{String(selectedDraft?.title || selectedDraft?.topic || selectedDraft?.name || 'Draft')}</h3>
+                  <button onClick={() => setSelectedDraft(null)} className="shrink-0 rounded-xl px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Close</button>
+                </div>
+                {selectedDraft?.pack?.kind === 'clip' ? (
+                  (() => {
+                    const vid = ytId(selectedDraft?.pack?.video || '');
+                    if (vid && OWN_VIDEO_IDS.has(vid)) {
+                      return (
+                        <div className="overflow-hidden rounded-2xl ring-1 ring-black/10">
+                          <div className="relative w-full" style={{ paddingBottom: '56.25%' }}>
+                            <iframe className="absolute inset-0 h-full w-full" src={`https://www.youtube.com/embed/${vid}`} title="Cellular Hope video" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen />
+                          </div>
+                        </div>
+                      );
+                    }
+                    return (<div className="rounded-2xl border border-dashed border-line p-6 text-center text-[13px] text-ink-muted">This clip isn’t linked to a Cellular Hope Institute video, so it can’t be played here.</div>);
+                  })()
+                ) : (
+                  <div className="whitespace-pre-wrap rounded-2xl bg-subtle/50 p-4 text-[14px] leading-relaxed text-ink ring-1 ring-line/60">{String(selectedDraft?.body || selectedDraft?.pack?.instagram || selectedDraft?.pack?.text || selectedDraft?.text || selectedDraft?.pack?.content || JSON.stringify(selectedDraft?.pack ?? {}, null, 2))}</div>
+                )}
+              </div>
+            </div>
+          ) : null}
         </main>
       </div>
     </div>
