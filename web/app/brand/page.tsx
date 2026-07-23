@@ -12,8 +12,8 @@ type Brand = {
 };
 
 const inputStyle: React.CSSProperties = {
-  width: '100%', padding: 10, borderRadius: 6, background: '#0a0e1a',
-  border: '1px solid #1f2937', color: '#e6edf3', marginTop: 6, boxSizing: 'border-box',
+  width: '100%', padding: 10, borderRadius: 6, background: '#f5f5f7',
+  border: '1px solid rgba(0,0,0,0.1)', color: '#1d1d1f', marginTop: 6, boxSizing: 'border-box',
 };
 
 export default function BrandPage() {
@@ -64,20 +64,20 @@ export default function BrandPage() {
   }
 
   return (
-    <main style={{ minHeight: '100vh', background: '#0a0e1a', color: '#e6edf3', fontFamily: '-apple-system,Segoe UI,sans-serif' }}>
-      <header style={{ padding: '20px 32px', borderBottom: '1px solid #1f2937', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <main style={{ minHeight: '100vh', background: '#f5f5f7', color: '#1d1d1f', fontFamily: '-apple-system,Segoe UI,sans-serif' }}>
+      <header style={{ padding: '20px 32px', borderBottom: '1px solid rgba(0,0,0,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 22 }}>Brand Brain</h1>
           <div style={{ fontSize: 13, opacity: .7 }}>Voice, audience and guidelines that steer every generation</div>
         </div>
-        <a href="/" style={{ color: '#9ca3af', fontSize: 13, textDecoration: 'none', border: '1px solid #1f2937', padding: '6px 12px', borderRadius: 6 }}>Back to dashboard</a>
+        <a href="/" style={{ color: '#6e6e73', fontSize: 13, textDecoration: 'none', border: '1px solid rgba(0,0,0,0.1)', padding: '6px 12px', borderRadius: 6 }}>Back to dashboard</a>
       </header>
 
       <div style={{ maxWidth: 760, margin: '0 auto', padding: 24 }}>
         {loading ? (
           <div style={{ opacity: .6, fontSize: 14 }}>Loading brand profile...</div>
         ) : (
-          <section style={{ background: '#0f172a', border: '1px solid #1f2937', borderRadius: 12, padding: 20, display: 'grid', gap: 16 }}>
+          <section style={{ background: '#ffffff', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 12, padding: 20, display: 'grid', gap: 16 }}>
             <label style={{ fontSize: 13 }}>Brand name
               <input style={inputStyle} value={brand.name || ''} onChange={(e) => update('name', e.target.value)} placeholder="Cellular Hope Institute" />
             </label>
@@ -97,10 +97,10 @@ export default function BrandPage() {
               <textarea style={{ ...inputStyle, minHeight: 90 }} value={brand.guidelines || ''} onChange={(e) => update('guidelines', e.target.value)} placeholder="Avoid medical claims, always include a CTA..." />
             </label>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <button onClick={save} disabled={saving} style={{ padding: '10px 18px', borderRadius: 8, border: 'none', background: '#1e3a8a', color: '#e6edf3', cursor: saving ? 'default' : 'pointer' }}>
+              <button onClick={save} disabled={saving} style={{ padding: '10px 18px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', cursor: saving ? 'default' : 'pointer' }}>
                 {saving ? 'Saving...' : 'Save brand brain'}
               </button>
-              {status && <span style={{ fontSize: 13, color: status.startsWith('Error') ? '#f87171' : '#4ade80' }}>{status}</span>}
+              {status && <span style={{ fontSize: 13, color: status.startsWith('Error') ? '#d70015' : '#248a3d' }}>{status}</span>}
             </div>
           </section>
         )}
