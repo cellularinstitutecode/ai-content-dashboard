@@ -80,6 +80,31 @@ export default function CalendarPage() {
 
   const today = new Date();
   const [cursor, setCursor] = useState(() => ({ year: today.getFullYear(), month: today.getMonth() }));
+  const [aiTopic, setAiTopic] = useState('');
+  const [aiProvider, setAiProvider] = useState<'anthropic' | 'openai'>('anthropic');
+  const [aiBusy, setAiBusy] = useState(false);
+
+  async function draftWithAI() {
+    if (!aiTopic.trim()) { setErr('Enter a topic for the AI to draft from.'); return; }
+    setErr('');
+    setAiBusy(true);
+    try {
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: aiTopic, provider: aiProvider, model: aiProvider === 'anthropic' ? 'claude-sonnet-4-5' : 'gpt-4o', type: 'social' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to draft');
+      const pack = data?.pack || {};
+      const drafted = pack.instagram || pack.facebook || pack.linkedin || pack.blog || '';
+      setPText(drafted);
+    } catch (e: any) {
+      setErr(e?.message || 'Failed to draft with AI');
+    } finally {
+      setAiBusy(false);
+    }
+  }
 
   useEffect(() => { refresh(); }, []);
 
@@ -240,7 +265,7 @@ export default function CalendarPage() {
           </div>
           <h2 className="text-lg font-semibold">{monthLabel}</h2>
           <div className="min-w-[90px] text-right text-xs text-ink/40">
-            {saving ? 'Saving…' : loading ? 'Loading…' : ''}
+            {saving ? 'Savingâ¦' : loading ? 'Loadingâ¦' : ''}
           </div>
         </div>
 
@@ -353,6 +378,44 @@ export default function CalendarPage() {
               className="mb-4 w-full rounded-xl bg-canvas px-3 py-2 text-sm text-ink outline-none ring-1 ring-black/10 focus:ring-accent/40"
             />
 
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink/40">Draft with AI</label>
+            <div className="mb-4 rounded-xl bg-canvas p-3 ring-1 ring-black/10">
+              <div className="mb-2 flex items-center gap-2">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12 2l1.9 5.4L19 9.3l-4.6 2.3L12 17l-2.4-5.4L5 9.3l5.1-1.9L12 2z" fill="#0071e3" />
+                </svg>
+                <span className="text-xs text-ink/50">Let GPT or Anthropic write this post for you.</span>
+              </div>
+              <div className="mb-2 flex gap-2">
+                {([['anthropic', 'Anthropic'], ['openai', 'GPT']] as const).map(([val, label]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setAiProvider(val)}
+                    className={'rounded-full px-3 py-1 text-xs font-medium transition ring-1 ring-black/10 ' + (aiProvider === val ? 'bg-accent text-white' : 'bg-surface text-ink hover:bg-black/5')}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={aiTopic}
+                  onChange={(e) => setAiTopic(e.target.value)}
+                  placeholder="What should this post be about?"
+                  className="w-full rounded-lg bg-surface px-3 py-2 text-sm text-ink outline-none ring-1 ring-black/10 focus:ring-accent/40"
+                />
+                <button
+                  type="button"
+                  onClick={draftWithAI}
+                  disabled={aiBusy}
+                  className="shrink-0 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+                >
+                  {aiBusy ? 'Drafting…' : 'Draft with AI'}
+                </button>
+              </div>
+            </div>
+
             <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink/40">Post text</label>
             <textarea
               value={pText}
@@ -369,7 +432,7 @@ export default function CalendarPage() {
             <div className="flex items-center justify-end gap-2">
               <button onClick={() => setScheduleDay(null)} disabled={pBusy} className="rounded-full border border-black/10 px-4 py-2 text-sm text-ink/70 transition hover:bg-black/5 disabled:opacity-50">Cancel</button>
               <button onClick={submitSchedule} disabled={pBusy} className="rounded-full bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50">
-                {pBusy ? 'Scheduling…' : 'Schedule'}
+                {pBusy ? 'Schedulingâ¦' : 'Schedule'}
               </button>
             </div>
           </div>
