@@ -2,10 +2,10 @@ import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase";
 import { generateContentPack, chatAssistant } from "@/lib/ai";
 
-// Embedded drafting assistant.
-// The client sends the full conversation "session" each turn; the server advances the
-// step machine, performs the real work (generate / save draft / schedule), and returns
-// the next prompt plus any confirmations and links produced so far.
+// Embedded assistant.
+// The client sends the full conversation "session" each turn. By default the assistant
+// is a free-form conversational AI (mode: "chat"). It only enters the guided draft
+// wizard when the user explicitly asks to draft/generate a post (or is already mid-wizard).
 
 type Step =
   | "greet"
@@ -45,6 +45,22 @@ const MODELS: Record<string, string> = {
   openai: "gpt-4o-mini",
 };
 
+// Steps that mean we are already inside the guided draft wizard and should keep
+// advancing the state machine rather than diverting to free-form chat.
+const GUIDED_STEPS = new Set<Step>([
+  "topic",
+  "audience",
+  "tone",
+  "channels",
+  "provider",
+  "review",
+  "scheduling",
+]);
+
+// Explicit "start the draft wizard" intent, e.g. "draft a post", "write me content".
+const DRAFT_INTENT =
+  /\b(draft|write|create|make|generate|compose|build)\b.{0,30}\b(post|content|caption|copy|article|blog|email|ad|script|campaign|newsletter)\b/i;
+
 function reply(session: Session, message: string, options?: string[]) {
   return NextResponse.json({ session, message, options: options || null });
 }
@@ -56,6 +72,22 @@ function parseChannels(text: string): string[] {
     (n) => t.includes(n) || (n === "instagram" && t.includes("ig"))
   );
   return picked.length ? picked : ["instagram", "linkedin"];
+}
+
+async function runChat(session: Session, input: string) {
+  const history = Array.isArray(session.history) ? session.history.slice(-11) : [];
+  history.push({ role: "user", content: input });
+  let answer = "";
+  try {
+    answer = await chatAssistant(history, session.provider as any);
+  } catch {
+    answer = "I had trouble reaching the AI just now. Please try again in a moment.";
+  }
+  const newHistory = [...history, { role: "assistant" as const, content: answer }];
+  return reply(
+    { ...session, mode: "chat", step: "greet", history: newHistory },
+    answer,
+  );
 }
 
 export async function POST(req: Request) {
@@ -73,32 +105,36 @@ export async function POST(req: Request) {
   const input = (text || "").trim();
 
   try {
-    // Free-form conversational mode: answer questions, explain the dashboard, propose ideas.
-    const questionLike = /\?|^(what|how|why|when|who|can|could|should|explain|tell|help|give|suggest|idea|propose|recommend)\b/i.test(input);
-    const wantsChat = session.mode === "chat" || (session.step === "greet" && questionLike);
-    if (wantsChat && input) {
-      const history = Array.isArray(session.history) ? session.history.slice(-11) : [];
-      history.push({ role: "user", content: input });
-      let answer = "";
-      try {
-        answer = await chatAssistant(history, session.provider as any);
-      } catch {
-        answer = "I had trouble reaching the AI just now. Please try again in a moment.";
-      }
-      const newHistory = [...history, { role: "assistant" as const, content: answer }];
+    // Initial priming call (empty input at greet): just show the greeting.
+    // Do NOT advance the step, so the user's first real message is still evaluated freshly.
+    if (!input && session.step === "greet" && !session.mode) {
       return reply(
-        { ...session, mode: "chat", step: "greet", history: newHistory },
-        answer,
+        session,
+        "Hi! I'm your AI assistant for Content Studio. Ask me anything about how the dashboard works, and I can explain the process or suggest content ideas. Or say 'draft a post' and I'll walk you through creating one.",
       );
+    }
+
+    const inGuided = session.mode === "guided" || GUIDED_STEPS.has(session.step);
+
+    // Explicit request to start the guided draft wizard.
+    if (input && !inGuided && DRAFT_INTENT.test(input)) {
+      return reply(
+        { ...session, mode: "guided", step: "topic" },
+        "Great, let's draft a post. What topic or idea should it be about?",
+      );
+    }
+
+    // Free-form conversational mode is the default whenever we are not mid-wizard.
+    if (input && !inGuided) {
+      return await runChat(session, input);
     }
 
     switch (session.step) {
       case "greet": {
+        // Reached only via an explicit guided start with empty input; ask for a topic.
+        session.mode = "guided";
         session.step = "topic";
-        return reply(
-          session,
-          "Hi! I'm your AI assistant for Content Studio. Ask me anything about how the dashboard works, and I can explain the process or suggest content ideas. Or tell me a topic and I'll help you draft a post."
-        );
+        return reply(session, "What topic or idea should this post be about?");
       }
       case "topic": {
         if (!input) return reply(session, "Give me a topic to start with.");

@@ -234,7 +234,7 @@ export default function DraftingAssistant() {
                 )}
               </div>
             ))}
-            {busy && <div className="text-xs text-ink/40">Thinkingâ¦</div>}
+            {busy && <div className="text-xs text-ink/40">Thinking…</div>}
             <div ref={endRef} />
           </div>
 
@@ -248,7 +248,7 @@ export default function DraftingAssistant() {
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Type your messageâ¦"
+              placeholder="Type your message…"
               className="min-w-0 flex-1 rounded-full bg-canvas px-4 py-2 text-sm text-ink outline-none ring-1 ring-black/5 focus:ring-accent/40"
             />
             <button type="submit" disabled={busy || !input.trim()} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition hover:scale-105 disabled:opacity-40">
