@@ -25,7 +25,11 @@ async function signOut(request: Request) {
   );
 
   await supabase.auth.signOut();
-  return NextResponse.redirect(new URL('/sign-in', url.origin));
+
+  const res = NextResponse.redirect(new URL('/sign-in', url.origin));
+  // Clear the temporary password auth cookie as well.
+  res.cookies.set({ name: 'app_auth', value: '', path: '/', maxAge: 0 });
+  return res;
 }
 
 export async function POST(request: Request) {

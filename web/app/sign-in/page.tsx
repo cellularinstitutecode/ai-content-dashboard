@@ -1,16 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { createBrowserClient } from '@supabase/ssr';
-
-const ALLOWED = (process.env.NEXT_PUBLIC_ALLOWED_EMAILS || 'cellularhopeinstitute@gmail.com')
-  .split(',')
-  .map((s) => s.trim().toLowerCase())
-  .filter(Boolean);
 
 export default function SignInPage() {
   const [email, setEmail] = useState('');
-  const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [password, setPassword] = useState('');
+  const [status, setStatus] = useState<'idle' | 'sending' | 'error'>('idle');
   const [message, setMessage] = useState('');
 
   async function handleSubmit(e: React.FormEvent) {
@@ -18,31 +13,33 @@ export default function SignInPage() {
     setStatus('sending');
     setMessage('');
 
-    const normalized = email.trim().toLowerCase();
-    if (!ALLOWED.includes(normalized)) {
+    try {
+      const resp = await fetch('/api/public/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
+
+      if (resp.ok) {
+        const params = new URLSearchParams(window.location.search);
+        const next = params.get('next') || '/';
+        window.location.assign(next);
+        return;
+      }
+
+      const data = await resp.json().catch(() => ({}));
       setStatus('error');
-      setMessage('This email is not authorized to access the dashboard.');
-      return;
-    }
-
-    const supabase = createBrowserClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    );
-
-    const { error } = await supabase.auth.signInWithOtp({
-      email: normalized,
-      options: { emailRedirectTo: `${location.origin}/auth/callback` },
-    });
-
-    if (error) {
+      if (data.error === 'invalid_credentials') {
+        setMessage('Incorrect password.');
+      } else if (data.error === 'email_required') {
+        setMessage('Please enter an email address.');
+      } else {
+        setMessage('Sign in failed. Please try again.');
+      }
+    } catch {
       setStatus('error');
-      setMessage(error.message);
-      return;
+      setMessage('Network error. Please try again.');
     }
-
-    setStatus('sent');
-    setMessage('Check your inbox for the sign-in link.');
   }
 
   return (
@@ -67,24 +64,30 @@ export default function SignInPage() {
             />
           </label>
 
+          <label className="block text-sm">
+            <span className="text-white/70">Password</span>
+            <input
+              type="password"
+              required
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter password"
+              className="mt-1 w-full rounded-lg bg-[#07111f] border border-white/10 px-3 py-2 text-white placeholder-white/30 focus:outline-none focus:border-[#3b82f6]"
+            />
+          </label>
+
           <button
             type="submit"
             disabled={status === 'sending'}
             className="w-full rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] disabled:opacity-50 disabled:cursor-not-allowed py-2 font-medium transition"
           >
-            {status === 'sending' ? 'Sending…' : 'Send magic link'}
+            {status === 'sending' ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
 
         {message && (
-          <div
-            className={
-              'mt-4 rounded-lg px-3 py-2 text-sm ' +
-              (status === 'error'
-                ? 'bg-red-500/10 text-red-300 border border-red-500/30'
-                : 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30')
-            }
-          >
+          <div className="mt-4 rounded-lg px-3 py-2 text-sm bg-red-500/10 text-red-300 border border-red-500/30">
             {message}
           </div>
         )}
