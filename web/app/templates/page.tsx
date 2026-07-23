@@ -43,22 +43,31 @@ export default function TemplatesPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [aiTopic, setAiTopic] = useState('');
-  const [aiProvider, setAiProvider] = useState<'anthropic' | 'openai'>('anthropic');
+  const [aiProviders, setAiProviders] = useState<('anthropic' | 'openai')[]>(['anthropic']);
   const [aiBusy, setAiBusy] = useState(false);
 
   async function draftWithAI() {
     if (!aiTopic.trim()) { setErr('Enter a topic for the AI to draft from.'); return; }
+    if (aiProviders.length === 0) { setErr('Pick at least one AI provider.'); return; }
     setErr(''); setAiBusy(true);
     try {
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic: aiTopic, provider: aiProvider, model: aiProvider === 'anthropic' ? 'claude-sonnet-4-5' : 'gpt-4o', type: 'social' }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Failed to draft');
-      const pack = data?.pack || {};
-      const drafted = pack.instagram || pack.facebook || pack.linkedin || pack.blog || '';
+      const results = await Promise.all(aiProviders.map(async (prov) => {
+        const model = prov === 'anthropic' ? 'claude-sonnet-4-5' : 'gpt-4o';
+        const res = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topic: aiTopic, provider: prov, model, type: 'social' }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || ('Failed to draft with ' + prov));
+        const pack = data?.pack || {};
+        const text = pack.instagram || pack.facebook || pack.linkedin || pack.blog || '';
+        const label = prov === 'anthropic' ? 'Claude' : 'OpenAI';
+        return { label, text };
+      }));
+      const drafted = results.length > 1
+        ? results.map((r) => '--- ' + r.label + ' ---\n' + r.text).join('\n\n')
+        : (results[0]?.text || '');
       setDraft((prev: any) => ({ ...prev, text: drafted }));
     } catch (e: any) {
       setErr(e?.message || 'Failed to draft with AI');
@@ -141,7 +150,7 @@ export default function TemplatesPage() {
 
   return (
     <main style={{ minHeight: '100vh', background: '#f5f5f7', color: '#1d1d1f', fontFamily: '-apple-system,Segoe UI,sans-serif' }}>
-      <header style={{ padding: '20px 32px', borderBottom: '1px solid rgba(0,0,0,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <header style={{ padding: 'clamp(16px, 4vw, 20px) clamp(16px, 4vw, 32px)', borderBottom: '1px solid rgba(0,0,0,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 22 }}>Schedule Templates</h1>
           <div style={{ fontSize: 13, opacity: .6, marginTop: 4 }}>Reusable weekly posting cadences. Apply one to generate upcoming scheduled posts.</div>
@@ -149,7 +158,7 @@ export default function TemplatesPage() {
         <a href="/" style={{ color: '#6e6e73', fontSize: 13, textDecoration: 'none', border: '1px solid rgba(0,0,0,0.1)', padding: '6px 12px', borderRadius: 6 }}>Back to dashboard</a>
       </header>
 
-      <div style={{ maxWidth: 900, margin: '0 auto', padding: 24, display: 'grid', gap: 24 }}>
+      <div style={{ width: '100%', maxWidth: 900, margin: '0 auto', padding: 'clamp(16px, 4vw, 24px)', display: 'grid', gap: 'clamp(16px, 3vw, 24px)', boxSizing: 'border-box' }}>
         {err && <div style={{ color: '#d70015', fontSize: 14 }}>Error: {err}</div>}
         {status && <div style={{ color: '#248a3d', fontSize: 14 }}>{status}</div>}
 
@@ -196,15 +205,20 @@ export default function TemplatesPage() {
               <span style={{ fontSize: 12, color: '#6e6e73' }}>Let Claude or GPT write the post for you.</span>
             </div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-              {([['anthropic', 'Claude'], ['openai', 'OpenAI']] as const).map(([val, label]) => (
-                <button key={val} type="button" onClick={() => setAiProvider(val)}
-                  style={{ ...ghost, background: aiProvider === val ? '#0071e3' : '#ffffff', color: aiProvider === val ? '#fff' : '#1d1d1f' }}>
+              {([['anthropic', 'Claude'], ['openai', 'OpenAI']] as const).map(([val, label]) => {
+                const on = aiProviders.includes(val);
+                return (
+                <button key={val} type="button"
+                  onClick={() => setAiProviders((prev) => prev.includes(val) ? prev.filter((p) => p !== val) : [...prev, val])}
+                  aria-pressed={on}
+                  style={{ ...ghost, background: on ? '#0071e3' : '#ffffff', color: on ? '#fff' : '#1d1d1f' }}>
                   {label}
                 </button>
-              ))}
+                );
+              })}
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input style={{ ...inputStyle, flex: 1 }} value={aiTopic}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <input style={{ ...inputStyle, flex: '1 1 220px', minWidth: 0 }} value={aiTopic}
                 onChange={(e) => setAiTopic(e.target.value)}
                 placeholder="What should this post be about?" />
               <button type="button" onClick={draftWithAI} disabled={aiBusy}
