@@ -10,6 +10,61 @@ export default function DraftingAssistant() {
   const [session, setSession] = useState<any>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [genProvider, setGenProvider] = useState<'anthropic' | 'openai'>('anthropic');
+  const [genModel, setGenModel] = useState('claude-sonnet-4-5');
+  const [genFormat, setGenFormat] = useState('social');
+  const [genIdea, setGenIdea] = useState('');
+  const [genOutput, setGenOutput] = useState('');
+  const [genBusy, setGenBusy] = useState(false);
+  const [genErr, setGenErr] = useState('');
+
+  const GEN_MODELS: Record<'anthropic' | 'openai', { value: string; label: string }[]> = {
+    anthropic: [
+      { value: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
+      { value: 'claude-opus-4-1', label: 'Claude Opus 4.1' },
+      { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
+    ],
+    openai: [
+      { value: 'gpt-4o', label: 'GPT-4o' },
+      { value: 'gpt-4o-mini', label: 'GPT-4o mini' },
+      { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+    ],
+  };
+  const GEN_FORMATS: { value: string; label: string }[] = [
+    { value: 'social', label: 'Social Post' },
+    { value: 'blog', label: 'Blog Article' },
+    { value: 'email', label: 'Email Campaign' },
+    { value: 'video', label: 'Video Script' },
+    { value: 'ad', label: 'Ad Copy' },
+  ];
+
+  function pickProvider(p: 'anthropic' | 'openai') {
+    setGenProvider(p);
+    setGenModel(GEN_MODELS[p][0].value);
+  }
+
+  async function runGenerate() {
+    if (!genIdea.trim()) { setGenErr('Describe your idea first.'); return; }
+    setGenErr('');
+    setGenBusy(true);
+    setGenOutput('');
+    try {
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: genIdea, provider: genProvider, model: genModel, type: genFormat }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to generate');
+      const pack = data?.pack || {};
+      const out = pack.instagram || pack.facebook || pack.linkedin || pack.blog || '';
+      setGenOutput(out || 'No content returned.');
+    } catch (e: any) {
+      setGenErr(e?.message || 'Failed to generate');
+    } finally {
+      setGenBusy(false);
+    }
+  }
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -84,6 +139,83 @@ export default function DraftingAssistant() {
           </header>
 
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+            {/* Content Generator — first thing shown in the assistant */}
+            <div className="rounded-2xl bg-canvas p-3 ring-1 ring-black/10">
+              <p className="text-sm font-semibold text-ink">Content Generator</p>
+              <p className="mb-3 text-xs text-ink/50">Pick a model and format, describe your idea, and generate a ready-to-post pack.</p>
+            
+              <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-ink/40">Model</label>
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                {(["anthropic", "openai"] as const).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => pickProvider(p)}
+                    className={"rounded-full px-3 py-1.5 text-xs font-medium transition ring-1 ring-black/10 " + (genProvider === p ? "bg-ink text-white" : "bg-surface text-ink hover:bg-black/5")}
+                  >
+                    {p === "anthropic" ? "Claude (Anthropic)" : "OpenAI"}
+                  </button>
+                ))}
+                <select
+                  value={genModel}
+                  onChange={(e) => setGenModel(e.target.value)}
+                  className="rounded-full bg-surface px-3 py-1.5 text-xs text-ink outline-none ring-1 ring-black/10 focus:ring-accent/40"
+                >
+                  {GEN_MODELS[genProvider].map((m) => (
+                    <option key={m.value} value={m.value}>{m.label}</option>
+                  ))}
+                </select>
+              </div>
+            
+              <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-ink/40">Format</label>
+              <div className="mb-3 flex flex-wrap gap-2">
+                {GEN_FORMATS.map((f) => (
+                  <button
+                    key={f.value}
+                    type="button"
+                    onClick={() => setGenFormat(f.value)}
+                    className={"rounded-full px-3 py-1.5 text-xs font-medium transition ring-1 ring-black/10 " + (genFormat === f.value ? "bg-accent text-white" : "bg-surface text-ink hover:bg-black/5")}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            
+              <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-ink/40">Your idea</label>
+              <textarea
+                value={genIdea}
+                onChange={(e) => setGenIdea(e.target.value)}
+                rows={3}
+                placeholder="e.g. 3 Instagram captions about exosome therapy benefits for athletes"
+                className="mb-3 w-full resize-none rounded-xl bg-surface px-3 py-2 text-sm text-ink outline-none ring-1 ring-black/10 focus:ring-accent/40"
+              />
+            
+              <button
+                type="button"
+                onClick={runGenerate}
+                disabled={genBusy || !genIdea.trim()}
+                className="w-full rounded-full bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+              >
+                {genBusy ? "Generating…" : "Generate"}
+              </button>
+            
+              {genErr && <p className="mt-2 text-xs text-red-600">{genErr}</p>}
+            
+              {genOutput && (
+                <div className="mt-3">
+                  <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-ink/40">Output</p>
+                  <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-xl bg-surface px-3 py-2 text-sm leading-relaxed text-ink ring-1 ring-black/10">{genOutput}</div>
+                  <button
+                    type="button"
+                    onClick={() => setInput(genOutput)}
+                    className="mt-2 rounded-full border border-accent/30 bg-accent/5 px-3 py-1 text-xs font-medium text-accent transition hover:bg-accent/10"
+                  >
+                    Use in chat
+                  </button>
+                </div>
+              )}
+            </div>
+            
             {msgs.map((m, i) => (
               <div key={i}>
                 <div className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
@@ -102,7 +234,7 @@ export default function DraftingAssistant() {
                 )}
               </div>
             ))}
-            {busy && <div className="text-xs text-ink/40">Thinking…</div>}
+            {busy && <div className="text-xs text-ink/40">Thinkingâ¦</div>}
             <div ref={endRef} />
           </div>
 
@@ -116,7 +248,7 @@ export default function DraftingAssistant() {
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Type your message…"
+              placeholder="Type your messageâ¦"
               className="min-w-0 flex-1 rounded-full bg-canvas px-4 py-2 text-sm text-ink outline-none ring-1 ring-black/5 focus:ring-accent/40"
             />
             <button type="submit" disabled={busy || !input.trim()} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition hover:scale-105 disabled:opacity-40">
