@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 export function useVoiceAssistant(getSession: () => any, applyResult: (data: any) => void) {
   const [active, setActive] = useState(false);
   const pcRef = useRef<RTCPeerConnection | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const start = useCallback(async () => {
     const s = await (await fetch("/api/realtime-session", { method: "POST" })).json();
@@ -12,9 +13,15 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
     const pc = new RTCPeerConnection();
     pcRef.current = pc;
 
-    const audioEl = new Audio();
+    const audioEl = document.createElement("audio");
     audioEl.autoplay = true;
-    pc.ontrack = (e) => { audioEl.srcObject = e.streams[0]; };
+    audioEl.style.display = "none";
+    document.body.appendChild(audioEl);
+    audioRef.current = audioEl;
+    pc.ontrack = (e) => {
+      audioEl.srcObject = e.streams[0];
+      audioEl.play().catch((err) => console.error("voice: audio play failed", err));
+    };
 
     const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     mic.getTracks().forEach((t) => pc.addTrack(t, mic));
@@ -52,7 +59,7 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
         dc.send(JSON.stringify({
           type: "conversation.item.create",
           item: { type: "function_call_output", call_id: evt.call_id,
-                  output: data.message ?? "done - ask the user to review on screen" },
+            output: data.message ?? "done - ask the user to review on screen" },
         }));
         dc.send(JSON.stringify({ type: "response.create" }));
       }
@@ -72,6 +79,11 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
   const stop = useCallback(() => {
     pcRef.current?.close();
     pcRef.current = null;
+    if (audioRef.current) {
+      audioRef.current.srcObject = null;
+      audioRef.current.remove();
+      audioRef.current = null;
+    }
     setActive(false);
   }, []);
 
