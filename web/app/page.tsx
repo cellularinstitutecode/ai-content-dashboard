@@ -53,6 +53,13 @@ function metricoolMetrics(a: any): { label: string; value: any }[] {
   return found.slice(0, 4);
 }
 
+function ytThumb(url: string): string {
+  try {
+    const m = String(url).match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([A-Za-z0-9_-]{11})/);
+    return m ? 'https://img.youtube.com/vi/' + m[1] + '/hqdefault.jpg' : '';
+  } catch { return ''; }
+}
+
 function toArray(x: any): any[] {
   if (Array.isArray(x)) return x;
   if (x && Array.isArray(x.data)) return x.data;
@@ -129,6 +136,13 @@ export default function Dashboard() {
         'LINKEDIN', pack.linkedin || '', '',
         'BLOG', pack.blog || ''
       ].join('\n'));
+      try {
+        await fetch('/api/drafts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topic: prompt, pack, provider }),
+        });
+      } catch {}
       refreshDrafts();
     } catch (e: any) { setErr(e?.message || 'Generation failed'); } finally { setLoading(false); }
   }
@@ -183,6 +197,18 @@ export default function Dashboard() {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data?.error || ('OpusClip failed ('+r.status+')'));
       setOpStatus('Clip job started ' + ((data && data.project && (data.project.projectId || data.project.id)) || ''));
+      try {
+        await fetch('/api/drafts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            topic: 'Video clips from ' + opUrl,
+            provider: 'opusclip',
+            pack: { kind: 'clip', video: opUrl, thumb: ytThumb(opUrl) },
+          }),
+        });
+        refreshDrafts();
+      } catch {}
     } catch (e: any) { setOpStatus('Error: ' + (e?.message || 'failed')); }
   }
 
@@ -243,7 +269,7 @@ export default function Dashboard() {
           <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
             <div>
               <h1 className="text-title font-semibold">Good to see you</h1>
-              <p className="mt-1 text-[15px] text-ink-muted">Create, schedule, and repurpose content — all in one place.</p>
+              <p className="mt-1 text-[15px] text-ink-muted">Create, schedule, and repurpose content â all in one place.</p>
             </div>
             <div className="flex items-center gap-2 lg:hidden">
               {nav.map(n => (
@@ -310,7 +336,7 @@ export default function Dashboard() {
                 <div className="flex items-center gap-3">
                   <button onClick={generate} disabled={loading || !prompt.trim()}
                     className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">
-                    {loading ? 'Generating…' : 'Generate'}
+                    {loading ? 'Generatingâ¦' : 'Generate'}
                   </button>
                   {err && <span className="text-[13px] text-danger">{err}</span>}
                 </div>
@@ -346,11 +372,11 @@ export default function Dashboard() {
                 <h2 className="text-headline font-semibold">Analytics &amp; Scheduling</h2>
                 <span className="rounded-full bg-subtle px-2.5 py-1 text-[11px] font-medium text-ink-muted ring-1 ring-line">Metricool</span>
               </div>
-              <p className="mb-4 text-[13px] text-ink-muted">Brand: Cellular Hope Institute · blogId 4308292</p>
+              <p className="mb-4 text-[13px] text-ink-muted">Brand: Cellular Hope Institute Â· blogId 4308292</p>
 
               <button onClick={loadAnalytics} disabled={mLoading}
                 className="mb-4 rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40">
-                {mLoading ? 'Loading…' : 'Load latest analytics'}
+                {mLoading ? 'Loadingâ¦' : 'Load latest analytics'}
               </button>
 
               {metrics.length > 0 && (
@@ -428,7 +454,7 @@ export default function Dashboard() {
                   <input type="datetime-local" value={mDate} onChange={e => setMDate(e.target.value)}
                     className="rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink ring-1 ring-line focus:ring-accent" />
                 </div>
-                <textarea value={mText} onChange={e => setMText(e.target.value)} rows={3} placeholder="Post text…"
+                <textarea value={mText} onChange={e => setMText(e.target.value)} rows={3} placeholder="Post textâ¦"
                   className="mb-3 w-full resize-none rounded-2xl bg-subtle p-3 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
                 <div className="flex items-center gap-3">
                   <button onClick={schedulePost} className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-white shadow-soft transition-colors hover:bg-accent-hover">Schedule via Metricool</button>
@@ -444,7 +470,7 @@ export default function Dashboard() {
                 <span className="rounded-full bg-subtle px-2.5 py-1 text-[11px] font-medium text-ink-muted ring-1 ring-line">OpusClip</span>
               </div>
               <p className="mb-4 text-[13px] text-ink-muted">Paste a YouTube or Vimeo URL to auto-generate short clips.</p>
-              <input value={opUrl} onChange={e => setOpUrl(e.target.value)} placeholder="https://youtube.com/watch?v=…"
+              <input value={opUrl} onChange={e => setOpUrl(e.target.value)} placeholder="https://youtube.com/watch?v=â¦"
                 className="mb-3 w-full rounded-2xl bg-subtle px-4 py-3 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
               <div className="flex items-center gap-3">
                 <button onClick={clipVideo} disabled={!opUrl.trim()}
@@ -469,6 +495,12 @@ export default function Dashboard() {
                   const body = (d && (d.body || d.instagram || d.text || d.content)) || '';
                   return (
                     <li key={(d && (d.id || d._id)) || i} className="flex items-start gap-4 py-4">
+                      {d?.pack?.kind === 'clip' && d?.pack?.thumb ? (
+                        <div className="mb-2 overflow-hidden rounded-lg ring-1 ring-black/10">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={d.pack.thumb} alt="Video still" className="h-32 w-full object-cover" />
+                        </div>
+                      ) : null}
                       <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-subtle text-[13px] font-semibold text-ink-muted ring-1 ring-line">{i + 1}</div>
                       <div className="min-w-0">
                         <div className="truncate text-[14px] font-medium text-ink">{String(title)}</div>
