@@ -45,6 +45,8 @@ export default function TemplatesPage() {
   const [aiTopic, setAiTopic] = useState('');
   const [aiProvider, setAiProvider] = useState<'anthropic' | 'openai'>('anthropic');
   const [aiBusy, setAiBusy] = useState(false);
+  const [compareBusy, setCompareBusy] = useState(false);
+  const [compareResults, setCompareResults] = useState<{ anthropic?: string; openai?: string; anthropicErr?: string; openaiErr?: string } | null>(null);
 
   async function draftWithAI() {
     if (!aiTopic.trim()) { setErr('Enter a topic for the AI to draft from.'); return; }
@@ -65,6 +67,31 @@ export default function TemplatesPage() {
     } finally {
       setAiBusy(false);
     }
+  }
+
+  async function callGenerate(provider: 'anthropic' | 'openai'): Promise<string> {
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic: aiTopic, provider, model: provider === 'anthropic' ? 'claude-sonnet-4-5' : 'gpt-4o', type: 'social' }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error || 'Failed to draft');
+    const pack = data?.pack || {};
+    return pack.instagram || pack.facebook || pack.linkedin || pack.blog || '';
+  }
+
+  async function draftWithBoth() {
+    if (!aiTopic.trim()) { setErr('Enter a topic for the AI to draft from.'); return; }
+    setErr(''); setCompareBusy(true); setCompareResults(null);
+    const [a, o] = await Promise.allSettled([callGenerate('anthropic'), callGenerate('openai')]);
+    setCompareResults({
+      anthropic: a.status === 'fulfilled' ? a.value : undefined,
+      anthropicErr: a.status === 'rejected' ? String(a.reason?.message || a.reason) : undefined,
+      openai: o.status === 'fulfilled' ? o.value : undefined,
+      openaiErr: o.status === 'rejected' ? String(o.reason?.message || o.reason) : undefined,
+    });
+    setCompareBusy(false);
   }
 
   useEffect(() => { load(); }, []);
@@ -211,8 +238,23 @@ export default function TemplatesPage() {
                 style={{ ...btn, whiteSpace: 'nowrap', opacity: aiBusy ? 0.6 : 1 }}>
                 {aiBusy ? 'Drafting…' : 'Draft with AI'}
               </button>
+              <button type="button" onClick={draftWithBoth} disabled={compareBusy}
+                style={{ ...ghost, whiteSpace: 'nowrap', opacity: compareBusy ? 0.6 : 1 }}>
+                {compareBusy ? 'Comparing…' : 'Compare both'}
+              </button>
             </div>
-          </div>
+            
+            {compareResults && (
+      <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        {(['anthropic', 'openai'] as const).map((key) => (
+        <div key={key} style={{ background: '#fff', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, padding: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{key === 'anthropic' ? 'Claude' : 'GPT'}</div>
+        <div style={{ fontSize: 13, whiteSpace: 'pre-wrap', marginBottom: 8, color: (key === 'anthropic' ? compareResults.anthropicErr : compareResults.openaiErr) ? '#d70015' : '#1d1d1f' }}>{(key === 'anthropic' ? (compareResults.anthropicErr || compareResults.anthropic) : (compareResults.openaiErr || compareResults.openai)) || 'No content.'}</div>
+        <button type="button" style={btn} onClick={() => setDraft((prev) => ({ ...prev, text: (key === 'anthropic' ? compareResults.anthropic : compareResults.openai) || '' }))}>Use this draft</button>
+        </div>
+        ))}
+      </div>
+          )}</div>
 
           <label style={{ display: 'block', marginTop: 22, fontSize: 13, opacity: .8 }}>Post text
             <textarea style={{ ...inputStyle, minHeight: 90, resize: 'vertical' }} value={draft.text || ''} onChange={(e) => setDraft({ ...draft, text: e.target.value })} placeholder="What should each scheduled post say?" />
