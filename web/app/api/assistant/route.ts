@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase";
-import { generateContentPack } from "@/lib/ai";
+import { generateContentPack, chatAssistant } from "@/lib/ai";
 
 // Embedded drafting assistant.
 // The client sends the full conversation "session" each turn; the server advances the
@@ -35,6 +35,8 @@ type Session = {
   schedule?: { network: string; publishAt: string }[];
   links?: LinkItem[];
   confirmations?: string[];
+  mode?: "chat" | "guided";
+  history?: { role: "user" | "assistant"; content: string }[];
 };
 
 const NETWORKS = ["instagram", "facebook", "linkedin", "blog"];
@@ -71,12 +73,31 @@ export async function POST(req: Request) {
   const input = (text || "").trim();
 
   try {
+    // Free-form conversational mode: answer questions, explain the dashboard, propose ideas.
+    const questionLike = /\?|^(what|how|why|when|who|can|could|should|explain|tell|help|give|suggest|idea|propose|recommend)\b/i.test(input);
+    const wantsChat = session.mode === "chat" || (session.step === "greet" && questionLike);
+    if (wantsChat && input) {
+      const history = Array.isArray(session.history) ? session.history.slice(-11) : [];
+      history.push({ role: "user", content: input });
+      let answer = "";
+      try {
+        answer = await chatAssistant(history, session.provider as any);
+      } catch {
+        answer = "I had trouble reaching the AI just now. Please try again in a moment.";
+      }
+      const newHistory = [...history, { role: "assistant" as const, content: answer }];
+      return reply(
+        { ...session, mode: "chat", step: "greet", history: newHistory },
+        answer,
+      );
+    }
+
     switch (session.step) {
       case "greet": {
         session.step = "topic";
         return reply(
           session,
-          "Hi! I'm your drafting assistant. What topic or idea should this post be about?"
+          "Hi! I'm your AI assistant for Content Studio. Ask me anything about how the dashboard works, and I can explain the process or suggest content ideas. Or tell me a topic and I'll help you draft a post."
         );
       }
       case "topic": {
