@@ -16,11 +16,11 @@ const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const PROVIDERS = ['instagram', 'facebook', 'linkedin', 'blog'];
 
 const card: React.CSSProperties = {
-  background: '#ffffff', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 10, padding: 16,
+  background: '#ffffff', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 12, padding: 28,
 };
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: 10, borderRadius: 6, background: '#f5f5f7',
-  border: '1px solid rgba(0,0,0,0.1)', color: '#1d1d1f', marginTop: 6, boxSizing: 'border-box',
+  border: '1px solid rgba(0,0,0,0.1)', color: '#1d1d1f', marginTop: 8, boxSizing: 'border-box',
 };
 const btn: React.CSSProperties = {
   background: '#0071e3', color: '#fff', border: 'none', borderRadius: 6,
@@ -154,13 +154,13 @@ export default function TemplatesPage() {
         {status && <div style={{ color: '#248a3d', fontSize: 14 }}>{status}</div>}
 
         <section style={card}>
-          <h2 style={{ marginTop: 0, fontSize: 16 }}>New template</h2>
+          <h2 style={{ marginTop: 0, marginBottom: 20, fontSize: 17 }}>New template</h2>
 
           <label style={{ fontSize: 13, opacity: .8 }}>Name
             <input style={inputStyle} value={draft.name || ''} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="e.g. Weekly product tips" />
           </label>
 
-          <div style={{ marginTop: 14, fontSize: 13, opacity: .8 }}>Providers</div>
+          <div style={{ marginTop: 22, fontSize: 13, opacity: .8 }}>Providers</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
             {PROVIDERS.map((p) => (
               <button key={p} type="button"
@@ -171,7 +171,7 @@ export default function TemplatesPage() {
             ))}
           </div>
 
-          <div style={{ marginTop: 14, fontSize: 13, opacity: .8 }}>Post on</div>
+          <div style={{ marginTop: 22, fontSize: 13, opacity: .8 }}>Post on</div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
             {DOW.map((d, i) => (
               <button key={d} type="button"
@@ -182,7 +182,7 @@ export default function TemplatesPage() {
             ))}
           </div>
 
-          <label style={{ display: 'block', marginTop: 14, fontSize: 13, opacity: .8 }}>Time of day
+          <label style={{ display: 'block', marginTop: 22, fontSize: 13, opacity: .8 }}>Time of day
             <input style={{ ...inputStyle, width: 140 }} type="time" value={draft.time_of_day || '09:00'} onChange={(e) => setDraft({ ...draft, time_of_day: e.target.value })} />
           </label>
 
@@ -213,19 +213,19 @@ export default function TemplatesPage() {
             </div>
           </div>
 
-          <label style={{ display: 'block', marginTop: 14, fontSize: 13, opacity: .8 }}>Post text
+          <label style={{ display: 'block', marginTop: 22, fontSize: 13, opacity: .8 }}>Post text
             <textarea style={{ ...inputStyle, minHeight: 90, resize: 'vertical' }} value={draft.text || ''} onChange={(e) => setDraft({ ...draft, text: e.target.value })} placeholder="What should each scheduled post say?" />
           </label>
 
           <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
-            <button style={btn} onClick={save} disabled={saving}>{saving ? 'Savingâ¦' : 'Save template'}</button>
+            <button style={btn} onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save template'}</button>
             <button style={ghost} type="button" onClick={() => setDraft(emptyDraft())}>Clear</button>
           </div>
         </section>
 
         <section>
           <h2 style={{ fontSize: 16 }}>Your templates</h2>
-          {loading && <div style={{ opacity: .6, fontSize: 14 }}>Loadingâ¦</div>}
+          {loading && <div style={{ opacity: .6, fontSize: 14 }}>Loading…</div>}
           {!loading && templates.length === 0 && (
             <div style={{ opacity: .6, fontSize: 14 }}>No templates yet. Create one above.</div>
           )}
@@ -235,7 +235,7 @@ export default function TemplatesPage() {
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 15, marginBottom: 4 }}>{t.name || 'Untitled template'}</div>
                   <div style={{ fontSize: 12, opacity: .7 }}>
-                    {(t.weekdays || []).map((w) => DOW[w]).join(', ') || 'no days'} at {t.time_of_day || '09:00'} Â· {(t.providers || []).join(', ') || 'no providers'}
+                    {(t.weekdays || []).map((w) => DOW[w]).join(', ') || 'no days'} at {t.time_of_day || '09:00'} · {(t.providers || []).join(', ') || 'no providers'}
                   </div>
                   {t.text && <div style={{ fontSize: 13, opacity: .85, marginTop: 6, whiteSpace: 'pre-wrap' }}>{t.text}</div>}
                 </div>
