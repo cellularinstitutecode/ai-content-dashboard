@@ -3,10 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useVoiceAssistant } from "@/components/useVoiceAssistant";
 
-type Msg = { id: string; role: "assistant" | "user"; text: string; options?: string[] | null };
-
-let __msgId = 0;
-const nextMsgId = () => `${Date.now()}-${++__msgId}`;
+type Msg = { role: "assistant" | "user"; text: string; options?: string[] | null };
 
 export default function DraftingAssistant() {
   const [open, setOpen] = useState(false);
@@ -16,9 +13,9 @@ export default function DraftingAssistant() {
   const voice = useVoiceAssistant(
     () => session,
     (data) => {
-      if (data.error) { setMsgs((m) => [...m, { id: nextMsgId(), role: "assistant", text: "⚠️ " + data.error }]); return; }
+      if (data.error) { setMsgs((m) => [...m, { role: "assistant", text: "⚠️ " + data.error }]); return; }
       setSession(data.session);
-      if (data.message) setMsgs((m) => [...m, { id: nextMsgId(), role: "assistant", text: data.message }]);
+      if (data.message) setMsgs((m) => [...m, { role: "assistant", text: data.message }]);
     }
   );
   const [busy, setBusy] = useState(false);
@@ -86,7 +83,7 @@ export default function DraftingAssistant() {
   async function send(text: string) {
     if (busy) return;
     const clean = text.trim();
-    if (clean) setMsgs((m) => [...m, { id: nextMsgId(), role: "user", text: clean }]);
+    if (clean) setMsgs((m) => [...m, { role: "user", text: clean }]);
     setInput("");
     setBusy(true);
     try {
@@ -97,16 +94,16 @@ export default function DraftingAssistant() {
       });
       const data = await res.json();
       if (data.error) {
-        setMsgs((m) => [...m, { id: nextMsgId(), role: "assistant", text: "\u26a0\ufe0f " + data.error }]);
+        setMsgs((m) => [...m, { role: "assistant", text: "\u26a0\ufe0f " + data.error }]);
       } else {
         setSession(data.session);
         setMsgs((m) => [
           ...m,
-          { id: nextMsgId(), role: "assistant", text: data.message, options: data.options },
+          { role: "assistant", text: data.message, options: data.options },
         ]);
       }
     } catch (e: any) {
-      setMsgs((m) => [...m, { id: nextMsgId(), role: "assistant", text: "\u26a0\ufe0f " + (e?.message || "Network error") }]);
+      setMsgs((m) => [...m, { role: "assistant", text: "\u26a0\ufe0f " + (e?.message || "Network error") }]);
     } finally {
       setBusy(false);
     }
@@ -229,7 +226,7 @@ export default function DraftingAssistant() {
             </div>
             
             {msgs.map((m, i) => (
-              <div key={m.id}>
+              <div key={i}>
                 <div className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
                   <div className={(m.role === "user" ? "bg-accent text-white" : "bg-canvas text-ink") + " max-w-[85%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed"}>
                     {m.text}
