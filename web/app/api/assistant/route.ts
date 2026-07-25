@@ -469,9 +469,68 @@ export async function POST(req: Request) {
         session.step = "done";
         return finish(session);
       }
-      default: {
-        session.step = "done";
-        return finish(session);
+default: {
+        const wantsDraft = /\b(draft|write|generate|create|compose|caption|post|copy)\b/i.test(input);
+        if (!wantsDraft) return finish(session);
+
+        const topic = session.lastTopic || session.topic || input;
+        const audience = session.audience || "general audience";
+        const tone = session.tone || "professional";
+        const provider = session.provider || (/openai|gpt/i.test(input) ? "openai" : "anthropic");
+        const contentType = "social" as any;
+
+        const inferred: string[] = [];
+        if (/instagram|insta|ig\b/i.test(input)) inferred.push("instagram");
+        if (/linkedin/i.test(input)) inferred.push("linkedin");
+        if (/facebook|fb\b/i.test(input)) inferred.push("facebook");
+        if (/blog|article/i.test(input)) inferred.push("blog");
+        const channels =
+          Array.isArray(session.channels) && session.channels.length ? session.channels : inferred;
+        const targetChannels = channels.length ? channels : ["instagram"];
+
+        let pack: Record<string, any> = {};
+        try {
+          const result = await generateContentPack({
+            topic, audience, tone,
+            provider: provider as any,
+            model: (MODELS as any)[provider],
+            contentType,
+          });
+          pack = ((result as any)?.pack || result || {}) as Record<string, any>;
+        } catch { return finish(session); }
+
+        const preview: Record<string, string> = {};
+        for (const ch of targetChannels) {
+          const txt = textFromPack(pack, ch);
+          if (txt) preview[ch] = txt;
+        }
+        if (Object.keys(preview).length === 0 && pack && typeof pack === "object") {
+          for (const ch of ["instagram", "linkedin", "facebook", "blog"]) {
+            if (typeof (pack as any)[ch] === "string") preview[ch] = (pack as any)[ch];
+          }
+        }
+
+        let draftId: string | null = null;
+        try {
+          const { data: row } = await supabaseServer()
+            .from("drafts")
+            .insert({ user_id: userId, topic, pack, provider })
+            .select().single();
+          draftId = (row as any)?.id ?? null;
+        } catch {}
+
+        session.lastPack = pack;
+        session.lastTopic = topic;
+        session.provider = provider;
+        if (draftId) session.draftId = draftId;
+
+        const firstCh = Object.keys(preview)[0] || "content";
+        return NextResponse.json({
+          session,
+          message: `Here's a ${firstCh} draft about "${topic}". I've added it to your Drafts and the dashboard output.`,
+          options: { preview, draftId },
+        });
+      }
       }
     }
   } catch (e: any) {
