@@ -2,22 +2,19 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useVoiceAssistant } from "@/components/useVoiceAssistant";
+import { useLiveContent } from "@/components/LiveContentProvider";
 
-type Msg = { role: "assistant" | "user"; text: string; options?: string[] | null };
+type Msg = { id: string; role: "assistant" | "user"; text: string; options?: string[] | null };
+let __msgSeq = 0;
+const uid = () => `m_${Date.now().toString(36)}_${(__msgSeq++).toString(36)}`;
 
 export default function DraftingAssistant() {
+  const { applyAssistantResult, setStatus } = useLiveContent();
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [session, setSession] = useState<any>(null);
   const [input, setInput] = useState("");
-  const voice = useVoiceAssistant(
-    () => session,
-    (data) => {
-      if (data.error) { setMsgs((m) => [...m, { role: "assistant", text: "⚠️ " + data.error }]); return; }
-      setSession(data.session);
-      if (data.message) setMsgs((m) => [...m, { role: "assistant", text: data.message }]);
-    }
-  );
+  const voice = useVoiceAssistant(() => session, (data) => applyAssistantResult(data));
   const [busy, setBusy] = useState(false);
   const [genProvider, setGenProvider] = useState<'anthropic' | 'openai'>('anthropic');
   const [genModel, setGenModel] = useState('claude-sonnet-4-5');
@@ -83,27 +80,29 @@ export default function DraftingAssistant() {
   async function send(text: string) {
     if (busy) return;
     const clean = text.trim();
-    if (clean) setMsgs((m) => [...m, { role: "user", text: clean }]);
+        if (clean) setMsgs((m) => [...m, { id: uid(), role: "user", text: clean }]);
     setInput("");
     setBusy(true);
     try {
+      setStatus("thinking");
       const res = await fetch("/api/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session, text: clean }),
       });
       const data = await res.json();
+      applyAssistantResult(data);
       if (data.error) {
-        setMsgs((m) => [...m, { role: "assistant", text: "\u26a0\ufe0f " + data.error }]);
+        setMsgs((m) => [...m, { id: uid(), role: "assistant", text: "\u26a0\ufe0f " + data.error }]);
       } else {
         setSession(data.session);
         setMsgs((m) => [
           ...m,
-          { role: "assistant", text: data.message, options: data.options },
+          { id: uid(), role: "assistant", text: data.message, options: data.options },
         ]);
       }
     } catch (e: any) {
-      setMsgs((m) => [...m, { role: "assistant", text: "\u26a0\ufe0f " + (e?.message || "Network error") }]);
+      setMsgs((m) => [...m, { id: uid(), role: "assistant", text: "\u26a0\ufe0f " + (e?.message || "Network error") }]);
     } finally {
       setBusy(false);
     }
@@ -225,8 +224,8 @@ export default function DraftingAssistant() {
               )}
             </div>
             
-            {msgs.map((m, i) => (
-              <div key={i}>
+            {msgs.map((m) => (
+                              <div key={m.id}>
                 <div className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
                   <div className={(m.role === "user" ? "bg-accent text-white" : "bg-canvas text-ink") + " max-w-[85%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed"}>
                     {m.text}

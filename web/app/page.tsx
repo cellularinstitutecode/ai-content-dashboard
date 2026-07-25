@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useLiveContent } from "@/components/LiveContentProvider";
 
 type Provider = 'anthropic' | 'openai';
 type ContentType = 'social' | 'blog' | 'email' | 'video' | 'ad';
@@ -79,11 +80,11 @@ function toArray(x: any): any[] {
 }
 
 export default function Dashboard() {
+  const { output, setOutput, drafts, setDrafts, stats, setStats } = useLiveContent();
   const [provider, setProvider] = useState<Provider>('anthropic');
   const [model, setModel] = useState<string>('claude-sonnet-4-5');
   const [type, setType] = useState<ContentType>('social');
   const [prompt, setPrompt] = useState('');
-  const [output, setOutput] = useState('');
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -99,8 +100,6 @@ export default function Dashboard() {
   const [opUrl, setOpUrl] = useState('');
   const [opStatus, setOpStatus] = useState<string | null>(null);
 
-  const [drafts, setDrafts] = useState<any[]>([]);
-  const [stats, setStats] = useState<any>(null);
   const [selectedDraft, setSelectedDraft] = useState<any>(null);
 
   useEffect(() => {
