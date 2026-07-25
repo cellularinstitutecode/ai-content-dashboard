@@ -270,8 +270,7 @@ async function runAgent(session: Session, input: string, userId: string | null) 
 
   session.toolMessages = tm;
   if (!finalMessage) finalMessage = "Done.";
-  return { message: finalMessage, options: undefined as string[] | undefined };
-}
+return { message: finalMessage, options: ((session as any).lastPack ? { preview: (session as any).lastPack, draftId: (session as any).draftId ?? null } : undefined) as any };}
 
 export async function POST(req: Request) {
   const { session: incoming, text } = (await req.json()) as {
