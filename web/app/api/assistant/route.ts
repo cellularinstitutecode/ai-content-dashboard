@@ -294,7 +294,70 @@ export async function POST(req: Request) {
     const { data: { user } } = await sb.auth.getUser();
     userId = user?.id || null;
   } catch { userId = null; }
+// Free-form draft fast-path: one-shot "draft/write a caption/post about X"
+    const draftIntent = /\b(draft|write|generate|create|compose|caption|post|copy)\b/i.test(text || "");
+    if (draftIntent) {
+      const topic = (session as any).lastTopic || (session as any).topic || text;
+      const audience = (session as any).audience || "general audience";
+      const tone = (session as any).tone || "professional";
+      const provider = (session as any).provider || (/openai|gpt/i.test(text) ? "openai" : "anthropic");
+      const contentType = "social" as any;
 
+      const inferred: string[] = [];
+      if (/instagram|insta|ig\b/i.test(text)) inferred.push("instagram");
+      if (/linkedin/i.test(text)) inferred.push("linkedin");
+      if (/facebook|fb\b/i.test(text)) inferred.push("facebook");
+      if (/blog|article/i.test(text)) inferred.push("blog");
+      const chans =
+        Array.isArray((session as any).channels) && (session as any).channels.length
+          ? (session as any).channels
+          : inferred;
+      const targetChannels = chans.length ? chans : ["instagram"];
+
+      try {
+        const result = await generateContentPack({
+          topic, audience, tone,
+          provider: provider as any,
+          model: (MODELS as any)[provider],
+          contentType,
+        });
+        const pack = ((result as any)?.pack || result || {}) as Record<string, any>;
+
+        const preview: Record<string, string> = {};
+        for (const ch of targetChannels) {
+          const txt = textFromPack(pack, ch);
+          if (txt) preview[ch] = txt;
+        }
+        if (Object.keys(preview).length === 0 && pack && typeof pack === "object") {
+          for (const ch of ["instagram", "linkedin", "facebook", "blog"]) {
+            if (typeof (pack as any)[ch] === "string") preview[ch] = (pack as any)[ch];
+          }
+        }
+
+        let draftId: string | null = null;
+        try {
+          const { data: row } = await supabaseServer()
+            .from("drafts")
+            .insert({ user_id: userId, topic, pack, provider })
+            .select().single();
+          draftId = (row as any)?.id ?? null;
+        } catch {}
+
+        (session as any).lastPack = pack;
+        (session as any).lastTopic = topic;
+        (session as any).provider = provider;
+        if (draftId) (session as any).draftId = draftId;
+
+        const firstCh = Object.keys(preview)[0] || "content";
+        return NextResponse.json({
+          session,
+          message: `Here's a ${firstCh} draft about "${topic}". I've added it to your Drafts and the dashboard output.`,
+          options: { preview, draftId },
+        });
+      } catch {
+        // fall through to the normal wizard if generation fails
+      }
+    }
   try {
     // Priming call: greet without advancing state.
     if (!input && session.step === "greet" && !session.mode) {
