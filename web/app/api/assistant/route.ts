@@ -294,7 +294,7 @@ export async function POST(req: Request) {
     const { data: { user } } = await sb.auth.getUser();
     userId = user?.id || null;
   } catch { userId = null; }
-// Free-form draft fast-path: one-shot "draft/write a caption/post about X"
+// Free-form draft fast-path (DIAGNOSTIC BUILD)
     const draftIntent = /\b(draft|write|generate|create|compose|caption|post|copy)\b/i.test(text || "");
     if (draftIntent) {
       const topic = (session as any).lastTopic || (session as any).topic || text;
@@ -314,15 +314,18 @@ export async function POST(req: Request) {
           : inferred;
       const targetChannels = chans.length ? chans : ["instagram"];
 
+      let stage = "start";
       try {
+        stage = "generate";
         const result = await generateContentPack({
           topic, audience, tone,
           provider: provider as any,
           model: (MODELS as any)[provider],
           contentType,
-        });
+        } as any);
         const pack = ((result as any)?.pack || result || {}) as Record<string, any>;
 
+        stage = "preview";
         const preview: Record<string, string> = {};
         for (const ch of targetChannels) {
           const txt = textFromPack(pack, ch);
@@ -334,15 +337,24 @@ export async function POST(req: Request) {
           }
         }
 
+        stage = "insert";
         let draftId: string | null = null;
-        try {
-          const { data: row } = await supabaseServer()
-            .from("drafts")
-            .insert({ user_id: userId, topic, pack, provider })
-            .select().single();
-          draftId = (row as any)?.id ?? null;
-        } catch {}
+        const ins = await supabaseServer()
+          .from("drafts")
+          .insert({ user_id: userId, topic, pack, provider })
+          .select()
+          .single();
+        if (ins.error) {
+          return NextResponse.json({
+            session,
+            message: "DIAG insert error",
+            options: null,
+            __diag: { stage, insertError: ins.error.message, userIdNull: userId == null, previewKeys: Object.keys(preview) },
+          });
+        }
+        draftId = (ins.data as any)?.id ?? null;
 
+        stage = "return";
         (session as any).lastPack = pack;
         (session as any).lastTopic = topic;
         (session as any).provider = provider;
@@ -354,8 +366,13 @@ export async function POST(req: Request) {
           message: `Here's a ${firstCh} draft about "${topic}". I've added it to your Drafts and the dashboard output.`,
           options: { preview, draftId },
         });
-      } catch {
-        // fall through to the normal wizard if generation fails
+      } catch (err: any) {
+        return NextResponse.json({
+          session,
+          message: "DIAG caught error",
+          options: null,
+          __diag: { stage, error: String(err?.message || err), userIdNull: userId == null },
+        });
       }
     }
   try {
