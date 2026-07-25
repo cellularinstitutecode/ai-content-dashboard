@@ -475,9 +475,8 @@ export async function POST(req: Request) {
       }
     }
   } catch (e: any) {
-    console.error("[assistant] unhandled error:", e);
     return NextResponse.json(
-      { error: "Assistant error. Please try again.", session },
+      { error: e?.message || "Assistant error", session },
       { status: 500 }
     );
   }
