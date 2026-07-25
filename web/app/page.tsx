@@ -362,7 +362,7 @@ export default function Dashboard() {
                   )}
                 </div>
                 {output ? (
-                  <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap rounded-2xl bg-white p-4 text-[13px] leading-relaxed text-ink-soft ring-1 ring-line">{output}</pre>
+                  <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap rounded-2xl bg-white p-4 text-[13px] leading-relaxed text-ink-soft ring-1 ring-line">{typeof output === 'string' ? output : JSON.stringify(output, null, 2)}</pre>
                 ) : (
                   <div className="flex h-[300px] flex-col items-center justify-center rounded-2xl border border-dashed border-line text-center">
                     <div className="text-[14px] font-medium text-ink-muted">Nothing generated yet</div>
