@@ -129,6 +129,31 @@ export default function Dashboard() {
     } catch {}
   }
 
+  async function deleteDraft(id: string) {
+    if (!id) return;
+    if (typeof window !== 'undefined' && !window.confirm('Delete this draft? This cannot be undone.')) return;
+    try {
+      const r = await fetch('/api/drafts?id=' + encodeURIComponent(id), { method: 'DELETE' });
+      if (r.ok) refreshDrafts();
+    } catch {}
+  }
+
+  async function editDraft(d: any) {
+    const current = (d && (d.topic || d.title || d.name)) || '';
+    const next = typeof window !== 'undefined' ? window.prompt('Edit draft name', String(current)) : null;
+    if (next == null) return;
+    const topic = next.trim();
+    if (!topic || topic === current) return;
+    try {
+      const r = await fetch('/api/drafts', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: d.id || d._id, topic }),
+      });
+      if (r.ok) refreshDrafts();
+    } catch {}
+  }
+
   async function generate() {
     setLoading(true); setErr(null); setOutput('');
     try {
@@ -550,6 +575,20 @@ export default function Dashboard() {
                       <div className="min-w-0">
                         <div className="truncate text-[14px] font-medium text-ink">{String(title)}</div>
                         {body && <div className="mt-0.5 line-clamp-2 text-[13px] text-ink-muted">{String(body)}</div>}
+                      </div>
+                      <div className="ml-auto flex shrink-0 items-center gap-1 self-center">
+                        <button
+                          type="button"
+                          aria-label="Edit draft"
+                          onClick={(e) => { e.stopPropagation(); editDraft(d); }}
+                          className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle"
+                        >Edit</button>
+                        <button
+                          type="button"
+                          aria-label="Delete draft"
+                          onClick={(e) => { e.stopPropagation(); deleteDraft((d && (d.id || d._id)) || ''); }}
+                          className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-red-600 ring-1 ring-red-200 transition hover:bg-red-50"
+                        >Delete</button>
                       </div>
                     </li>
                   );
