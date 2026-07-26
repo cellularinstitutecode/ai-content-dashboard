@@ -9,6 +9,10 @@ import {
 
 export const runtime = "nodejs";
 
+// Agent tool loop chains several sequential Anthropic calls; the default 10s
+// serverless limit is too low and causes empty 500s / hangs (issue #36).
+export const maxDuration = 60;
+
 // Embedded assistant.
 // Default mode is a free-form conversational AI that can also TAKE ACTIONS via
 // tool-calling (generate content, save drafts, schedule posts). Scheduling to live
@@ -181,7 +185,7 @@ async function runAgent(session: Session, input: string, userId: string | null) 
   tm.push({ role: "user", content: input });
 
   let finalMessage = "";
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 4; i++) {
     const turn = await chatWithTools(tm);
     // Record the assistant turn (text and/or tool_use) so the model keeps context.
     const assistantBlocks: any[] = [];
