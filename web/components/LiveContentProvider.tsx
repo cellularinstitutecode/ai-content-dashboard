@@ -21,7 +21,7 @@ type AssistantResult = {
 };
 
 type Draft = any;
-type Stats = { drafts?: number; scheduled?: number; upcoming?: number; clips?: number } | null;
+type Stats = { drafts?: number; scheduled?: number; upcoming?: number; clips?: number; draftsCount?: number; scheduledCount?: number; upcomingCount?: number; clipJobs?: number } | null;
 
 type LiveContent = {
   output: any;
@@ -53,6 +53,19 @@ export function LiveContentProvider({ children }: { children: ReactNode }) {
   const [staged, setStaged] = useState<AssistantOptions>(null);
   const [status, setStatus] = useState<"idle" | "thinking" | "applying">("idle");
 
+  const flattenPack = (pack: any): string => {
+  if (pack == null) return "";
+  if (typeof pack === "string") return pack;
+  const order = ["instagram", "facebook", "linkedin", "blog"];
+  const parts: string[] = [];
+  for (const k of order) {
+    const v = pack[k];
+    if (v) parts.push(k.toUpperCase() + "\n" + (typeof v === "string" ? v : String(v)));
+  }
+  if (parts.length) return parts.join("\n\n");
+  try { return JSON.stringify(pack, null, 2); } catch { return String(pack); }
+};
+
   const extractPack = (data: AssistantResult) => {
     if (data?.options?.preview) return data.options.preview;
     if (data?.pack) return data.pack;
@@ -66,7 +79,7 @@ export function LiveContentProvider({ children }: { children: ReactNode }) {
     setStaged(data?.options ?? null);
 
     const pack = extractPack(data);
-    if (pack) setOutput(pack);
+    if (pack) setOutput(flattenPack(pack));
 
     const id = data?.options?.draftId;
     if (id && pack) {

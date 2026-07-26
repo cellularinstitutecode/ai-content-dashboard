@@ -98,7 +98,7 @@ export default function DraftingAssistant() {
         setSession(data.session);
         setMsgs((m) => [
           ...m,
-          { id: uid(), role: "assistant", text: data.message, options: data.options },
+          { id: uid(), role: "assistant", text: data.message, options: Array.isArray(data.options) ? data.options : null },
         ]);
       }
     } catch (e: any) {
