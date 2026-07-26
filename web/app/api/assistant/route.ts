@@ -184,6 +184,10 @@ async function runAgent(session: Session, input: string, userId: string | null) 
   const tm: ToolMessage[] = Array.isArray(session.toolMessages) ? session.toolMessages : [];
   tm.push({ role: "user", content: input });
 
+  // Reliable auto-save: remember any pre-existing draft so we can tell if THIS turn saved one.
+  const _startDraftId = (session as any).draftId || null;
+  const _wantsSave = /\b(save|draft|keep|store|add (it|this) to (my )?drafts)\b/i.test(input || "");
+
   let finalMessage = "";
   for (let i = 0; i < 4; i++) {
     const turn = await chatWithTools(tm);
@@ -271,6 +275,46 @@ async function runAgent(session: Session, input: string, userId: string | null) 
       role: "user",
       content: [{ type: "tool_result", tool_use_id: turn.toolUseId, content: toolResult }],
     });
+  }
+
+  // Reliable auto-save fallback: if the user wanted to save but the model never persisted a
+  // draft this turn (e.g. it narrated a blog article inline instead of calling the tools),
+  // generate the pack in code if needed and insert the draft deterministically.
+  if (_wantsSave && userId && (session as any).draftId === _startDraftId) {
+    try {
+      if (!session.lastPack) {
+        const _topic = (session.lastTopic || (input || "").replace(/\b(please|kindly)\b/gi, "").replace(/\b(save|keep|store|add)\b.*$/i, "").replace(/^(write|create|draft|generate|make)\s+(me\s+)?(an?\s+)?/i, "").trim()).slice(0, 200) || "Untitled";
+        const _fmt = /blog|article/i.test(input) ? "blog" : /email/i.test(input) ? "email" : /video|script/i.test(input) ? "video" : /\bad\b|advert/i.test(input) ? "ad" : "social";
+        const _provider = (session.provider === "openai" ? "openai" : "anthropic");
+        const _res: any = await generateContentPack({ topic: _topic, provider: _provider as any, model: MODELS[_provider], contentType: _fmt as any });
+        session.lastPack = (_res?.pack || _res) as Record<string, any>;
+        session.lastTopic = _topic;
+        session.provider = _provider;
+      }
+      const _label = String(session.lastTopic || "Untitled").slice(0, 120);
+      const _sb = supabaseServer();
+      const { data: _draft } = await _sb
+        .from("drafts")
+        .insert({
+          user_id: userId,
+          title: _label,
+          topic: String(session.lastTopic || "Untitled"),
+          pack: session.lastPack,
+          provider: session.provider || "anthropic",
+        })
+        .select()
+        .single();
+      if (_draft) {
+        session.draftId = _draft.id;
+        session.links = session.links || [];
+        session.links.push({ label: "Open draft", url: "/?draft=" + _draft.id });
+        if (!/saved|draft/i.test(finalMessage || "")) {
+          finalMessage = (finalMessage ? finalMessage + "\n\n" : "") + "Saved it to your drafts.";
+        }
+      }
+    } catch (_e) {
+      // Non-fatal: if the fallback save fails, keep the model's message.
+    }
   }
 
   session.toolMessages = tm;
