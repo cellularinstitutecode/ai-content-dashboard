@@ -690,7 +690,7 @@ export default function Dashboard() {
                         </div>
                       );
                     }
-                    return (<div className="rounded-2xl border border-dashed border-line p-6 text-center text-[13px] text-ink-muted">This clip isn't linked to a Cellular Hope Institute video, so it can't be played here.</div>);
+                    return (<div className="rounded-2xl border border-dashed border-line p-6 text-center text-[13px] text-ink-muted">This clip isn’t linked to a Cellular Hope Institute video, so it can’t be played here.</div>);
                   })()
                 ) : editingDraft ? (
                   <div>
