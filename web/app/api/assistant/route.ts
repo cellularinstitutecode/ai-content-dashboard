@@ -229,6 +229,7 @@ async function runAgent(session: Session, input: string, userId: string | null) 
             .from("drafts")
             .insert({
               user_id: userId,
+              title: String(call.input.topic || session.lastTopic || "Untitled").slice(0, 120),
               topic: String(call.input.topic || session.lastTopic || "Untitled"),
               pack: session.lastPack,
               provider: session.provider || "anthropic",
