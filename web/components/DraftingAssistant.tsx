@@ -90,7 +90,17 @@ export default function DraftingAssistant() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session, text: clean }),
       });
-      const data = await res.json();
+      const _raw = await res.text();
+      let data: any = null;
+      try { data = _raw ? JSON.parse(_raw) : null; } catch { data = null; }
+      if (!data) {
+        const _timedOut = res.status === 504 || /FUNCTION_INVOCATION_TIMEOUT/i.test(_raw);
+        throw new Error(
+          _timedOut
+            ? "That request took too long and timed out. Long formats like a full blog article can exceed the limit — try a shorter format (for example a social post or an outline), then expand it."
+            : "The assistant returned an unexpected response (status " + res.status + "). Please try again."
+        );
+      }
       applyAssistantResult(data);
       if (data.error) {
         setMsgs((m) => [...m, { id: uid(), role: "assistant", text: "\u26a0\ufe0f " + data.error }]);
