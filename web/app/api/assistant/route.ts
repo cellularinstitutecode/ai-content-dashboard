@@ -282,13 +282,17 @@ async function runAgent(session: Session, input: string, userId: string | null) 
   if (_wantsSave && userId && (session as any).draftId === _startDraftId) {
     try {
       if (!session.lastPack) {
+        // Reuse the content the model already narrated this turn instead of
+        // regenerating (a second generateContentPack call times out for blogs).
         const _topic = (session.lastTopic || (input || "").replace(/\b(please|kindly)\b/gi, "").replace(/\b(save|keep|store|add)\b.*$/i, "").replace(/^(write|create|draft|generate|make)\s+(me\s+)?(an?\s+)?/i, "").trim()).slice(0, 200) || "Untitled";
         const _fmt = /blog|article/i.test(input) ? "blog" : /email/i.test(input) ? "email" : /video|script/i.test(input) ? "video" : /\bad\b|advert/i.test(input) ? "ad" : "social";
-        const _provider = (session.provider === "openai" ? "openai" : "anthropic");
-        const _res: any = await generateContentPack({ topic: _topic, provider: _provider as any, model: MODELS[_provider], contentType: _fmt as any });
-        session.lastPack = (_res?.pack || _res) as Record<string, any>;
-        session.lastTopic = _topic;
-        session.provider = _provider;
+        const _body = String(finalMessage || "").trim();
+        if (_body) {
+          const _key = _fmt === "blog" ? "blog" : _fmt === "email" ? "email" : _fmt === "video" ? "video" : _fmt === "ad" ? "ad" : "instagram";
+          session.lastPack = { [_key]: _body, instagram: _body };
+          session.lastTopic = _topic;
+          session.provider = session.provider === "openai" ? "openai" : "anthropic";
+        }
       }
       const _sb = supabaseServer();
       const { data: _draft } = await _sb
