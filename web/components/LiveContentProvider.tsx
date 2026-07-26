@@ -21,7 +21,7 @@ type AssistantResult = {
 };
 
 type Draft = any;
-type Stats = { drafts?: number; scheduled?: number; upcoming?: number; clips?: number } | null;
+type Stats = { drafts?: number; scheduled?: number; upcoming?: number; clips?: number; draftsCount?: number; scheduledCount?: number; upcomingCount?: number; clipJobs?: number } | null;
 
 type LiveContent = {
   output: any;
