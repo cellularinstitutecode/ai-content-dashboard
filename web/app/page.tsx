@@ -101,6 +101,10 @@ export default function Dashboard() {
   const [opStatus, setOpStatus] = useState<string | null>(null);
 
   const [selectedDraft, setSelectedDraft] = useState<any>(null);
+  const [editingDraft, setEditingDraft] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editBody, setEditBody] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   useEffect(() => {
     const first = PROVIDERS.find(p => p.id === provider)!;
@@ -152,6 +156,62 @@ export default function Dashboard() {
       });
       if (r.ok) refreshDrafts();
     } catch {}
+  }
+
+  function primaryBodyKey(pack: any): string {
+    if (!pack || typeof pack !== 'object') return 'content';
+    for (const k of ['blog', 'instagram', 'text', 'content', 'body', 'facebook', 'linkedin']) {
+      if (typeof pack[k] === 'string') return k;
+    }
+    for (const k of Object.keys(pack)) {
+      if (typeof pack[k] === 'string') return k;
+    }
+    return 'content';
+  }
+
+  function draftBody(d: any): string {
+    if (!d) return '';
+    if (typeof d.body === 'string') return d.body;
+    const pack = d.pack;
+    if (pack && typeof pack === 'object') {
+      const k = primaryBodyKey(pack);
+      if (typeof pack[k] === 'string') return pack[k];
+    }
+    if (typeof d.text === 'string') return d.text;
+    return '';
+  }
+
+  function startEditDraft(d: any) {
+    if (!d) return;
+    setEditTitle(String(d.topic || d.title || d.name || ''));
+    setEditBody(draftBody(d));
+    setEditingDraft(true);
+  }
+
+  async function saveDraftEdits() {
+    const d = selectedDraft;
+    if (!d) return;
+    const id = d.id || d._id;
+    if (!id) return;
+    const topic = editTitle.trim();
+    const basePack = (d.pack && typeof d.pack === 'object') ? { ...d.pack } : {};
+    const key = primaryBodyKey(d.pack);
+    basePack[key] = editBody;
+    setSavingEdit(true);
+    try {
+      const r = await fetch('/api/drafts', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, topic: topic || (d.topic || 'Untitled'), pack: basePack }),
+      });
+      if (r.ok) {
+        const j = await r.json().catch(() => null);
+        const updated = (j && j.draft) ? j.draft : { ...d, topic: topic || d.topic, pack: basePack };
+        setSelectedDraft(updated);
+        setEditingDraft(false);
+        refreshDrafts();
+      }
+    } catch {} finally { setSavingEdit(false); }
   }
 
   async function generate() {
@@ -596,13 +656,27 @@ export default function Dashboard() {
               </ul>
             )}
           </section>
-          {/* Draft detail modal — click a draft to view / play */}
+          {/* Draft detail modal — click a draft to view / play / edit */}
           {selectedDraft ? (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" onClick={() => setSelectedDraft(null)}>
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" onClick={() => { setSelectedDraft(null); setEditingDraft(false); }}>
               <div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7" onClick={(e) => e.stopPropagation()}>
                 <div className="mb-4 flex items-start justify-between gap-4">
-                  <h3 className="text-headline font-semibold text-ink">{String(selectedDraft?.title || selectedDraft?.topic || selectedDraft?.name || 'Draft')}</h3>
-                  <button onClick={() => setSelectedDraft(null)} className="shrink-0 rounded-xl px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Close</button>
+                  {editingDraft ? (
+                    <input
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      placeholder="Draft title"
+                      className="min-w-0 flex-1 rounded-xl bg-subtle px-3 py-2 text-[16px] font-semibold text-ink ring-1 ring-line focus:ring-accent"
+                    />
+                  ) : (
+                    <h3 className="text-headline font-semibold text-ink">{String(selectedDraft?.title || selectedDraft?.topic || selectedDraft?.name || 'Draft')}</h3>
+                  )}
+                  <div className="flex shrink-0 items-center gap-2">
+                    {selectedDraft?.pack?.kind !== 'clip' && !editingDraft ? (
+                      <button onClick={() => startEditDraft(selectedDraft)} className="rounded-xl px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Edit</button>
+                    ) : null}
+                    <button onClick={() => { setSelectedDraft(null); setEditingDraft(false); }} className="rounded-xl px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Close</button>
+                  </div>
                 </div>
                 {selectedDraft?.pack?.kind === 'clip' ? (
                   (() => {
@@ -616,15 +690,29 @@ export default function Dashboard() {
                         </div>
                       );
                     }
-                    return (<div className="rounded-2xl border border-dashed border-line p-6 text-center text-[13px] text-ink-muted">This clip isn’t linked to a Cellular Hope Institute video, so it can’t be played here.</div>);
+                    return (<div className="rounded-2xl border border-dashed border-line p-6 text-center text-[13px] text-ink-muted">This clip isn't linked to a Cellular Hope Institute video, so it can't be played here.</div>);
                   })()
+                ) : editingDraft ? (
+                  <div>
+                    <textarea
+                      value={editBody}
+                      onChange={(e) => setEditBody(e.target.value)}
+                      rows={14}
+                      placeholder="Draft content..."
+                      className="w-full resize-y rounded-2xl bg-subtle/50 p-4 text-[14px] leading-relaxed text-ink ring-1 ring-line/60 focus:ring-accent"
+                    />
+                    <div className="mt-4 flex items-center gap-3">
+                      <button onClick={saveDraftEdits} disabled={savingEdit} className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-white shadow-soft transition-colors hover:bg-accent-hover disabled:opacity-40">{savingEdit ? 'Saving...' : 'Save changes'}</button>
+                      <button onClick={() => setEditingDraft(false)} disabled={savingEdit} className="rounded-full px-4 py-2 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle disabled:opacity-40">Cancel</button>
+                    </div>
+                  </div>
                 ) : (
                   <div className="whitespace-pre-wrap rounded-2xl bg-subtle/50 p-4 text-[14px] leading-relaxed text-ink ring-1 ring-line/60">{String(selectedDraft?.body || selectedDraft?.pack?.instagram || selectedDraft?.pack?.text || selectedDraft?.text || selectedDraft?.pack?.content || JSON.stringify(selectedDraft?.pack ?? {}, null, 2))}</div>
                 )}
               </div>
             </div>
           ) : null}
-        </main>
+          </main>
       </div>
     </div>
   );
