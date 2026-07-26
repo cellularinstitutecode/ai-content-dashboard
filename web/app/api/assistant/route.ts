@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 
 // Agent tool loop chains several sequential Anthropic calls; the default 10s
 // serverless limit is too low and causes empty 500s / hangs (issue #36).
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // Embedded assistant.
 // Default mode is a free-form conversational AI that can also TAKE ACTIONS via
