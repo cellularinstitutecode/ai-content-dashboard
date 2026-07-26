@@ -233,7 +233,6 @@ async function runAgent(session: Session, input: string, userId: string | null) 
             .from("drafts")
             .insert({
               user_id: userId,
-              title: String(call.input.topic || session.lastTopic || "Untitled").slice(0, 120),
               topic: String(call.input.topic || session.lastTopic || "Untitled"),
               pack: session.lastPack,
               provider: session.provider || "anthropic",
@@ -291,13 +290,11 @@ async function runAgent(session: Session, input: string, userId: string | null) 
         session.lastTopic = _topic;
         session.provider = _provider;
       }
-      const _label = String(session.lastTopic || "Untitled").slice(0, 120);
       const _sb = supabaseServer();
       const { data: _draft } = await _sb
         .from("drafts")
         .insert({
           user_id: userId,
-          title: _label,
           topic: String(session.lastTopic || "Untitled"),
           pack: session.lastPack,
           provider: session.provider || "anthropic",
