@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
     .from('drafts')
     .insert({
       user_id: user.id,
+      title: String(topic).slice(0, 120),
       topic,
       audience: audience ?? null,
       tone: tone ?? null,
