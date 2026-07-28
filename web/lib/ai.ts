@@ -66,7 +66,7 @@ function maxTokensFor(type: ContentType): number {
   return type === 'blog' || type === 'email' ? 4000 : 2000;
 }
 
-const BASE_VOICE = `You are the marketing content writer for Cellular Hope Institute, a regenerative medicine clinic in Cancún, Mexico. You write in the brand voice: warm, expert, science-backed, never hype.`;
+const DEFAULT_VOICE = `You are an expert marketing content writer. You write in a warm, clear, credible voice: helpful and specific, never hype. When a brand profile is provided below, follow it exactly and let it override these defaults.`;
 
 // Each content type keeps the SAME four JSON keys (instagram, facebook, linkedin, blog)
 // so drafts + the dashboard renderer never break. The MEANING of each key is adapted
@@ -79,8 +79,9 @@ const TYPE_INSTRUCTIONS: Record<ContentType, string> = {
   ad: `Produce ad copy for Meta/Google Ads. Put 3 headline variations + primary text + CTA in the "blog" key. In "instagram", "facebook" and "linkedin" put a platform-tailored ad primary text for each.`,
 };
 
-function systemPrompt(type: ContentType) {
-  return `${BASE_VOICE} You always return STRICT JSON with exactly the keys: instagram, facebook, linkedin, blog. Each value is a finished, ready-to-use string. ${TYPE_INSTRUCTIONS[type]} Return strict JSON only. No prose, no markdown fences.`;
+function systemPrompt(type: ContentType, brand?: BrandContext) {
+  const voice = brand?.voice ? `You are the marketing content writer for ${brand.name || 'this brand'}. Write in this brand voice: ${brand.voice}` : DEFAULT_VOICE;
+  return `${voice} You always return STRICT JSON with exactly the keys: instagram, facebook, linkedin, blog. Each value is a finished, ready-to-use string. ${TYPE_INSTRUCTIONS[type]} Return strict JSON only. No prose, no markdown fences.`;
 }
 
 function brandBlock(brand?: BrandContext): string {
@@ -97,9 +98,10 @@ function brandBlock(brand?: BrandContext): string {
 }
 
 function buildUserPrompt(input: GenerateInput) {
+  const brand = input.brand;
   const channels = input.channels?.length ? input.channels.join(', ') : 'instagram, facebook, linkedin, blog';
   return `${brandBlock(input.brand)}Topic: ${input.topic}
-Target audience: ${input.audience || 'aesthetic and wellness patients considering regenerative therapy'}
+Target audience: ${input.audience || brand?.audience || 'a general audience'}
 Tone: ${input.tone || 'professional, friendly'}
 Channels to produce: ${channels}
 Return strict JSON only. No prose, no markdown fences.`;
@@ -120,7 +122,7 @@ async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
     body: JSON.stringify({
       model,
       max_tokens: maxTokensFor(type),
-      system: systemPrompt(type),
+      system: systemPrompt(type, input.brand),
       messages: [{ role: 'user', content: buildUserPrompt(input) }],
     }),
   });
@@ -145,7 +147,7 @@ async function callOpenAI(input: GenerateInput): Promise<ContentPack> {
       model,
       response_format: { type: 'json_object' },
       messages: [
-        { role: 'system', content: systemPrompt(type) },
+        { role: 'system', content: systemPrompt(type, input.brand) },
         { role: 'user', content: buildUserPrompt(input) },
       ],
     }),
