@@ -2,7 +2,8 @@
 // Thin route — delegates to lib/ai.ts so we can swap providers.
 import { NextRequest, NextResponse } from 'next/server';
 import { generateContentPack, type Provider, type ContentType, type BrandContext } from '@/lib/ai';
-import { supabaseServer } from '@/lib/supabase';
+import { supabaseServer, supabaseAdmin } from '@/lib/supabase';
+import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -67,6 +68,30 @@ export async function POST(req: NextRequest) {
       // ignore brand-load failures; fall back to the default brand voice.
     }
 
+    // Load the user's recent top-performing posts to bias generation (optional).
+    let performanceHint: string | undefined;
+    try {
+      const { data: rows } = await supabaseAdmin()
+        .from('post_metrics')
+        .select('network, external_id, text, published_at, impressions, engagement')
+        .eq('user_id', user.id)
+        .order('engagement', { ascending: false })
+        .limit(5);
+      if (rows && rows.length) {
+        const metrics: NormalizedMetric[] = rows.map((r: any) => ({
+          network: r.network,
+          externalId: r.external_id ?? null,
+          text: r.text ?? null,
+          publishedAt: r.published_at ?? null,
+          impressions: r.impressions ?? 0,
+          engagement: r.engagement ?? 0,
+        }));
+        performanceHint = summarizeTopPerformers(metrics) || undefined;
+      }
+    } catch {
+      // ignore performance-load failures; generation proceeds without the hint.
+    }
+
     const { provider: used, pack } = await generateContentPack({
       topic,
       audience,
@@ -76,6 +101,7 @@ export async function POST(req: NextRequest) {
       model: safeModel,
       contentType,
       brand,
+      performanceHint,
     });
     return NextResponse.json({ provider: used, pack });
   } catch (e: any) {
