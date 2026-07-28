@@ -1,6 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+type Provider = 'instagram' | 'facebook' | 'linkedin' | 'blog';
+type AiProvider = 'anthropic' | 'openai';
 
 type Template = {
   id?: string;
@@ -12,8 +15,16 @@ type Template = {
   active?: boolean;
 };
 
+type CompareResults = {
+  anthropic?: string;
+  openai?: string;
+  anthropicErr?: string;
+  openaiErr?: string;
+};
+
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const PROVIDERS = ['instagram', 'facebook', 'linkedin', 'blog'];
+const PROVIDERS: Provider[] = ['instagram', 'facebook', 'linkedin', 'blog'];
+const APPLY_WEEKS = 4;
 
 const card: React.CSSProperties = {
   background: '#ffffff', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 12, padding: 28,
@@ -35,6 +46,42 @@ function emptyDraft(): Template {
   return { name: '', providers: [], text: '', weekdays: [], time_of_day: '09:00', active: true };
 }
 
+function toggle<T>(list: T[], value: T): T[] {
+  return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+}
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : 'Something went wrong';
+}
+
+async function api<T = unknown>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error((data && data.error) || 'Request failed (' + res.status + ')');
+  }
+  return data as T;
+}
+
+function draftedFromPack(pack: Record<string, string> | undefined): string {
+  const p = pack || {};
+  return p.instagram || p.facebook || p.linkedin || p.blog || '';
+}
+
+async function callGenerate(topic: string, provider: AiProvider): Promise<string> {
+  const data = await api<{ pack?: Record<string, string> }>('/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      topic,
+      provider,
+      model: provider === 'anthropic' ? 'claude-sonnet-4-5' : 'gpt-4o',
+      type: 'social',
+    }),
+  });
+  return draftedFromPack(data.pack);
+}
+
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [draft, setDraft] = useState<Template>(emptyDraft());
@@ -43,94 +90,84 @@ export default function TemplatesPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [aiTopic, setAiTopic] = useState('');
-  const [aiProvider, setAiProvider] = useState<'anthropic' | 'openai'>('anthropic');
+  const [aiProvider, setAiProvider] = useState<AiProvider>('anthropic');
   const [aiBusy, setAiBusy] = useState(false);
   const [compareBusy, setCompareBusy] = useState(false);
-  const [compareResults, setCompareResults] = useState<{ anthropic?: string; openai?: string; anthropicErr?: string; openaiErr?: string } | null>(null);
+  const [compareResults, setCompareResults] = useState<CompareResults | null>(null);
+
+  const loadSeq = useRef(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function load(signal?: AbortSignal) {
+    const seq = ++loadSeq.current;
+    setLoading(true);
+    setErr(null);
+    try {
+      const j = await api<{ templates?: Template[] }>('/api/templates', { signal });
+      if (seq !== loadSeq.current) return; // stale response, ignore
+      setTemplates(Array.isArray(j.templates) ? j.templates : []);
+    } catch (e) {
+      if ((e as { name?: string }).name === 'AbortError') return;
+      if (seq === loadSeq.current) setErr(errMsg(e));
+    } finally {
+      if (seq === loadSeq.current) setLoading(false);
+    }
+  }
 
   async function draftWithAI() {
     if (!aiTopic.trim()) { setErr('Enter a topic for the AI to draft from.'); return; }
-    setErr(''); setAiBusy(true);
+    setErr(null);
+    setAiBusy(true);
     try {
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic: aiTopic, provider: aiProvider, model: aiProvider === 'anthropic' ? 'claude-sonnet-4-5' : 'gpt-4o', type: 'social' }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Failed to draft');
-      const pack = data?.pack || {};
-      const drafted = pack.instagram || pack.facebook || pack.linkedin || pack.blog || '';
-      setDraft((prev: any) => ({ ...prev, text: drafted }));
-    } catch (e: any) {
-      setErr(e?.message || 'Failed to draft with AI');
+      const drafted = await callGenerate(aiTopic, aiProvider);
+      setDraft((prev) => ({ ...prev, text: drafted }));
+    } catch (e) {
+      setErr(errMsg(e));
     } finally {
       setAiBusy(false);
     }
   }
 
-  async function callGenerate(provider: 'anthropic' | 'openai'): Promise<string> {
-    const res = await fetch('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic: aiTopic, provider, model: provider === 'anthropic' ? 'claude-sonnet-4-5' : 'gpt-4o', type: 'social' }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error || 'Failed to draft');
-    const pack = data?.pack || {};
-    return pack.instagram || pack.facebook || pack.linkedin || pack.blog || '';
-  }
-
   async function draftWithBoth() {
     if (!aiTopic.trim()) { setErr('Enter a topic for the AI to draft from.'); return; }
-    setErr(''); setCompareBusy(true); setCompareResults(null);
-    const [a, o] = await Promise.allSettled([callGenerate('anthropic'), callGenerate('openai')]);
+    setErr(null);
+    setCompareBusy(true);
+    setCompareResults(null);
+    const [a, o] = await Promise.allSettled([
+      callGenerate(aiTopic, 'anthropic'),
+      callGenerate(aiTopic, 'openai'),
+    ]);
     setCompareResults({
       anthropic: a.status === 'fulfilled' ? a.value : undefined,
-      anthropicErr: a.status === 'rejected' ? String(a.reason?.message || a.reason) : undefined,
+      anthropicErr: a.status === 'rejected' ? errMsg(a.reason) : undefined,
       openai: o.status === 'fulfilled' ? o.value : undefined,
-      openaiErr: o.status === 'rejected' ? String(o.reason?.message || o.reason) : undefined,
+      openaiErr: o.status === 'rejected' ? errMsg(o.reason) : undefined,
     });
     setCompareBusy(false);
   }
 
-  useEffect(() => { load(); }, []);
-
-  async function load() {
-    setLoading(true);
-    setErr(null);
-    try {
-      const r = await fetch('/api/templates');
-      if (!r.ok) throw new Error('Failed to load templates (' + r.status + ')');
-      const j = await r.json().catch(() => null);
-      setTemplates(Array.isArray(j && j.templates) ? j.templates : []);
-    } catch (e: any) {
-      setErr(e && e.message ? e.message : 'Failed to load');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function toggle(list: any[], value: any): any[] {
-    return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
-  }
-
   async function save() {
+    if (!draft.name?.trim()) { setErr('Give the template a name before saving.'); return; }
     setSaving(true);
     setStatus(null);
     setErr(null);
     try {
-      const r = await fetch('/api/templates', {
+      await api('/api/templates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(draft),
       });
-      if (!r.ok) throw new Error('Save failed (' + r.status + ')');
       setDraft(emptyDraft());
       setStatus('Template saved.');
       await load();
-    } catch (e: any) {
-      setErr(e && e.message ? e.message : 'Save failed');
+    } catch (e) {
+      setErr(errMsg(e));
     } finally {
       setSaving(false);
     }
@@ -138,31 +175,32 @@ export default function TemplatesPage() {
 
   async function remove(id?: string) {
     if (!id) return;
+    const t = templates.find((x) => x.id === id);
+    const label = t?.name ? '"' + t.name + '"' : 'this template';
+    if (!window.confirm('Delete ' + label + '? This cannot be undone.')) return;
     setErr(null);
     try {
-      const r = await fetch('/api/templates?id=' + encodeURIComponent(id), { method: 'DELETE' });
-      if (!r.ok) throw new Error('Delete failed (' + r.status + ')');
+      await api('/api/templates?id=' + encodeURIComponent(id), { method: 'DELETE' });
       await load();
-    } catch (e: any) {
-      setErr(e && e.message ? e.message : 'Delete failed');
+    } catch (e) {
+      setErr(errMsg(e));
     }
   }
 
   async function apply(id?: string) {
     if (!id) return;
+    if (!window.confirm('Schedule posts for the next ' + APPLY_WEEKS + ' weeks from this template?')) return;
     setStatus(null);
     setErr(null);
     try {
-      const r = await fetch('/api/templates/apply', {
+      const j = await api<{ created?: number }>('/api/templates/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, weeks: 4 }),
+        body: JSON.stringify({ id, weeks: APPLY_WEEKS }),
       });
-      const j = await r.json().catch(() => null);
-      if (!r.ok) throw new Error((j && j.error) || 'Apply failed (' + r.status + ')');
-      setStatus('Scheduled ' + ((j && j.created) || 0) + ' posts for the next 4 weeks.');
-    } catch (e: any) {
-      setErr(e && e.message ? e.message : 'Apply failed');
+      setStatus('Scheduled ' + (j.created || 0) + ' posts for the next ' + APPLY_WEEKS + ' weeks.');
+    } catch (e) {
+      setErr(errMsg(e));
     }
   }
 
@@ -177,91 +215,98 @@ export default function TemplatesPage() {
       </header>
 
       <div style={{ maxWidth: 900, margin: '0 auto', padding: 24, display: 'grid', gap: 24 }}>
-        {err && <div style={{ color: '#d70015', fontSize: 14 }}>Error: {err}</div>}
-        {status && <div style={{ color: '#248a3d', fontSize: 14 }}>{status}</div>}
+        {err && <div role="alert" aria-live="assertive" style={{ color: '#d70015', fontSize: 14 }}>Error: {err}</div>}
+        {status && <div role="status" aria-live="polite" style={{ color: '#248a3d', fontSize: 14 }}>{status}</div>}
 
         <section style={card}>
           <h2 style={{ marginTop: 0, marginBottom: 20, fontSize: 17 }}>New template</h2>
 
           <label style={{ fontSize: 13, opacity: .8 }}>Name
-            <input style={inputStyle} value={draft.name || ''} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="e.g. Weekly product tips" />
+            <input style={inputStyle} value={draft.name || ''} onChange={(e) => setDraft((prev) => ({ ...prev, name: e.target.value }))} placeholder="e.g. Weekly product tips" />
           </label>
 
-          <div style={{ marginTop: 22, fontSize: 13, opacity: .8 }}>Providers</div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
-            {PROVIDERS.map((p) => (
-              <button key={p} type="button"
-                onClick={() => setDraft({ ...draft, providers: toggle(draft.providers || [], p) })}
-                style={{ ...ghost, background: (draft.providers || []).includes(p) ? '#0071e3' : '#f5f5f7', color: (draft.providers || []).includes(p) ? '#fff' : '#1d1d1f', border: '1px solid rgba(0,0,0,0.1)' }}>
-                {p}
-              </button>
-            ))}
-          </div>
-
-          <div style={{ marginTop: 22, fontSize: 13, opacity: .8 }}>Post on</div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-            {DOW.map((d, i) => (
-              <button key={d} type="button"
-                onClick={() => setDraft({ ...draft, weekdays: toggle(draft.weekdays || [], i) })}
-                style={{ ...ghost, minWidth: 46, textAlign: 'center', background: (draft.weekdays || []).includes(i) ? '#0071e3' : '#f5f5f7', color: (draft.weekdays || []).includes(i) ? '#fff' : '#1d1d1f' }}>
-                {d}
-              </button>
-            ))}
-          </div>
-
-          <label style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 22 }}>
-            <span style={{ fontSize: 13, opacity: .8 }}>Time of day</span>
-            <input style={{ ...inputStyle, width: 140, marginTop: 0 }} type="time" value={draft.time_of_day || '09:00'} onChange={(e) => setDraft({ ...draft, time_of_day: e.target.value })} />
-          </label>
-
-          <div style={{ marginTop: 18, marginBottom: 6, padding: 14, borderRadius: 12, background: '#f5f5f7', border: '1px solid rgba(0,0,0,0.06)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M12 2l1.9 5.4L19 9.3l-4.6 2.3L12 17l-2.4-5.4L5 9.3l5.1-1.9L12 2z" fill="#0071e3"/>
-              </svg>
-              <span style={{ fontSize: 14, fontWeight: 600, color: '#1d1d1f' }}>Draft with AI</span>
-              <span style={{ fontSize: 12, color: '#6e6e73' }}>Let Claude or GPT write the post for you.</span>
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-              {([['anthropic', 'Claude'], ['openai', 'OpenAI']] as const).map(([val, label]) => (
-                <button key={val} type="button" onClick={() => setAiProvider(val)}
-                  style={{ ...ghost, background: aiProvider === val ? '#0071e3' : '#ffffff', color: aiProvider === val ? '#fff' : '#1d1d1f' }}>
-                  {label}
+          <div style={{ marginTop: 22, fontSize: 13, opacity: .8 }} id="providers-label">Providers</div>
+          <div role="group" aria-labelledby="providers-label" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+            {PROVIDERS.map((p) => {
+              const selected = (draft.providers || []).includes(p);
+              return (
+                <button key={p} type="button" aria-pressed={selected}
+                  onClick={() => setDraft((prev) => ({ ...prev, providers: toggle(prev.providers || [], p) }))}
+                  style={{ ...ghost, background: selected ? '#0071e3' : '#f5f5f7', color: selected ? '#fff' : '#1d1d1f' }}>
+                  {p}
                 </button>
-              ))}
+              );
+            })}
+          </div>
+
+          <div style={{ marginTop: 22, fontSize: 13, opacity: .8 }} id="weekdays-label">Days of week</div>
+          <div role="group" aria-labelledby="weekdays-label" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+            {DOW.map((d, i) => {
+              const selected = (draft.weekdays || []).includes(i);
+              return (
+                <button key={d} type="button" aria-pressed={selected} aria-label={d}
+                  onClick={() => setDraft((prev) => ({ ...prev, weekdays: toggle(prev.weekdays || [], i) }))}
+                  style={{ ...ghost, background: selected ? '#0071e3' : '#f5f5f7', color: selected ? '#fff' : '#1d1d1f' }}>
+                  {d}
+                </button>
+              );
+            })}
+          </div>
+
+          <label style={{ display: 'block', marginTop: 22, fontSize: 13, opacity: .8 }}>Time of day
+            <input type="time" style={{ ...inputStyle, width: 160 }} value={draft.time_of_day || '09:00'} onChange={(e) => setDraft((prev) => ({ ...prev, time_of_day: e.target.value }))} />
+          </label>
+
+          <div style={{ marginTop: 22, fontSize: 13, opacity: .8 }}>Draft with AI</div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
+            <label style={{ fontSize: 13, opacity: .8 }} htmlFor="ai-provider">Model</label>
+            <select id="ai-provider" value={aiProvider} onChange={(e) => setAiProvider(e.target.value as AiProvider)}
+              style={{ ...inputStyle, width: 140, marginTop: 0 }}>
+              <option value="anthropic">Claude</option>
+              <option value="openai">GPT</option>
+            </select>
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <label htmlFor="ai-topic" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>Topic</label>
+            <input id="ai-topic" style={{ ...inputStyle, flex: 1, marginTop: 0 }} value={aiTopic}
+              onChange={(e) => setAiTopic(e.target.value)}
+              placeholder="What should this post be about?" />
+            <button type="button" onClick={draftWithAI} disabled={aiBusy}
+              style={{ ...btn, whiteSpace: 'nowrap', opacity: aiBusy ? 0.6 : 1 }}>
+              {aiBusy ? 'Drafting…' : 'Draft with AI'}
+            </button>
+            <button type="button" onClick={draftWithBoth} disabled={compareBusy}
+              style={{ ...ghost, whiteSpace: 'nowrap', opacity: compareBusy ? 0.6 : 1 }}>
+              {compareBusy ? 'Comparing…' : 'Compare both'}
+            </button>
+          </div>
+
+          {compareResults && (
+            <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              {(['anthropic', 'openai'] as const).map((key) => {
+                const isErr = key === 'anthropic' ? compareResults.anthropicErr : compareResults.openaiErr;
+                const value = key === 'anthropic' ? compareResults.anthropic : compareResults.openai;
+                return (
+                  <div key={key} style={{ background: '#fff', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, padding: 10 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{key === 'anthropic' ? 'Claude' : 'GPT'}</div>
+                    <div style={{ fontSize: 13, whiteSpace: 'pre-wrap', marginBottom: 8, color: isErr ? '#d70015' : '#1d1d1f' }}>
+                      {isErr || value || 'No content.'}
+                    </div>
+                    {value && (
+                      <button type="button" style={btn} onClick={() => setDraft((prev) => ({ ...prev, text: value }))}>Use this draft</button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input style={{ ...inputStyle, flex: 1 }} value={aiTopic}
-                onChange={(e) => setAiTopic(e.target.value)}
-                placeholder="What should this post be about?" />
-              <button type="button" onClick={draftWithAI} disabled={aiBusy}
-                style={{ ...btn, whiteSpace: 'nowrap', opacity: aiBusy ? 0.6 : 1 }}>
-                {aiBusy ? 'Drafting…' : 'Draft with AI'}
-              </button>
-              <button type="button" onClick={draftWithBoth} disabled={compareBusy}
-                style={{ ...ghost, whiteSpace: 'nowrap', opacity: compareBusy ? 0.6 : 1 }}>
-                {compareBusy ? 'Comparing…' : 'Compare both'}
-              </button>
-            </div>
-            
-            {compareResults && (
-      <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        {(['anthropic', 'openai'] as const).map((key) => (
-        <div key={key} style={{ background: '#fff', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, padding: 10 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{key === 'anthropic' ? 'Claude' : 'GPT'}</div>
-        <div style={{ fontSize: 13, whiteSpace: 'pre-wrap', marginBottom: 8, color: (key === 'anthropic' ? compareResults.anthropicErr : compareResults.openaiErr) ? '#d70015' : '#1d1d1f' }}>{(key === 'anthropic' ? (compareResults.anthropicErr || compareResults.anthropic) : (compareResults.openaiErr || compareResults.openai)) || 'No content.'}</div>
-        <button type="button" style={btn} onClick={() => setDraft((prev) => ({ ...prev, text: (key === 'anthropic' ? compareResults.anthropic : compareResults.openai) || '' }))}>Use this draft</button>
-        </div>
-        ))}
-      </div>
-          )}</div>
+          )}
 
           <label style={{ display: 'block', marginTop: 22, fontSize: 13, opacity: .8 }}>Post text
-            <textarea style={{ ...inputStyle, minHeight: 90, resize: 'vertical' }} value={draft.text || ''} onChange={(e) => setDraft({ ...draft, text: e.target.value })} placeholder="What should each scheduled post say?" />
+            <textarea style={{ ...inputStyle, minHeight: 90, resize: 'vertical' }} value={draft.text || ''} onChange={(e) => setDraft((prev) => ({ ...prev, text: e.target.value }))} placeholder="What should each scheduled post say?" />
           </label>
 
           <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
-            <button style={btn} onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save template'}</button>
+            <button style={{ ...btn, opacity: saving ? 0.6 : 1 }} onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save template'}</button>
             <button style={ghost} type="button" onClick={() => setDraft(emptyDraft())}>Clear</button>
           </div>
         </section>
@@ -283,9 +328,8 @@ export default function TemplatesPage() {
                   {t.text && <div style={{ fontSize: 13, opacity: .85, marginTop: 6, whiteSpace: 'pre-wrap' }}>{t.text}</div>}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <button style={btn} onClick={() => apply(t.id)}>Apply (4 wks)</button>
-                  <button style={ghost} onClick={() => setDraft(t)}>Edit</button>
-                  <button style={{ ...ghost, color: '#d70015' }} onClick={() => remove(t.id)}>Delete</button>
+                  <button style={btn} onClick={() => apply(t.id)}>Apply</button>
+                  <button style={ghost} onClick={() => remove(t.id)}>Delete</button>
                 </div>
               </div>
             ))}
