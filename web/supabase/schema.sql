@@ -116,3 +116,21 @@ create policy if not exists "templates: owner insert" on public.schedule_templat
 create policy if not exists "templates: owner update" on public.schedule_templates for update using (auth.uid() = user_id);
 create policy if not exists "templates: owner delete" on public.schedule_templates for delete using (auth.uid() = user_id);
 
+-- Usage events: append-only log used by the rate limiter to count a user's
+-- recent calls to expensive AI actions (generate, assistant, opus-clip).
+create table if not exists public.usage_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  action text not null,
+  created_at timestamptz default now()
+);
+
+-- Fast lookups for the sliding window: filter by user + action, order by time.
+create index if not exists usage_events_user_action_time_idx
+  on public.usage_events (user_id, action, created_at desc);
+
+alter table public.usage_events enable row level security;
+
+-- Users may read their own usage; writes happen via the service-role client
+-- (rate limiter), which bypasses RLS, so no insert policy is required.
+create policy if not exists "usage_events: owner read" on public.usage_events for select using (auth.uid() = user_id);
