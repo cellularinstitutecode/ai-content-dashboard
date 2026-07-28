@@ -146,6 +146,7 @@ async function callOpenAI(input: GenerateInput): Promise<ContentPack> {
     body: JSON.stringify({
       model,
       response_format: { type: 'json_object' },
+      max_tokens: maxTokensFor(type),
       messages: [
         { role: 'system', content: systemPrompt(type, input.brand) },
         { role: 'user', content: buildUserPrompt(input) },
@@ -159,8 +160,16 @@ async function callOpenAI(input: GenerateInput): Promise<ContentPack> {
 }
 
 function parseJsonStrict(text: string): ContentPack {
-  // Tolerate accidental markdown fences
-  const cleaned = text.replace(/^\s*```(?:json)?/i, '').replace(/```\s*$/, '').trim();
+  // Tolerate accidental markdown fences and any prose the model wraps around JSON.
+  let cleaned = text.replace(/^\s*```(?:json)?/i, '').replace(/```\s*$/, '').trim();
+  // If the payload is wrapped in prose, extract the outermost JSON object.
+  if (!cleaned.startsWith('{')) {
+    const first = cleaned.indexOf('{');
+    const last = cleaned.lastIndexOf('}');
+    if (first !== -1 && last !== -1 && last > first) {
+      cleaned = cleaned.slice(first, last + 1);
+    }
+  }
   let obj: any;
   try { obj = JSON.parse(cleaned); }
   catch { throw new Error('AI returned malformed JSON; please try again.'); }
@@ -176,7 +185,18 @@ export async function generateContentPack(input: GenerateInput): Promise<{ provi
   const provider: Provider =
     input.provider ||
     (process.env.AI_PROVIDER === 'openai' ? 'openai' : 'anthropic');
-  const pack = provider === 'openai' ? await callOpenAI(input) : await callAnthropic(input);
+  const call = () => (provider === 'openai' ? callOpenAI(input) : callAnthropic(input));
+  let pack: ContentPack;
+  try {
+    pack = await call();
+  } catch (e) {
+    // One retry: a malformed-JSON parse is often transient, so regenerate once.
+    if (e instanceof Error && /malformed JSON/i.test(e.message)) {
+      pack = await call();
+    } else {
+      throw e;
+    }
+  }
   return { provider, pack };
 }
 

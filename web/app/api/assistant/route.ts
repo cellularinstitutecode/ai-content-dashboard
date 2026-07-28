@@ -6,6 +6,7 @@ import {
   chatWithTools,
   type ToolMessage,
 } from "@/lib/ai";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -347,6 +348,15 @@ export async function POST(req: Request) {
   // Require an authenticated user before running the assistant (which spends AI credits).
   if (!userId) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
+  // Rate limit before spending AI credits (fails open if usage_events is absent).
+  const rl = await checkRateLimit(userId, 'assistant');
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: 'rate_limited', limit: rl.limit },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } }
+    );
   }
 
   try {

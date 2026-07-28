@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { opusCreateClipProject, opusGetClips } from '@/lib/opus';
 import { supabaseServer, supabaseAdmin } from '@/lib/supabase';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 
@@ -9,6 +10,15 @@ export async function POST(req: NextRequest) {
     const sb = supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
+    // Rate limit before kicking off an Opus clip job (fails open if usage_events is absent).
+    const rl = await checkRateLimit(user.id, 'opus-clip');
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'rate_limited', limit: rl.limit },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } }
+      );
+    }
 
     const { videoUrl, brandTemplateId, language } = await req.json();
     if (!videoUrl) return NextResponse.json({ error: 'videoUrl required' }, { status: 400 });
