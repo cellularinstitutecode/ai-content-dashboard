@@ -32,6 +32,8 @@ export type GenerateInput = {
   model?: string;
   contentType?: ContentType;
   brand?: BrandContext;
+  // Optional summary of recent top-performing posts to bias generation.
+  performanceHint?: string;
 };
 
 // Retryable transient statuses: 408 timeout, 409 conflict, 429 rate limit, 5xx overloaded/errors
@@ -104,7 +106,7 @@ function buildUserPrompt(input: GenerateInput) {
 Target audience: ${input.audience || brand?.audience || 'a general audience'}
 Tone: ${input.tone || 'professional, friendly'}
 Channels to produce: ${channels}
-Return strict JSON only. No prose, no markdown fences.`;
+${input.performanceHint ? input.performanceHint + '\n' : ''}Return strict JSON only. No prose, no markdown fences.`;
 }
 
 async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
