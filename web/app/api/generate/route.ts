@@ -1,5 +1,5 @@
 // web/app/api/generate/route.ts
-// Thin route â delegates to lib/ai.ts so we can swap providers.
+// Thin route — delegates to lib/ai.ts so we can swap providers.
 import { NextRequest, NextResponse } from 'next/server';
 import { generateContentPack, type Provider, type ContentType, type BrandContext } from '@/lib/ai';
 import { supabaseServer } from '@/lib/supabase';
