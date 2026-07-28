@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateContentPack, type Provider, type ContentType, type BrandContext } from '@/lib/ai';
 import { supabaseServer } from '@/lib/supabase';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 
@@ -42,6 +43,15 @@ export async function POST(req: NextRequest) {
     const { data: { user } } = await sb.auth.getUser();
     if (!user) {
       return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+    }
+
+    // Rate limit before spending AI credits (fails open if usage_events is absent).
+    const rl = await checkRateLimit(user.id, 'generate');
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'rate_limited', limit: rl.limit },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } }
+      );
     }
 
     // Load the signed-in user's Brand Brain profile (optional).
