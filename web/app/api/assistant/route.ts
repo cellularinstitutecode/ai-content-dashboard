@@ -344,12 +344,17 @@ export async function POST(req: Request) {
     userId = user?.id || null;
   } catch { userId = null; }
 
+  // Require an authenticated user before running the assistant (which spends AI credits).
+  if (!userId) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
   try {
     // Priming call: greet without advancing state.
     if (!input && session.step === "greet" && !session.mode) {
       return reply(
         session,
-        "Hi! I am your AI assistant for Content Studio. Ask me anything, or tell me to do something — like \"write an Instagram post about NK cell therapy and schedule it for Friday 9am\". I will always confirm with you before anything goes live.",
+        "Hi! I am your AI assistant for Content Studio. Ask me anything, or tell me to do something â like \"write an Instagram post about NK cell therapy and schedule it for Friday 9am\". I will always confirm with you before anything goes live.",
       );
     }
 
@@ -381,7 +386,7 @@ export async function POST(req: Request) {
         return reply({ ...session, mode: "chat", step: "greet" }, "Okay, I will not schedule it. Anything else?");
       }
       // Ambiguous reply: keep waiting.
-      return reply(session, "Just to confirm — should I schedule that post? Please reply yes or no.", ["Yes, schedule it", "No, cancel"]);
+      return reply(session, "Just to confirm â should I schedule that post? Please reply yes or no.", ["Yes, schedule it", "No, cancel"]);
     }
 
     const inGuided = session.mode === "guided" || GUIDED_STEPS.has(session.step);
