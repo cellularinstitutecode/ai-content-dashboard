@@ -344,6 +344,11 @@ export async function POST(req: Request) {
     userId = user?.id || null;
   } catch { userId = null; }
 
+  // Require an authenticated user before running the assistant (which spends AI credits).
+  if (!userId) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
   try {
     // Priming call: greet without advancing state.
     if (!input && session.step === "greet" && !session.mode) {

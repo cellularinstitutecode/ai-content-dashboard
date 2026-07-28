@@ -37,19 +37,22 @@ export async function POST(req: NextRequest) {
         ? model
         : undefined;
 
-    // Load the signed-in user's Brand Brain profile (optional — generation still works without it).
+    // Require an authenticated user before spending AI credits.
+    const sb = supabaseServer();
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+    }
+
+    // Load the signed-in user's Brand Brain profile (optional).
     let brand: BrandContext | undefined;
     try {
-      const sb = supabaseServer();
-      const { data: { user } } = await sb.auth.getUser();
-      if (user) {
-        const { data: bp } = await sb
-          .from('brand_profiles')
-          .select('name, mission, voice, audience, keywords, guidelines')
-          .eq('user_id', user.id)
-          .maybeSingle();
-        if (bp) brand = bp as BrandContext;
-      }
+      const { data: bp } = await sb
+        .from('brand_profiles')
+        .select('name, mission, voice, audience, keywords, guidelines')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      if (bp) brand = bp as BrandContext;
     } catch {
       // ignore brand-load failures; fall back to the default brand voice.
     }
