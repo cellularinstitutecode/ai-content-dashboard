@@ -134,3 +134,27 @@ alter table public.usage_events enable row level security;
 -- Users may read their own usage; writes happen via the service-role client
 -- (rate limiter), which bypasses RLS, so no insert policy is required.
 create policy if not exists "usage_events: owner read" on public.usage_events for select using (auth.uid() = user_id);
+
+-- Post metrics: normalized per-post performance pulled from Metricool. Used by
+-- the generation prompt to bias new content toward what has performed well.
+create table if not exists public.post_metrics (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  network text not null,
+  external_id text,
+  text text,
+  published_at timestamptz,
+  impressions integer not null default 0,
+  engagement integer not null default 0,
+  fetched_at timestamptz default now(),
+  unique (user_id, network, external_id)
+);
+
+create index if not exists post_metrics_user_engagement_idx
+  on public.post_metrics (user_id, engagement desc);
+
+alter table public.post_metrics enable row level security;
+
+-- Users may read their own metrics; the sync route writes via the service-role
+-- client, which bypasses RLS, so no insert policy is required.
+create policy if not exists "post_metrics: owner read" on public.post_metrics for select using (auth.uid() = user_id);
