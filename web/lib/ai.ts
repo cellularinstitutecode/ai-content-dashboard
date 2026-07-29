@@ -3,6 +3,8 @@
 // Both providers return the same shape: { instagram, facebook, linkedin, blog }
 import 'server-only';
 
+import { MEDICAL_SAFETY_GUARDRAILS } from '@/lib/safety';
+
 export type Provider = 'anthropic' | 'openai';
 
 export type ContentType = 'social' | 'blog' | 'email' | 'video' | 'ad';
@@ -83,7 +85,7 @@ const TYPE_INSTRUCTIONS: Record<ContentType, string> = {
 
 function systemPrompt(type: ContentType, brand?: BrandContext) {
   const voice = brand?.voice ? `You are the marketing content writer for ${brand.name || 'this brand'}. Write in this brand voice: ${brand.voice}` : DEFAULT_VOICE;
-  return `${voice} You always return STRICT JSON with exactly the keys: instagram, facebook, linkedin, blog. Each value is a finished, ready-to-use string. ${TYPE_INSTRUCTIONS[type]} Return strict JSON only. No prose, no markdown fences.`;
+  return `${voice} You always return STRICT JSON with exactly the keys: instagram, facebook, linkedin, blog. Each value is a finished, ready-to-use string. ${TYPE_INSTRUCTIONS[type]}${MEDICAL_SAFETY_GUARDRAILS} Return strict JSON only. No prose, no markdown fences.`;
 }
 
 function brandBlock(brand?: BrandContext): string {

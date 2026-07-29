@@ -2,6 +2,7 @@
 // Thin route — delegates to lib/ai.ts so we can swap providers.
 import { NextRequest, NextResponse } from 'next/server';
 import { generateContentPack, type Provider, type ContentType, type BrandContext } from '@/lib/ai';
+import { reviewPack } from '@/lib/safety';
 import { supabaseServer, supabaseAdmin } from '@/lib/supabase';
 import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -103,7 +104,18 @@ export async function POST(req: NextRequest) {
       brand,
       performanceHint,
     });
-    return NextResponse.json({ provider: used, pack });
+    // Advisory content-safety review (medical domain). Never blocks generation.
+    let safetyAdvisory: { code: string; message: string }[] = [];
+    try {
+      safetyAdvisory = reviewPack(pack as unknown as Record<string, unknown>);
+    } catch {
+      // ignore review failures; content is returned regardless.
+    }
+    return NextResponse.json(
+      safetyAdvisory.length
+        ? { provider: used, pack, safetyAdvisory }
+        : { provider: used, pack }
+    );
   } catch (e: any) {
     return NextResponse.json(
       { error: e?.message || 'generate failed' },
