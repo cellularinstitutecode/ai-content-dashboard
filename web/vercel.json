@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/metricool/sync",
+      "schedule": "0 6 * * *"
+    }
+  ]
+}
