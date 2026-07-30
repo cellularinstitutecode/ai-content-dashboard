@@ -28,7 +28,7 @@ function normalizePublishAt(input: string): string {
 }
 
 // POST /api/metricool/schedule
-// body: { network, text, publishAt (ISO datetime string), blogId?, mediaUrl?, draftId? }
+// body: { network, text, publishAt (ISO datetime string), blogId?, mediaUrl?, draftId?, autoPublish? }
 export async function POST(req: NextRequest) {
   // --- Auth guard (defense in depth; matches drafts/opus routes) ---
   const sb = supabaseServer();
@@ -52,11 +52,18 @@ export async function POST(req: NextRequest) {
   if (!provider) return NextResponse.json({ error: 'Unsupported network: ' + network }, { status: 400 });
   if (!text) return NextResponse.json({ error: 'text is required' }, { status: 400 });
 
+  // Review step: never auto-publish by default. Posts land in Metricool as
+  // drafts/pending so a human approves them there before they go live. Callers
+  // may opt in with { autoPublish: true } once a reviewer has approved.
+  const autoPublish = payload.autoPublish === true;
+
   const body: any = {
     text: text,
     publicationDate: { dateTime: publishAt, timezone: TIMEZONE },
     providers: [{ network: provider }],
-    autoPublish: true,
+    // draft:true tells Metricool to hold the post for review rather than queue it live.
+    autoPublish,
+    draft: !autoPublish,
   };
   if (payload.mediaUrl) {
     body.media = [{ url: String(payload.mediaUrl) }];
@@ -78,7 +85,9 @@ export async function POST(req: NextRequest) {
     let parsed: any = null;
     try { parsed = JSON.parse(rawText); } catch { parsed = { raw: rawText }; }
     if (!r.ok) {
-      return NextResponse.json({ error: 'Metricool API error', status: r.status, detail: parsed, publishAtSent: publishAt }, { status: 502 });
+      // Do not leak the raw upstream body to the client; log it server-side instead.
+      console.error('Metricool schedule error', r.status, rawText.slice(0, 500));
+      return NextResponse.json({ error: 'Metricool rejected the request. Please review and try again.', status: r.status }, { status: 502 });
     }
     const post = (parsed && parsed.data) ? parsed.data : parsed;
     const id = post && (post.id || post.postId) ? (post.id || post.postId) : null;
@@ -96,20 +105,23 @@ export async function POST(req: NextRequest) {
         text: text,
         publication_date: publishAt,
         metricool_post_id: id,
-        status: status || 'scheduled',
+        status: status || (autoPublish ? 'scheduled' : 'pending_review'),
       });
     } catch { /* logging-only */ }
 
     return NextResponse.json({
       ok: true,
       id: id,
-      status: status,
+      status: status || (autoPublish ? 'scheduled' : 'pending_review'),
+      autoPublish,
+      review: !autoPublish,
       publicationDate: publicationDate,
       providers: providers,
       post: post,
     });
   } catch (err: any) {
     const lastErr = err && err.message ? err.message : String(err);
-    return NextResponse.json({ error: 'Metricool API error', detail: lastErr }, { status: 502 });
+    console.error('Metricool schedule exception', lastErr);
+    return NextResponse.json({ error: 'Could not reach Metricool. Please try again.' }, { status: 502 });
   }
 }
