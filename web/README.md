@@ -57,6 +57,7 @@ Full-stack rebuild of the dashboard at \`/index.html\`. Lives in this \`web/\` s
 | \`NEXT_PUBLIC_SUPABASE_URL\` | Supabase Settings → API | https://xxx.supabase.co |
 | \`NEXT_PUBLIC_SUPABASE_ANON_KEY\` | Supabase Settings → API | anon public |
 | \`SUPABASE_SERVICE_ROLE_KEY\` | Supabase Settings → API | server-only |
+| `CRON_SECRET` | generate a long random string | shared with the daily Vercel cron that calls `/api/metricool/sync` |
 
 ## Local dev
 \`\`\`
