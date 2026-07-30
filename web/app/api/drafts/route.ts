@@ -4,18 +4,23 @@ import { supabaseServer } from '@/lib/supabase';
 
 export const runtime = 'nodejs';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const sb = supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
-  const { data, error } = await sb
+  // Pagination: ?limit (1-50, default 10) & ?offset (>=0, default 0).
+  const url = req.nextUrl;
+  const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '10', 10) || 10, 1), 50);
+  const offset = Math.max(parseInt(url.searchParams.get('offset') || '0', 10) || 0, 0);
+
+  const { data, error, count } = await sb
     .from('drafts')
-    .select('*')
+    .select('*', { count: 'exact' })
     .order('updated_at', { ascending: false })
-    .limit(50);
+    .range(offset, offset + limit - 1);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ drafts: data });
+  return NextResponse.json({ drafts: data, total: count ?? 0, limit, offset });
 }
 
 export async function POST(req: NextRequest) {

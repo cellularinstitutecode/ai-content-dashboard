@@ -17,7 +17,8 @@ export const maxDuration = 300;
 // Embedded assistant.
 // Default mode is a free-form conversational AI that can also TAKE ACTIONS via
 // tool-calling (generate content, save drafts, schedule posts). Scheduling to live
-// social accounts always requires an explicit user confirmation first.
+// social accounts always requires an explicit user confirmation first, and even
+// then posts are queued in Metricool as drafts for review (never auto-published).
 // The legacy guided wizard still exists and starts only on explicit draft intent.
 
 type Step =
@@ -132,6 +133,8 @@ function textFromPack(pack: Record<string, any> | undefined, network: string): s
 }
 
 // Execute the real Metricool scheduling (mirrors /api/metricool/schedule).
+// REVIEW STEP: posts are queued in Metricool as drafts (autoPublish:false), so a
+// human still approves them in Metricool before anything goes live.
 async function doSchedule(userId: string, p: PendingSchedule) {
   const token = process.env.METRICOOL_USER_TOKEN;
   const mcUserId = process.env.METRICOOL_USER_ID || "3377431";
@@ -146,7 +149,9 @@ async function doSchedule(userId: string, p: PendingSchedule) {
     text: p.text,
     publicationDate: { dateTime: publishAt, timezone: TIMEZONE },
     providers: [{ network: provider }],
-    autoPublish: true,
+    // Review step: hold in Metricool as a draft for human approval before publishing.
+    autoPublish: false,
+    draft: true,
   };
   const url =
     "https://app.metricool.com/api/v2/scheduler/posts?blogId=" +
@@ -161,10 +166,13 @@ async function doSchedule(userId: string, p: PendingSchedule) {
   const rawText = await r.text();
   let parsed: any = null;
   try { parsed = JSON.parse(rawText); } catch { parsed = { raw: rawText }; }
-  if (!r.ok) throw new Error("Metricool API error " + r.status + ": " + rawText.slice(0, 300));
+  if (!r.ok) {
+    console.error("Metricool schedule error", r.status, rawText.slice(0, 300));
+    throw new Error("Metricool rejected the request (status " + r.status + ").");
+  }
   const post = parsed && parsed.data ? parsed.data : parsed;
   const id = post && (post.id || post.postId) ? post.id || post.postId : null;
-  const status = (post && post.providers && post.providers[0] && post.providers[0].status) || "scheduled";
+  const status = (post && post.providers && post.providers[0] && post.providers[0].status) || "pending_review";
   try {
     const admin = supabaseAdmin();
     await admin.from("posts").insert({
@@ -173,7 +181,7 @@ async function doSchedule(userId: string, p: PendingSchedule) {
       text: p.text,
       publication_date: publishAt,
       metricool_post_id: id,
-      status,
+      status: status && status !== "scheduled" ? status : "pending_review",
     });
   } catch { /* logging-only */ }
   return { id, status, publishAt };
@@ -263,9 +271,9 @@ async function runAgent(session: Session, input: string, userId: string | null) 
       return {
         message:
           (turn.message ? turn.message + "\n\n" : "") +
-          "Ready to schedule to " + pretty + " for " + publishAt + ":\n\n\"" +
-          text.slice(0, 400) + "\"\n\nShould I schedule it? (yes / no)",
-        options: ["Yes, schedule it", "No, cancel"],
+          "Ready to queue this to " + pretty + " for " + publishAt + " as a draft for review in Metricool (it will NOT publish automatically):\n\n\"" +
+          text.slice(0, 400) + "\"\n\nShould I send it for review? (yes / no)",
+        options: ["Yes, send for review", "No, cancel"],
       };
     } else {
       toolResult = "Unknown tool.";
@@ -321,7 +329,7 @@ async function runAgent(session: Session, input: string, userId: string | null) 
 
   session.toolMessages = tm;
   if (!finalMessage) finalMessage = "Done.";
-return { message: finalMessage, options: ((session as any).lastPack ? { preview: (session as any).lastPack, draftId: (session as any).draftId ?? null } : undefined) as any };}
+  return { message: finalMessage, options: ((session as any).lastPack ? { preview: (session as any).lastPack, draftId: (session as any).draftId ?? null } : undefined) as any };}
 
 export async function POST(req: Request) {
   const { session: incoming, text } = (await req.json()) as {
@@ -350,7 +358,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
-  // Rate limit before spending AI credits (fails open if usage_events is absent).
+  // Rate limit before spending AI credits.
   const rl = await checkRateLimit(userId, 'assistant');
   if (!rl.ok) {
     return NextResponse.json(
@@ -382,7 +390,7 @@ export async function POST(req: Request) {
           const pretty = p.network.charAt(0).toUpperCase() + p.network.slice(1);
           return reply(
             { ...session, mode: "chat", step: "greet" },
-            "Scheduled to " + pretty + " for " + res.publishAt + " (status: " + res.status + "). You can see it on the calendar.",
+            "Sent to " + pretty + " as a draft for review for " + res.publishAt + " (status: " + res.status + "). Approve it in Metricool to publish. You can also see it on the calendar.",
           );
         } catch (e: any) {
           return reply(
@@ -396,7 +404,7 @@ export async function POST(req: Request) {
         return reply({ ...session, mode: "chat", step: "greet" }, "Okay, I will not schedule it. Anything else?");
       }
       // Ambiguous reply: keep waiting.
-      return reply(session, "Just to confirm — should I schedule that post? Please reply yes or no.", ["Yes, schedule it", "No, cancel"]);
+      return reply(session, "Just to confirm — should I send that post to Metricool for review? Please reply yes or no.", ["Yes, send for review", "No, cancel"]);
     }
 
     const inGuided = session.mode === "guided" || GUIDED_STEPS.has(session.step);
