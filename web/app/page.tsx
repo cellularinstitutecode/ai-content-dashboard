@@ -106,6 +106,12 @@ export default function Dashboard() {
   const [editBody, setEditBody] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Draft pagination
+  const PAGE_SIZE = 10;
+  const [draftsOffset, setDraftsOffset] = useState(0);
+  const [draftsTotal, setDraftsTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+
   useEffect(() => {
     const first = PROVIDERS.find(p => p.id === provider)!;
     if (!first.models.some(m => m.id === model)) setModel(first.models[0].id);
@@ -122,15 +128,19 @@ export default function Dashboard() {
     } catch {}
   }
 
-  async function refreshDrafts() {
+  async function refreshDrafts(offset = 0, append = false) {
     try {
-      const r = await fetch('/api/drafts');
+      if (append) setLoadingMore(true);
+      const r = await fetch('/api/drafts?limit=' + PAGE_SIZE + '&offset=' + offset);
       if (!r.ok) return;
       const ct = r.headers.get('content-type') || '';
       if (!ct.includes('application/json')) return;
       const j = await r.json().catch(() => null);
-      setDrafts(toArray(j));
-    } catch {}
+      const rows = toArray(j);
+      if (j && typeof j.total === 'number') setDraftsTotal(j.total);
+      setDraftsOffset(offset);
+      setDrafts((prev: any) => append ? [...(Array.isArray(prev) ? prev : []), ...rows] : rows);
+    } catch {} finally { setLoadingMore(false); }
   }
 
   async function deleteDraft(id: string) {
@@ -270,11 +280,11 @@ export default function Dashboard() {
       const ok = results.filter((x) => x.ok).map((x) => x.network);
       const failed = results.filter((x) => !x.ok).map((x) => x.network);
       if (failed.length === 0) {
-        setMStatus('Scheduled on ' + ok.join(', ') + '.');
+        setMStatus('Sent for review on ' + ok.join(', ') + ' — approve in Metricool to publish.');
       } else if (ok.length === 0) {
         setMStatus('Error: failed on ' + failed.join(', ') + '.');
       } else {
-        setMStatus('Scheduled on ' + ok.join(', ') + '; failed on ' + failed.join(', ') + '.');
+        setMStatus('Sent for review on ' + ok.join(', ') + '; failed on ' + failed.join(', ') + '.');
       }
     } catch (e: any) {
       setMStatus('Error: ' + (e?.message || 'failed'));
@@ -317,8 +327,8 @@ export default function Dashboard() {
 
   const statCards = [
     { label: 'Drafts', value: (stats && (stats.drafts ?? stats.draftsCount)) ?? safeDrafts.length ?? 0 },
-    { label: 'Scheduled posts', value: (stats && (stats.scheduled ?? stats.scheduledCount)) ?? 0 },
-    { label: 'Upcoming', value: (stats && (stats.upcoming ?? stats.upcomingCount)) ?? 0 },
+    { label: 'Scheduled posts', value: (stats && (stats.scheduledPosts ?? stats.scheduled ?? stats.scheduledCount)) ?? 0 },
+    { label: 'Upcoming', value: (stats && (stats.upcomingPosts ?? stats.upcoming ?? stats.upcomingCount)) ?? 0 },
     { label: 'Clip jobs', value: (stats && (stats.clips ?? stats.clipJobs)) ?? 0 },
   ];
 
@@ -488,70 +498,22 @@ export default function Dashboard() {
                 <label className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Schedule a post</label>
                 <div className="mb-3 flex flex-wrap gap-2">
                   <div className="flex flex-wrap gap-2" role="group" aria-label="Networks to post to">
-            <button
-              type="button"
-              key="facebook"
-              onClick={() => toggleNetwork("facebook")}
-              aria-pressed={mNetworks.includes("facebook")}
-              className={
-                "rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " +
-                (mNetworks.includes("facebook")
-                  ? "bg-accent text-white ring-accent"
-                  : "bg-subtle text-ink ring-line hover:ring-accent/50")
-              }
-            >
-              Facebook
-            </button>
-            <button
-              type="button"
-              key="instagram"
-              onClick={() => toggleNetwork("instagram")}
-              aria-pressed={mNetworks.includes("instagram")}
-              className={
-                "rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " +
-                (mNetworks.includes("instagram")
-                  ? "bg-accent text-white ring-accent"
-                  : "bg-subtle text-ink ring-line hover:ring-accent/50")
-              }
-            >
-              Instagram
-            </button>
-            <button
-              type="button"
-              key="linkedin"
-              onClick={() => toggleNetwork("linkedin")}
-              aria-pressed={mNetworks.includes("linkedin")}
-              className={
-                "rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " +
-                (mNetworks.includes("linkedin")
-                  ? "bg-accent text-white ring-accent"
-                  : "bg-subtle text-ink ring-line hover:ring-accent/50")
-              }
-            >
-              LinkedIn
-            </button>
-            <button
-              type="button"
-              key="twitter"
-              onClick={() => toggleNetwork("twitter")}
-              aria-pressed={mNetworks.includes("twitter")}
-              className={
-                "rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " +
-                (mNetworks.includes("twitter")
-                  ? "bg-accent text-white ring-accent"
-                  : "bg-subtle text-ink ring-line hover:ring-accent/50")
-              }
-            >
-              X / Twitter
-            </button>
-          </div>
+                    <button type="button" key="facebook" onClick={() => toggleNetwork("facebook")} aria-pressed={mNetworks.includes("facebook")}
+                      className={"rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (mNetworks.includes("facebook") ? "bg-accent text-white ring-accent" : "bg-subtle text-ink ring-line hover:ring-accent/50")}>Facebook</button>
+                    <button type="button" key="instagram" onClick={() => toggleNetwork("instagram")} aria-pressed={mNetworks.includes("instagram")}
+                      className={"rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (mNetworks.includes("instagram") ? "bg-accent text-white ring-accent" : "bg-subtle text-ink ring-line hover:ring-accent/50")}>Instagram</button>
+                    <button type="button" key="linkedin" onClick={() => toggleNetwork("linkedin")} aria-pressed={mNetworks.includes("linkedin")}
+                      className={"rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (mNetworks.includes("linkedin") ? "bg-accent text-white ring-accent" : "bg-subtle text-ink ring-line hover:ring-accent/50")}>LinkedIn</button>
+                    <button type="button" key="twitter" onClick={() => toggleNetwork("twitter")} aria-pressed={mNetworks.includes("twitter")}
+                      className={"rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (mNetworks.includes("twitter") ? "bg-accent text-white ring-accent" : "bg-subtle text-ink ring-line hover:ring-accent/50")}>X / Twitter</button>
+                  </div>
                   <input type="datetime-local" value={mDate} onChange={e => setMDate(e.target.value)}
                     className="rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink ring-1 ring-line focus:ring-accent" />
                 </div>
                 <textarea value={mText} onChange={e => setMText(e.target.value)} rows={3} placeholder="Post text..."
                   className="mb-3 w-full resize-none rounded-2xl bg-subtle p-3 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
                 <div className="flex items-center gap-3">
-                  <button onClick={schedulePost} className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-white shadow-soft transition-colors hover:bg-accent-hover">Schedule via Metricool</button>
+                  <button onClick={schedulePost} className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-white shadow-soft transition-colors hover:bg-accent-hover">Send to Metricool for review</button>
                   {mStatus && <span className={'text-[12px] ' + (mStatus.startsWith('Error') ? 'text-danger' : 'text-ink-muted')}>{mStatus}</span>}
                 </div>
               </div>
@@ -590,11 +552,8 @@ export default function Dashboard() {
                   </div>
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                     {opusClips.map((d: any, i: number) => (
-                      <button
-                        key={(d?.id || d?._id || i) + '-opus'}
-                        onClick={() => setSelectedDraft(d)}
-                        className="group overflow-hidden rounded-2xl text-left ring-1 ring-line/60 transition hover:ring-black/20"
-                      >
+                      <button key={(d?.id || d?._id || i) + '-opus'} onClick={() => setSelectedDraft(d)}
+                        className="group overflow-hidden rounded-2xl text-left ring-1 ring-line/60 transition hover:ring-black/20">
                         <div className="relative">
                           {d?.pack?.thumb ? (
                             // eslint-disable-next-line @next/next/no-img-element
@@ -619,8 +578,9 @@ export default function Dashboard() {
                 <div className="mt-1 text-[12px] text-ink-faint">Generate something above to get started.</div>
               </div>
             ) : (
+              <>
               <ul className="divide-y divide-line">
-                {safeDrafts.slice(0, 8).map((d, i) => {
+                {safeDrafts.map((d, i) => {
                   const title = (d && (d.title || d.topic || d.name)) || 'Untitled draft';
                   const body = (d && (d.body || d.instagram || d.text || d.content)) || '';
                   return (
@@ -637,23 +597,24 @@ export default function Dashboard() {
                         {body && <div className="mt-0.5 line-clamp-2 text-[13px] text-ink-muted">{String(body)}</div>}
                       </div>
                       <div className="ml-auto flex shrink-0 items-center gap-1 self-center">
-                        <button
-                          type="button"
-                          aria-label="Edit draft"
-                          onClick={(e) => { e.stopPropagation(); editDraft(d); }}
-                          className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle"
-                        >Edit</button>
-                        <button
-                          type="button"
-                          aria-label="Delete draft"
-                          onClick={(e) => { e.stopPropagation(); deleteDraft((d && (d.id || d._id)) || ''); }}
-                          className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-red-600 ring-1 ring-red-200 transition hover:bg-red-50"
-                        >Delete</button>
+                        <button type="button" aria-label="Edit draft" onClick={(e) => { e.stopPropagation(); editDraft(d); }}
+                          className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Edit</button>
+                        <button type="button" aria-label="Delete draft" onClick={(e) => { e.stopPropagation(); deleteDraft((d && (d.id || d._id)) || ''); }}
+                          className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-red-600 ring-1 ring-red-200 transition hover:bg-red-50">Delete</button>
                       </div>
                     </li>
                   );
                 })}
               </ul>
+              {draftsTotal > safeDrafts.length && (
+                <div className="mt-5 flex justify-center">
+                  <button type="button" onClick={() => refreshDrafts(draftsOffset + PAGE_SIZE, true)} disabled={loadingMore}
+                    className="rounded-full bg-subtle px-5 py-2 text-[13px] font-medium text-ink ring-1 ring-line transition hover:bg-white disabled:opacity-40">
+                    {loadingMore ? 'Loading…' : 'Load more (' + (draftsTotal - safeDrafts.length) + ' more)'}
+                  </button>
+                </div>
+              )}
+              </>
             )}
           </section>
           {/* Draft detail modal — click a draft to view / play / edit */}
@@ -662,12 +623,8 @@ export default function Dashboard() {
               <div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7" onClick={(e) => e.stopPropagation()}>
                 <div className="mb-4 flex items-start justify-between gap-4">
                   {editingDraft ? (
-                    <input
-                      value={editTitle}
-                      onChange={(e) => setEditTitle(e.target.value)}
-                      placeholder="Draft title"
-                      className="min-w-0 flex-1 rounded-xl bg-subtle px-3 py-2 text-[16px] font-semibold text-ink ring-1 ring-line focus:ring-accent"
-                    />
+                    <input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} placeholder="Draft title"
+                      className="min-w-0 flex-1 rounded-xl bg-subtle px-3 py-2 text-[16px] font-semibold text-ink ring-1 ring-line focus:ring-accent" />
                   ) : (
                     <h3 className="text-headline font-semibold text-ink">{String(selectedDraft?.title || selectedDraft?.topic || selectedDraft?.name || 'Draft')}</h3>
                   )}
@@ -685,7 +642,7 @@ export default function Dashboard() {
                       return (
                         <div className="overflow-hidden rounded-2xl ring-1 ring-black/10">
                           <div className="relative w-full" style={{ paddingBottom: '56.25%' }}>
-                            <iframe className="absolute inset-0 h-full w-full" src={`https://www.youtube.com/embed/${vid}`} title="Cellular Hope video" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen />
+                            <iframe className="absolute inset-0 h-full w-full" src={'https://www.youtube.com/embed/' + vid} title="Cellular Hope video" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen />
                           </div>
                         </div>
                       );
@@ -694,13 +651,8 @@ export default function Dashboard() {
                   })()
                 ) : editingDraft ? (
                   <div>
-                    <textarea
-                      value={editBody}
-                      onChange={(e) => setEditBody(e.target.value)}
-                      rows={14}
-                      placeholder="Draft content..."
-                      className="w-full resize-y rounded-2xl bg-subtle/50 p-4 text-[14px] leading-relaxed text-ink ring-1 ring-line/60 focus:ring-accent"
-                    />
+                    <textarea value={editBody} onChange={(e) => setEditBody(e.target.value)} rows={14} placeholder="Draft content..."
+                      className="w-full resize-y rounded-2xl bg-subtle/50 p-4 text-[14px] leading-relaxed text-ink ring-1 ring-line/60 focus:ring-accent" />
                     <div className="mt-4 flex items-center gap-3">
                       <button onClick={saveDraftEdits} disabled={savingEdit} className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-white shadow-soft transition-colors hover:bg-accent-hover disabled:opacity-40">{savingEdit ? 'Saving...' : 'Save changes'}</button>
                       <button onClick={() => setEditingDraft(false)} disabled={savingEdit} className="rounded-full px-4 py-2 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle disabled:opacity-40">Cancel</button>
@@ -712,7 +664,7 @@ export default function Dashboard() {
               </div>
             </div>
           ) : null}
-          </main>
+        </main>
       </div>
     </div>
   );
