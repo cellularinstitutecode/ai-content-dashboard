@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLiveContent } from "@/components/LiveContentProvider";
 
 type Provider = 'anthropic' | 'openai';
@@ -61,13 +61,26 @@ function ytThumb(url: string): string {
   } catch { return ''; }
 }
 
-// Video IDs from Cellular Hope Institute's OWN YouTube channel (allowlist — nothing external can be embedded)
-const OWN_VIDEO_IDS = new Set<string>(['N0x4zSdIoL8','Slh2u-aNbsA','P9eVqXAlOX0','Jp-4LoYjg9c','si7cwDqh87E','Lg4i2gZ3h9A','W9dGgIlm1D8','Lm54IKoWagY','REKxqVAgojQ','dJmkZffjnc8','NIxBmJX5Ofo','FyLyGD3tsOU','5cT8jnA6yy0','PUdDRDQ5o0Y','d5j1wPu0wqA','_HTcG6Ct8R0','SvZvrpZO24I','ZlAh066wph4','K8sZpsNOe2I','2-0fzkVIiSc','fNGee0Ax4Q0','kJd2yPHq3I0','1sHPntPRQm8','Fp-ArLlh__E','sNkFdy1b4Mo','39IV4hnJ3bc','y370BBoyE-0','GR3SoM0ZcNE','GHI6oX03JB8','6emvqez-1Gg']);
 function ytId(url: string): string {
   try {
     const m = String(url).match(/(?:v=|be\/|shorts\/|embed\/)([\w-]{11})/);
     return m ? m[1] : '';
   } catch { return ''; }
+}
+
+// A finished Opus clip (mirrors OpusClip in lib/opus.ts).
+type Clip = { id: string; title: string; text: string; description: string; hashtags: string; durationMs: number; preview: string; export: string };
+
+function clipsOf(d: any): Clip[] {
+  const c = d && d.pack && d.pack.clips;
+  return Array.isArray(c) ? c : [];
+}
+
+function fmtDuration(ms: number): string {
+  const s = Math.round((Number(ms) || 0) / 1000);
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return m + ':' + String(r).padStart(2, '0');
 }
 
 function toArray(x: any): any[] {
@@ -99,6 +112,7 @@ export default function Dashboard() {
 
   const [opUrl, setOpUrl] = useState('');
   const [opStatus, setOpStatus] = useState<string | null>(null);
+  const [opBusy, setOpBusy] = useState(false);
 
   const [selectedDraft, setSelectedDraft] = useState<any>(null);
   const [editingDraft, setEditingDraft] = useState(false);
@@ -118,6 +132,34 @@ export default function Dashboard() {
   }, [provider]);
 
   useEffect(() => { refreshDrafts(); refreshStats(); }, []);
+
+  // Poll clip drafts that are still processing until Opus finishes rendering.
+  // The webhook is the fast path; this poll is the fallback / live-refresh so a
+  // user watching the dashboard sees processing -> ready without reloading.
+  const pollRef = useRef<any>(null);
+  useEffect(() => {
+    const pending = (Array.isArray(drafts) ? drafts : []).filter(
+      (d: any) => d && d.pack && d.pack.kind === 'clip' && d.pack.projectId && d.pack.status !== 'ready' && d.pack.status !== 'failed'
+    );
+    if (pending.length === 0) { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } return; }
+    if (pollRef.current) return; // already polling
+    pollRef.current = setInterval(async () => {
+      const current = (Array.isArray(drafts) ? drafts : []).filter(
+        (d: any) => d && d.pack && d.pack.kind === 'clip' && d.pack.projectId && d.pack.status !== 'ready' && d.pack.status !== 'failed'
+      );
+      let changed = false;
+      for (const d of current) {
+        try {
+          const r = await fetch('/api/opus/clip?projectId=' + encodeURIComponent(d.pack.projectId));
+          if (!r.ok) continue;
+          const j = await r.json().catch(() => null);
+          if (j && j.status === 'ready' && Array.isArray(j.clips) && j.clips.length > 0) changed = true;
+        } catch {}
+      }
+      if (changed) refreshDrafts(0, false);
+    }, 15000);
+    return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  }, [drafts]);
 
   async function refreshStats() {
     try {
@@ -292,7 +334,7 @@ export default function Dashboard() {
   }
 
   async function clipVideo() {
-    setOpStatus(null);
+    setOpStatus(null); setOpBusy(true);
     try {
       const r = await fetch('/api/opus/clip', {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -300,7 +342,8 @@ export default function Dashboard() {
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data?.error || ('OpusClip failed ('+r.status+')'));
-      setOpStatus('Clip job started ' + ((data && data.project && (data.project.projectId || data.project.id)) || ''));
+      const projectId = (data && (data.projectId || (data.project && (data.project.projectId || data.project.id)))) || '';
+      setOpStatus(projectId ? 'Clip job started — processing…' : 'Clip job started.');
       try {
         await fetch('/api/drafts', {
           method: 'POST',
@@ -308,12 +351,13 @@ export default function Dashboard() {
           body: JSON.stringify({
             topic: 'Video clips from ' + opUrl,
             provider: 'opusclip',
-            pack: { kind: 'clip', video: opUrl, thumb: ytThumb(opUrl) },
+            pack: { kind: 'clip', video: opUrl, thumb: (data && data.thumbnailUrl) || ytThumb(opUrl), projectId, status: 'processing', clips: [] },
           }),
         });
+        setOpUrl('');
         refreshDrafts();
       } catch {}
-    } catch (e: any) { setOpStatus('Error: ' + (e?.message || 'failed')); }
+    } catch (e: any) { setOpStatus('Error: ' + (e?.message || 'failed')); } finally { setOpBusy(false); }
   }
 
   async function copyOutput() {
@@ -529,10 +573,11 @@ export default function Dashboard() {
               <input value={opUrl} onChange={e => setOpUrl(e.target.value)} placeholder="https://youtube.com/watch?v=..."
                 className="mb-3 w-full rounded-2xl bg-subtle px-4 py-3 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
               <div className="flex items-center gap-3">
-                <button onClick={clipVideo} disabled={!opUrl.trim()}
-                  className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-white shadow-soft transition-colors hover:bg-accent-hover disabled:opacity-40">Generate clips</button>
+                <button onClick={clipVideo} disabled={opBusy || !opUrl.trim()}
+                  className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-white shadow-soft transition-colors hover:bg-accent-hover disabled:opacity-40">{opBusy ? 'Starting…' : 'Generate clips'}</button>
                 {opStatus && <span className={'text-[12px] ' + (opStatus.startsWith('Error') ? 'text-danger' : 'text-ink-muted')}>{opStatus}</span>}
               </div>
+              <p className="mt-3 text-[12px] text-ink-faint">Clips render in the background and appear below when ready.</p>
             </div>
           </section>
 
@@ -551,23 +596,37 @@ export default function Dashboard() {
                     <span className="text-[12px] text-ink-faint">Long-form to Shorts</span>
                   </div>
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    {opusClips.map((d: any, i: number) => (
-                      <button key={(d?.id || d?._id || i) + '-opus'} onClick={() => setSelectedDraft(d)}
-                        className="group overflow-hidden rounded-2xl text-left ring-1 ring-line/60 transition hover:ring-black/20">
-                        <div className="relative">
-                          {d?.pack?.thumb ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={d.pack.thumb} alt="Clip still" className="h-28 w-full object-cover" />
-                          ) : (
-                            <div className="flex h-28 w-full items-center justify-center bg-subtle text-[12px] text-ink-faint">Clip</div>
-                          )}
-                          <div className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition group-hover:opacity-100">
-                            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-ink shadow-card">▶</span>
+                    {opusClips.map((d: any, i: number) => {
+                      const ready = d?.pack?.status === 'ready' && clipsOf(d).length > 0;
+                      const failed = d?.pack?.status === 'failed';
+                      const count = clipsOf(d).length;
+                      return (
+                        <button key={(d?.id || d?._id || i) + '-opus'} onClick={() => setSelectedDraft(d)}
+                          className="group overflow-hidden rounded-2xl text-left ring-1 ring-line/60 transition hover:ring-black/20">
+                          <div className="relative">
+                            {d?.pack?.thumb ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={d.pack.thumb} alt="Clip still" className="h-28 w-full object-cover" />
+                            ) : (
+                              <div className="flex h-28 w-full items-center justify-center bg-subtle text-[12px] text-ink-faint">Clip</div>
+                            )}
+                            <div className="absolute left-2 top-2">
+                              {ready ? (
+                                <span className="rounded-full bg-emerald-600/90 px-2 py-0.5 text-[10px] font-semibold text-white">{count} clip{count === 1 ? '' : 's'}</span>
+                              ) : failed ? (
+                                <span className="rounded-full bg-danger/90 px-2 py-0.5 text-[10px] font-semibold text-white">Failed</span>
+                              ) : (
+                                <span className="rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-semibold text-white">Processing…</span>
+                              )}
+                            </div>
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition group-hover:opacity-100">
+                              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-ink shadow-card">▶</span>
+                            </div>
                           </div>
-                        </div>
-                        <div className="truncate px-3 py-2 text-[12px] font-medium text-ink">{String(d?.topic || d?.title || 'Clip')}</div>
-                      </button>
-                    ))}
+                          <div className="truncate px-3 py-2 text-[12px] font-medium text-ink">{String(d?.topic || d?.title || 'Clip')}</div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               );
@@ -579,44 +638,45 @@ export default function Dashboard() {
               </div>
             ) : (
               <>
-              <ul className="divide-y divide-line">
-                {safeDrafts.map((d, i) => {
-                  const title = (d && (d.title || d.topic || d.name)) || 'Untitled draft';
-                  const body = (d && (d.body || d.instagram || d.text || d.content)) || '';
-                  return (
-                    <li onClick={() => setSelectedDraft(d)} role="button" tabIndex={0} key={(d && (d.id || d._id)) || i} className="cursor-pointer rounded-xl transition hover:bg-subtle/60 flex items-start gap-4 py-4">
-                      {d?.pack?.kind === 'clip' && d?.pack?.thumb ? (
-                        <div className="mb-2 overflow-hidden rounded-lg ring-1 ring-black/10">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={d.pack.thumb} alt="Video still" className="h-32 w-full object-cover" />
+                <ul className="divide-y divide-line">
+                  {safeDrafts.map((d, i) => {
+                    const title = (d && (d.title || d.topic || d.name)) || 'Untitled draft';
+                    const body = (d && (d.body || d.instagram || d.text || d.content)) || '';
+                    return (
+                      <li onClick={() => setSelectedDraft(d)} role="button" tabIndex={0} key={(d && (d.id || d._id)) || i} className="cursor-pointer rounded-xl transition hover:bg-subtle/60 flex items-start gap-4 py-4">
+                        {d?.pack?.kind === 'clip' && d?.pack?.thumb ? (
+                          <div className="mb-2 overflow-hidden rounded-lg ring-1 ring-black/10">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={d.pack.thumb} alt="Video still" className="h-32 w-full object-cover" />
+                          </div>
+                        ) : null}
+                        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-subtle text-[13px] font-semibold text-ink-muted ring-1 ring-line">{i + 1}</div>
+                        <div className="min-w-0">
+                          <div className="truncate text-[14px] font-medium text-ink">{String(title)}</div>
+                          {body && <div className="mt-0.5 line-clamp-2 text-[13px] text-ink-muted">{String(body)}</div>}
                         </div>
-                      ) : null}
-                      <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-subtle text-[13px] font-semibold text-ink-muted ring-1 ring-line">{i + 1}</div>
-                      <div className="min-w-0">
-                        <div className="truncate text-[14px] font-medium text-ink">{String(title)}</div>
-                        {body && <div className="mt-0.5 line-clamp-2 text-[13px] text-ink-muted">{String(body)}</div>}
-                      </div>
-                      <div className="ml-auto flex shrink-0 items-center gap-1 self-center">
-                        <button type="button" aria-label="Edit draft" onClick={(e) => { e.stopPropagation(); editDraft(d); }}
-                          className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Edit</button>
-                        <button type="button" aria-label="Delete draft" onClick={(e) => { e.stopPropagation(); deleteDraft((d && (d.id || d._id)) || ''); }}
-                          className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-red-600 ring-1 ring-red-200 transition hover:bg-red-50">Delete</button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-              {draftsTotal > safeDrafts.length && (
-                <div className="mt-5 flex justify-center">
-                  <button type="button" onClick={() => refreshDrafts(draftsOffset + PAGE_SIZE, true)} disabled={loadingMore}
-                    className="rounded-full bg-subtle px-5 py-2 text-[13px] font-medium text-ink ring-1 ring-line transition hover:bg-white disabled:opacity-40">
-                    {loadingMore ? 'Loading…' : 'Load more (' + (draftsTotal - safeDrafts.length) + ' more)'}
-                  </button>
-                </div>
-              )}
+                        <div className="ml-auto flex shrink-0 items-center gap-1 self-center">
+                          <button type="button" aria-label="Edit draft" onClick={(e) => { e.stopPropagation(); editDraft(d); }}
+                            className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Edit</button>
+                          <button type="button" aria-label="Delete draft" onClick={(e) => { e.stopPropagation(); deleteDraft((d && (d.id || d._id)) || ''); }}
+                            className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-red-600 ring-1 ring-red-200 transition hover:bg-red-50">Delete</button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {draftsTotal > safeDrafts.length && (
+                  <div className="mt-5 flex justify-center">
+                    <button type="button" onClick={() => refreshDrafts(draftsOffset + PAGE_SIZE, true)} disabled={loadingMore}
+                      className="rounded-full bg-subtle px-5 py-2 text-[13px] font-medium text-ink ring-1 ring-line transition hover:bg-white disabled:opacity-40">
+                      {loadingMore ? 'Loading…' : 'Load more (' + (draftsTotal - safeDrafts.length) + ' more)'}
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </section>
+
           {/* Draft detail modal — click a draft to view / play / edit */}
           {selectedDraft ? (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" onClick={() => { setSelectedDraft(null); setEditingDraft(false); }}>
@@ -637,17 +697,43 @@ export default function Dashboard() {
                 </div>
                 {selectedDraft?.pack?.kind === 'clip' ? (
                   (() => {
-                    const vid = ytId(selectedDraft?.pack?.video || '');
-                    if (vid && OWN_VIDEO_IDS.has(vid)) {
+                    const clips = clipsOf(selectedDraft);
+                    if (clips.length > 0) {
                       return (
-                        <div className="overflow-hidden rounded-2xl ring-1 ring-black/10">
-                          <div className="relative w-full" style={{ paddingBottom: '56.25%' }}>
-                            <iframe className="absolute inset-0 h-full w-full" src={'https://www.youtube.com/embed/' + vid} title="Cellular Hope video" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen />
-                          </div>
+                        <div className="space-y-5">
+                          {clips.map((c: Clip, ci: number) => (
+                            <div key={c.id || ci} className="overflow-hidden rounded-2xl ring-1 ring-line/60">
+                              <video controls preload="metadata" poster={selectedDraft?.pack?.thumb || undefined} src={c.preview || c.export}
+                                className="aspect-video w-full bg-black" />
+                              <div className="p-3">
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="truncate text-[13px] font-semibold text-ink">{c.title || ('Clip ' + (ci + 1))}</div>
+                                  <span className="shrink-0 text-[11px] text-ink-faint">{fmtDuration(c.durationMs)}</span>
+                                </div>
+                                {c.description ? <p className="mt-1 line-clamp-2 text-[12px] text-ink-muted">{c.description}</p> : null}
+                                {c.hashtags ? <p className="mt-1 truncate text-[11px] text-accent">{c.hashtags}</p> : null}
+                                <div className="mt-2 flex items-center gap-2">
+                                  {c.export ? (
+                                    <a href={c.export} target="_blank" rel="noopener noreferrer"
+                                      className="rounded-full bg-ink px-3 py-1 text-[12px] font-medium text-white transition-opacity hover:opacity-90">Download</a>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       );
                     }
-                    return (<div className="rounded-2xl border border-dashed border-line p-6 text-center text-[13px] text-ink-muted">This clip isn’t linked to a Cellular Hope Institute video, so it can’t be played here.</div>);
+                    if (selectedDraft?.pack?.status === 'failed') {
+                      return (<div className="rounded-2xl border border-dashed border-line p-6 text-center text-[13px] text-ink-muted">This clip job failed to render. Try submitting the video again.</div>);
+                    }
+                    return (
+                      <div className="rounded-2xl border border-dashed border-line p-8 text-center">
+                        <div className="mx-auto mb-3 h-6 w-6 animate-spin rounded-full border-2 border-line border-t-accent" />
+                        <div className="text-[14px] font-medium text-ink-muted">Clips are still rendering</div>
+                        <div className="mt-1 text-[12px] text-ink-faint">This can take a few minutes. They&apos;ll appear here automatically when ready.</div>
+                      </div>
+                    );
                   })()
                 ) : editingDraft ? (
                   <div>
