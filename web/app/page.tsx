@@ -327,8 +327,8 @@ export default function Dashboard() {
 
   const statCards = [
     { label: 'Drafts', value: (stats && (stats.drafts ?? stats.draftsCount)) ?? safeDrafts.length ?? 0 },
-    { label: 'Scheduled posts', value: (stats && (stats.scheduledPosts ?? stats.scheduled ?? stats.scheduledCount)) ?? 0 },
-    { label: 'Upcoming', value: (stats && (stats.upcomingPosts ?? stats.upcoming ?? stats.upcomingCount)) ?? 0 },
+    { label: 'Scheduled posts', value: (stats && (stats.scheduled ?? stats.scheduledCount)) ?? 0 },
+    { label: 'Upcoming', value: (stats && (stats.upcoming ?? stats.upcomingCount)) ?? 0 },
     { label: 'Clip jobs', value: (stats && (stats.clips ?? stats.clipJobs)) ?? 0 },
   ];
 
