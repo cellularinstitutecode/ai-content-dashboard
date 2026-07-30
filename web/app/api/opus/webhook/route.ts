@@ -35,16 +35,49 @@ function verify(rawBody: string, headers: Headers, secret: string): boolean {
   return true;
 }
 
-// Best-effort extraction of a project id from an arbitrary webhook payload.
+// Best-effort extraction of a project id from an arbitrary webhook payload,
+// normalized to a trimmed string so it keys drafts exactly like the create/poll
+// paths do.
 function extractProjectId(payload: any): string | null {
-  return (
+  const raw =
     payload?.projectId ||
     payload?.project?.id ||
     payload?.project?.projectId ||
     payload?.data?.projectId ||
     payload?.id ||
-    null
-  );
+    null;
+  const s = raw == null ? '' : String(raw).trim();
+  return s || null;
+}
+
+// Locate the gallery draft for a project. The webhook has no user session, so we
+// match on the JSON projectId key first, then fall back to the source_url stored
+// on the clips bookkeeping row (which is keyed by opus_project_id). This mirrors
+// the fallback in the clip route so both the fast path (webhook) and the fallback
+// path (poll) resolve the same draft even if the id was stored in an odd shape.
+async function findClipDraft(admin: any, projectId: string) {
+  const byKey = await admin
+    .from('drafts')
+    .select('id, pack')
+    .filter('pack->>projectId', 'eq', projectId)
+    .limit(1);
+  if (byKey.data && byKey.data[0]) return byKey.data[0];
+
+  const clipRow = await admin
+    .from('clips')
+    .select('source_url')
+    .eq('opus_project_id', projectId)
+    .limit(1);
+  const sourceUrl = clipRow.data && clipRow.data[0] && clipRow.data[0].source_url;
+  if (!sourceUrl) return null;
+  const byUrl = await admin
+    .from('drafts')
+    .select('id, pack')
+    .filter('pack->>video', 'eq', sourceUrl)
+    .filter('pack->>kind', 'eq', 'clip')
+    .order('created_at', { ascending: false })
+    .limit(1);
+  return (byUrl.data && byUrl.data[0]) || null;
 }
 
 export async function POST(req: NextRequest) {
@@ -78,21 +111,16 @@ export async function POST(req: NextRequest) {
     const admin = supabaseAdmin();
 
     // Update the gallery draft (pack.kind === 'clip') keyed by projectId.
-    const { data: rows } = await admin
-      .from('drafts')
-      .select('id, pack')
-      .filter('pack->>projectId', 'eq', projectId)
-      .limit(1);
-    const row = rows && rows[0];
+    const row = await findClipDraft(admin, projectId);
     if (row) {
-      const pack = { ...(row.pack || {}), clips, status };
+      const pack = { ...(row.pack || {}), projectId, clips, status };
       await admin.from('drafts').update({ pack, updated_at: new Date().toISOString() }).eq('id', row.id);
     }
 
     // Update the clips bookkeeping row too.
     await admin.from('clips').update({ status, result: clips }).eq('opus_project_id', projectId);
 
-    return NextResponse.json({ ok: true, status, count: clips.length });
+    return NextResponse.json({ ok: true, status, count: clips.length, matched: !!row });
   } catch (e: any) {
     // Return 200 so Opus does not hammer retries on a transient DB error; we log via message.
     return NextResponse.json({ ok: false, error: e?.message || 'handler error' });
