@@ -336,6 +336,9 @@ export default function Dashboard() {
   async function clipVideo() {
     setOpStatus(null); setOpBusy(true);
     try {
+      // The server creates the gallery draft itself (keyed by the authoritative
+      // Opus projectId) and returns it, so there is no separate client draft
+      // insert to race against the webhook or to save an empty projectId.
       const r = await fetch('/api/opus/clip', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ videoUrl: opUrl }),
@@ -344,19 +347,15 @@ export default function Dashboard() {
       if (!r.ok) throw new Error(data?.error || ('OpusClip failed ('+r.status+')'));
       const projectId = (data && (data.projectId || (data.project && (data.project.projectId || data.project.id)))) || '';
       setOpStatus(projectId ? 'Clip job started — processing…' : 'Clip job started.');
-      try {
-        await fetch('/api/drafts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            topic: 'Video clips from ' + opUrl,
-            provider: 'opusclip',
-            pack: { kind: 'clip', video: opUrl, thumb: (data && data.thumbnailUrl) || ytThumb(opUrl), projectId, status: 'processing', clips: [] },
-          }),
-        });
-        setOpUrl('');
-        refreshDrafts();
-      } catch {}
+
+      // Optimistically show the server-created draft immediately; otherwise fall
+      // back to a refresh so the new tile still appears.
+      if (data && data.draft) {
+        setDrafts((prev: any) => [data.draft, ...(Array.isArray(prev) ? prev : [])]);
+      }
+      setOpUrl('');
+      refreshDrafts();
+      refreshStats();
     } catch (e: any) { setOpStatus('Error: ' + (e?.message || 'failed')); } finally { setOpBusy(false); }
   }
 

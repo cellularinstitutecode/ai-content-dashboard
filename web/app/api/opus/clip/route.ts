@@ -5,9 +5,28 @@ import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 
-// Pull the Opus project id out of whatever shape the create response uses.
+// Pull the Opus project id out of whatever shape the create response uses,
+// then normalize it to a trimmed string so it keys drafts consistently
+// everywhere (create, poll, webhook).
 function projectIdOf(project: any): string | null {
-  return project?.projectId || project?.id || null;
+  const raw =
+    project?.projectId ||
+    project?.id ||
+    project?.project?.id ||
+    project?.project?.projectId ||
+    null;
+  const s = raw == null ? '' : String(raw).trim();
+  return s || null;
+}
+
+// Best-effort thumbnail from the create response.
+function thumbnailOf(project: any): string | null {
+  return (
+    project?.sourceInfo?.thumbnailUrl ||
+    project?.sourceInfo?.thumbnail ||
+    project?.thumbnailUrl ||
+    null
+  );
 }
 
 export async function POST(req: NextRequest) {
@@ -30,10 +49,17 @@ export async function POST(req: NextRequest) {
 
     const project = await opusCreateClipProject({ videoUrl, brandTemplateId, language, title });
     const projectId = projectIdOf(project);
+    if (!projectId) {
+      // Without a project id we could never map finished clips back to a draft,
+      // so fail loudly instead of creating an orphan job.
+      return NextResponse.json({ error: 'opus returned no project id', project }, { status: 502 });
+    }
+    const thumbnailUrl = thumbnailOf(project);
+    const projectTitle = title || project?.sourceInfo?.title || null;
 
-    // Record the job so it shows up in stats. The user-facing gallery item is a
-    // draft (pack.kind === 'clip') created by the client, keyed by this projectId.
     const admin = supabaseAdmin();
+
+    // Bookkeeping row (drives the "Clip jobs" stat) — keyed by projectId + user.
     await admin.from('clips').insert({
       user_id: user.id,
       opus_project_id: projectId,
@@ -41,17 +67,74 @@ export async function POST(req: NextRequest) {
       status: 'processing',
     });
 
-    // Surface projectId + thumbnail so the client can persist them on the draft.
+    // Create the gallery draft SERVER-SIDE, in the same request that owns the
+    // authoritative projectId. Previously the client created this draft in a
+    // second, best-effort call, which could save an empty projectId or lose the
+    // race with the Opus webhook — the finished clips then had no draft to map
+    // onto. Creating it here guarantees the draft exists and is keyed correctly
+    // before any webhook or poll can fire.
+    const pack = {
+      kind: 'clip',
+      video: videoUrl,
+      thumb: thumbnailUrl || null,
+      projectId,
+      status: 'processing',
+      clips: [] as any[],
+    };
+    const { data: draft } = await admin
+      .from('drafts')
+      .insert({
+        user_id: user.id,
+        topic: projectTitle ? ('Video clips — ' + projectTitle) : ('Video clips from ' + videoUrl),
+        pack,
+        provider: 'opusclip',
+      })
+      .select()
+      .single();
+
     return NextResponse.json({
       ok: true,
       projectId,
-      thumbnailUrl: project?.sourceInfo?.thumbnailUrl || null,
-      title: project?.sourceInfo?.title || null,
+      thumbnailUrl: thumbnailUrl || null,
+      title: projectTitle,
+      draft: draft || null,
       project,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'opus failed' }, { status: 500 });
   }
+}
+
+// Locate this user's clip draft for a project. Matches on the JSON key first,
+// and if that misses (e.g. the id was stored in a slightly different shape),
+// falls back to the source_url recorded on the linked clips bookkeeping row.
+async function findClipDraft(admin: any, userId: string, projectId: string) {
+  const byKey = await admin
+    .from('drafts')
+    .select('id, pack')
+    .eq('user_id', userId)
+    .filter('pack->>projectId', 'eq', projectId)
+    .limit(1);
+  if (byKey.data && byKey.data[0]) return byKey.data[0];
+
+  // Fallback: use the source_url from the clips row that owns this projectId.
+  const clipRow = await admin
+    .from('clips')
+    .select('source_url')
+    .eq('user_id', userId)
+    .eq('opus_project_id', projectId)
+    .limit(1);
+  const sourceUrl = clipRow.data && clipRow.data[0] && clipRow.data[0].source_url;
+  if (!sourceUrl) return null;
+  const byUrl = await admin
+    .from('drafts')
+    .select('id, pack')
+    .eq('user_id', userId)
+    .filter('pack->>video', 'eq', sourceUrl)
+    .filter('pack->>kind', 'eq', 'clip')
+    .order('created_at', { ascending: false })
+    .limit(1);
+  return (byUrl.data && byUrl.data[0]) || null;
 }
 
 // Poll finished clips for a project. Also persists them onto the matching clip
@@ -63,32 +146,32 @@ export async function GET(req: NextRequest) {
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
-    const projectId = req.nextUrl.searchParams.get('projectId');
+    const projectId = (req.nextUrl.searchParams.get('projectId') || '').trim();
     if (!projectId) return NextResponse.json({ error: 'projectId required' }, { status: 400 });
 
     const clips = await opusGetExportableClips(projectId);
     const ready = clips.length > 0;
+    const status = ready ? 'ready' : 'processing';
 
-    // Best-effort persist onto this user's clip draft for the project.
+    // Best-effort, idempotent persist onto this user's clip draft.
     try {
       const admin = supabaseAdmin();
-      const { data: rows } = await admin
-        .from('drafts')
-        .select('id, pack')
-        .eq('user_id', user.id)
-        .filter('pack->>projectId', 'eq', projectId)
-        .limit(1);
-      const row = rows && rows[0];
+      const row = await findClipDraft(admin, user.id, projectId);
       if (row) {
-        const pack = { ...(row.pack || {}), clips, status: ready ? 'ready' : 'processing' };
-        await admin.from('drafts').update({ pack, updated_at: new Date().toISOString() }).eq('id', row.id);
+        // Only write when something actually changed, so repeated polls don't
+        // churn updated_at or clobber a webhook that already marked it ready.
+        const prevCount = Array.isArray(row.pack?.clips) ? row.pack.clips.length : 0;
+        if (ready && (prevCount !== clips.length || row.pack?.status !== 'ready')) {
+          const pack = { ...(row.pack || {}), projectId, clips, status };
+          await admin.from('drafts').update({ pack, updated_at: new Date().toISOString() }).eq('id', row.id);
+        }
       }
       if (ready) {
         await admin.from('clips').update({ status: 'ready', result: clips }).eq('opus_project_id', projectId);
       }
     } catch {}
 
-    return NextResponse.json({ ok: true, status: ready ? 'ready' : 'processing', clips });
+    return NextResponse.json({ ok: true, status, clips });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'opus failed' }, { status: 500 });
   }
