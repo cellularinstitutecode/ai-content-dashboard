@@ -361,9 +361,37 @@ if (j && j.status === 'ready' && Array.isArray(j.clips) && j.clips.length > 0) c
 } catch {}
 }
 if (changed) refreshDrafts(0, false);
-}, 15000);
+}, 5000);
 return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
 }, [drafts]);
+
+  // Keep the open draft detail in sync as drafts refresh, so clips appear the
+  // instant Opus finishes rendering without needing to close and reopen.
+  useEffect(() => {
+    if (!selectedDraft) return;
+    const list = Array.isArray(drafts) ? drafts : [];
+    const key = (x: any) => (x && (x.id ?? x._id));
+    const fresh = list.find((d: any) => d && key(d) === key(selectedDraft));
+    if (fresh && fresh !== selectedDraft && JSON.stringify(fresh) !== JSON.stringify(selectedDraft)) {
+      setSelectedDraft(fresh);
+    }
+  }, [drafts]);
+
+  // Open a draft and, if it is a still-rendering clip job, immediately check
+  // Opus once instead of waiting for the next poll tick.
+  async function openDraft(d: any) {
+    setSelectedDraft(d);
+    setEditingDraft(false);
+    try {
+      if (d && d.pack && d.pack.kind === 'clip' && d.pack.projectId && d.pack.status !== 'ready' && d.pack.status !== 'failed') {
+        const r = await fetch('/api/opus/clip?projectId=' + encodeURIComponent(d.pack.projectId));
+        if (r.ok) {
+          const j = await r.json().catch(() => null);
+          if (j && j.status === 'ready' && Array.isArray(j.clips) && j.clips.length > 0) refreshDrafts(0, false);
+        }
+      }
+    } catch {}
+  }
 
 async function refreshStats() {
 try {
@@ -1239,7 +1267,7 @@ const ready = d?.pack?.status === 'ready' && clipsOf(d).length > 0;
 const failed = d?.pack?.status === 'failed';
 const count = clipsOf(d).length;
 return (
-<button key={(d?.id || d?._id || i) + '-opus'} onClick={() => setSelectedDraft(d)}
+<button key={(d?.id || d?._id || i) + '-opus'} onClick={() => openDraft(d)}
 className="group overflow-hidden rounded-2xl text-left ring-1 ring-line/60 transition hover:ring-black/20">
 <div className="relative">
 {d?.pack?.thumb ? (
@@ -1281,7 +1309,7 @@ className="group overflow-hidden rounded-2xl text-left ring-1 ring-line/60 trans
 const title = (d && (d.title || d.topic || d.name)) || 'Untitled draft';
 const body = (d && (d.body || d.instagram || d.text || d.content)) || '';
 return (
-<li onClick={() => setSelectedDraft(d)} role="button" tabIndex={0} key={(d && (d.id || d._id)) || i} className="cursor-pointer rounded-xl transition hover:bg-subtle/60 flex items-start gap-4 py-4">
+<li onClick={() => openDraft(d)} role="button" tabIndex={0} key={(d && (d.id || d._id)) || i} className="cursor-pointer rounded-xl transition hover:bg-subtle/60 flex items-start gap-4 py-4">
 {d?.pack?.kind === 'clip' && d?.pack?.thumb ? (
 <div className="mb-2 overflow-hidden rounded-lg ring-1 ring-black/10">
 {/* eslint-disable-next-line @next/next/no-img-element */}
