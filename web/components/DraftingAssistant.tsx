@@ -65,6 +65,16 @@ export default function DraftingAssistant() {
       const pack = data?.pack || {};
       const out = pack.instagram || pack.facebook || pack.linkedin || pack.blog || '';
       setGenOutput(out || 'No content returned.');
+      // Persist to Recent Drafts so nothing generated here is lost (parity with
+      // the main dashboard + chat flows). Stamp the chosen format on the pack so
+      // the renderer can label it faithfully (email/video/ad).
+      try {
+        await fetch('/api/drafts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topic: genIdea, pack: { ...pack, format: genFormat }, provider: genProvider }),
+        });
+      } catch {}
     } catch (e: any) {
       setGenErr(e?.message || 'Failed to generate');
     } finally {
