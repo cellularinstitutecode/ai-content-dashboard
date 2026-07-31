@@ -4,8 +4,10 @@ import {
   generateContentPack,
   chatAssistant,
   chatWithTools,
+  researchTopic,
   type ToolMessage,
 } from "@/lib/ai";
+import { opusCreateClipProject } from "@/lib/opus";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -275,6 +277,60 @@ async function runAgent(session: Session, input: string, userId: string | null) 
           text.slice(0, 400) + "\"\n\nShould I send it for review? (yes / no)",
         options: ["Yes, send for review", "No, cancel"],
       };
+    } else if (call.name === "clip_video") {
+      if (!userId) {
+        toolResult = "Cannot start a clip job: user is not signed in.";
+      } else {
+        try {
+          const videoUrl = String(call.input.videoUrl || "").trim();
+          const title = call.input.title ? String(call.input.title) : undefined;
+          const language = call.input.language ? String(call.input.language) : undefined;
+          if (!videoUrl) {
+            toolResult = "No video URL provided. Ask the user for a YouTube or Vimeo link.";
+          } else {
+            const project: any = await opusCreateClipProject({ videoUrl, language, title });
+            const projectId = String((project && (project.projectId || project.id || (project.project && (project.project.id || project.project.projectId)))) || "").trim();
+            if (!projectId) {
+              toolResult = "OpusClip did not return a project id, so the job could not be started.";
+            } else {
+              const thumb = (project && (project.sourceInfo?.thumbnailUrl || project.sourceInfo?.thumbnail || project.thumbnailUrl)) || null;
+              const projectTitle = title || (project && project.sourceInfo && project.sourceInfo.title) || null;
+              const admin = supabaseAdmin();
+              await admin.from("clips").insert({ user_id: userId, opus_project_id: projectId, source_url: videoUrl, status: "processing" });
+              const pack = { kind: "clip", video: videoUrl, thumb, projectId, status: "processing", clips: [] as any[] };
+              await admin.from("drafts").insert({ user_id: userId, topic: projectTitle ? ("Video clips — " + projectTitle) : ("Video clips from " + videoUrl), pack, provider: "opusclip" });
+              session.confirmations = session.confirmations || [];
+              session.confirmations.push("Started an OpusClip job — clips will appear under Recent Drafts when ready.");
+              toolResult = "Started an OpusClip job for the video. It is processing now and the clips will appear under Recent Drafts automatically when ready (this can take a few minutes).";
+            }
+          }
+        } catch (e: any) {
+          toolResult = "Failed to start the clip job: " + (e?.message || "unknown error");
+        }
+      }
+    } else if (call.name === "research_topic") {
+      try {
+        const topic = String(call.input.topic || "").trim();
+        const network = String(call.input.network || "instagram").trim() || "instagram";
+        if (!topic) {
+          toolResult = "No topic provided. Ask the user what they want researched.";
+        } else {
+          const research: any = await researchTopic({ topic, provider: session.provider === "openai" ? "openai" : "anthropic", network });
+          const r = (research && research.result) ? research.result : research;
+          const angles = Array.isArray(r?.angles) ? r.angles.slice(0, 5).join("; ") : "";
+          const keywords = Array.isArray(r?.keywords) ? r.keywords.map((k: any) => (k && (k.term || k)) || "").filter(Boolean).slice(0, 8).join(", ") : "";
+          const hashtags = Array.isArray(r?.hashtags) ? r.hashtags.slice(0, 10).join(" ") : "";
+          const hooks = Array.isArray(r?.hooks) ? r.hooks.slice(0, 3).join(" | ") : "";
+          if (r && typeof r.draft === "string" && r.draft.trim()) {
+            session.lastPack = { instagram: r.draft, blog: r.draft, format: "research", research: r } as any;
+            session.lastTopic = topic;
+            session.provider = session.provider === "openai" ? "openai" : "anthropic";
+          }
+          toolResult = "Research for " + topic + ":\nAngles: " + angles + "\nKeywords: " + keywords + "\nHashtags: " + hashtags + "\nHooks: " + hooks + "\nA ready-to-edit draft is prepared; call save_draft to keep it.";
+        }
+      } catch (e: any) {
+        toolResult = "Research failed: " + (e?.message || "unknown error");
+      }
     } else {
       toolResult = "Unknown tool.";
     }
