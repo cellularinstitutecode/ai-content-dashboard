@@ -9,6 +9,11 @@ import { researchTopic, type Provider, type BrandContext } from '@/lib/ai';
 import { supabaseServer } from '@/lib/supabase';
 import { checkRateLimit } from '@/lib/rate-limit';
 
+// Vercel: research can take 30s+ on the LLM, so lift the function limit.
+// (Hobby default is ~10s; nodejs runtime is needed for env + supabase.)
+export const runtime = 'nodejs';
+export const maxDuration = 60;
+
 const ALLOWED_PROVIDERS: Provider[] = ['anthropic', 'openai'];
 
 export async function POST(req: NextRequest) {
@@ -45,7 +50,10 @@ export async function POST(req: NextRequest) {
     const { provider: used, result } = await researchTopic({ topic, provider, network, brand });
     return NextResponse.json({ provider: used, ...result });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'research failed';
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error('[ai-research] failed:', err);
+    return NextResponse.json(
+      { error: 'AI research is taking longer than expected right now. Please try again in a moment.' },
+      { status: 500 },
+    );
   }
 }
