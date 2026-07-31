@@ -8,6 +8,7 @@ import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
+export const maxDuration = 60;
 
 const ALLOWED_TYPES: ContentType[] = ['social', 'blog', 'email', 'video', 'ad'];
 
