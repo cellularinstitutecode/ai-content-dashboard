@@ -298,6 +298,20 @@ setType('social');
 try { if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }); } catch {}
 }
 
+  // Smooth-scroll the "How this works" cards to the matching section below,
+  // and briefly highlight it so the viewer sees where they landed.
+  const STEP_ANCHORS = ['section-create', 'section-repurpose', 'section-publish', 'section-library'];
+  function scrollToStep(i: number) {
+    try {
+      const el = typeof document !== 'undefined' ? document.getElementById(STEP_ANCHORS[i]) : null;
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        el.classList.add('ring-2', 'ring-accent');
+        setTimeout(() => { el.classList.remove('ring-2', 'ring-accent'); }, 1600);
+      }
+    } catch {}
+  }
+
 // Manual "Refresh clips" affordance so the viewer can pull the latest Opus
 // render status on demand instead of waiting for the 15s poll.
 const [refreshingClips, setRefreshingClips] = useState(false);
@@ -668,11 +682,11 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
           </div>
           {onboardOpen && (
             <div className="grid gap-3 p-6 sm:grid-cols-2 sm:p-8 lg:grid-cols-4">
-              {ONBOARD_STEPS.map((s) => (
-                <div key={s.title} className="rounded-2xl bg-subtle/60 p-4 ring-1 ring-line">
+              {ONBOARD_STEPS.map((s, i) => (
+                <button key={s.title} type="button" onClick={() => scrollToStep(i)} className="cursor-pointer rounded-2xl bg-subtle/60 p-4 text-left ring-1 ring-line transition hover:bg-white hover:ring-accent">
                   <div className="text-[13px] font-semibold text-ink">{s.title}</div>
                   <p className="mt-1 text-[12px] leading-relaxed text-ink-muted">{s.body}</p>
-                </div>
+                </button>
               ))}
             </div>
           )}
@@ -691,7 +705,7 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 
 
 {/* Generator */}
-<section className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<section id="section-create" className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
 <div className="border-b border-line px-6 py-5 sm:px-8">
 <div className="flex items-center gap-2">
 <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 1 · Create</span>
@@ -762,7 +776,7 @@ className="w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink rin
 <div className="flex items-center gap-3">
 <button onClick={generate} disabled={loading || !prompt.trim()}
 className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">
-{loading ? 'Generating...' : 'Generate'}
+{loading ? (<><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />Generating…</>) : 'Generate'}
 </button>
 {err && <span className="text-[13px] text-danger">{err}</span>}
 </div>
@@ -792,13 +806,13 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 tex
 
 
 {/* Publishing (Metricool) — compose, review flow, and live queue */}
-<section className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<section id="section-publish" className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
 <div className="border-b border-line px-6 py-5 sm:px-8">
 <div className="flex flex-wrap items-center justify-between gap-3">
 <div className="flex items-center gap-3">
 <span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-2xl bg-accent/10 text-accent text-[18px]">📣</span>
 <div>
-<h2 className="text-[18px] font-semibold text-ink">Publishing</h2>
+<span className="mb-1 inline-block rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 3 · Schedule</span><h2 className="text-[18px] font-semibold text-ink">Publishing</h2>
 <p className="text-[13px] text-ink-muted">Plan, schedule, and track your posts across every channel.</p>
 </div>
 </div>
@@ -820,9 +834,9 @@ return (
 <p className="text-[13px] text-emerald-900"><span className="font-semibold">Nothing is ever posted automatically.</span> You write it here, send it for review, and give the final approval yourself inside Metricool.</p>
 </div>
 <ol className="mt-4 grid gap-3 sm:grid-cols-3">
-<li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">Step 1 · Write</div><div className="mt-0.5 text-[13px] text-ink-muted">Choose your networks and write the post below.</div></li>
-<li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">Step 2 · Send for review</div><div className="mt-0.5 text-[13px] text-ink-muted">It lands safely in Metricool as a draft — never live yet.</div></li>
-<li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">Step 3 · You approve</div><div className="mt-0.5 text-[13px] text-ink-muted">Open Metricool, take a final look, and publish when ready.</div></li>
+<li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">Write</div><div className="mt-0.5 text-[13px] text-ink-muted">Choose your networks and write the post below.</div></li>
+<li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">Send for review</div><div className="mt-0.5 text-[13px] text-ink-muted">It lands safely in Metricool as a draft — never live yet.</div></li>
+<li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">You approve</div><div className="mt-0.5 text-[13px] text-ink-muted">Open Metricool, take a final look, and publish when ready.</div></li>
 </ol>
 </div>
 <div className="grid gap-0 lg:grid-cols-5">
@@ -1085,7 +1099,7 @@ return (
 
 
 {/* OpusClip — long-form to Shorts (video repurposing workspace) */}
-<section className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<section id="section-repurpose" className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
 <div className="border-b border-line px-6 py-5 sm:px-8">
 <div className="flex flex-wrap items-center justify-between gap-3">
 <div className="flex items-center gap-2">
@@ -1167,7 +1181,7 @@ onClick={clipVideo}
 disabled={opBusy || !opUrl.trim()}
 className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
 >
-{opBusy ? 'Sending to Opus…' : 'Generate clips'}
+{opBusy ? (<><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />Sending to Opus…</>) : 'Generate clips'}
 </button>
 <span className="text-[12px] text-ink-faint">Processing runs in the background — no need to wait here.</span>
 </div>
@@ -1201,7 +1215,7 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 tex
 
 
 {/* Recent Drafts */}
-<section className="rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7">
+<section id="section-library" className="rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7">
 <h2 className="mb-4 text-headline font-semibold">Recent Drafts</h2>
 {/* Clips from Opus — long-form to Shorts */}
 {(() => {
