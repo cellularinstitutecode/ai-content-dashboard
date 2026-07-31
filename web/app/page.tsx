@@ -1401,7 +1401,7 @@ return (
 <div className="space-y-5">
 {clips.map((c: Clip, ci: number) => (
 <div key={c.id || ci} className="overflow-hidden rounded-2xl ring-1 ring-line/60">
-<video controls preload="metadata" poster={selectedDraft?.pack?.thumb || undefined} src={c.preview || c.export}
+<video controls autoPlay muted playsInline preload="auto" poster={selectedDraft?.pack?.thumb || undefined} src={c.preview || c.export}
 className="aspect-video w-full bg-black" />
 <div className="p-3">
 <div className="flex items-center justify-between gap-3">
