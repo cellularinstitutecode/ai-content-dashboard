@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useRef, useState } from "react";
 
-export function useVoiceAssistant(getSession: () => any, applyResult: (data: any) => void) {
+export function useVoiceAssistant(getSession: () => any, applyResult: (data: any, command?: string) => void) {
   const [active, setActive] = useState(false);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -56,7 +56,7 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ session: getSession(), text: command }),
         })).json();
-        applyResult(data);
+        applyResult(data, command);
         dc.send(JSON.stringify({
           type: "conversation.item.create",
           item: { type: "function_call_output", call_id: evt.call_id,
