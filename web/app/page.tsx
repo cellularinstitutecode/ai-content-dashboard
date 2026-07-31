@@ -188,6 +188,40 @@ const [mBusy, setMBusy] = useState(false);
     }
   }
 
+  // --- AI Research & Draft Copilot state ---
+  const [researchTopicText, setResearchTopicText] = useState('');
+  const [researchNetwork, setResearchNetwork] = useState('instagram');
+  const [research, setResearch] = useState<any>(null);
+  const [researchLoading, setResearchLoading] = useState(false);
+  const [researchError, setResearchError] = useState<string | null>(null);
+
+  async function runResearch() {
+    const topic = researchTopicText.trim();
+    if (!topic || researchLoading) return;
+    setResearchLoading(true);
+    setResearchError(null);
+    try {
+      const res = await fetch('/api/metricool/ai-research', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ topic, provider, network: researchNetwork }),
+      });
+      const j = await res.json();
+      if (!res.ok) {
+        setResearch(null);
+        setResearchError(j?.error === 'unauthorized' ? 'Please sign in to run AI research.' : (j?.error || 'Research failed. Please try again.'));
+      } else {
+        setResearch(j);
+      }
+    } catch {
+      setResearch(null);
+      setResearchError('Research failed. Please check your connection and try again.');
+    } finally {
+      setResearchLoading(false);
+    }
+  }
+
+
 // Scheduled / pending-review queue, backed by GET /api/posts. Surfacing this
 // is what makes "sent for review" concrete: the post shows up here with its
 // status and a link to approve it in Metricool.
@@ -896,6 +930,138 @@ return (
 );
 })()}
 </div>
+              {/* AI Research & Draft Copilot */}
+              <div className="mt-6 overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-50 to-white ring-1 ring-indigo-100">
+                <div className="border-b border-indigo-100 px-5 py-4">
+                  <div className="flex items-center gap-2">
+                    <span aria-hidden className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-600/10 text-indigo-700">&#10024;</span>
+                    <div>
+                      <h3 className="text-[15px] font-semibold text-ink">AI Research &amp; Draft Copilot</h3>
+                      <p className="text-[12px] text-ink-muted">Give it a topic and it does the research legwork &mdash; angles, keywords, hashtags, hooks and a ready draft.</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="p-5">
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      type="text"
+                      value={researchTopicText}
+                      onChange={(e) => setResearchTopicText(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") runResearch(); }}
+                      placeholder="e.g. stem cell therapy for knee pain"
+                      className="flex-1 rounded-xl bg-white px-3.5 py-2.5 text-[13px] text-ink ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    />
+                    <select
+                      value={researchNetwork}
+                      onChange={(e) => setResearchNetwork(e.target.value)}
+                      className="rounded-xl bg-white px-3 py-2.5 text-[13px] text-ink ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    >
+                      <option value="instagram">Instagram</option>
+                      <option value="facebook">Facebook</option>
+                      <option value="linkedin">LinkedIn</option>
+                      <option value="x">X / Twitter</option>
+                      <option value="blog">Blog</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={runResearch}
+                      disabled={researchLoading || !researchTopicText.trim()}
+                      className="shrink-0 rounded-xl bg-indigo-600 px-4 py-2.5 text-[13px] font-medium text-white transition hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {researchLoading ? "Researching\u2026" : "Research this topic"}
+                    </button>
+                  </div>
+
+                  {researchError && (
+                    <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-700 ring-1 ring-red-100">{researchError}</p>
+                  )}
+
+                  {research && (
+                    <div className="mt-4 space-y-4">
+                      {research.summary && (
+                        <p className="text-[13px] leading-relaxed text-ink">{research.summary}</p>
+                      )}
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {Array.isArray(research.angles) && research.angles.length > 0 && (
+                          <div className="rounded-xl bg-white p-4 ring-1 ring-line">
+                            <div className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">Content angles</div>
+                            <ul className="mt-2 space-y-1">
+                              {research.angles.map((a: string, i: number) => (
+                                <li key={i} className="text-[13px] text-ink">&bull; {a}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {Array.isArray(research.viralityFactors) && research.viralityFactors.length > 0 && (
+                          <div className="rounded-xl bg-white p-4 ring-1 ring-line">
+                            <div className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">Why it can spread</div>
+                            <ul className="mt-2 space-y-1">
+                              {research.viralityFactors.map((v: string, i: number) => (
+                                <li key={i} className="text-[13px] text-ink">&bull; {v}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+
+                      {Array.isArray(research.keywords) && research.keywords.length > 0 && (
+                        <div className="rounded-xl bg-white p-4 ring-1 ring-line">
+                          <div className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">Suggested keywords</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {research.keywords.map((k: any, i: number) => (
+                              <span key={i} title={k.why} className="rounded-full bg-indigo-50 px-3 py-1 text-[12px] text-indigo-800 ring-1 ring-indigo-100">{k.term}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {Array.isArray(research.hashtags) && research.hashtags.length > 0 && (
+                        <div className="rounded-xl bg-white p-4 ring-1 ring-line">
+                          <div className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">Hashtags</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {research.hashtags.map((h: string, i: number) => (
+                              <span key={i} className="rounded-full bg-subtle px-3 py-1 text-[12px] text-ink-muted ring-1 ring-line">{h}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {Array.isArray(research.hooks) && research.hooks.length > 0 && (
+                        <div className="rounded-xl bg-white p-4 ring-1 ring-line">
+                          <div className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">Hooks to open with</div>
+                          <ul className="mt-2 space-y-1">
+                            {research.hooks.map((h: string, i: number) => (
+                              <li key={i} className="text-[13px] text-ink">&bull; {h}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {research.trendRead && (
+                        <div className="rounded-xl bg-white p-4 ring-1 ring-line">
+                          <div className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">Trend read</div>
+                          <p className="mt-2 text-[13px] leading-relaxed text-ink">{research.trendRead}</p>
+                        </div>
+                      )}
+
+                      {research.draft && (
+                        <div className="rounded-xl bg-white p-4 ring-1 ring-line">
+                          <div className="flex items-center justify-between">
+                            <div className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">Ready-to-edit draft</div>
+                            <button type="button" onClick={() => { try { navigator.clipboard.writeText(String(research.draft || "")); } catch {} }} className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-indigo-700 ring-1 ring-indigo-200 transition hover:bg-indigo-50">Copy draft</button>
+                          </div>
+                          <p className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed text-ink">{research.draft}</p>
+                        </div>
+                      )}
+
+                      {research.liveDataNote && (
+                        <p className="text-[11px] leading-relaxed text-ink-muted">{research.liveDataNote}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
 <div className="mt-6 flex flex-wrap gap-3 border-t border-line pt-5 text-[12px]">
 <a href={'https://app.metricool.com/inbox'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">💬 Open Inbox ↗</a>
 <a href={'https://app.metricool.com/smartlinks'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">🔗 Smartlinks ↗</a>
