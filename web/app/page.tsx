@@ -171,6 +171,22 @@ const [mText, setMText] = useState('');
 const [mDate, setMDate] = useState('');
 const [mStatus, setMStatus] = useState<string | null>(null);
 const [mBusy, setMBusy] = useState(false);
+  // --- Comprehensive Publishing panel state (brand switcher + live insights) ---
+  const [activeBlogId, setActiveBlogId] = useState<string>('4308292');
+  const [insights, setInsights] = useState<any>(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  async function loadInsights(blogId: string) {
+    try {
+      setInsightsLoading(true);
+      const r = await fetch('/api/metricool/insights?blogId=' + encodeURIComponent(blogId));
+      const j = await r.json().catch(() => null);
+      setInsights(j);
+    } catch {
+      setInsights(null);
+    } finally {
+      setInsightsLoading(false);
+    }
+  }
 
 // Scheduled / pending-review queue, backed by GET /api/posts. Surfacing this
 // is what makes "sent for review" concrete: the post shows up here with its
@@ -195,16 +211,22 @@ const [editTitle, setEditTitle] = useState('');
 const [editBody, setEditBody] = useState('');
 const [savingEdit, setSavingEdit] = useState(false);
 
-// "How this works" onboarding strip. Hidden once the viewer dismisses it
-// (persisted in localStorage so it does not nag on every visit).
-const [showOnboard, setShowOnboard] = useState(false);
-useEffect(() => {
-try { if (typeof window !== 'undefined' && window.localStorage.getItem(ONBOARD_KEY) !== '1') setShowOnboard(true); } catch { setShowOnboard(true); }
-}, []);
-function dismissOnboard() {
-setShowOnboard(false);
-try { if (typeof window !== 'undefined') window.localStorage.setItem(ONBOARD_KEY, '1'); } catch {}
-}
+// "How this works" onboarding strip — collapsible. The header stays
+// visible so viewers can always reopen it; the collapsed/expanded
+// preference is remembered per browser via localStorage.
+  const [onboardOpen, setOnboardOpen] = useState(true);
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage.getItem(ONBOARD_KEY) === '0') setOnboardOpen(false);
+    } catch {}
+  }, []);
+  function toggleOnboard() {
+    setOnboardOpen((open) => {
+      const next = !open;
+      try { if (typeof window !== 'undefined') window.localStorage.setItem(ONBOARD_KEY, next ? '1' : '0'); } catch {}
+      return next;
+    });
+  }
 
 // Load any saved trending topics on mount.
 useEffect(() => {
@@ -226,7 +248,7 @@ persistTrending([t, ...trending].slice(0, 24));
 setNewTrend('');
 }
 function removeTrend(t: string) { persistTrending(trending.filter((x) => x !== t)); }
-function useTrend(t: string) {
+function applyTrend(t: string) {
 setPrompt(t);
 setType('social');
 try { if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }); } catch {}
@@ -588,26 +610,30 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 </header>
 
 {/* Onboarding "How this works" strip — dismissible, remembered per browser */}
-{showOnboard && (
-<section className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
-<div className="flex items-center justify-between border-b border-line px-6 py-4 sm:px-8">
-<div>
-<h2 className="text-[15px] font-semibold text-ink">How this works</h2>
-<p className="mt-0.5 text-[12px] text-ink-muted">A quick tour of the create → repurpose → schedule flow.</p>
-</div>
-<button type="button" onClick={dismissOnboard}
-className="shrink-0 rounded-full px-3 py-1.5 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Got it, hide this</button>
-</div>
-<div className="grid gap-3 p-6 sm:grid-cols-2 sm:p-8 lg:grid-cols-4">
-{ONBOARD_STEPS.map((s) => (
-<div key={s.title} className="rounded-2xl bg-subtle/60 p-4 ring-1 ring-line">
-<div className="text-[13px] font-semibold text-ink">{s.title}</div>
-<p className="mt-1 text-[12px] leading-relaxed text-ink-muted">{s.body}</p>
-</div>
-))}
-</div>
-</section>
-)}
+      {(
+        <section className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+          <div className="flex items-center justify-between border-b border-line px-6 py-4 sm:px-8">
+            <div>
+              <h2 className="text-[15px] font-semibold text-ink">How this works</h2>
+              <p className="mt-0.5 text-[12px] text-ink-muted">A quick tour of the create → repurpose → schedule flow.</p>
+            </div>
+            <button type="button" onClick={toggleOnboard} aria-expanded={onboardOpen}
+              className="shrink-0 rounded-full px-3 py-1.5 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">
+              {onboardOpen ? 'Hide guide' : 'Show guide'}
+            </button>
+          </div>
+          {onboardOpen && (
+            <div className="grid gap-3 p-6 sm:grid-cols-2 sm:p-8 lg:grid-cols-4">
+              {ONBOARD_STEPS.map((s) => (
+                <div key={s.title} className="rounded-2xl bg-subtle/60 p-4 ring-1 ring-line">
+                  <div className="text-[13px] font-semibold text-ink">{s.title}</div>
+                  <p className="mt-1 text-[12px] leading-relaxed text-ink-muted">{s.body}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
 {/* Stat cards */}
 <section className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -669,7 +695,7 @@ className={'rounded-full px-3.5 py-1.5 text-[13px] font-medium transition-all ' 
 <div className="flex flex-wrap gap-2">
 {trending.slice(0, 12).map((t) => (
 <span key={t} className="group inline-flex items-center gap-1 rounded-full bg-subtle px-3 py-1.5 text-[12px] font-medium text-ink ring-1 ring-line">
-<button type="button" onClick={() => useTrend(t)} className="transition hover:text-accent">{t}</button>
+<button type="button" onClick={() => applyTrend(t)} className="transition hover:text-accent">{t}</button>
 <button type="button" aria-label={'Remove ' + t} onClick={() => removeTrend(t)} className="text-ink-faint opacity-0 transition group-hover:opacity-100 hover:text-danger">×</button>
 </span>
 ))}
@@ -725,161 +751,157 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 tex
 <section className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
 <div className="border-b border-line px-6 py-5 sm:px-8">
 <div className="flex flex-wrap items-center justify-between gap-3">
+<div className="flex items-center gap-3">
+<span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-2xl bg-accent/10 text-accent text-[18px]">📣</span>
+<div>
+<h2 className="text-[18px] font-semibold text-ink">Publishing</h2>
+<p className="text-[13px] text-ink-muted">Plan, schedule, and track your posts across every channel.</p>
+</div>
+</div>
 <div className="flex items-center gap-2">
-<span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 3 · Publish</span>
-<h2 className="text-headline font-semibold">Publishing &amp; Scheduling</h2>
-</div>
-<span className="rounded-full bg-subtle px-2.5 py-1 text-[11px] font-medium text-ink-muted ring-1 ring-line">Powered by Metricool</span>
-</div>
-<p className="mt-1 text-[13px] text-ink-muted">Write a post here, queue it, and approve it in Metricool. Nothing goes live without a person confirming.</p>
-</div>
-
-{/* Flow map — makes it obvious where a post goes and who sees it */}
-<div className="border-b border-line bg-subtle/40 px-6 py-4 sm:px-8">
-<div className="flex flex-wrap items-center gap-2 text-[12px]">
-<span className="rounded-full bg-white px-3 py-1 font-medium text-ink ring-1 ring-line">1 · You write it here</span>
-<span className="text-ink-faint">→</span>
-<span className="rounded-full bg-white px-3 py-1 font-medium text-ink ring-1 ring-line">2 · Saved to Metricool as a draft</span>
-<span className="text-ink-faint">→</span>
-<span className="rounded-full bg-white px-3 py-1 font-medium text-ink ring-1 ring-line">3 · A person approves it</span>
-<span className="text-ink-faint">→</span>
-<span className="rounded-full bg-white px-3 py-1 font-medium text-ink ring-1 ring-line">4 · Goes live on the networks you picked</span>
-</div>
-</div>
-
-<div className="grid gap-0 lg:grid-cols-2">
-{/* Composer */}
-<div className="space-y-4 p-6 sm:p-8">
-<div>
-<label className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Post to</label>
-<div className="flex flex-wrap gap-2" role="group" aria-label="Networks to post to">
-{PUBLISH_NETWORKS.map((n) => (
-<button type="button" key={n.id} onClick={() => toggleNetwork(n.id)} aria-pressed={mNetworks.includes(n.id)}
-className={"rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (mNetworks.includes(n.id) ? "bg-accent text-white ring-accent" : "bg-subtle text-ink ring-line hover:ring-accent/50")}>{n.label}</button>
-))}
-</div>
-<p className="mt-1.5 text-[11px] text-ink-faint">{mNetworks.length ? 'This post will be prepared for: ' + mNetworks.join(', ') + '.' : 'Pick at least one network.'}</p>
-</div>
-
-<div>
-<label className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Post text</label>
-<textarea value={mText} onChange={e => setMText(e.target.value)} rows={4} placeholder="Write the caption exactly as it should appear…"
-className="w-full resize-none rounded-2xl bg-subtle p-3 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
-</div>
-
-<div>
-<label className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">When to publish</label>
-<input type="datetime-local" value={mDate} onChange={e => setMDate(e.target.value)}
-className="w-full rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink ring-1 ring-line focus:ring-accent" />
-</div>
-
-<div className="rounded-2xl bg-subtle/60 p-3 ring-1 ring-line">
-<div className="text-[12px] font-semibold text-ink">What happens when you click below</div>
-<p className="mt-1 text-[12px] leading-relaxed text-ink-muted">The post is created in Metricool as a <span className="font-medium text-ink">draft</span> — it does not publish yet. Open Metricool, review it, and approve it there to send it live. You will see it appear in the queue on the right.</p>
-</div>
-
-<div className="flex flex-wrap items-center gap-3">
-<button onClick={schedulePost} disabled={mBusy}
-className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-white shadow-soft transition-colors hover:bg-accent-hover disabled:opacity-40">{mBusy ? 'Saving…' : 'Save to Metricool for review'}</button>
-<a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer" className="text-[12px] font-medium text-accent underline-offset-2 hover:underline">Open Metricool planner ↗</a>
-{mStatus && <span className={'text-[12px] ' + (mStatus.startsWith('Error') ? 'text-danger' : 'text-ink-muted')}>{mStatus}</span>}
-</div>
-</div>
-
-{/* Analytics */}
-<div className="border-t border-line bg-subtle/40 p-6 sm:p-8 lg:border-l lg:border-t-0">
-<div className="mb-3 flex items-center justify-between">
-<div>
-<span className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Audience &amp; reach</span>
-<p className="mt-0.5 text-[11px] text-ink-faint">Cellular Hope Institute · last 30 days</p>
-</div>
-<button onClick={() => loadAnalytics(false)} disabled={mLoading}
-className="rounded-full bg-white px-3 py-1 text-[12px] font-medium text-ink ring-1 ring-line transition hover:bg-subtle disabled:opacity-40">{mLoading ? 'Loading…' : 'Refresh'}</button>
-</div>
-{metrics.length > 0 ? (
-<div className="grid grid-cols-2 gap-3">
-{metrics.map(m => (
-<div key={m.label} className="rounded-2xl bg-white p-3 ring-1 ring-line">
-<div className="text-[20px] font-semibold">{typeof m.value === 'number' ? m.value.toLocaleString() : String(m.value)}</div>
-<div className="text-[12px] text-ink-muted">{m.label}</div>
-</div>
-))}
-</div>
-) : (
-<div className="flex h-[160px] flex-col items-center justify-center rounded-2xl border border-dashed border-line text-center">
-<div className="text-[13px] font-medium text-ink-muted">{mLoading ? 'Loading analytics…' : 'No analytics yet'}</div>
-<div className="mt-1 text-[11px] text-ink-faint">Connect Metricool credentials to see followers, reach, and engagement.</div>
-</div>
-)}
-</div>
-</div>
-
-
-{/* Scheduled & pending-review queue — the "where did it go" answer */}
-<div className="border-t border-line p-6 sm:p-8">
-<div className="mb-3 flex flex-wrap items-center gap-2">
-<h3 className="text-[15px] font-semibold text-ink">Scheduled &amp; pending review</h3>
-<span className="rounded-full bg-subtle px-2 py-0.5 text-[11px] font-medium text-ink-muted ring-1 ring-line">{safePosts.length}</span>
-{pendingReviewCount > 0 && (
-<span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-amber-200">{pendingReviewCount} awaiting approval</span>
-)}
-<button type="button" onClick={refreshPosts} disabled={postsLoading}
-className="ml-auto rounded-full bg-subtle px-3 py-1 text-[12px] font-medium text-ink ring-1 ring-line transition hover:bg-white disabled:opacity-40">{postsLoading ? 'Refreshing…' : 'Refresh queue'}</button>
-</div>
-
-{safePosts.length === 0 ? (
-<div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-line py-10 text-center">
-<div className="text-[14px] font-medium text-ink-muted">Nothing queued yet</div>
-<div className="mt-1 text-[12px] text-ink-faint">Posts you save for review will show up here with their status and a link to approve them.</div>
-</div>
-) : (
-<ul className="space-y-3">
-{safePosts.map((p: any, i: number) => {
-const meta = postStatusMeta(p?.status);
-const tone = meta.tone;
-const pillClass = tone === 'amber' ? 'bg-amber-100 text-amber-700 ring-amber-200'
-: tone === 'blue' ? 'bg-blue-100 text-blue-700 ring-blue-200'
-: tone === 'green' ? 'bg-emerald-100 text-emerald-700 ring-emerald-200'
-: tone === 'red' ? 'bg-red-100 text-red-700 ring-red-200'
-: 'bg-subtle text-ink-muted ring-line';
-const provs = Array.isArray(p?.providers) ? p.providers : [];
-const id = p?.id || p?._id || String(i);
+{(() => {
+const brands = mAnalytics && Array.isArray(mAnalytics.data) ? mAnalytics.data.filter((b: any) => b && (b.label || b.title)) : [];
+if (brands.length <= 1) return <span className="rounded-full bg-white px-3 py-1 font-medium text-ink ring-1 ring-line text-[12px]">Powered by Metricool</span>;
 return (
-<li key={id} className="rounded-2xl bg-subtle/40 p-4 ring-1 ring-line">
-<div className="flex flex-wrap items-start justify-between gap-3">
-<div className="min-w-0 flex-1">
-<div className="flex flex-wrap items-center gap-2">
-<span className={'rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ' + pillClass}>{meta.label}</span>
-{provs.map((n: string) => (
-<span key={n} className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-ink-muted ring-1 ring-line">{n}</span>
-))}
-<span className="text-[11px] text-ink-faint">{fmtDateTime(p?.publication_date)}</span>
-</div>
-<p className="mt-1.5 line-clamp-2 text-[13px] text-ink">{String(p?.text || '')}</p>
-</div>
-<div className="flex shrink-0 items-center gap-2">
-<button type="button" onClick={() => { setRescheduleId(rescheduleId === id ? null : id); setRescheduleAt(''); }}
-className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white">Reschedule</button>
-<a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer"
-className="rounded-lg bg-ink px-2.5 py-1 text-[12px] font-medium text-white transition-opacity hover:opacity-90">Open in Metricool ↗</a>
+<label className="flex items-center gap-2 text-[12px] text-ink-muted">Brand
+<select value={activeBlogId} onChange={(e) => { setActiveBlogId(e.target.value); loadInsights(e.target.value); }} className="rounded-full bg-white px-3 py-1.5 text-[13px] font-medium text-ink ring-1 ring-line focus:ring-accent">
+{brands.map((b: any) => <option key={String(b.id)} value={String(b.id)}>{b.label || b.title}</option>)}
+</select>
+</label>
+);
+})()}
 </div>
 </div>
-{rescheduleId === id && (
-<div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
-<input type="datetime-local" value={rescheduleAt} onChange={(e) => setRescheduleAt(e.target.value)}
-className="rounded-xl bg-white px-3 py-1.5 text-[12px] text-ink ring-1 ring-line focus:ring-accent" />
-<button type="button" onClick={() => saveReschedule(id)} disabled={!rescheduleAt}
-className="rounded-full bg-accent px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-accent-hover disabled:opacity-40">Save new time</button>
-<button type="button" onClick={() => { setRescheduleId(null); setRescheduleAt(''); }}
-className="rounded-full px-3 py-1.5 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white">Cancel</button>
-<span className="text-[11px] text-ink-faint">Changes the scheduled time on this dashboard.</span>
+<div className="mt-4 rounded-2xl bg-emerald-50 px-4 py-3 ring-1 ring-emerald-100">
+<p className="text-[13px] text-emerald-900"><span className="font-semibold">Nothing is ever posted automatically.</span> You write it here, send it for review, and give the final approval yourself inside Metricool.</p>
 </div>
-)}
-</li>
+<ol className="mt-4 grid gap-3 sm:grid-cols-3">
+<li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">Step 1 · Write</div><div className="mt-0.5 text-[13px] text-ink-muted">Choose your networks and write the post below.</div></li>
+<li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">Step 2 · Send for review</div><div className="mt-0.5 text-[13px] text-ink-muted">It lands safely in Metricool as a draft — never live yet.</div></li>
+<li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">Step 3 · You approve</div><div className="mt-0.5 text-[13px] text-ink-muted">Open Metricool, take a final look, and publish when ready.</div></li>
+</ol>
+</div>
+<div className="grid gap-0 lg:grid-cols-5">
+<div className="border-b border-line p-6 sm:p-8 lg:col-span-3 lg:border-b-0 lg:border-r">
+<div className="mb-3 flex items-center justify-between gap-2">
+<label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Schedule a post</label>
+{mBusy && <span className="text-[11px] text-ink-faint">Sending…</span>}
+</div>
+<div className="mb-2 text-[12px] text-ink-muted">Which channels should this go to?</div>
+<div className="flex flex-wrap gap-2" role="group" aria-label="Networks to post to">
+{PUBLISH_NETWORKS.map((n) => {
+const on = mNetworks.includes(n.id);
+const emoji = n.id === 'facebook' ? '📘' : n.id === 'instagram' ? '📸' : n.id === 'linkedin' ? '💼' : n.id === 'twitter' ? '𝕏' : '🔗';
+return (
+<button type="button" key={n.id} onClick={() => toggleNetwork(n.id)} aria-pressed={on}
+className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (on ? "bg-accent text-white ring-accent" : "bg-white text-ink ring-line hover:ring-accent")}>
+<span aria-hidden>{emoji}</span>{n.label}
+</button>
 );
 })}
+</div>
+<p className="mt-1.5 text-[11px] text-ink-faint">{mNetworks.length ? 'Posting to ' + mNetworks.length + ' channel' + (mNetworks.length > 1 ? 's' : '') + '.' : 'Pick at least one channel.'}</p>
+<div className="mt-4 flex items-center justify-between gap-2">
+<span className="text-[12px] font-medium text-ink-muted">When should it go out?</span>
+<span className="text-[11px] text-ink-faint">Times in America/Cancun</span>
+</div>
+<div className="mt-1 flex flex-wrap gap-2">
+{[{ label: 'Tomorrow 9 AM', h: 9, d: 1 }, { label: 'Tomorrow 6 PM', h: 18, d: 1 }, { label: 'In 2 days, 12 PM', h: 12, d: 2 }].map((preset) => (
+<button type="button" key={preset.label} onClick={() => { const dt = new Date(); dt.setDate(dt.getDate() + preset.d); dt.setHours(preset.h, 0, 0, 0); const pad = (x: number) => String(x).padStart(2, '0'); setMDate(dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate()) + 'T' + pad(dt.getHours()) + ':' + pad(dt.getMinutes())); }}
+className="rounded-full bg-subtle px-3 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:ring-accent">{preset.label}</button>
+))}
+</div>
+<input type="datetime-local" value={mDate} onChange={(e) => setMDate(e.target.value)} className="mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring-1 ring-line focus:ring-accent" />
+<div className="mt-4 text-[12px] font-medium text-ink-muted">What should it say?</div>
+<textarea value={mText} onChange={(e) => setMText(e.target.value)} rows={4} placeholder="Write your post… you can paste anything you generated above." className="mt-1 w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
+<div className="mt-2 flex items-center justify-between text-[11px] text-ink-faint">
+<span>{mText.trim().length} characters</span>
+<span>{mDate ? 'Scheduled for ' + fmtDateTime(mDate) : 'No time set — sends as a draft'}</span>
+</div>
+<div className="mt-4 flex flex-wrap items-center gap-3">
+<button onClick={schedulePost} disabled={mBusy} className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">{mBusy ? 'Sending…' : 'Send to Metricool for review'}</button>
+<a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:ring-accent">Open in Metricool ↗</a>
+</div>
+{mStatus && <p className="mt-3 rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink-muted ring-1 ring-line">{mStatus}</p>}
+<p className="mt-3 text-[11px] text-ink-faint">Nothing publishes automatically — you approve the final post inside Metricool.</p>
+</div>
+<div className="p-6 sm:p-8 lg:col-span-2">
+<div className="mb-3 flex items-center justify-between gap-2">
+<label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Connection health</label>
+<button type="button" onClick={() => { loadAnalytics(false); loadInsights(activeBlogId); }} className="text-[12px] font-medium text-accent hover:underline">{(mLoading || insightsLoading) ? 'Checking…' : 'Refresh'}</button>
+</div>
+{(() => {
+const brand = mAnalytics && Array.isArray(mAnalytics.data) ? (mAnalytics.data.find((b: any) => String(b.id) === String(activeBlogId)) || mAnalytics.data[0]) : null;
+const channels = [
+{ id: 'facebook', label: 'Facebook', emoji: '📘', handle: brand && brand.facebook ? 'Connected' : '' },
+{ id: 'instagram', label: 'Instagram', emoji: '📸', handle: brand && brand.instagram ? '@' + brand.instagram : '' },
+{ id: 'twitter', label: 'X / Twitter', emoji: '𝕏', handle: brand && brand.twitter ? '@' + brand.twitter : '' },
+{ id: 'linkedin', label: 'LinkedIn', emoji: '💼', handle: brand && brand.linkedinCompany ? 'Connected' : '' },
+{ id: 'youtube', label: 'YouTube', emoji: '▶️', handle: brand && (brand.youtubeChannelName || brand.youtube) ? (brand.youtubeChannelName || 'Connected') : '' },
+{ id: 'tiktok', label: 'TikTok', emoji: '🎵', handle: brand && brand.tiktok ? '@' + brand.tiktok : '' },
+];
+const connectedCount = channels.filter((c) => c.handle).length;
+const ads = brand ? [brand.facebookAds && 'Facebook Ads', brand.adwords && 'Google Ads', brand.tiktokads && 'TikTok Ads'].filter(Boolean) : [];
+if (!mAnalytics) {
+return <div className="rounded-2xl bg-subtle p-4 text-center ring-1 ring-line"><div className="text-[13px] font-medium text-ink-muted">See which accounts are linked</div><div className="mt-1 text-[12px] text-ink-faint">Tap Refresh to load the accounts connected to your Metricool brand.</div></div>;
+}
+if (connectedCount === 0) {
+return <div className="rounded-2xl bg-amber-50 p-4 text-center ring-1 ring-amber-100"><div className="text-[13px] font-medium text-amber-900">No accounts connected yet</div><div className="mt-1 text-[12px] text-amber-800">Connect the accounts for this brand inside Metricool to start publishing.</div></div>;
+}
+return (
+<div>
+<ul className="space-y-2">
+{channels.map((c) => (
+<li key={c.id} className="flex items-center justify-between rounded-2xl bg-white px-3 py-2 ring-1 ring-line">
+<span className="flex items-center gap-2 text-[13px] text-ink"><span aria-hidden className="text-[16px]">{c.emoji}</span><span className="font-medium">{c.label}</span>{c.handle && c.handle !== 'Connected' && <span className="text-[12px] text-ink-faint">{c.handle}</span>}</span>
+{c.handle ? <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-100">Connected</span> : <span className="rounded-full bg-subtle px-2 py-0.5 text-[11px] font-medium text-ink-faint ring-1 ring-line">Not connected</span>}
+</li>
+))}
 </ul>
-)}
+<p className="mt-2 text-[11px] text-ink-faint">{connectedCount} of {channels.length} channels connected.</p>
+{ads.length > 0 && <p className="mt-1 text-[11px] text-ink-faint">Ad accounts linked: {ads.join(', ')}.</p>}
+</div>
+);
+})()}
+<div className="mt-6 border-t border-line pt-5">
+<label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">How your recent posts did</label>
+{(() => {
+const posts = insights && Array.isArray(insights.posts) ? insights.posts : [];
+if (!insights) return <div className="mt-2 rounded-2xl bg-subtle p-4 text-center text-[12px] text-ink-faint ring-1 ring-line">Tap Refresh to load recent performance.</div>;
+if (posts.length === 0) return <div className="mt-2 rounded-2xl bg-subtle p-4 text-center text-[12px] text-ink-faint ring-1 ring-line">No recent post data yet. Numbers appear here once your channels have activity.</div>;
+const num = (p: any) => Number((p && (p.engagement || p.interactions || p.likes || p.impressions)) || 0);
+const total = posts.reduce((s: number, p: any) => s + num(p), 0);
+return (
+<div className="mt-2 grid grid-cols-2 gap-2">
+<div className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[20px] font-semibold text-ink">{posts.length}</div><div className="text-[12px] text-ink-muted">Posts (last 28 days)</div></div>
+<div className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[20px] font-semibold text-ink">{total.toLocaleString()}</div><div className="text-[12px] text-ink-muted">Total interactions</div></div>
+</div>
+);
+})()}
+</div>
+<div className="mt-6 border-t border-line pt-5">
+<label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Coming up next</label>
+{(() => {
+const sched = insights && Array.isArray(insights.scheduled) ? insights.scheduled : [];
+if (sched.length === 0) return <div className="mt-2 rounded-2xl bg-subtle p-4 text-center ring-1 ring-line"><div className="text-[13px] font-medium text-ink-muted">Nothing scheduled yet</div><div className="mt-1 text-[12px] text-ink-faint">Posts you send for review will appear here, and your upcoming Metricool posts show once you refresh.</div></div>;
+return (
+<ul className="mt-2 space-y-2">
+{sched.slice(0, 5).map((p: any, i: number) => (
+<li key={(p && (p.id || p.uuid)) || i} className="rounded-2xl bg-white p-3 ring-1 ring-line">
+<div className="flex items-center justify-between gap-2"><span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 ring-1 ring-blue-100">Scheduled</span><span className="text-[11px] text-ink-faint">{fmtDateTime((p && (p.publicationDate || p.publishAt || p.date || (p.data && p.data.date))) || '')}</span></div>
+<p className="mt-1.5 line-clamp-2 text-[13px] text-ink">{(p && (p.text || p.content || (p.data && p.data.text))) || 'Scheduled post'}</p>
+</li>
+))}
+</ul>
+);
+})()}
+</div>
+<div className="mt-6 flex flex-wrap gap-3 border-t border-line pt-5 text-[12px]">
+<a href={'https://app.metricool.com/inbox'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">💬 Open Inbox ↗</a>
+<a href={'https://app.metricool.com/smartlinks'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">🔗 Smartlinks ↗</a>
+<a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">📅 Full planner ↗</a>
+</div>
+</div>
 </div>
 </section>
 
