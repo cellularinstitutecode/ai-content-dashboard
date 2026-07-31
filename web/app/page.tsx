@@ -226,7 +226,7 @@ persistTrending([t, ...trending].slice(0, 24));
 setNewTrend('');
 }
 function removeTrend(t: string) { persistTrending(trending.filter((x) => x !== t)); }
-function useTrend(t: string) {
+function applyTrend(t: string) {
 setPrompt(t);
 setType('social');
 try { if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }); } catch {}
@@ -669,7 +669,7 @@ className={'rounded-full px-3.5 py-1.5 text-[13px] font-medium transition-all ' 
 <div className="flex flex-wrap gap-2">
 {trending.slice(0, 12).map((t) => (
 <span key={t} className="group inline-flex items-center gap-1 rounded-full bg-subtle px-3 py-1.5 text-[12px] font-medium text-ink ring-1 ring-line">
-<button type="button" onClick={() => useTrend(t)} className="transition hover:text-accent">{t}</button>
+<button type="button" onClick={() => applyTrend(t)} className="transition hover:text-accent">{t}</button>
 <button type="button" aria-label={'Remove ' + t} onClick={() => removeTrend(t)} className="text-ink-faint opacity-0 transition group-hover:opacity-100 hover:text-danger">×</button>
 </span>
 ))}
