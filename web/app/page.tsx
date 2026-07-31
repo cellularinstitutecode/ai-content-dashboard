@@ -836,7 +836,7 @@ if (!mAnalytics) {
 return <div className="rounded-2xl bg-subtle p-4 text-center ring-1 ring-line"><div className="text-[13px] font-medium text-ink-muted">See which accounts are linked</div><div className="mt-1 text-[12px] text-ink-faint">Tap Refresh to load the accounts connected to your Metricool brand.</div></div>;
 }
 if (connectedCount === 0) {
-return <div className="rounded-2xl bg-amber-50 p-4 text-center ring-1 ring-amber-100"><div className="text-[13px] font-medium text-amber-900">No accounts connected yet</div><div className="mt-1 text-[12px] text-amber-800">Connect this brand's social accounts inside Metricool to start publishing.</div></div>;
+return <div className="rounded-2xl bg-amber-50 p-4 text-center ring-1 ring-amber-100"><div className="text-[13px] font-medium text-amber-900">No accounts connected yet</div><div className="mt-1 text-[12px] text-amber-800">Connect the accounts for this brand inside Metricool to start publishing.</div></div>;
 }
 return (
 <div>
