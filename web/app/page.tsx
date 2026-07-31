@@ -930,8 +930,16 @@ return (
 );
 })()}
 </div>
-              {/* AI Research & Draft Copilot */}
-              <div className="mt-6 overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-50 to-white ring-1 ring-indigo-100">
+<div className="mt-6 flex flex-wrap gap-3 border-t border-line pt-5 text-[12px]">
+<a href={'https://app.metricool.com/inbox'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">💬 Open Inbox ↗</a>
+<a href={'https://app.metricool.com/smartlinks'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">🔗 Smartlinks ↗</a>
+<a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">📅 Full planner ↗</a>
+</div>
+</div>
+</div>
+              {/* AI Research & Draft Copilot — full-width band below the two columns */}
+              <div className="border-t border-line p-6 sm:p-8">
+              <div className="overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-50 to-white ring-1 ring-indigo-100">
                 <div className="border-b border-indigo-100 px-5 py-4">
                   <div className="flex items-center gap-2">
                     <span aria-hidden className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-600/10 text-indigo-700">&#10024;</span>
@@ -1062,13 +1070,7 @@ return (
                   )}
                 </div>
               </div>
-<div className="mt-6 flex flex-wrap gap-3 border-t border-line pt-5 text-[12px]">
-<a href={'https://app.metricool.com/inbox'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">💬 Open Inbox ↗</a>
-<a href={'https://app.metricool.com/smartlinks'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">🔗 Smartlinks ↗</a>
-<a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">📅 Full planner ↗</a>
-</div>
-</div>
-</div>
+              </div>
 </section>
 
 
