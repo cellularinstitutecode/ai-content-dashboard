@@ -14,7 +14,12 @@ export default function DraftingAssistant() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [session, setSession] = useState<any>(null);
   const [input, setInput] = useState("");
-  const voice = useVoiceAssistant(() => session, (data) => applyAssistantResult(data));
+  const voice = useVoiceAssistant(() => session, (data, command) => {
+    if (command && command.trim()) setMsgs((m) => [...m, { id: uid(), role: "user", text: "\uD83C\uDF99\uFE0F " + command.trim() }]);
+    if (data && data.session) setSession(data.session);
+    if (data && data.message) setMsgs((m) => [...m, { id: uid(), role: "assistant", text: data.message, options: Array.isArray(data.options) ? data.options : null }]);
+    applyAssistantResult(data);
+  });
   const [busy, setBusy] = useState(false);
   const [genProvider, setGenProvider] = useState<'anthropic' | 'openai'>('anthropic');
   const [genModel, setGenModel] = useState('claude-sonnet-4-5');
@@ -244,7 +249,25 @@ export default function DraftingAssistant() {
               )}
             </div>
             
-            {msgs.map((m) => (
+{msgs.every((m) => m.role !== "user") && (
+              <div className="space-y-1.5">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-ink/40">Try asking</p>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    "Draft an Instagram post about our stem cell therapy and save it",
+                    "Turn this YouTube video into clips: ",
+                    "Research trending topics about regenerative medicine",
+                    "Write a blog article about exosome therapy",
+                  ].map((q) => (
+                    <button key={q} type="button" disabled={busy} onClick={() => send(q)}
+                      className="rounded-full border border-accent/30 bg-accent/5 px-3 py-1 text-left text-xs font-medium text-accent transition hover:bg-accent/10 disabled:opacity-50">
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+                        {msgs.map((m) => (
                               <div key={m.id}>
                 <div className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
                   <div className={(m.role === "user" ? "bg-accent text-white" : "bg-canvas text-ink") + " max-w-[85%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed"}>
@@ -262,6 +285,7 @@ export default function DraftingAssistant() {
                 )}
               </div>
             ))}
+            {voice.active && (<div className="flex items-center gap-2 text-xs text-red-500"><span className="h-2 w-2 animate-pulse rounded-full bg-red-500" /><span>Listening\u2026 speak your request.</span></div>)}
             {busy && (<div className="flex items-center gap-2 text-xs text-ink/50"><span className="flex gap-1"><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent" /></span><span>Working on it\u2026 longer formats like a full blog can take up to a minute.</span></div>)}
             <div ref={endRef} />
           </div>
