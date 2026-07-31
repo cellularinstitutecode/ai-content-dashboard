@@ -1154,7 +1154,7 @@ className="w-full rounded-xl bg-white px-3 py-2.5 text-[13px] text-ink shadow-so
 key={a.value}
 type="button"
 onClick={() => setOpAspect(a.value)}
-className={\`rounded-full px-3 py-1.5 text-[12px] font-medium ring-1 transition \${opAspect === a.value ? 'bg-accent text-white ring-accent' : 'bg-white text-ink-muted ring-line hover:ring-accent'}\`}
+className={`rounded-full px-3 py-1.5 text-[12px] font-medium ring-1 transition ${opAspect === a.value ? 'bg-accent text-white ring-accent' : 'bg-white text-ink-muted ring-line hover:ring-accent'}`}
 >
 {a.label}
 </button>
