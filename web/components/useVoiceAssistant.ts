@@ -3,10 +3,15 @@ import { useCallback, useRef, useState } from "react";
 
 export function useVoiceAssistant(getSession: () => any, applyResult: (data: any, command?: string) => void) {
   const [active, setActive] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const start = useCallback(async () => {
+    setError(null);
+    setConnecting(true);
+    try {
     const s = await (await fetch("/api/realtime-session", { method: "POST" })).json();
     const EPHEMERAL = s.value ?? s.client_secret?.value;
 
@@ -23,7 +28,24 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
       audioEl.play().catch((err) => console.error("voice: audio play failed", err));
     };
 
-    const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+    let mic: MediaStream;
+    try {
+      mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err: any) {
+      const name = err && err.name;
+      if (name === "NotAllowedError" || name === "SecurityError") {
+        setError("Microphone access is blocked for this site. Click the tune/lock icon at the left of the address bar, set Microphone to Allow, then reload and try again.");
+      } else if (name === "NotFoundError" || name === "OverconstrainedError") {
+        setError("No microphone was found. Please connect a mic and try again.");
+      } else {
+        setError("Could not access the microphone. Please check your browser and OS microphone settings.");
+      }
+      pc.close();
+      pcRef.current = null;
+      setConnecting(false);
+      setActive(false);
+      return;
+    }
     mic.getTracks().forEach((t) => pc.addTrack(t, mic));
 
     const dc = pc.createDataChannel("oai-events");
@@ -75,7 +97,16 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
     })).text();
     await pc.setRemoteDescription({ type: "answer", sdp });
     setActive(true);
-  }, [getSession, applyResult]);
+    setConnecting(false);
+    } catch (err) {
+      console.error("voice: start failed", err);
+      if (!error) setError("Voice assistant failed to start. Please try again.");
+      try { pcRef.current?.close(); } catch {}
+      pcRef.current = null;
+      setConnecting(false);
+      setActive(false);
+    }
+  }, [getSession, applyResult, error]);
 
   const stop = useCallback(() => {
     pcRef.current?.close();
@@ -86,7 +117,9 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
       audioRef.current = null;
     }
     setActive(false);
+    setConnecting(false);
+    setError(null);
   }, []);
 
-  return { active, start, stop };
+  return { active, connecting, error, start, stop };
 }
