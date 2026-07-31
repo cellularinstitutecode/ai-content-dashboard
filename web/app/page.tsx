@@ -334,7 +334,7 @@ if (!first.models.some(m => m.id === model)) setModel(first.models[0].id);
 
 // On mount: load drafts, stats, the scheduled-posts queue, and (best-effort)
 // the latest analytics so the Publishing panel is populated without a click.
-useEffect(() => { refreshDrafts(); refreshStats(); refreshPosts(); loadAnalytics(true); }, []);
+useEffect(() => { refreshDrafts(); refreshStats(); refreshPosts(); loadAnalytics(true); warmClips(); }, []);
 
 
 // Poll clip drafts that are still processing until Opus finishes rendering.
@@ -390,6 +390,35 @@ return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.cu
           if (j && j.status === 'ready' && Array.isArray(j.clips) && j.clips.length > 0) refreshDrafts(0, false);
         }
       }
+    } catch {}
+  }
+
+  // Pre-warm every real clip job on load so opening a draft is instant. We fetch
+  // the current drafts directly (not state, which may be empty at mount) and, for
+  // each clip draft with an Opus projectId that isn't ready yet, ask the API once
+  // in parallel; the API persists the clips onto the draft for an instant open.
+  async function warmClips() {
+    try {
+      const lr = await fetch('/api/drafts?limit=100&offset=0');
+      if (!lr.ok) return;
+      const lj = await lr.json().catch(() => null);
+      const list = Array.isArray(lj) ? lj : (lj && (lj.drafts || lj.data || lj.rows)) || [];
+      const pending = list.filter(
+        (d: any) => d && d.pack && d.pack.kind === 'clip' && d.pack.projectId && d.pack.status !== 'ready' && d.pack.status !== 'failed'
+      );
+      if (pending.length === 0) return;
+      let any = false;
+      await Promise.all(
+        pending.map(async (d: any) => {
+          try {
+            const r = await fetch('/api/opus/clip?projectId=' + encodeURIComponent(d.pack.projectId));
+            if (!r.ok) return;
+            const j = await r.json().catch(() => null);
+            if (j && j.status === 'ready' && Array.isArray(j.clips) && j.clips.length > 0) any = true;
+          } catch {}
+        })
+      );
+      if (any) refreshDrafts(0, false);
     } catch {}
   }
 
@@ -486,6 +515,7 @@ function draftBody(d: any): string {
 if (!d) return '';
 if (typeof d.body === 'string') return d.body;
 const pack = d.pack;
+if (pack && pack.kind === 'clip') return typeof pack.caption === 'string' ? pack.caption : '';
 if (pack && typeof pack === 'object') {
 const k = primaryBodyKey(pack);
 if (typeof pack[k] === 'string') return pack[k];
@@ -508,7 +538,8 @@ const id = d.id || d._id;
 if (!id) return;
 const topic = editTitle.trim();
 const basePack = (d.pack && typeof d.pack === 'object') ? { ...d.pack } : {};
-const key = primaryBodyKey(d.pack);
+const isClip = d.pack && d.pack.kind === 'clip';
+const key = isClip ? 'caption' : primaryBodyKey(d.pack);
 basePack[key] = editBody;
 setSavingEdit(true);
 try {
@@ -1356,7 +1387,7 @@ className="min-w-0 flex-1 rounded-xl bg-subtle px-3 py-2 text-[16px] font-semibo
 <h3 className="text-headline font-semibold text-ink">{String(selectedDraft?.title || selectedDraft?.topic || selectedDraft?.name || 'Draft')}</h3>
 )}
 <div className="flex shrink-0 items-center gap-2">
-{selectedDraft?.pack?.kind !== 'clip' && !editingDraft ? (
+{!editingDraft ? (
 <button onClick={() => startEditDraft(selectedDraft)} className="rounded-xl px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Edit</button>
 ) : null}
 <button onClick={() => { setSelectedDraft(null); setEditingDraft(false); }} className="rounded-xl px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Close</button>
