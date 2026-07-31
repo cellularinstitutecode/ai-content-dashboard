@@ -286,6 +286,8 @@ export default function DraftingAssistant() {
               </div>
             ))}
             {voice.active && (<div className="flex items-center gap-2 text-xs text-red-500"><span className="h-2 w-2 animate-pulse rounded-full bg-red-500" /><span>Listening\u2026 speak your request.</span></div>)}
+            {voice.connecting && (<div className="flex items-center gap-2 text-xs text-amber-600"><span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" /><span>Connecting\u2026 allow microphone access if prompted.</span></div>)}
+            {voice.error && (<div className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 ring-1 ring-red-200">{voice.error}</div>)}
             {busy && (<div className="flex items-center gap-2 text-xs text-ink/50"><span className="flex gap-1"><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent" /></span><span>Working on it\u2026 longer formats like a full blog can take up to a minute.</span></div>)}
             <div ref={endRef} />
           </div>
@@ -303,7 +305,7 @@ export default function DraftingAssistant() {
                                   placeholder="Type your message…"
                                   className="min-w-0 flex-1 rounded-full bg-canvas px-4 py-2 text-sm text-ink outline-none ring-1 ring-black/5 focus:ring-accent/40"
                                 />
-          <button type="button" onClick={() => (voice.active ? voice.stop() : voice.start())} disabled={busy} className={"flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition hover:scale-105 disabled:opacity-40 " + (voice.active ? "bg-red-500 text-white animate-pulse" : "bg-canvas text-ink ring-1 ring-black/5")} aria-label={voice.active ? "Stop voice" : "Start voice"}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="22" /></svg></button>
+          <button type="button" onClick={() => { if (voice.active) { voice.stop(); } else if (!voice.connecting) { voice.start(); } }} disabled={busy || voice.connecting} className={"flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition hover:scale-105 disabled:opacity-40 " + (voice.active ? "bg-red-500 text-white animate-pulse" : voice.connecting ? "bg-amber-400 text-white animate-pulse" : "bg-canvas text-ink ring-1 ring-black/5")} aria-label={voice.active ? "Stop voice" : voice.connecting ? "Connecting" : "Start voice"}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="22" /></svg></button>
           <button type="submit" disabled={busy || !input.trim()} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-white transition hover:scale-105 disabled:opacity-40"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg></button>
           </form>
         </div>
