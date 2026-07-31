@@ -3,10 +3,13 @@ import { useCallback, useRef, useState } from "react";
 
 export function useVoiceAssistant(getSession: () => any, applyResult: (data: any, command?: string) => void) {
   const [active, setActive] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const start = useCallback(async () => {
+    setError(null);
+    try {
     const s = await (await fetch("/api/realtime-session", { method: "POST" })).json();
     const EPHEMERAL = s.value ?? s.client_secret?.value;
 
@@ -23,7 +26,23 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
       audioEl.play().catch((err) => console.error("voice: audio play failed", err));
     };
 
-    const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+    let mic: MediaStream;
+    try {
+      mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err: any) {
+      const name = err && err.name;
+      if (name === "NotAllowedError" || name === "SecurityError") {
+        setError("Microphone is blocked. Click the camera/lock icon in the address bar and set Microphone to Allow, then try again.");
+      } else if (name === "NotFoundError" || name === "OverconstrainedError") {
+        setError("No microphone was found. Please connect a mic and try again.");
+      } else {
+        setError("Could not access the microphone. Please check your browser and OS microphone settings.");
+      }
+      pc.close();
+      pcRef.current = null;
+      setActive(false);
+      return;
+    }
     mic.getTracks().forEach((t) => pc.addTrack(t, mic));
 
     const dc = pc.createDataChannel("oai-events");
@@ -75,7 +94,14 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
     })).text();
     await pc.setRemoteDescription({ type: "answer", sdp });
     setActive(true);
-  }, [getSession, applyResult]);
+    } catch (err) {
+      console.error("voice: start failed", err);
+      if (!error) setError("Voice assistant failed to start. Please try again.");
+      try { pcRef.current?.close(); } catch {}
+      pcRef.current = null;
+      setActive(false);
+    }
+  }, [getSession, applyResult, error]);
 
   const stop = useCallback(() => {
     pcRef.current?.close();
@@ -88,5 +114,5 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
     setActive(false);
   }, []);
 
-  return { active, start, stop };
+  return { active, start, stop, error };
 }
