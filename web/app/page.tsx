@@ -37,6 +37,46 @@ const ONBOARD_STEPS: { title: string; body: string }[] = [
 ];
 const ONBOARD_KEY = 'chi_onboarding_dismissed_v1';
 
+// Networks we can publish to through Metricool, with display labels. These map
+// to the providers supported by /api/metricool/schedule.
+const PUBLISH_NETWORKS: { id: string; label: string }[] = [
+{ id: 'facebook', label: 'Facebook' },
+{ id: 'instagram', label: 'Instagram' },
+{ id: 'linkedin', label: 'LinkedIn' },
+{ id: 'twitter', label: 'X / Twitter' },
+];
+
+// Seed topics for the Trending in stem cell therapy panel. These are a curated
+// starting set the team controls — NOT scraped live — and only ever pre-fill the
+// generator prompt for a human to review. Editable in the UI and remembered per
+// browser via localStorage.
+const DEFAULT_TRENDING: string[] = [
+'Exosome therapy for joint recovery',
+'Stem cells and sports injury rehab',
+'Regenerative medicine for knee osteoarthritis',
+'PRP vs stem cell treatment explained',
+'Anti-aging and cellular regeneration',
+'Stem cell safety and what to ask your provider',
+];
+const TRENDING_KEY = 'chi_trending_topics_v1';
+
+// Where a Metricool brand's planner lives, so we can deep-link a queued post
+// straight to the place it gets approved.
+const METRICOOL_BLOG_ID = '4308292';
+function metricoolPlannerUrl(): string {
+return 'https://app.metricool.com/planning/list?blogId=' + METRICOOL_BLOG_ID;
+}
+
+// Human-readable status for a scheduled post row from /api/posts.
+function postStatusMeta(status: string): { label: string; tone: string } {
+const s = String(status || '').toLowerCase();
+if (s === 'pending_review' || s === 'draft' || s === 'pending') return { label: 'Waiting for your approval', tone: 'amber' };
+if (s === 'scheduled' || s === 'queued') return { label: 'Scheduled', tone: 'blue' };
+if (s === 'published' || s === 'sent' || s === 'live') return { label: 'Published', tone: 'green' };
+if (s === 'failed' || s === 'error' || s === 'rejected') return { label: 'Needs attention', tone: 'red' };
+return { label: status || 'Unknown', tone: 'gray' };
+}
+
 
 function metricoolMetrics(a: any): { label: string; value: any }[] {
 if (!a || typeof a !== 'object') return [];
@@ -94,6 +134,15 @@ const r = s % 60;
 return m + ':' + String(r).padStart(2, '0');
 }
 
+// Friendly date/time for a scheduled post, e.g. "Aug 3, 9:00 AM".
+function fmtDateTime(input: any): string {
+try {
+const d = new Date(input);
+if (isNaN(d.getTime())) return String(input || '');
+return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+} catch { return String(input || ''); }
+}
+
 function toArray(x: any): any[] {
 if (Array.isArray(x)) return x;
 if (x && Array.isArray(x.data)) return x.data;
@@ -121,6 +170,20 @@ const toggleNetwork = (n: string) => setMNetworks((prev) => prev.includes(n) ? p
 const [mText, setMText] = useState('');
 const [mDate, setMDate] = useState('');
 const [mStatus, setMStatus] = useState<string | null>(null);
+const [mBusy, setMBusy] = useState(false);
+
+// Scheduled / pending-review queue, backed by GET /api/posts. Surfacing this
+// is what makes "sent for review" concrete: the post shows up here with its
+// status and a link to approve it in Metricool.
+const [posts, setPosts] = useState<any[]>([]);
+const [postsLoading, setPostsLoading] = useState(false);
+const [rescheduleId, setRescheduleId] = useState<string | null>(null);
+const [rescheduleAt, setRescheduleAt] = useState('');
+
+// Trending stem-cell topics: a curated, editable list (not scraped) that only
+// pre-fills the generator prompt for a human to review before anything is made.
+const [trending, setTrending] = useState<string[]>(DEFAULT_TRENDING);
+const [newTrend, setNewTrend] = useState('');
 
 const [opUrl, setOpUrl] = useState('');
 const [opStatus, setOpStatus] = useState<string | null>(null);
@@ -143,6 +206,32 @@ setShowOnboard(false);
 try { if (typeof window !== 'undefined') window.localStorage.setItem(ONBOARD_KEY, '1'); } catch {}
 }
 
+// Load any saved trending topics on mount.
+useEffect(() => {
+try {
+if (typeof window === 'undefined') return;
+const raw = window.localStorage.getItem(TRENDING_KEY);
+if (raw) { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length) setTrending(arr.map(String)); }
+} catch {}
+}, []);
+function persistTrending(next: string[]) {
+setTrending(next);
+try { if (typeof window !== 'undefined') window.localStorage.setItem(TRENDING_KEY, JSON.stringify(next)); } catch {}
+}
+function addTrend() {
+const t = newTrend.trim();
+if (!t) return;
+if (trending.some((x) => x.toLowerCase() === t.toLowerCase())) { setNewTrend(''); return; }
+persistTrending([t, ...trending].slice(0, 24));
+setNewTrend('');
+}
+function removeTrend(t: string) { persistTrending(trending.filter((x) => x !== t)); }
+function useTrend(t: string) {
+setPrompt(t);
+setType('social');
+try { if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }); } catch {}
+}
+
 // Manual "Refresh clips" affordance so the viewer can pull the latest Opus
 // render status on demand instead of waiting for the 15s poll.
 const [refreshingClips, setRefreshingClips] = useState(false);
@@ -162,7 +251,9 @@ const first = PROVIDERS.find(p => p.id === provider)!;
 if (!first.models.some(m => m.id === model)) setModel(first.models[0].id);
 }, [provider]);
 
-useEffect(() => { refreshDrafts(); refreshStats(); }, []);
+// On mount: load drafts, stats, the scheduled-posts queue, and (best-effort)
+// the latest analytics so the Publishing panel is populated without a click.
+useEffect(() => { refreshDrafts(); refreshStats(); refreshPosts(); loadAnalytics(true); }, []);
 
 
 // Poll clip drafts that are still processing until Opus finishes rendering.
@@ -215,6 +306,34 @@ if (j && typeof j.total === 'number') setDraftsTotal(j.total);
 setDraftsOffset(offset);
 setDrafts((prev: any) => append ? [...(Array.isArray(prev) ? prev : []), ...rows] : rows);
 } catch {} finally { setLoadingMore(false); }
+}
+
+// Pull the current user's scheduled posts (GET /api/posts). Ordered soonest
+// first by the API; we keep that order for the queue.
+async function refreshPosts() {
+setPostsLoading(true);
+try {
+const r = await fetch('/api/posts');
+if (!r.ok) return;
+const j = await r.json().catch(() => null);
+const rows = (j && Array.isArray(j.posts)) ? j.posts : toArray(j);
+setPosts(Array.isArray(rows) ? rows : []);
+} catch {} finally { setPostsLoading(false); }
+}
+
+// Reschedule a queued post via PATCH /api/posts (updates publication_date).
+async function saveReschedule(id: string) {
+if (!id || !rescheduleAt) return;
+let iso = rescheduleAt;
+try { const d = new Date(rescheduleAt); if (!isNaN(d.getTime())) iso = d.toISOString(); } catch {}
+try {
+const r = await fetch('/api/posts', {
+method: 'PATCH',
+headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({ id, publication_date: iso }),
+});
+if (r.ok) { setRescheduleId(null); setRescheduleAt(''); refreshPosts(); }
+} catch {}
 }
 
 async function deleteDraft(id: string) {
@@ -326,28 +445,31 @@ refreshDrafts();
 } catch (e: any) { setErr(e?.message || 'Generation failed'); } finally { setLoading(false); }
 }
 
-async function loadAnalytics() {
-setMLoading(true); setMStatus(null);
+// Load analytics from GET /api/metricool. When silent (mount auto-load), we do
+// not surface an error banner if credentials are not configured yet.
+async function loadAnalytics(silent = false) {
+setMLoading(true); if (!silent) setMStatus(null);
 try {
-const r = await fetch('/api/metricool?blogId=4308292');
+const r = await fetch('/api/metricool?blogId=' + METRICOOL_BLOG_ID);
 const data = await r.json().catch(() => ({}));
 if (!r.ok) throw new Error(data?.error || ('Metricool fetch failed ('+r.status+')'));
 setMAnalytics(data);
-} catch (e: any) { setMStatus('Error: ' + (e?.message || 'failed')); } finally { setMLoading(false); }
+} catch (e: any) { if (!silent) setMStatus('Error: ' + (e?.message || 'failed')); } finally { setMLoading(false); }
 }
 
 
 async function schedulePost() {
 if (!mNetworks.length) { setMStatus('Pick at least one network.'); return; }
 if (!mDate) { setMStatus('Pick a date & time.'); return; }
-setMStatus(null);
+if (!mText.trim()) { setMStatus('Write the post text first.'); return; }
+setMStatus(null); setMBusy(true);
 try {
 const results = await Promise.all(
 mNetworks.map(async (network) => {
 const r = await fetch('/api/metricool/schedule', {
 method: 'POST',
 headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify({ network, text: mText, publishAt: mDate, blogId: 4308292 }),
+body: JSON.stringify({ network, text: mText, publishAt: mDate, blogId: METRICOOL_BLOG_ID }),
 });
 const data = await r.json().catch(() => ({}));
 return { network, ok: r.ok, status: r.status, data };
@@ -356,15 +478,18 @@ return { network, ok: r.ok, status: r.status, data };
 const ok = results.filter((x) => x.ok).map((x) => x.network);
 const failed = results.filter((x) => !x.ok).map((x) => x.network);
 if (failed.length === 0) {
-setMStatus('Sent for review on ' + ok.join(', ') + ' — approve in Metricool to publish.');
+setMStatus('Saved to Metricool as a draft on ' + ok.join(', ') + ' — approve it there to publish.');
+setMText('');
 } else if (ok.length === 0) {
 setMStatus('Error: failed on ' + failed.join(', ') + '.');
 } else {
-setMStatus('Sent for review on ' + ok.join(', ') + '; failed on ' + failed.join(', ') + '.');
+setMStatus('Saved on ' + ok.join(', ') + '; failed on ' + failed.join(', ') + '.');
 }
+refreshPosts();
+refreshStats();
 } catch (e: any) {
 setMStatus('Error: ' + (e?.message || 'failed'));
-}
+} finally { setMBusy(false); }
 }
 
 async function clipVideo() {
@@ -399,13 +524,15 @@ try { await navigator.clipboard.writeText(output); setCopied(true); setTimeout((
 
 const currentModels = PROVIDERS.find(p => p.id === provider)!.models;
 const safeDrafts = Array.isArray(drafts) ? drafts : [];
+const safePosts = Array.isArray(posts) ? posts : [];
+const pendingReviewCount = safePosts.filter((p: any) => postStatusMeta(p?.status).label === 'Waiting for your approval').length;
 const metrics = metricoolMetrics(mAnalytics);
 const activeType = CONTENT_TYPES.find(t => t.id === type)!;
 
 const statCards = [
 { label: 'Drafts', value: (stats && (stats.drafts ?? stats.draftsCount)) ?? safeDrafts.length ?? 0 },
-{ label: 'Scheduled posts', value: (stats && (stats.scheduled ?? stats.scheduledCount)) ?? 0 },
-{ label: 'Upcoming', value: (stats && (stats.upcoming ?? stats.upcomingCount)) ?? 0 },
+{ label: 'Scheduled posts', value: (stats && (stats.scheduled ?? stats.scheduledCount)) ?? safePosts.length ?? 0 },
+{ label: 'Awaiting approval', value: pendingReviewCount },
 { label: 'Clip jobs', value: (stats && (stats.clips ?? stats.clipJobs)) ?? 0 },
 ];
 
@@ -535,6 +662,27 @@ className={'rounded-full px-3.5 py-1.5 text-[13px] font-medium transition-all ' 
 </div>
 
 <div>
+<div className="mb-2 flex items-center justify-between">
+<label className="block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Trending in stem cell therapy</label>
+<span className="text-[11px] text-ink-faint">Tap one to start · a person always reviews before anything posts</span>
+</div>
+<div className="flex flex-wrap gap-2">
+{trending.slice(0, 12).map((t) => (
+<span key={t} className="group inline-flex items-center gap-1 rounded-full bg-subtle px-3 py-1.5 text-[12px] font-medium text-ink ring-1 ring-line">
+<button type="button" onClick={() => useTrend(t)} className="transition hover:text-accent">{t}</button>
+<button type="button" aria-label={'Remove ' + t} onClick={() => removeTrend(t)} className="text-ink-faint opacity-0 transition group-hover:opacity-100 hover:text-danger">×</button>
+</span>
+))}
+</div>
+<div className="mt-2 flex items-center gap-2">
+<input value={newTrend} onChange={(e) => setNewTrend(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTrend(); } }}
+placeholder="Add a trending topic to track…"
+className="min-w-0 flex-1 rounded-full bg-subtle px-3 py-1.5 text-[12px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
+<button type="button" onClick={addTrend} className="shrink-0 rounded-full bg-ink px-3 py-1.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90">Add</button>
+</div>
+</div>
+
+<div>
 <label className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Your idea</label>
 <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={5}
 placeholder="e.g. 3 Instagram captions about exosome therapy benefits for athletes"
@@ -573,63 +721,171 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 tex
 </section>
 
 
-{/* Metricool + OpusClip */}
-<section className="mb-8 grid gap-6 lg:grid-cols-2">
-{/* Metricool */}
-<div className="rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7">
-<div className="mb-1 flex items-center justify-between">
+{/* Publishing (Metricool) — compose, review flow, and live queue */}
+<section className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<div className="border-b border-line px-6 py-5 sm:px-8">
+<div className="flex flex-wrap items-center justify-between gap-3">
 <div className="flex items-center gap-2">
-<span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 3 · Schedule</span>
-<h2 className="text-headline font-semibold">Analytics &amp; Scheduling</h2>
+<span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 3 · Publish</span>
+<h2 className="text-headline font-semibold">Publishing &amp; Scheduling</h2>
 </div>
-<span className="rounded-full bg-subtle px-2.5 py-1 text-[11px] font-medium text-ink-muted ring-1 ring-line">Metricool</span>
+<span className="rounded-full bg-subtle px-2.5 py-1 text-[11px] font-medium text-ink-muted ring-1 ring-line">Powered by Metricool</span>
 </div>
-<p className="mb-4 text-[13px] text-ink-muted">Check performance, then queue a post — it goes to Metricool for your review before it publishes. Brand: Cellular Hope Institute · blogId 4308292</p>
+<p className="mt-1 text-[13px] text-ink-muted">Write a post here, queue it, and approve it in Metricool. Nothing goes live without a person confirming.</p>
+</div>
 
-<button onClick={loadAnalytics} disabled={mLoading}
-className="mb-4 rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40">
-{mLoading ? 'Loading...' : 'Load latest analytics'}
-</button>
+{/* Flow map — makes it obvious where a post goes and who sees it */}
+<div className="border-b border-line bg-subtle/40 px-6 py-4 sm:px-8">
+<div className="flex flex-wrap items-center gap-2 text-[12px]">
+<span className="rounded-full bg-white px-3 py-1 font-medium text-ink ring-1 ring-line">1 · You write it here</span>
+<span className="text-ink-faint">→</span>
+<span className="rounded-full bg-white px-3 py-1 font-medium text-ink ring-1 ring-line">2 · Saved to Metricool as a draft</span>
+<span className="text-ink-faint">→</span>
+<span className="rounded-full bg-white px-3 py-1 font-medium text-ink ring-1 ring-line">3 · A person approves it</span>
+<span className="text-ink-faint">→</span>
+<span className="rounded-full bg-white px-3 py-1 font-medium text-ink ring-1 ring-line">4 · Goes live on the networks you picked</span>
+</div>
+</div>
 
-{metrics.length > 0 && (
-<div className="mb-5 grid grid-cols-2 gap-3">
+<div className="grid gap-0 lg:grid-cols-2">
+{/* Composer */}
+<div className="space-y-4 p-6 sm:p-8">
+<div>
+<label className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Post to</label>
+<div className="flex flex-wrap gap-2" role="group" aria-label="Networks to post to">
+{PUBLISH_NETWORKS.map((n) => (
+<button type="button" key={n.id} onClick={() => toggleNetwork(n.id)} aria-pressed={mNetworks.includes(n.id)}
+className={"rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (mNetworks.includes(n.id) ? "bg-accent text-white ring-accent" : "bg-subtle text-ink ring-line hover:ring-accent/50")}>{n.label}</button>
+))}
+</div>
+<p className="mt-1.5 text-[11px] text-ink-faint">{mNetworks.length ? 'This post will be prepared for: ' + mNetworks.join(', ') + '.' : 'Pick at least one network.'}</p>
+</div>
+
+<div>
+<label className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Post text</label>
+<textarea value={mText} onChange={e => setMText(e.target.value)} rows={4} placeholder="Write the caption exactly as it should appear…"
+className="w-full resize-none rounded-2xl bg-subtle p-3 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
+</div>
+
+<div>
+<label className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">When to publish</label>
+<input type="datetime-local" value={mDate} onChange={e => setMDate(e.target.value)}
+className="w-full rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink ring-1 ring-line focus:ring-accent" />
+</div>
+
+<div className="rounded-2xl bg-subtle/60 p-3 ring-1 ring-line">
+<div className="text-[12px] font-semibold text-ink">What happens when you click below</div>
+<p className="mt-1 text-[12px] leading-relaxed text-ink-muted">The post is created in Metricool as a <span className="font-medium text-ink">draft</span> — it does not publish yet. Open Metricool, review it, and approve it there to send it live. You will see it appear in the queue on the right.</p>
+</div>
+
+<div className="flex flex-wrap items-center gap-3">
+<button onClick={schedulePost} disabled={mBusy}
+className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-white shadow-soft transition-colors hover:bg-accent-hover disabled:opacity-40">{mBusy ? 'Saving…' : 'Save to Metricool for review'}</button>
+<a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer" className="text-[12px] font-medium text-accent underline-offset-2 hover:underline">Open Metricool planner ↗</a>
+{mStatus && <span className={'text-[12px] ' + (mStatus.startsWith('Error') ? 'text-danger' : 'text-ink-muted')}>{mStatus}</span>}
+</div>
+</div>
+
+{/* Analytics */}
+<div className="border-t border-line bg-subtle/40 p-6 sm:p-8 lg:border-l lg:border-t-0">
+<div className="mb-3 flex items-center justify-between">
+<div>
+<span className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Audience &amp; reach</span>
+<p className="mt-0.5 text-[11px] text-ink-faint">Cellular Hope Institute · last 30 days</p>
+</div>
+<button onClick={() => loadAnalytics(false)} disabled={mLoading}
+className="rounded-full bg-white px-3 py-1 text-[12px] font-medium text-ink ring-1 ring-line transition hover:bg-subtle disabled:opacity-40">{mLoading ? 'Loading…' : 'Refresh'}</button>
+</div>
+{metrics.length > 0 ? (
+<div className="grid grid-cols-2 gap-3">
 {metrics.map(m => (
-<div key={m.label} className="rounded-2xl bg-subtle p-3 ring-1 ring-line">
-<div className="text-[18px] font-semibold">{typeof m.value === 'number' ? m.value.toLocaleString() : String(m.value)}</div>
+<div key={m.label} className="rounded-2xl bg-white p-3 ring-1 ring-line">
+<div className="text-[20px] font-semibold">{typeof m.value === 'number' ? m.value.toLocaleString() : String(m.value)}</div>
 <div className="text-[12px] text-ink-muted">{m.label}</div>
 </div>
 ))}
 </div>
+) : (
+<div className="flex h-[160px] flex-col items-center justify-center rounded-2xl border border-dashed border-line text-center">
+<div className="text-[13px] font-medium text-ink-muted">{mLoading ? 'Loading analytics…' : 'No analytics yet'}</div>
+<div className="mt-1 text-[11px] text-ink-faint">Connect Metricool credentials to see followers, reach, and engagement.</div>
+</div>
 )}
-
-<div className="border-t border-line pt-5">
-<label className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Schedule a post</label>
-<div className="mb-3 flex flex-wrap gap-2">
-<div className="flex flex-wrap gap-2" role="group" aria-label="Networks to post to">
-<button type="button" key="facebook" onClick={() => toggleNetwork("facebook")} aria-pressed={mNetworks.includes("facebook")}
-className={"rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (mNetworks.includes("facebook") ? "bg-accent text-white ring-accent" : "bg-subtle text-ink ring-line hover:ring-accent/50")}>Facebook</button>
-<button type="button" key="instagram" onClick={() => toggleNetwork("instagram")} aria-pressed={mNetworks.includes("instagram")}
-className={"rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (mNetworks.includes("instagram") ? "bg-accent text-white ring-accent" : "bg-subtle text-ink ring-line hover:ring-accent/50")}>Instagram</button>
-<button type="button" key="linkedin" onClick={() => toggleNetwork("linkedin")} aria-pressed={mNetworks.includes("linkedin")}
-className={"rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (mNetworks.includes("linkedin") ? "bg-accent text-white ring-accent" : "bg-subtle text-ink ring-line hover:ring-accent/50")}>LinkedIn</button>
-<button type="button" key="twitter" onClick={() => toggleNetwork("twitter")} aria-pressed={mNetworks.includes("twitter")}
-className={"rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (mNetworks.includes("twitter") ? "bg-accent text-white ring-accent" : "bg-subtle text-ink ring-line hover:ring-accent/50")}>X / Twitter</button>
-</div>
-<input type="datetime-local" value={mDate} onChange={e => setMDate(e.target.value)}
-className="rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink ring-1 ring-line focus:ring-accent" />
-</div>
-<textarea value={mText} onChange={e => setMText(e.target.value)} rows={3} placeholder="Post text..."
-className="mb-3 w-full resize-none rounded-2xl bg-subtle p-3 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
-<div className="flex items-center gap-3">
-<button onClick={schedulePost} className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-white shadow-soft transition-colors hover:bg-accent-hover">Send to Metricool for review</button>
-{mStatus && <span className={'text-[12px] ' + (mStatus.startsWith('Error') ? 'text-danger' : 'text-ink-muted')}>{mStatus}</span>}
-</div>
-<p className="mt-2 text-[11px] text-ink-faint">Nothing publishes automatically — you approve the final post inside Metricool.</p>
 </div>
 </div>
 
-{/* OpusClip */}
-<div className="rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7">
+
+{/* Scheduled & pending-review queue — the "where did it go" answer */}
+<div className="border-t border-line p-6 sm:p-8">
+<div className="mb-3 flex flex-wrap items-center gap-2">
+<h3 className="text-[15px] font-semibold text-ink">Scheduled &amp; pending review</h3>
+<span className="rounded-full bg-subtle px-2 py-0.5 text-[11px] font-medium text-ink-muted ring-1 ring-line">{safePosts.length}</span>
+{pendingReviewCount > 0 && (
+<span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-amber-200">{pendingReviewCount} awaiting approval</span>
+)}
+<button type="button" onClick={refreshPosts} disabled={postsLoading}
+className="ml-auto rounded-full bg-subtle px-3 py-1 text-[12px] font-medium text-ink ring-1 ring-line transition hover:bg-white disabled:opacity-40">{postsLoading ? 'Refreshing…' : 'Refresh queue'}</button>
+</div>
+
+{safePosts.length === 0 ? (
+<div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-line py-10 text-center">
+<div className="text-[14px] font-medium text-ink-muted">Nothing queued yet</div>
+<div className="mt-1 text-[12px] text-ink-faint">Posts you save for review will show up here with their status and a link to approve them.</div>
+</div>
+) : (
+<ul className="space-y-3">
+{safePosts.map((p: any, i: number) => {
+const meta = postStatusMeta(p?.status);
+const tone = meta.tone;
+const pillClass = tone === 'amber' ? 'bg-amber-100 text-amber-700 ring-amber-200'
+: tone === 'blue' ? 'bg-blue-100 text-blue-700 ring-blue-200'
+: tone === 'green' ? 'bg-emerald-100 text-emerald-700 ring-emerald-200'
+: tone === 'red' ? 'bg-red-100 text-red-700 ring-red-200'
+: 'bg-subtle text-ink-muted ring-line';
+const provs = Array.isArray(p?.providers) ? p.providers : [];
+const id = p?.id || p?._id || String(i);
+return (
+<li key={id} className="rounded-2xl bg-subtle/40 p-4 ring-1 ring-line">
+<div className="flex flex-wrap items-start justify-between gap-3">
+<div className="min-w-0 flex-1">
+<div className="flex flex-wrap items-center gap-2">
+<span className={'rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ' + pillClass}>{meta.label}</span>
+{provs.map((n: string) => (
+<span key={n} className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-ink-muted ring-1 ring-line">{n}</span>
+))}
+<span className="text-[11px] text-ink-faint">{fmtDateTime(p?.publication_date)}</span>
+</div>
+<p className="mt-1.5 line-clamp-2 text-[13px] text-ink">{String(p?.text || '')}</p>
+</div>
+<div className="flex shrink-0 items-center gap-2">
+<button type="button" onClick={() => { setRescheduleId(rescheduleId === id ? null : id); setRescheduleAt(''); }}
+className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white">Reschedule</button>
+<a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer"
+className="rounded-lg bg-ink px-2.5 py-1 text-[12px] font-medium text-white transition-opacity hover:opacity-90">Open in Metricool ↗</a>
+</div>
+</div>
+{rescheduleId === id && (
+<div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
+<input type="datetime-local" value={rescheduleAt} onChange={(e) => setRescheduleAt(e.target.value)}
+className="rounded-xl bg-white px-3 py-1.5 text-[12px] text-ink ring-1 ring-line focus:ring-accent" />
+<button type="button" onClick={() => saveReschedule(id)} disabled={!rescheduleAt}
+className="rounded-full bg-accent px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-accent-hover disabled:opacity-40">Save new time</button>
+<button type="button" onClick={() => { setRescheduleId(null); setRescheduleAt(''); }}
+className="rounded-full px-3 py-1.5 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white">Cancel</button>
+<span className="text-[11px] text-ink-faint">Changes the scheduled time on this dashboard.</span>
+</div>
+)}
+</li>
+);
+})}
+</ul>
+)}
+</div>
+</section>
+
+
+{/* OpusClip — long-form to Shorts */}
+<section className="mb-8 rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7">
 <div className="mb-1 flex items-center justify-between">
 <div className="flex items-center gap-2">
 <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 2 · Repurpose</span>
@@ -638,15 +894,16 @@ className="mb-3 w-full resize-none rounded-2xl bg-subtle p-3 text-[14px] text-in
 <span className="rounded-full bg-subtle px-2.5 py-1 text-[11px] font-medium text-ink-muted ring-1 ring-line">OpusClip</span>
 </div>
 <p className="mb-4 text-[13px] text-ink-muted">Turn one long video into several short vertical clips — paste a YouTube or Vimeo URL to start.</p>
+<div className="flex flex-col gap-3 sm:flex-row sm:items-center">
 <input value={opUrl} onChange={e => setOpUrl(e.target.value)} placeholder="https://youtube.com/watch?v=..."
-className="mb-3 w-full rounded-2xl bg-subtle px-4 py-3 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
-<div className="flex items-center gap-3">
+className="w-full rounded-2xl bg-subtle px-4 py-3 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
 <button onClick={clipVideo} disabled={opBusy || !opUrl.trim()}
-className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-white shadow-soft transition-colors hover:bg-accent-hover disabled:opacity-40">{opBusy ? 'Starting…' : 'Generate clips'}</button>
+className="shrink-0 rounded-full bg-accent px-5 py-3 text-[13px] font-semibold text-white shadow-soft transition-colors hover:bg-accent-hover disabled:opacity-40">{opBusy ? 'Starting…' : 'Generate clips'}</button>
+</div>
+<div className="mt-2 flex items-center gap-3">
 {opStatus && <span className={'text-[12px] ' + (opStatus.startsWith('Error') ? 'text-danger' : 'text-ink-muted')}>{opStatus}</span>}
 </div>
 <p className="mt-3 text-[12px] text-ink-faint">Clips render in the background and appear under Recent Drafts when ready — use “Refresh clips” there to check on them.</p>
-</div>
 </section>
 
 
