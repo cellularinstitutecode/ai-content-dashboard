@@ -4,13 +4,11 @@ import { useCallback, useRef, useState } from "react";
 export function useVoiceAssistant(getSession: () => any, applyResult: (data: any, command?: string) => void) {
   const [active, setActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [connecting, setConnecting] = useState(false);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const start = useCallback(async () => {
     setError(null);
-    setConnecting(true);
     try {
     const s = await (await fetch("/api/realtime-session", { method: "POST" })).json();
     const EPHEMERAL = s.value ?? s.client_secret?.value;
@@ -42,7 +40,6 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
       }
       pc.close();
       pcRef.current = null;
-      setConnecting(false);
       setActive(false);
       return;
     }
@@ -97,13 +94,11 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
     })).text();
     await pc.setRemoteDescription({ type: "answer", sdp });
     setActive(true);
-    setConnecting(false);
     } catch (err) {
       console.error("voice: start failed", err);
       if (!error) setError("Voice assistant failed to start. Please try again.");
       try { pcRef.current?.close(); } catch {}
       pcRef.current = null;
-      setConnecting(false);
       setActive(false);
     }
   }, [getSession, applyResult, error]);
@@ -117,8 +112,7 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
       audioRef.current = null;
     }
     setActive(false);
-    setConnecting(false);
   }, []);
 
-  return { active, connecting, error, start, stop };
+  return { active, start, stop, error };
 }
