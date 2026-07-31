@@ -32,15 +32,20 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
     try {
       mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err: any) {
-      const name = err && err.name;
+      const name = err && err.name ? String(err.name) : "UnknownError";
+      const detail = err && err.message ? String(err.message) : "";
+      const suffix = detail ? " (" + name + ": " + detail + ")" : " (" + name + ")";
       if (name === "NotAllowedError" || name === "SecurityError") {
-        setError("Microphone access is blocked for this site. Click the tune/lock icon at the left of the address bar, set Microphone to Allow, then reload and try again.");
+        setError("The browser blocked microphone access. If the site is already set to Allow, this is usually an operating-system block: open your OS Privacy settings and let your browser use the microphone, then fully restart the browser." + suffix);
       } else if (name === "NotFoundError" || name === "OverconstrainedError") {
-        setError("No microphone was found. Please connect a mic and try again.");
+        setError("No microphone was found. Please connect or enable a mic and try again." + suffix);
+      } else if (name === "NotReadableError" || name === "AbortError") {
+        setError("The microphone is in use or unavailable. Close other apps that might be using it (Zoom, Teams, Discord, OBS), then try again." + suffix);
       } else {
-        setError("Could not access the microphone. Please check your browser and OS microphone settings.");
+        setError("Could not access the microphone." + suffix);
       }
-      pc.close();
+      try { console.error("voice: getUserMedia failed", name, detail); } catch {}
+            pc.close();
       pcRef.current = null;
       setConnecting(false);
       setActive(false);
