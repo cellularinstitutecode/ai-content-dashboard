@@ -179,6 +179,17 @@ const [mText, setMText] = useState('');
 const [mDate, setMDate] = useState('');
 const [mStatus, setMStatus] = useState<string | null>(null);
 const [mBusy, setMBusy] = useState(false);
+  const [mAutoPublish, setMAutoPublish] = useState(false);
+  function prefillComposerFromDraft(d: any) {
+    try {
+      const secs = formatSections(d && d.pack);
+      const body = secs.length ? secs.map((s: any) => s.text).join("\n\n") : (typeof (d && d.pack) === "string" ? d.pack : "");
+      if (body) setMText(body);
+      setMAutoPublish(false);
+      setSelectedDraft(null); setEditingDraft(false);
+      if (typeof document !== "undefined") { const el = document.getElementById("section-publish"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }
+    } catch {}
+  }
   // --- Comprehensive Publishing panel state (brand switcher + live insights) ---
   const [activeBlogId, setActiveBlogId] = useState<string>('4308292');
   const [insights, setInsights] = useState<any>(null);
@@ -641,7 +652,7 @@ mNetworks.map(async (network) => {
 const r = await fetch('/api/metricool/schedule', {
 method: 'POST',
 headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify({ network, text: mText, publishAt: mDate, blogId: METRICOOL_BLOG_ID }),
+body: JSON.stringify({ network, text: mText, publishAt: mDate, blogId: METRICOOL_BLOG_ID, autoPublish: mAutoPublish }),
 });
 const data = await r.json().catch(() => ({}));
 return { network, ok: r.ok, status: r.status, data };
@@ -650,7 +661,7 @@ return { network, ok: r.ok, status: r.status, data };
 const ok = results.filter((x) => x.ok).map((x) => x.network);
 const failed = results.filter((x) => !x.ok).map((x) => x.network);
 if (failed.length === 0) {
-setMStatus('Saved to Metricool as a draft on ' + ok.join(', ') + ' — approve it there to publish.');
+setMStatus(mAutoPublish ? ('Published now on ' + ok.join(', ') + ' via Metricool.') : ('Saved to Metricool as a draft on ' + ok.join(', ') + ' — approve it there to publish.'));
 setMText('');
 } else if (ok.length === 0) {
 setMStatus('Error: failed on ' + failed.join(', ') + '.');
@@ -968,8 +979,9 @@ className="rounded-full bg-subtle px-3 py-1 text-[12px] font-medium text-ink-mut
 <span>{mText.trim().length} characters</span>
 <span>{mDate ? 'Scheduled for ' + fmtDateTime(mDate) : 'No time set — sends as a draft'}</span>
 </div>
+<div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="Publishing mode"><button type="button" onClick={() => setMAutoPublish(false)} aria-pressed={!mAutoPublish} className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (!mAutoPublish ? "bg-accent text-white ring-accent" : "bg-white text-ink ring-line hover:ring-accent")}>Save as draft in Metricool</button><button type="button" onClick={() => setMAutoPublish(true)} aria-pressed={mAutoPublish} className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (mAutoPublish ? "bg-red-600 text-white ring-red-600" : "bg-white text-ink ring-line hover:ring-accent")}>Publish now</button></div><p className="mt-1 text-[11px] text-ink-faint">{mAutoPublish ? "Publish now posts live to the selected channels via Metricool." : "Save as draft queues it in Metricool for you to approve there."}</p>
 <div className="mt-4 flex flex-wrap items-center gap-3">
-<button onClick={schedulePost} disabled={mBusy} className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">{mBusy ? 'Sending…' : 'Send to Metricool for review'}</button>
+<button onClick={schedulePost} disabled={mBusy} className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">{mBusy ? 'Sending…' : (mAutoPublish ? 'Publish now' : 'Send to Metricool for review')}</button>
 <a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:ring-accent">Open in Metricool ↗</a>
 </div>
 {mStatus && <p className="mt-3 rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink-muted ring-1 ring-line">{mStatus}</p>}
@@ -1422,6 +1434,7 @@ className="min-w-0 flex-1 rounded-xl bg-subtle px-3 py-2 text-[16px] font-semibo
 {!editingDraft ? (
 <button onClick={() => startEditDraft(selectedDraft)} className="rounded-xl px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Edit</button>
 ) : null}
+{!editingDraft && !(selectedDraft && selectedDraft.pack && selectedDraft.pack.kind === "clip") ? (<button onClick={() => prefillComposerFromDraft(selectedDraft)} className="rounded-xl bg-accent px-3 py-1.5 text-[13px] font-semibold text-white transition hover:bg-accent-hover">Schedule / Publish</button>) : null}
 <button onClick={() => { setSelectedDraft(null); setEditingDraft(false); }} className="rounded-xl px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Close</button>
 </div>
 </div>
