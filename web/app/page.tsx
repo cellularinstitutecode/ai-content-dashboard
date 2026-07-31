@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useLiveContent } from "@/components/LiveContentProvider";
 
 type Provider = 'anthropic' | 'openai';
@@ -1316,7 +1317,7 @@ className="rounded-full bg-subtle px-5 py-2 text-[13px] font-medium text-ink rin
 
 
 {/* Draft detail modal — click a draft to view / play / edit */}
-{selectedDraft ? (
+{selectedDraft && typeof document !== 'undefined' ? createPortal((
 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" onClick={() => { setSelectedDraft(null); setEditingDraft(false); }}>
 <div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7" onClick={(e) => e.stopPropagation()}>
 <div className="mb-4 flex items-start justify-between gap-4">
@@ -1387,7 +1388,7 @@ className="w-full resize-y rounded-2xl bg-subtle/50 p-4 text-[14px] leading-rela
 )}
 </div>
 </div>
-) : null}
+), document.body) : null}
 </main>
 </div>
 </div>
