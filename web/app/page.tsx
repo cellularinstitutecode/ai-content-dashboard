@@ -1176,7 +1176,7 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 tex
 )}
 </div>
 <div className="p-6 sm:p-8 lg:col-span-2">
-<p className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">What you'll get</p>
+<p className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">What you&apos;ll get</p>
 <ul className="space-y-2.5">
 <li className="flex items-start gap-2 text-[13px] text-ink-muted"><span className="mt-0.5 text-accent">▸</span>Several short vertical clips from the best moments of your video.</li>
 <li className="flex items-start gap-2 text-[13px] text-ink-muted"><span className="mt-0.5 text-accent">▸</span>Auto-generated captions burned in, in your chosen language.</li>
