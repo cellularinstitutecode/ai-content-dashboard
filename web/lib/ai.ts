@@ -348,3 +348,108 @@ export async function chatWithTools(messages: ToolMessage[]): Promise<ToolTurn> 
   }
   return { message: message.trim(), toolCall, toolUseId };
 }
+
+
+// ---------------------------------------------------------------------------
+// AI Research & Draft Copilot
+// researchTopic() asks the model to do the up-front research legwork for a
+// topic and return STRUCTURED JSON: content angles, virality factors, keyword
+// and hashtag suggestions, hooks, a trend read, and a ready-to-edit draft.
+// Reuses the same provider handling as chatAssistant (Anthropic first, OpenAI
+// fallback). Live X-trends and keyword-volume numbers are intentionally NOT
+// fabricated here — they are supplied by pluggable providers when configured.
+// ---------------------------------------------------------------------------
+
+export type ResearchInput = {
+  topic: string;
+  provider?: Provider;
+  network?: string;
+  brand?: BrandContext;
+};
+
+export type ResearchResult = {
+  summary: string;
+  angles: string[];
+  viralityFactors: string[];
+  keywords: { term: string; why: string }[];
+  hashtags: string[];
+  hooks: string[];
+  trendRead: string;
+  draft: string;
+  liveDataNote: string;
+};
+
+const RESEARCH_SYSTEM = `You are an expert social-media strategist and content researcher.
+Given a TOPIC (and optional brand context and target network), do the research legwork a
+marketer would otherwise do by hand, then return ONLY a strict JSON object — no prose, no
+markdown fences — with EXACTLY these keys:
+{
+  "summary": string,            // 1-2 sentence read on the opportunity for this topic
+  "angles": string[],          // 4-6 distinct content angles worth pursuing
+  "viralityFactors": string[], // 3-5 concrete reasons content on this topic tends to spread
+  "keywords": [{ "term": string, "why": string }], // 6-10 high-intent keywords + why each matters
+  "hashtags": string[],        // 6-12 relevant hashtags, each starting with #
+  "hooks": string[],           // 4-6 scroll-stopping opening lines
+  "trendRead": string,         // your best qualitative read of where this topic is trending and why
+  "draft": string              // a ready-to-edit post draft for the chosen network
+}
+Base your analysis on durable patterns and your knowledge of the subject. Do NOT invent
+specific real-time metrics (exact follower counts, live trending ranks, ad CPCs) — speak
+qualitatively where live data would be required. Keep it practical and specific to the topic.`;
+
+export async function researchTopic(input: ResearchInput): Promise<{ provider: Provider; result: ResearchResult }> {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
+  const useProvider: Provider = input.provider || (anthropicKey ? 'anthropic' : 'openai');
+  const topic = String(input.topic || '').slice(0, 2000);
+  const network = input.network ? String(input.network).slice(0, 40) : 'social';
+  const userPrompt = `TOPIC: ${topic}\nTARGET NETWORK: ${network}${brandBlock(input.brand)}\nReturn the JSON object now.`;
+
+  let raw = '';
+  let provider: Provider = useProvider;
+  if (useProvider === 'anthropic' && anthropicKey) {
+    const res = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 2048, system: RESEARCH_SYSTEM, messages: [{ role: 'user', content: userPrompt }] }),
+    });
+    if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    raw = String(data?.content?.[0]?.text ?? '');
+    provider = 'anthropic';
+  } else {
+    if (!openaiKey) throw new Error('No AI provider key configured');
+    const res = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${openaiKey}` },
+      body: JSON.stringify({ model: 'gpt-4o-mini', max_tokens: 2048, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: RESEARCH_SYSTEM }, { role: 'user', content: userPrompt }] }),
+    });
+    if (!res.ok) throw new Error(`openai ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    raw = String(data?.choices?.[0]?.message?.content ?? '');
+    provider = 'openai';
+  }
+
+  let cleaned = raw.trim().replace(/^```(?:json)?/i, '').replace(/```$/,'').trim();
+  if (!cleaned.startsWith('{')) {
+    const s = cleaned.indexOf('{');
+    const e = cleaned.lastIndexOf('}');
+    if (s !== -1 && e !== -1 && e > s) cleaned = cleaned.slice(s, e + 1);
+  }
+  let obj: any = {};
+  try { obj = JSON.parse(cleaned); } catch { throw new Error('AI returned malformed JSON; please try again.'); }
+
+  const arr = (v: any): string[] => Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean).slice(0, 20) : [];
+  const result: ResearchResult = {
+    summary: String(obj.summary ?? ''),
+    angles: arr(obj.angles),
+    viralityFactors: arr(obj.viralityFactors),
+    keywords: Array.isArray(obj.keywords) ? obj.keywords.slice(0, 20).map((k: any) => ({ term: String(k?.term ?? ''), why: String(k?.why ?? '') })).filter((k: { term: string }) => k.term) : [],
+    hashtags: arr(obj.hashtags).map((h) => (h.startsWith('#') ? h : `#${h}`)),
+    hooks: arr(obj.hooks),
+    trendRead: String(obj.trendRead ?? ''),
+    draft: String(obj.draft ?? ''),
+    liveDataNote: 'Qualitative research from the AI model. Connect an X API and keyword-data provider to add live trending ranks and search-volume numbers.',
+  };
+  return { provider, result };
+}
