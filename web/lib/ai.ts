@@ -246,7 +246,7 @@ export async function chatAssistant(
 // server (assistant route) can run it with the authed user + confirmation gate.
 // ---------------------------------------------------------------------------
 
-export type ToolName = "generate_content" | "save_draft" | "schedule_post";
+export type ToolName = "generate_content" | "save_draft" | "schedule_post" | "clip_video" | "research_topic";
 
 export type ToolCall = {
   name: ToolName;
@@ -267,6 +267,8 @@ Tool guidance:
 - generate_content: produce a ready-to-post content pack for a topic. Use this first when the user wants a post/article/email/etc. Infer a sensible format (social/blog/email/video/ad) from the request.
 - save_draft: save a generated pack to the drafts feed. Call after generate_content when the user wants to keep or later schedule the content.
 - schedule_post: schedule a post to a social network at a date/time via the connected scheduler. Networks: facebook, instagram, linkedin, twitter (x), tiktok, youtube, threads. publishAt must be an ISO datetime (YYYY-MM-DDTHH:MM). The server will ask the user to confirm before anything goes live, so it is fine to call this when the user asks; do not refuse.
+- clip_video: turn a long YouTube or Vimeo video into short vertical clips via OpusClip. Use when the user gives a video URL and asks for clips/shorts/reels. Requires a videoUrl; title and language are optional.
+- research_topic: run topic research (angles, keywords, hashtags, hooks, and a ready draft) for a network. Use when the user asks to research a topic or wants ideas/angles/keywords before drafting. Requires a topic; network is optional (default instagram).
 
 Keep replies concise and friendly. Only reference the clinic own website and YouTube content. Never invent medical claims; keep language compliant and non-exaggerated. If a scheduling request is missing the network or the date/time, ask a brief clarifying question instead of calling schedule_post.`;
 
@@ -308,6 +310,31 @@ const TOOL_DEFS = [
         publishAt: { type: "string", description: "ISO datetime YYYY-MM-DDTHH:MM in the clinic timezone." },
       },
       required: ["network", "text", "publishAt"],
+    },
+  },
+  {
+    name: "clip_video",
+    description: "Turn a long YouTube or Vimeo video into short vertical clips (Reels/Shorts/TikTok) via OpusClip.",
+    input_schema: {
+      type: "object",
+      properties: {
+        videoUrl: { type: "string", description: "The YouTube or Vimeo URL to clip." },
+        title: { type: "string", description: "Optional project title." },
+        language: { type: "string", description: "Optional caption language code, e.g. en, es. Default en." },
+      },
+      required: ["videoUrl"],
+    },
+  },
+  {
+    name: "research_topic",
+    description: "Research a topic and return angles, keywords, hashtags, hooks and a ready-to-edit draft for a given network.",
+    input_schema: {
+      type: "object",
+      properties: {
+        topic: { type: "string", description: "The topic to research." },
+        network: { type: "string", enum: ["instagram", "facebook", "linkedin", "x", "blog"], description: "Target network. Default instagram." },
+      },
+      required: ["topic"],
     },
   },
 ];

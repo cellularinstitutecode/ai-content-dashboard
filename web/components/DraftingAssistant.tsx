@@ -65,6 +65,16 @@ export default function DraftingAssistant() {
       const pack = data?.pack || {};
       const out = pack.instagram || pack.facebook || pack.linkedin || pack.blog || '';
       setGenOutput(out || 'No content returned.');
+      // Persist to Recent Drafts so nothing generated here is lost (parity with
+      // the main dashboard + chat flows). Stamp the chosen format on the pack so
+      // the renderer can label it faithfully (email/video/ad).
+      try {
+        await fetch('/api/drafts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topic: genIdea, pack: { ...pack, format: genFormat }, provider: genProvider }),
+        });
+      } catch {}
     } catch (e: any) {
       setGenErr(e?.message || 'Failed to generate');
     } finally {
@@ -252,7 +262,7 @@ export default function DraftingAssistant() {
                 )}
               </div>
             ))}
-            {busy && <div className="text-xs text-ink/40">Thinking…</div>}
+            {busy && (<div className="flex items-center gap-2 text-xs text-ink/50"><span className="flex gap-1"><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent" /></span><span>Working on it\u2026 longer formats like a full blog can take up to a minute.</span></div>)}
             <div ref={endRef} />
           </div>
 

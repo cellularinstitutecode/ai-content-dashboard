@@ -511,6 +511,43 @@ if (typeof pack[k] === 'string') return k;
 return 'content';
 }
 
+// Format-aware rendering. Generation always returns the same 4 pack keys
+// (instagram/facebook/linkedin/blog); the MEANING of the primary field changes
+// per format. formatMeta maps the stored pack.format to the right primary key,
+// a human label, and a one-line description so email/video/ad render faithfully
+// instead of being mislabeled as INSTAGRAM/BLOG.
+function formatMeta(pack: any): { key: string; label: string; lead: string } {
+  const f = pack && typeof pack === 'object' ? String(pack.format || '') : '';
+  if (f === 'email') return { key: 'blog', label: 'EMAIL CAMPAIGN', lead: 'Subject line, preview text and body' };
+  if (f === 'video') return { key: 'blog', label: 'VIDEO SCRIPT', lead: 'Hook, scenes and call-to-action' };
+  if (f === 'ad') return { key: 'blog', label: 'AD COPY', lead: 'Headline variations, primary text and CTA' };
+  if (f === 'blog') return { key: 'blog', label: 'BLOG ARTICLE', lead: 'Long-form article' };
+  return { key: '', label: '', lead: '' };
+}
+function formatSections(pack: any): { label: string; text: string }[] {
+  if (!pack || typeof pack !== 'object') return [];
+  const meta = formatMeta(pack);
+  const out: { label: string; text: string }[] = [];
+  const socials: [string, string][] = [['instagram','INSTAGRAM'],['facebook','FACEBOOK'],['linkedin','LINKEDIN']];
+  if (meta.key && typeof pack[meta.key] === 'string' && String(pack[meta.key]).trim()) {
+    out.push({ label: meta.label, text: String(pack[meta.key]) });
+    const socialLabel = String(pack.format) === 'blog' ? 'PROMO POST' : 'SOCIAL TEASER';
+    for (const [k, lbl] of socials) {
+      if (typeof pack[k] === 'string' && String(pack[k]).trim()) out.push({ label: socialLabel + ' \u00b7 ' + lbl, text: String(pack[k]) });
+    }
+    return out;
+  }
+  for (const [k, lbl] of [...socials, ['blog','BLOG']] as [string, string][]) {
+    if (typeof pack[k] === 'string' && String(pack[k]).trim()) out.push({ label: lbl, text: String(pack[k]) });
+  }
+  return out;
+}
+function formatOutputString(pack: any): string {
+  const secs = formatSections(pack);
+  if (!secs.length) return '';
+  return secs.map((s) => s.label + '\n' + s.text).join('\n\n');
+}
+
 function draftBody(d: any): string {
 if (!d) return '';
 if (typeof d.body === 'string') return d.body;
@@ -568,17 +605,12 @@ body: JSON.stringify({ topic: prompt, provider, model, type }),
 const data = await r.json().catch(() => ({}));
 if (!r.ok) throw new Error(data?.error || ('Generation failed ('+r.status+')'));
 const pack = data.pack || {};
-setOutput([
-'INSTAGRAM', pack.instagram || '', '',
-'FACEBOOK', pack.facebook || '', '',
-'LINKEDIN', pack.linkedin || '', '',
-'BLOG', pack.blog || ''
-].join('\n'));
+setOutput(formatOutputString({ ...pack, format: type }));
 try {
 await fetch('/api/drafts', {
 method: 'POST',
 headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify({ topic: prompt, pack, provider }),
+body: JSON.stringify({ topic: prompt, pack: { ...pack, format: type }, provider }),
 });
 } catch {}
 refreshDrafts();
@@ -1443,7 +1475,24 @@ className="w-full resize-y rounded-2xl bg-subtle/50 p-4 text-[14px] leading-rela
 </div>
 </div>
 ) : (
-<div className="whitespace-pre-wrap rounded-2xl bg-subtle/50 p-4 text-[14px] leading-relaxed text-ink ring-1 ring-line/60">{String(selectedDraft?.body || selectedDraft?.pack?.instagram || selectedDraft?.pack?.text || selectedDraft?.text || selectedDraft?.pack?.content || JSON.stringify(selectedDraft?.pack ?? {}, null, 2))}</div>
+(() => {
+  const secs = formatSections(selectedDraft?.pack);
+  if (secs.length > 0) {
+    return (
+      <div className="space-y-4">
+        {secs.map((s, si) => (
+          <div key={si} className="rounded-2xl bg-subtle/50 p-4 ring-1 ring-line/60">
+            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">{s.label}</div>
+            <div className="whitespace-pre-wrap text-[14px] leading-relaxed text-ink">{s.text}</div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className="whitespace-pre-wrap rounded-2xl bg-subtle/50 p-4 text-[14px] leading-relaxed text-ink ring-1 ring-line/60">{String(selectedDraft?.body || selectedDraft?.pack?.instagram || selectedDraft?.pack?.text || selectedDraft?.text || selectedDraft?.pack?.content || JSON.stringify(selectedDraft?.pack ?? {}, null, 2))}</div>
+  );
+})()
 )}
 </div>
 </div>
