@@ -412,7 +412,7 @@ export async function researchTopic(input: ResearchInput): Promise<{ provider: P
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 2048, system: RESEARCH_SYSTEM, messages: [{ role: 'user', content: userPrompt }] }),
-    });
+    }, { retries: 0, timeoutMs: 50000 });
     if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
     const data = await res.json();
     raw = String(data?.content?.[0]?.text ?? '');
@@ -423,7 +423,7 @@ export async function researchTopic(input: ResearchInput): Promise<{ provider: P
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${openaiKey}` },
       body: JSON.stringify({ model: 'gpt-4o-mini', max_tokens: 2048, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: RESEARCH_SYSTEM }, { role: 'user', content: userPrompt }] }),
-    });
+    }, { retries: 0, timeoutMs: 50000 });
     if (!res.ok) throw new Error(`openai ${res.status}: ${await res.text()}`);
     const data = await res.json();
     raw = String(data?.choices?.[0]?.message?.content ?? '');
