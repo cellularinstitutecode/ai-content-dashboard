@@ -262,7 +262,7 @@ export default function DraftingAssistant() {
                 )}
               </div>
             ))}
-            {busy && <div className="text-xs text-ink/40">Thinking…</div>}
+            {busy && (<div className="flex items-center gap-2 text-xs text-ink/50"><span className="flex gap-1"><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent" /></span><span>Working on it\u2026 longer formats like a full blog can take up to a minute.</span></div>)}
             <div ref={endRef} />
           </div>
 
