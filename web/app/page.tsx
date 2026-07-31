@@ -211,16 +211,22 @@ const [editTitle, setEditTitle] = useState('');
 const [editBody, setEditBody] = useState('');
 const [savingEdit, setSavingEdit] = useState(false);
 
-// "How this works" onboarding strip. Hidden once the viewer dismisses it
-// (persisted in localStorage so it does not nag on every visit).
-const [showOnboard, setShowOnboard] = useState(false);
-useEffect(() => {
-try { if (typeof window !== 'undefined' && window.localStorage.getItem(ONBOARD_KEY) !== '1') setShowOnboard(true); } catch { setShowOnboard(true); }
-}, []);
-function dismissOnboard() {
-setShowOnboard(false);
-try { if (typeof window !== 'undefined') window.localStorage.setItem(ONBOARD_KEY, '1'); } catch {}
-}
+// "How this works" onboarding strip — collapsible. The header stays
+// visible so viewers can always reopen it; the collapsed/expanded
+// preference is remembered per browser via localStorage.
+  const [onboardOpen, setOnboardOpen] = useState(true);
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage.getItem(ONBOARD_KEY) === '0') setOnboardOpen(false);
+    } catch {}
+  }, []);
+  function toggleOnboard() {
+    setOnboardOpen((open) => {
+      const next = !open;
+      try { if (typeof window !== 'undefined') window.localStorage.setItem(ONBOARD_KEY, next ? '1' : '0'); } catch {}
+      return next;
+    });
+  }
 
 // Load any saved trending topics on mount.
 useEffect(() => {
@@ -604,26 +610,30 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 </header>
 
 {/* Onboarding "How this works" strip — dismissible, remembered per browser */}
-{showOnboard && (
-<section className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
-<div className="flex items-center justify-between border-b border-line px-6 py-4 sm:px-8">
-<div>
-<h2 className="text-[15px] font-semibold text-ink">How this works</h2>
-<p className="mt-0.5 text-[12px] text-ink-muted">A quick tour of the create → repurpose → schedule flow.</p>
-</div>
-<button type="button" onClick={dismissOnboard}
-className="shrink-0 rounded-full px-3 py-1.5 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Got it, hide this</button>
-</div>
-<div className="grid gap-3 p-6 sm:grid-cols-2 sm:p-8 lg:grid-cols-4">
-{ONBOARD_STEPS.map((s) => (
-<div key={s.title} className="rounded-2xl bg-subtle/60 p-4 ring-1 ring-line">
-<div className="text-[13px] font-semibold text-ink">{s.title}</div>
-<p className="mt-1 text-[12px] leading-relaxed text-ink-muted">{s.body}</p>
-</div>
-))}
-</div>
-</section>
-)}
+      {(
+        <section className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+          <div className="flex items-center justify-between border-b border-line px-6 py-4 sm:px-8">
+            <div>
+              <h2 className="text-[15px] font-semibold text-ink">How this works</h2>
+              <p className="mt-0.5 text-[12px] text-ink-muted">A quick tour of the create → repurpose → schedule flow.</p>
+            </div>
+            <button type="button" onClick={toggleOnboard} aria-expanded={onboardOpen}
+              className="shrink-0 rounded-full px-3 py-1.5 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">
+              {onboardOpen ? 'Hide guide' : 'Show guide'}
+            </button>
+          </div>
+          {onboardOpen && (
+            <div className="grid gap-3 p-6 sm:grid-cols-2 sm:p-8 lg:grid-cols-4">
+              {ONBOARD_STEPS.map((s) => (
+                <div key={s.title} className="rounded-2xl bg-subtle/60 p-4 ring-1 ring-line">
+                  <div className="text-[13px] font-semibold text-ink">{s.title}</div>
+                  <p className="mt-1 text-[12px] leading-relaxed text-ink-muted">{s.body}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
 {/* Stat cards */}
 <section className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
