@@ -248,16 +248,21 @@ const [mBusy, setMBusy] = useState(false);
     if (!topic || researchLoading) return;
     setResearchLoading(true);
     setResearchError(null);
+    const doFetch = () => fetch('/api/metricool/ai-research', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ topic, provider, network: researchNetwork }),
+    });
     try {
-      const res = await fetch('/api/metricool/ai-research', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ topic, provider, network: researchNetwork }),
-      });
-      const j = await res.json();
+      let res = await doFetch();
+      if (res.status >= 500) {
+        await new Promise((r) => setTimeout(r, 1500));
+        res = await doFetch();
+      }
+      const j = await res.json().catch(() => ({}));
       if (!res.ok) {
         setResearch(null);
-        setResearchError(j?.error === 'unauthorized' ? 'Please sign in to run AI research.' : (j?.error || 'Research failed. Please try again.'));
+        setResearchError(j && j.error === 'unauthorized' ? 'Please sign in to run AI research.' : ((j && j.error) || 'Research is taking longer than usual. Please try again in a moment.'));
       } else {
         setResearch(j);
       }
