@@ -180,14 +180,43 @@ const [mDate, setMDate] = useState('');
 const [mStatus, setMStatus] = useState<string | null>(null);
 const [mBusy, setMBusy] = useState(false);
   const [mAutoPublish, setMAutoPublish] = useState(false);
+  const [mMedia, setMMedia] = useState<string>("");
+  const [mMediaLabel, setMMediaLabel] = useState<string>("");
+  function platformsForFormat(fmt: string): string[] {
+    if (fmt === "video") return ["instagram", "facebook"];
+    if (fmt === "blog" || fmt === "email") return ["linkedin", "facebook"];
+    return ["instagram", "facebook", "linkedin"];
+  }
+  function scrollToPublisher() {
+    if (typeof document !== "undefined") { const el = document.getElementById("section-publish"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }
+  }
   function prefillComposerFromDraft(d: any) {
     try {
+      const fmt = String((d && d.pack && d.pack.format) || (d && d.format) || "social");
       const secs = formatSections(d && d.pack);
       const body = secs.length ? secs.map((s: any) => s.text).join("\n\n") : (typeof (d && d.pack) === "string" ? d.pack : "");
       if (body) setMText(body);
+      setMMedia(""); setMMediaLabel("");
+      setMNetworks(platformsForFormat(fmt).filter((n) => PUBLISH_NETWORKS.some((p) => p.id === n)));
       setMAutoPublish(false);
+      setMStatus(null);
       setSelectedDraft(null); setEditingDraft(false);
-      if (typeof document !== "undefined") { const el = document.getElementById("section-publish"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }
+      scrollToPublisher();
+    } catch {}
+  }
+  function prefillComposerFromClip(c: any) {
+    try {
+      const caption = String((c && c.text) || (c && c.description) || "").trim();
+      const tags = String((c && c.hashtags) || "").trim();
+      const media = String((c && c.export) || (c && c.preview) || "");
+      setMText([caption, tags].filter(Boolean).join("\n\n"));
+      setMMedia(media);
+      setMMediaLabel(String((c && c.title) || "Clip video"));
+      setMNetworks(["instagram", "facebook"].filter((n) => PUBLISH_NETWORKS.some((p) => p.id === n)));
+      setMAutoPublish(false);
+      setMStatus(null);
+      setSelectedDraft(null); setEditingDraft(false);
+      scrollToPublisher();
     } catch {}
   }
   // --- Comprehensive Publishing panel state (brand switcher + live insights) ---
@@ -652,7 +681,7 @@ mNetworks.map(async (network) => {
 const r = await fetch('/api/metricool/schedule', {
 method: 'POST',
 headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify({ network, text: mText, publishAt: mDate, blogId: METRICOOL_BLOG_ID, autoPublish: mAutoPublish }),
+body: JSON.stringify({ network, text: mText, publishAt: mDate, blogId: METRICOOL_BLOG_ID, autoPublish: mAutoPublish, mediaUrl: mMedia || undefined }),
 });
 const data = await r.json().catch(() => ({}));
 return { network, ok: r.ok, status: r.status, data };
@@ -975,6 +1004,7 @@ className="rounded-full bg-subtle px-3 py-1 text-[12px] font-medium text-ink-mut
 <input type="datetime-local" value={mDate} onChange={(e) => setMDate(e.target.value)} className="mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring-1 ring-line focus:ring-accent" />
 <div className="mt-4 text-[12px] font-medium text-ink-muted">What should it say?</div>
 <textarea value={mText} onChange={(e) => setMText(e.target.value)} rows={4} placeholder="Write your post… you can paste anything you generated above." className="mt-1 w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
+{mMedia ? (<div className="mt-2 flex items-center justify-between gap-2 rounded-2xl bg-subtle p-2.5 ring-1 ring-line"><div className="flex min-w-0 items-center gap-2"><span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">\uD83C\uDFAC</span><div className="min-w-0"><div className="truncate text-[13px] font-medium text-ink">{mMediaLabel || "Video attached"}</div><div className="text-[11px] text-ink-faint">This video will be attached to the post.</div></div></div><button type="button" onClick={() => { setMMedia(""); setMMediaLabel(""); }} className="shrink-0 rounded-full px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white">Remove</button></div>) : null}
 <div className="mt-2 flex items-center justify-between text-[11px] text-ink-faint">
 <span>{mText.trim().length} characters</span>
 <span>{mDate ? 'Scheduled for ' + fmtDateTime(mDate) : 'No time set — sends as a draft'}</span>
@@ -1456,6 +1486,7 @@ className="aspect-video w-full bg-black" />
 {c.description ? <p className="mt-1 line-clamp-2 text-[12px] text-ink-muted">{c.description}</p> : null}
 {c.hashtags ? <p className="mt-1 truncate text-[11px] text-accent">{c.hashtags}</p> : null}
 <div className="mt-2 flex items-center gap-2">
+<button type="button" onClick={() => prefillComposerFromClip(c)} className="rounded-full bg-accent px-3 py-1 text-[12px] font-semibold text-white transition hover:bg-accent-hover">Publish / Schedule</button>
 {c.export ? (
 <a href={c.export} target="_blank" rel="noopener noreferrer"
 className="rounded-full bg-ink px-3 py-1 text-[12px] font-medium text-white transition-opacity hover:opacity-90">Download</a>
