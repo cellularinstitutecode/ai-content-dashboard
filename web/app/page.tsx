@@ -171,6 +171,22 @@ const [mText, setMText] = useState('');
 const [mDate, setMDate] = useState('');
 const [mStatus, setMStatus] = useState<string | null>(null);
 const [mBusy, setMBusy] = useState(false);
+  // --- Comprehensive Publishing panel state (brand switcher + live insights) ---
+  const [activeBlogId, setActiveBlogId] = useState<string>('4308292');
+  const [insights, setInsights] = useState<any>(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  async function loadInsights(blogId: string) {
+    try {
+      setInsightsLoading(true);
+      const r = await fetch('/api/metricool/insights?blogId=' + encodeURIComponent(blogId));
+      const j = await r.json().catch(() => null);
+      setInsights(j);
+    } catch {
+      setInsights(null);
+    } finally {
+      setInsightsLoading(false);
+    }
+  }
 
 // Scheduled / pending-review queue, backed by GET /api/posts. Surfacing this
 // is what makes "sent for review" concrete: the post shows up here with its
@@ -729,27 +745,30 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 tex
 <span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-2xl bg-accent/10 text-accent text-[18px]">📣</span>
 <div>
 <h2 className="text-[18px] font-semibold text-ink">Publishing</h2>
-<p className="text-[13px] text-ink-muted">Where your finished posts go out to social media.</p>
+<p className="text-[13px] text-ink-muted">Plan, schedule, and track your posts across every channel.</p>
 </div>
 </div>
-<span className="rounded-full bg-white px-3 py-1 font-medium text-ink ring-1 ring-line text-[12px]">Powered by Metricool</span>
+<div className="flex items-center gap-2">
+{(() => {
+const brands = mAnalytics && Array.isArray(mAnalytics.data) ? mAnalytics.data.filter((b: any) => b && (b.label || b.title)) : [];
+if (brands.length <= 1) return <span className="rounded-full bg-white px-3 py-1 font-medium text-ink ring-1 ring-line text-[12px]">Powered by Metricool</span>;
+return (
+<label className="flex items-center gap-2 text-[12px] text-ink-muted">Brand
+<select value={activeBlogId} onChange={(e) => { setActiveBlogId(e.target.value); loadInsights(e.target.value); }} className="rounded-full bg-white px-3 py-1.5 text-[13px] font-medium text-ink ring-1 ring-line focus:ring-accent">
+{brands.map((b: any) => <option key={String(b.id)} value={String(b.id)}>{b.label || b.title}</option>)}
+</select>
+</label>
+);
+})()}
+</div>
 </div>
 <div className="mt-4 rounded-2xl bg-emerald-50 px-4 py-3 ring-1 ring-emerald-100">
 <p className="text-[13px] text-emerald-900"><span className="font-semibold">Nothing is ever posted automatically.</span> You write it here, send it for review, and give the final approval yourself inside Metricool.</p>
 </div>
 <ol className="mt-4 grid gap-3 sm:grid-cols-3">
-<li className="rounded-2xl bg-white p-3 ring-1 ring-line">
-<div className="text-[12px] font-semibold text-accent">Step 1 · Write</div>
-<div className="mt-0.5 text-[13px] text-ink-muted">Choose your networks and write the post below.</div>
-</li>
-<li className="rounded-2xl bg-white p-3 ring-1 ring-line">
-<div className="text-[12px] font-semibold text-accent">Step 2 · Send for review</div>
-<div className="mt-0.5 text-[13px] text-ink-muted">It lands safely in Metricool as a draft — never live yet.</div>
-</li>
-<li className="rounded-2xl bg-white p-3 ring-1 ring-line">
-<div className="text-[12px] font-semibold text-accent">Step 3 · You approve</div>
-<div className="mt-0.5 text-[13px] text-ink-muted">Open Metricool, take a final look, and publish when ready.</div>
-</li>
+<li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">Step 1 · Write</div><div className="mt-0.5 text-[13px] text-ink-muted">Choose your networks and write the post below.</div></li>
+<li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">Step 2 · Send for review</div><div className="mt-0.5 text-[13px] text-ink-muted">It lands safely in Metricool as a draft — never live yet.</div></li>
+<li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">Step 3 · You approve</div><div className="mt-0.5 text-[13px] text-ink-muted">Open Metricool, take a final look, and publish when ready.</div></li>
 </ol>
 </div>
 <div className="grid gap-0 lg:grid-cols-5">
@@ -772,8 +791,17 @@ className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px
 })}
 </div>
 <p className="mt-1.5 text-[11px] text-ink-faint">{mNetworks.length ? 'Posting to ' + mNetworks.length + ' channel' + (mNetworks.length > 1 ? 's' : '') + '.' : 'Pick at least one channel.'}</p>
-<div className="mt-4 text-[12px] font-medium text-ink-muted">When should it go out?</div>
-<input type="datetime-local" value={mDate} onChange={(e) => setMDate(e.target.value)} className="mt-1 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring-1 ring-line focus:ring-accent" />
+<div className="mt-4 flex items-center justify-between gap-2">
+<span className="text-[12px] font-medium text-ink-muted">When should it go out?</span>
+<span className="text-[11px] text-ink-faint">Times in America/Cancun</span>
+</div>
+<div className="mt-1 flex flex-wrap gap-2">
+{[{ label: 'Tomorrow 9 AM', h: 9, d: 1 }, { label: 'Tomorrow 6 PM', h: 18, d: 1 }, { label: 'In 2 days, 12 PM', h: 12, d: 2 }].map((preset) => (
+<button type="button" key={preset.label} onClick={() => { const dt = new Date(); dt.setDate(dt.getDate() + preset.d); dt.setHours(preset.h, 0, 0, 0); const pad = (x: number) => String(x).padStart(2, '0'); setMDate(dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate()) + 'T' + pad(dt.getHours()) + ':' + pad(dt.getMinutes())); }}
+className="rounded-full bg-subtle px-3 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:ring-accent">{preset.label}</button>
+))}
+</div>
+<input type="datetime-local" value={mDate} onChange={(e) => setMDate(e.target.value)} className="mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring-1 ring-line focus:ring-accent" />
 <div className="mt-4 text-[12px] font-medium text-ink-muted">What should it say?</div>
 <textarea value={mText} onChange={(e) => setMText(e.target.value)} rows={4} placeholder="Write your post… you can paste anything you generated above." className="mt-1 w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
 <div className="mt-2 flex items-center justify-between text-[11px] text-ink-faint">
@@ -781,9 +809,7 @@ className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px
 <span>{mDate ? 'Scheduled for ' + fmtDateTime(mDate) : 'No time set — sends as a draft'}</span>
 </div>
 <div className="mt-4 flex flex-wrap items-center gap-3">
-<button onClick={schedulePost} disabled={mBusy} className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">
-{mBusy ? 'Sending…' : 'Send to Metricool for review'}
-</button>
+<button onClick={schedulePost} disabled={mBusy} className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">{mBusy ? 'Sending…' : 'Send to Metricool for review'}</button>
 <a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:ring-accent">Open in Metricool ↗</a>
 </div>
 {mStatus && <p className="mt-3 rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink-muted ring-1 ring-line">{mStatus}</p>}
@@ -791,11 +817,11 @@ className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px
 </div>
 <div className="p-6 sm:p-8 lg:col-span-2">
 <div className="mb-3 flex items-center justify-between gap-2">
-<label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Your connected channels</label>
-<button type="button" onClick={() => loadAnalytics(false)} className="text-[12px] font-medium text-accent hover:underline">{mLoading ? 'Checking…' : 'Refresh'}</button>
+<label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Connection health</label>
+<button type="button" onClick={() => { loadAnalytics(false); loadInsights(activeBlogId); }} className="text-[12px] font-medium text-accent hover:underline">{(mLoading || insightsLoading) ? 'Checking…' : 'Refresh'}</button>
 </div>
 {(() => {
-const brand = mAnalytics && Array.isArray(mAnalytics.data) ? mAnalytics.data.find((b: any) => b && (b.twitter || b.facebook || b.instagram || b.linkedinCompany || b.youtube || b.tiktok)) || mAnalytics.data[0] : null;
+const brand = mAnalytics && Array.isArray(mAnalytics.data) ? (mAnalytics.data.find((b: any) => String(b.id) === String(activeBlogId)) || mAnalytics.data[0]) : null;
 const channels = [
 { id: 'facebook', label: 'Facebook', emoji: '📘', handle: brand && brand.facebook ? 'Connected' : '' },
 { id: 'instagram', label: 'Instagram', emoji: '📸', handle: brand && brand.instagram ? '@' + brand.instagram : '' },
@@ -805,17 +831,15 @@ const channels = [
 { id: 'tiktok', label: 'TikTok', emoji: '🎵', handle: brand && brand.tiktok ? '@' + brand.tiktok : '' },
 ];
 const connectedCount = channels.filter((c) => c.handle).length;
+const ads = brand ? [brand.facebookAds && 'Facebook Ads', brand.adwords && 'Google Ads', brand.tiktokads && 'TikTok Ads'].filter(Boolean) : [];
 if (!mAnalytics) {
-return (
-<div className="rounded-2xl bg-subtle p-4 text-center ring-1 ring-line">
-<div className="text-[13px] font-medium text-ink-muted">See which accounts are linked</div>
-<div className="mt-1 text-[12px] text-ink-faint">Tap Refresh to load the social accounts connected to your Metricool brand.</div>
-</div>
-);
+return <div className="rounded-2xl bg-subtle p-4 text-center ring-1 ring-line"><div className="text-[13px] font-medium text-ink-muted">See which accounts are linked</div><div className="mt-1 text-[12px] text-ink-faint">Tap Refresh to load the accounts connected to your Metricool brand.</div></div>;
+}
+if (connectedCount === 0) {
+return <div className="rounded-2xl bg-amber-50 p-4 text-center ring-1 ring-amber-100"><div className="text-[13px] font-medium text-amber-900">No accounts connected yet</div><div className="mt-1 text-[12px] text-amber-800">Connect this brand's social accounts inside Metricool to start publishing.</div></div>;
 }
 return (
 <div>
-{brand && brand.label && <div className="mb-2 text-[13px] font-semibold text-ink">{brand.label}</div>}
 <ul className="space-y-2">
 {channels.map((c) => (
 <li key={c.id} className="flex items-center justify-between rounded-2xl bg-white px-3 py-2 ring-1 ring-line">
@@ -824,34 +848,48 @@ return (
 </li>
 ))}
 </ul>
-<p className="mt-2 text-[11px] text-ink-faint">{connectedCount} of {channels.length} channels connected. Follower and reach numbers are coming soon.</p>
+<p className="mt-2 text-[11px] text-ink-faint">{connectedCount} of {channels.length} channels connected.</p>
+{ads.length > 0 && <p className="mt-1 text-[11px] text-ink-faint">Ad accounts linked: {ads.join(', ')}.</p>}
 </div>
 );
 })()}
 <div className="mt-6 border-t border-line pt-5">
-<label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Waiting for your approval</label>
-{(!posts || posts.length === 0) ? (
-<div className="mt-2 rounded-2xl bg-subtle p-4 text-center ring-1 ring-line">
-<div className="text-[13px] font-medium text-ink-muted">Nothing waiting right now</div>
-<div className="mt-1 text-[12px] text-ink-faint">Posts you send for review will appear here so you can track them.</div>
-</div>
-) : (
-<ul className="mt-2 space-y-2">
-{posts.slice(0, 5).map((p: any, i: number) => {
-const meta = postStatusMeta(p && (p.status || p.state) || '');
+<label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">How your recent posts did</label>
+{(() => {
+const posts = insights && Array.isArray(insights.posts) ? insights.posts : [];
+if (!insights) return <div className="mt-2 rounded-2xl bg-subtle p-4 text-center text-[12px] text-ink-faint ring-1 ring-line">Tap Refresh to load recent performance.</div>;
+if (posts.length === 0) return <div className="mt-2 rounded-2xl bg-subtle p-4 text-center text-[12px] text-ink-faint ring-1 ring-line">No recent post data yet. Numbers appear here once your channels have activity.</div>;
+const num = (p: any) => Number((p && (p.engagement || p.interactions || p.likes || p.impressions)) || 0);
+const total = posts.reduce((s: number, p: any) => s + num(p), 0);
 return (
-<li key={(p && (p.id || p.uuid)) || i} className="rounded-2xl bg-white p-3 ring-1 ring-line">
-<div className="flex items-center justify-between gap-2">
-<span className="rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-line text-ink-muted">{meta.label}</span>
-<span className="text-[11px] text-ink-faint">{fmtDateTime((p && (p.publishAt || p.scheduledAt || p.date)) || '')}</span>
+<div className="mt-2 grid grid-cols-2 gap-2">
+<div className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[20px] font-semibold text-ink">{posts.length}</div><div className="text-[12px] text-ink-muted">Posts (last 28 days)</div></div>
+<div className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[20px] font-semibold text-ink">{total.toLocaleString()}</div><div className="text-[12px] text-ink-muted">Total interactions</div></div>
 </div>
-<p className="mt-1.5 line-clamp-2 text-[13px] text-ink">{(p && (p.text || p.content || p.message)) || 'Scheduled post'}</p>
-</li>
 );
-})}
+})()}
+</div>
+<div className="mt-6 border-t border-line pt-5">
+<label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Coming up next</label>
+{(() => {
+const sched = insights && Array.isArray(insights.scheduled) ? insights.scheduled : [];
+if (sched.length === 0) return <div className="mt-2 rounded-2xl bg-subtle p-4 text-center ring-1 ring-line"><div className="text-[13px] font-medium text-ink-muted">Nothing scheduled yet</div><div className="mt-1 text-[12px] text-ink-faint">Posts you send for review will appear here, and your upcoming Metricool posts show once you refresh.</div></div>;
+return (
+<ul className="mt-2 space-y-2">
+{sched.slice(0, 5).map((p: any, i: number) => (
+<li key={(p && (p.id || p.uuid)) || i} className="rounded-2xl bg-white p-3 ring-1 ring-line">
+<div className="flex items-center justify-between gap-2"><span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 ring-1 ring-blue-100">Scheduled</span><span className="text-[11px] text-ink-faint">{fmtDateTime((p && (p.publicationDate || p.publishAt || p.date || (p.data && p.data.date))) || '')}</span></div>
+<p className="mt-1.5 line-clamp-2 text-[13px] text-ink">{(p && (p.text || p.content || (p.data && p.data.text))) || 'Scheduled post'}</p>
+</li>
+))}
 </ul>
-)}
-<a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1.5 text-[12px] font-medium text-accent hover:underline">Review everything in Metricool ↗</a>
+);
+})()}
+</div>
+<div className="mt-6 flex flex-wrap gap-3 border-t border-line pt-5 text-[12px]">
+<a href={'https://app.metricool.com/inbox'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">💬 Open Inbox ↗</a>
+<a href={'https://app.metricool.com/smartlinks'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">🔗 Smartlinks ↗</a>
+<a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">📅 Full planner ↗</a>
 </div>
 </div>
 </div>
