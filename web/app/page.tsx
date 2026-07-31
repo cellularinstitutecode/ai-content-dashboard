@@ -206,7 +206,7 @@ const [mBusy, setMBusy] = useState(false);
   }
   function prefillComposerFromClip(c: any) {
     try {
-      const caption = String((c && c.text) || (c && c.description) || "").trim();
+      const caption = cleanCaption(String((c && c.description) || (c && c.text) || ""));
       const tags = String((c && c.hashtags) || "").trim();
       const media = String((c && c.export) || (c && c.preview) || "");
       setMText([caption, tags].filter(Boolean).join("\n\n"));
@@ -523,7 +523,18 @@ if (r.ok) refreshDrafts();
 } catch {}
 }
 
-async function editDraft(d: any) {
+function cleanCaption(s: string): string {
+    return String(s || "").replace(/__\w+/g, " ").replace(/\s+/g, " ").trim();
+  }
+  function friendlyGenError(msg: string): string {
+    const m = String(msg || "");
+    if (/credit_balance_exhausted|insufficient_quota|billing/i.test(m)) return "OpenAI is out of API credits. Add credits to your OpenAI account, or switch the model to Claude (Anthropic) to keep generating.";
+    if (/\b429\b|rate.?limit/i.test(m)) return "The AI provider is rate-limited right now. Wait a moment and try again, or switch to Claude (Anthropic).";
+    if (/401|invalid.?api.?key|unauthor/i.test(m)) return "The AI provider rejected the API key. Check the provider configuration, or switch to Claude (Anthropic).";
+    return m.length > 200 ? m.slice(0, 200) + "…" : m;
+  }
+
+  async function editDraft(d: any) {
 const current = (d && (d.topic || d.title || d.name)) || '';
 const next = typeof window !== 'undefined' ? window.prompt('Edit draft name', String(current)) : null;
 if (next == null) return;
@@ -654,7 +665,7 @@ body: JSON.stringify({ topic: prompt, pack: { ...pack, format: type }, provider 
 });
 } catch {}
 refreshDrafts();
-} catch (e: any) { setErr(e?.message || 'Generation failed'); } finally { setLoading(false); }
+} catch (e: any) { setErr(friendlyGenError(e?.message || 'Generation failed')); } finally { setLoading(false); }
 }
 
 // Load analytics from GET /api/metricool. When silent (mount auto-load), we do
@@ -1015,7 +1026,7 @@ className="rounded-full bg-subtle px-3 py-1 text-[12px] font-medium text-ink-mut
 <a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:ring-accent">Open in Metricool ↗</a>
 </div>
 {mStatus && <p className="mt-3 rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink-muted ring-1 ring-line">{mStatus}</p>}
-<p className="mt-3 text-[11px] text-ink-faint">Nothing publishes automatically — you approve the final post inside Metricool.</p>
+<p className="mt-3 text-[11px] text-ink-faint">{mAutoPublish ? "Publish now sends straight to your channels via Metricool the moment you click — review carefully first." : "Nothing publishes automatically — it lands in Metricool as a draft for you to approve."}</p>
 </div>
 <div className="p-6 sm:p-8 lg:col-span-2">
 <div className="mb-3 flex items-center justify-between gap-2">
@@ -1215,7 +1226,7 @@ return (
                         <div className="rounded-xl bg-white p-4 ring-1 ring-line">
                           <div className="flex items-center justify-between">
                             <div className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">Ready-to-edit draft</div>
-                            <button type="button" onClick={() => { try { navigator.clipboard.writeText(String(research.draft || "")); } catch {} }} className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-indigo-700 ring-1 ring-indigo-200 transition hover:bg-indigo-50">Copy draft</button>
+                            <button type="button" onClick={() => { try { setMText(String(research.draft || "")); setMStatus(null); scrollToPublisher(); } catch {} }} className="rounded-lg bg-indigo-600 px-2.5 py-1 text-[12px] font-medium text-white transition hover:bg-indigo-700">Use this draft</button> <button type="button" onClick={() => { try { navigator.clipboard.writeText(String(research.draft || "")); } catch {} }} className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-indigo-700 ring-1 ring-indigo-200 transition hover:bg-indigo-50">Copy draft</button>
                           </div>
                           <p className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed text-ink">{research.draft}</p>
                         </div>
@@ -1427,7 +1438,7 @@ return (
 {body && <div className="mt-0.5 line-clamp-2 text-[13px] text-ink-muted">{String(body)}</div>}
 </div>
 <div className="ml-auto flex shrink-0 items-center gap-1 self-center">
-<button type="button" aria-label="Edit draft" onClick={(e) => { e.stopPropagation(); editDraft(d); }}
+<button type="button" aria-label="Edit draft" onClick={(e) => { e.stopPropagation(); prefillComposerFromDraft(d); }}
 className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Edit</button>
 <button type="button" aria-label="Delete draft" onClick={(e) => { e.stopPropagation(); deleteDraft((d && (d.id || d._id)) || ''); }}
 className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-red-600 ring-1 ring-red-200 transition hover:bg-red-50">Delete</button>
