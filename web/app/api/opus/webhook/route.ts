@@ -2,8 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { opusGetExportableClips } from '@/lib/opus';
 import { supabaseAdmin } from '@/lib/supabase';
+import { persistToDrive } from '@/lib/drive';
 
 export const runtime = 'nodejs';
+// Drive uploads take time; give the webhook room so clips finish persisting.
+export const maxDuration = 60;
 
 // Opus signs every webhook: signature = HMAC-SHA256(secretKey, rawBody + salt).
 // Headers: X-Opus-Signature (hex), X-Opus-Salt (hex), X-Opus-Timestamp (unix sec).
@@ -11,7 +14,7 @@ export const runtime = 'nodejs';
 
 // Small in-memory replay guard. Serverless instances are ephemeral, so this only
 // blocks replays hitting the same warm instance; combined with the 5-min freshness
-// window it is a reasonable best effort without external state.
+// window it is a reasonable best-effort without external state.
 const seenSalts = new Set<string>();
 
 function verify(rawBody: string, headers: Headers, secret: string): boolean {
@@ -54,7 +57,7 @@ function extractProjectId(payload: any): string | null {
 // match on the JSON projectId key first, then fall back to the source_url stored
 // on the clips bookkeeping row (which is keyed by opus_project_id). This mirrors
 // the fallback in the clip route so both the fast path (webhook) and the fallback
-// path (poll) resolve the same draft even if the id was stored in an odd shape.
+// path (poll) resolve the same draft even if the id was written in an odd shape.
 async function findClipDraft(admin: any, projectId: string) {
   const byKey = await admin
     .from('drafts')
@@ -80,10 +83,31 @@ async function findClipDraft(admin: any, projectId: string) {
   return (byUrl.data && byUrl.data[0]) || null;
 }
 
+// Copy each finished clip's MP4 into Google Drive while Opus's signed link is
+// still valid, and swap in the permanent Drive URL. If a single clip fails to
+// persist we keep the original Opus link for that one clip rather than dropping
+// it, so a partial failure never loses data.
+async function persistClips(clips: any[], projectId: string): Promise<any[]> {
+  const out: any[] = [];
+  for (let i = 0; i < clips.length; i++) {
+    const clip = clips[i];
+    const src = clip.export || clip.preview;
+    if (!src) { out.push(clip); continue; }
+    try {
+      const filename = 'clip-' + projectId + '-' + (i + 1) + '.mp4';
+      const { fileId, url } = await persistToDrive(src, filename);
+      out.push({ ...clip, preview: url, export: url, driveFileId: fileId, opusExport: clip.export });
+    } catch (e) {
+      out.push({ ...clip, driveError: (e as any)?.message || 'persist failed' });
+    }
+  }
+  return out;
+}
+
 export async function POST(req: NextRequest) {
   const secret = process.env.OPUS_WEBHOOK_SECRET || process.env.OPUS_API_KEY;
   if (!secret) {
-    // Without a secret we cannot verify authenticity — refuse rather than trust.
+    // Without a secret we cannot verify authenticity - refuse rather than trust.
     return NextResponse.json({ error: 'webhook not configured' }, { status: 503 });
   }
 
@@ -104,9 +128,12 @@ export async function POST(req: NextRequest) {
 
   try {
     // Pull the authoritative finished clips from Opus for this project.
-    const clips = await opusGetExportableClips(projectId).catch(() => []);
+    const rawClips = await opusGetExportableClips(projectId).catch(() => []);
     const failed = payload?.type === 'FAILURE' || payload?.status === 'FAILED';
-    const status = failed ? 'failed' : (clips.length > 0 ? 'ready' : 'processing');
+    const status = failed ? 'FAILED' : (rawClips.length > 0 ? 'ready' : 'processing');
+
+    // Persist to Drive while tokens are valid, then store permanent links.
+    const clips = status === 'ready' ? await persistClips(rawClips, projectId) : rawClips;
 
     const admin = supabaseAdmin();
 
