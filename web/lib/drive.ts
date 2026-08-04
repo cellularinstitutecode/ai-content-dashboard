@@ -63,3 +63,28 @@ const url =
     'https://drive.google.com/uc?export=download&id=' + fileId;
   return { fileId, url };
 }
+
+
+// Shared helper: copy each finished clip's MP4 into Google Drive and swap in the
+// permanent Drive URL, so BOTH the webhook (fast path) and the /api/opus/clip poll
+// (fallback path) store durable links instead of Opus's short-lived signed CDN URLs.
+// On a per-clip failure we keep the original Opus link so a single bad clip never
+// loses the whole batch. Idempotent-ish: clips already carrying a driveFileId are
+// left untouched so repeated polls don't re-upload.
+export async function persistClips(clips: any[], projectId: string): Promise<any[]> {
+    const out: any[] = [];
+    for (let i = 0; i < clips.length; i++) {
+          const clip = clips[i];
+          if (clip && clip.driveFileId) { out.push(clip); continue; }
+          const src = clip?.export || clip?.preview;
+          if (!src) { out.push(clip); continue; }
+          try {
+                  const filename = 'clip-' + projectId + '-' + (i + 1) + '.mp4';
+                  const { fileId, url } = await persistToDrive(src, filename);
+                  out.push({ ...clip, preview: url, export: url, driveFileId: fileId, opusExport: clip.export });
+          } catch (e) {
+                  out.push({ ...clip, driveError: (e as any)?.message || 'persist failed' });
+          }
+    }
+    return out;
+}
