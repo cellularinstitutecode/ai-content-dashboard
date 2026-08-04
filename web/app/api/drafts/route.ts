@@ -16,6 +16,7 @@ export async function GET(req: NextRequest) {
 
   const { data, error, count } = await sb
     .from('drafts')
+    .eq('user_id', user.id)
     .select('*', { count: 'exact' })
     .order('updated_at', { ascending: false })
     .range(offset, offset + limit - 1);
