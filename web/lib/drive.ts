@@ -48,12 +48,18 @@ export async function persistToDrive(
   const created = await drive.files.create({
     requestBody: { name: filename, parents: [folderId] },
     media: { mimeType: 'video/mp4', body: Readable.from(buf) },
-    fields: 'id, webViewLink',
+    fields: 'id, webViewLink, webContentLink',
+  });
+
+    // Make the file readable by anyone with the link so <video> can stream it.
+  await drive.permissions.create({
+      fileId: created.data.id as string,
+      requestBody: { role: 'reader', type: 'anyone' },
   });
 
   const fileId = created.data.id as string;
-  const url =
-    created.data.webViewLink ||
-    'https://drive.google.com/file/d/' + fileId + '/view';
+const url =
+    created.data.webContentLink ||
+    'https://drive.google.com/uc?export=download&id=' + fileId;
   return { fileId, url };
 }

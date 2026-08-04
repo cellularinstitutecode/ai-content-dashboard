@@ -1493,6 +1493,7 @@ return (
 {clips.map((c: Clip, ci: number) => (
 <div key={c.id || ci} className="overflow-hidden rounded-2xl ring-1 ring-line/60">
 <video controls autoPlay muted playsInline preload="auto" poster={selectedDraft?.pack?.thumb || undefined} src={c.preview || c.export}
+  onError={(e) => { const v = e.currentTarget; const box = v.parentElement; if (box && !box.querySelector('[data-clip-expired]')) { v.style.display = 'none'; const d = document.createElement('div'); d.setAttribute('data-clip-expired', '1'); d.className = 'aspect-video w-full bg-black text-[13px] text-white flex items-center justify-center text-center px-4'; d.textContent = 'Preview link expired — re-sync this clip to play it again.'; box.prepend(d); } }}
 className="aspect-video w-full bg-black" />
 <div className="p-3">
 <div className="flex items-center justify-between gap-3">
