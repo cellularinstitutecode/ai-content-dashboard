@@ -40,7 +40,7 @@ export async function GET() {
     .from('schedule_templates')
     .select('*')
     .eq('user_id', user.id)
-    .order('created_at', { ascending: true });
+    .order('updated_at', { ascending: false });
   if (error) {
     // If the schedule_templates table hasn't been created yet, treat it as no templates
     // rather than surfacing a 500 to the UI.
