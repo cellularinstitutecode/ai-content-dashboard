@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { opusCreateClipProject, opusGetExportableClips } from '@/lib/opus';
 import { supabaseServer, supabaseAdmin } from '@/lib/supabase';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { persistClips } from '@/lib/drive';
 
 export const runtime = 'nodejs';
 
@@ -149,9 +150,17 @@ export async function GET(req: NextRequest) {
     const projectId = (req.nextUrl.searchParams.get('projectId') || '').trim();
     if (!projectId) return NextResponse.json({ error: 'projectId required' }, { status: 400 });
 
-    const clips = await opusGetExportableClips(projectId);
+    let clips = await opusGetExportableClips(projectId);
     const ready = clips.length > 0;
     const status = ready ? 'ready' : 'processing';
+
+    // Persist finished clips to Drive so we store permanent links instead of Opus's
+    // short-lived signed CDN URLs. This mirrors the webhook's fast path; without it the
+    // poll path would overwrite the draft with URLs that expire (Error: 30 on playback).
+    if (ready) {
+        try { clips = await persistClips(clips, projectId); }
+        catch (e) { /* keep raw Opus clips if Drive persist fails entirely */ }
+    }
 
     // Best-effort, idempotent persist onto this user's clip draft.
     try {
