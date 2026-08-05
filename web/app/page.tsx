@@ -47,6 +47,29 @@ const PUBLISH_NETWORKS: { id: string; label: string }[] = [
 { id: 'twitter', label: 'X / Twitter' },
 ];
 
+// Per-network character limits for post text, mirrored from the server-side
+// check in /api/metricool/schedule. Keys are the canonical network ids used
+// in PUBLISH_NETWORKS (and NETWORK_MAP values on the server).
+const PLATFORM_CHAR_LIMITS: Record<string, number> = {
+  twitter: 280,
+  facebook: 63206,
+  instagram: 2200,
+  linkedin: 3000,
+  tiktok: 2200,
+  youtube: 5000,
+  threads: 500,
+};
+
+// The strictest (smallest) limit across the currently selected networks, so the
+// counter warns as soon as the text is too long for any one of them. Returns
+// null when no selected network has a known limit.
+function activeCharLimit(networks: string[]): number | null {
+  const limits = networks
+  .map((n) => PLATFORM_CHAR_LIMITS[n === 'x' ? 'twitter' : n])
+  .filter((v): v is number => typeof v === 'number');
+  return limits.length ? Math.min(...limits) : null;
+}
+
 // Seed topics for the Trending in stem cell therapy panel. These are a curated
 // starting set the team controls — NOT scraped live — and only ever pre-fill the
 // generator prompt for a human to review. Editable in the UI and remembered per
@@ -1022,7 +1045,7 @@ className="rounded-full bg-subtle px-3 py-1 text-[12px] font-medium text-ink-mut
 <textarea value={mText} onChange={(e) => setMText(e.target.value)} rows={4} placeholder="Write your post… you can paste anything you generated above." className="mt-1 w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
 {mMedia ? (<div className="mt-2 flex items-center justify-between gap-2 rounded-2xl bg-subtle p-2.5 ring-1 ring-line"><div className="flex min-w-0 items-center gap-2"><span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">\uD83C\uDFAC</span><div className="min-w-0"><div className="truncate text-[13px] font-medium text-ink">{mMediaLabel || "Video attached"}</div><div className="text-[11px] text-ink-faint">This video will be attached to the post.</div></div></div><button type="button" onClick={() => { setMMedia(""); setMMediaLabel(""); }} className="shrink-0 rounded-full px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white">Remove</button></div>) : null}
 <div className="mt-2 flex items-center justify-between text-[11px] text-ink-faint">
-<span>{mText.trim().length} characters</span>
+<span className={activeCharLimit(mNetworks) !== null && mText.trim().length > (activeCharLimit(mNetworks) as number) ? 'font-semibold text-danger' : undefined}>{mText.trim().length}{activeCharLimit(mNetworks) !== null ? ' / ' + activeCharLimit(mNetworks) : ''} characters{activeCharLimit(mNetworks) !== null && mText.trim().length > (activeCharLimit(mNetworks) as number) ? ' \u2014 over the limit' : ''}</span>span>
 <span>{mDate ? 'Scheduled for ' + fmtDateTime(mDate) : 'No time set — sends as a draft'}</span>
 </div>
 <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="Publishing mode"><button type="button" onClick={() => setMAutoPublish(false)} aria-pressed={!mAutoPublish} className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (!mAutoPublish ? "bg-accent text-white ring-accent" : "bg-white text-ink ring-line hover:ring-accent")}>Save as draft in Metricool</button><button type="button" onClick={() => setMAutoPublish(true)} aria-pressed={mAutoPublish} className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (mAutoPublish ? "bg-red-600 text-white ring-red-600" : "bg-white text-ink ring-line hover:ring-accent")}>Publish now</button></div><p className="mt-1 text-[11px] text-ink-faint">{mAutoPublish ? "Publish now posts live to the selected channels via Metricool." : "Save as draft queues it in Metricool for you to approve there."}</p>
