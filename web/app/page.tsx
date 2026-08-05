@@ -65,7 +65,7 @@ const TRENDING_KEY = 'chi_trending_topics_v1';
 // straight to the place it gets approved.
 const METRICOOL_BLOG_ID = '4308292';
 function metricoolPlannerUrl(): string {
-  return 'https://app.metricool.com/planner?blogId=' + METRICOOL_BLOG_ID + '&userId=3377431';eturn 'https://app.metricool.com/planning/list?blogId=' + METRICOOL_BLOG_ID;
+  return 'https://app.metricool.com/planner?blogId=' + METRICOOL_BLOG_ID + '&userId=3377431';
 }
 
 // Human-readable status for a scheduled post row from /api/posts.
