@@ -12,9 +12,9 @@ export async function GET(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const token = process.env.METRICOOL_USER_TOKEN;
-  const userId = process.env.METRICOOL_USER_ID || '3377431';
-  if (!token) {
-    return NextResponse.json({ error: 'METRICOOL_USER_TOKEN not configured in Vercel env' }, { status: 500 });
+  const userId = process.env.METRICOOL_USER_ID;
+  if (!token || !userId) {
+    return NextResponse.json({ error: 'METRICOOL_USER_TOKEN and METRICOOL_USER_ID must be configured in Vercel env' }, { status: 500 });
   }
   const blogId = req.nextUrl.searchParams.get('blogId') || '4308292';
   const today = new Date();
