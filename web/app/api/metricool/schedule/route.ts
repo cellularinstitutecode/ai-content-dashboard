@@ -14,6 +14,19 @@ const NETWORK_MAP: Record<string, string> = {
   threads: 'threads',
 };
 
+// Per-network character limits for post text (caption/body), keyed by the
+// canonical network name used in NETWORK_MAP values. Used to reject drafts
+// that exceed the platform's hard limit before they reach Metricool.
+const CHAR_LIMITS: Record<string, number> = {
+  twitter: 280,
+  facebook: 63206,
+  instagram: 2200,
+  linkedin: 3000,
+  tiktok: 2200,
+  youtube: 5000,
+  threads: 500,
+};
+
 const TIMEZONE = process.env.METRICOOL_TIMEZONE || 'America/Cancun';
 
 // Metricool requires ISO datetime with seconds: YYYY-MM-DDTHH:MM:SS
@@ -51,6 +64,10 @@ export async function POST(req: NextRequest) {
   const provider = NETWORK_MAP[network];
   if (!provider) return NextResponse.json({ error: 'Unsupported network: ' + network }, { status: 400 });
   if (!text) return NextResponse.json({ error: 'text is required' }, { status: 400 });
+  const limit = CHAR_LIMITS[provider];
+  if (typeof limit === 'number' && text.length > limit) {
+    return NextResponse.json({ error: text.length + ' characters exceeds the ' + limit + '-character limit for ' + network }, { status: 400 });
+  }
 
   // Review step: never auto-publish by default. Posts land in Metricool as
   // drafts/pending so a human approves them there before they go live. Callers
