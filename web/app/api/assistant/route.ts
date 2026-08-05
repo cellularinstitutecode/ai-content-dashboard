@@ -139,14 +139,15 @@ function textFromPack(pack: Record<string, any> | undefined, network: string): s
 // human still approves them in Metricool before anything goes live.
 async function doSchedule(userId: string, p: PendingSchedule) {
   const token = process.env.METRICOOL_USER_TOKEN;
-  const mcUserId = process.env.METRICOOL_USER_ID || "3377431";
-  if (!token) throw new Error("METRICOOL_USER_TOKEN not configured");
+  const mcUserId = process.env.METRICOOL_USER_ID;
+  if (!token || !mcUserId) throw new Error("METRICOOL_USER_TOKEN and METRICOOL_USER_ID must be configured");
   const provider = SCHEDULE_NETWORK_MAP[p.network.toLowerCase()];
   if (!provider) throw new Error("Unsupported network: " + p.network);
   const publishAt = normalizePublishAt(p.publishAt);
   if (!publishAt) throw new Error("publishAt is required");
   if (!p.text) throw new Error("text is required");
-  const blogId = "4308292";
+  const blogId = process.env.METRICOOL_BLOG_ID;
+  if (!blogId) throw new Error("METRICOOL_BLOG_ID must be configured");
   const body: any = {
     text: p.text,
     publicationDate: { dateTime: publishAt, timezone: TIMEZONE },

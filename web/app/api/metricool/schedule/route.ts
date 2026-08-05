@@ -36,9 +36,9 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const token = process.env.METRICOOL_USER_TOKEN;
-  const userId = process.env.METRICOOL_USER_ID || '3377431';
-  if (!token) {
-    return NextResponse.json({ error: 'METRICOOL_USER_TOKEN not configured' }, { status: 500 });
+  const userId = process.env.METRICOOL_USER_ID;
+  if (!token || !userId) {
+    return NextResponse.json({ error: 'METRICOOL_USER_TOKEN and METRICOOL_USER_ID must be configured' }, { status: 500 });
   }
   let payload: any;
   try { payload = await req.json(); } catch { payload = {}; }
