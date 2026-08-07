@@ -26,6 +26,11 @@ export type KeywordResearch = {
   keywords: KeywordMetric[];
   // Human-readable note for logs / UI when data is unavailable.
   note?: string;
+  // Machine-readable status so the UI badge and diagnostics can distinguish
+  // the *reason* data is missing instead of collapsing everything to 'none'.
+  reason?: 'ok' | 'no_token' | 'auth' | 'plan' | 'http' | 'network' | 'empty';
+  // Upstream HTTP status when the Mangools call was actually made (else null).
+  upstreamStatus?: number | null;
 };
 
 const API_BASE = process.env.MANGOOLS_API_BASE || 'https://api.mangools.com/v3';
@@ -76,11 +81,11 @@ export async function researchKeywords(
 ): Promise<KeywordResearch> {
   const seed = (topic || '').trim();
   const base: KeywordResearch = { ok: false, source: 'none', topic: seed, keywords: [] };
-  if (!seed) return { ...base, note: 'empty topic' };
+  if (!seed) return { ...base, note: 'empty topic', reason: 'empty', upstreamStatus: null };
 
   const token = process.env.MANGOOLS_API_TOKEN;
   if (!token) {
-    return { ...base, note: 'MANGOOLS_API_TOKEN not set — using KWFinder link-out only' };
+    return { ...base, note: 'MANGOOLS_API_TOKEN not set — using KWFinder link-out only', reason: 'no_token', upstreamStatus: null };
   }
 
   const limit = Math.max(1, Math.min(opts.limit ?? 12, 50));
@@ -99,16 +104,28 @@ export async function researchKeywords(
       signal: ctl.signal,
     });
     if (!res.ok) {
-      return { ...base, note: 'Mangools API ' + res.status };
+      // Distinguish *why* Mangools rejected us so the token step is debuggable.
+      // 401/403 = token missing/invalid (auth); 402/429 = plan/quota limits;
+      // anything else = generic upstream HTTP error. All still degrade to no data.
+      let reason: KeywordResearch['reason'] = 'http';
+      if (res.status === 401 || res.status === 403) reason = 'auth';
+      else if (res.status === 402 || res.status === 429) reason = 'plan';
+      const hint =
+        reason === 'auth'
+          ? 'Mangools rejected the token (invalid or plan lacks REST API access)'
+          : reason === 'plan'
+          ? 'Mangools plan limit or quota reached'
+          : 'Mangools API error';
+      return { ...base, note: hint + ' (HTTP ' + res.status + ')', reason, upstreamStatus: res.status };
     }
     const json = await res.json().catch(() => null);
     const kws = normalize(json)
       .sort((a, b) => (b.volume ?? -1) - (a.volume ?? -1))
       .slice(0, limit);
-    if (!kws.length) return { ...base, note: 'no keywords returned' };
-    return { ok: true, source: 'mangools', topic: seed, keywords: kws };
+    if (!kws.length) return { ...base, source: 'mangools', note: 'no keywords returned', reason: 'ok', upstreamStatus: 200 };
+    return { ok: true, source: 'mangools', topic: seed, keywords: kws, reason: 'ok', upstreamStatus: 200 };
   } catch (e: any) {
-    return { ...base, note: 'Mangools API error: ' + (e?.name || 'fetch failed') };
+    return { ...base, note: 'Mangools API error: ' + (e?.name || 'fetch failed'), reason: 'network', upstreamStatus: null };
   } finally {
     clearTimeout(to);
   }
