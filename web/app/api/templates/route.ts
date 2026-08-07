@@ -72,6 +72,15 @@ export async function POST(req: NextRequest) {
     updated_at: new Date().toISOString(),
   };
   if (body.id) row.id = body.id;
+  if (body.id) {
+    const { data: owned } = await sb
+      .from('schedule_templates')
+      .select('id')
+      .eq('id', body.id)
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (!owned) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  }
 
   const { data, error } = await sb
     .from('schedule_templates')
