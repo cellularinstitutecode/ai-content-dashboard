@@ -4,7 +4,11 @@
 // so both you and the AI share the same keyword picture. Type a topic and hit
 // Analyze to pull search volume + difficulty. This is the same data the AI uses
 // automatically during draft generation (see /api/generate).
-import { useState } from 'react';
+//
+// A live health badge shows whether real Mangools data is flowing or the
+// integration has silently degraded to link-out only (MANGOOLS_API_TOKEN unset
+// or the API erroring) — so "keyword-informed" can never quietly become a no-op.
+import { useEffect, useState } from 'react';
 
 type KeywordMetric = {
   keyword: string;
@@ -12,6 +16,8 @@ type KeywordMetric = {
   difficulty: number | null;
   cpc: number | null;
 };
+
+type Health = 'unknown' | 'live' | 'degraded';
 
 function kwfinderUrl(keyword: string): string {
   const kw = (keyword || '').trim();
@@ -32,6 +38,23 @@ export default function KeywordPanel({ initialTopic = '' }: { initialTopic?: str
   const [loading, setLoading] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [ran, setRan] = useState(false);
+  const [health, setHealth] = useState<Health>('unknown');
+
+  // Probe the endpoint once on mount so the badge reflects the true connection
+  // state before the user runs anything.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/keywords?topic=ping');
+        const j = await r.json().catch(() => null);
+        if (!cancelled) setHealth(j && j.source === 'mangools' ? 'live' : 'degraded');
+      } catch {
+        if (!cancelled) setHealth('degraded');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   async function analyze() {
     const seed = topic.trim();
@@ -42,6 +65,7 @@ export default function KeywordPanel({ initialTopic = '' }: { initialTopic?: str
       const r = await fetch('/api/keywords?topic=' + encodeURIComponent(seed));
       const j = await r.json().catch(() => null);
       setRan(true);
+      setHealth(j && j.source === 'mangools' ? 'live' : 'degraded');
       if (j && j.ok && Array.isArray(j.keywords) && j.keywords.length) {
         setRows(j.keywords);
         setNote(null);
@@ -51,11 +75,19 @@ export default function KeywordPanel({ initialTopic = '' }: { initialTopic?: str
       }
     } catch {
       setRows([]);
+      setHealth('degraded');
       setNote('Could not reach the keyword service.');
     } finally {
       setLoading(false);
     }
   }
+
+  const badge =
+    health === 'live'
+      ? { cls: 'bg-emerald-100 text-emerald-700', label: 'Live Mangools data' }
+      : health === 'degraded'
+      ? { cls: 'bg-amber-100 text-amber-700', label: 'Not connected · link-out only' }
+      : { cls: 'bg-subtle text-ink-muted', label: 'Checking…' };
 
   return (
     <section className="overflow-hidden rounded-3xl bg-white ring-1 ring-line shadow-soft">
@@ -63,8 +95,11 @@ export default function KeywordPanel({ initialTopic = '' }: { initialTopic?: str
         <div className="flex items-center gap-3">
           <span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">🔑</span>
           <div>
-            <h3 className="text-[15px] font-semibold text-ink">Keyword Intelligence</h3>
-            <p className="text-[12px] text-ink-muted">Mangools KWFinder data. The AI uses these keywords automatically on every draft.</p>
+            <div className="flex items-center gap-2">
+              <h3 className="text-[15px] font-semibold text-ink">Keyword Intelligence</h3>
+              <span className={'rounded-full px-2 py-0.5 text-[11px] font-medium ' + badge.cls}>{badge.label}</span>
+            </div>
+            <p className="text-[12px] text-ink-muted">Mangools KWFinder data. When connected, the AI uses these keywords automatically on every draft.</p>
           </div>
         </div>
         <a href={kwfinderUrl(topic)} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[12px] font-medium text-emerald-700 hover:text-emerald-800">Open in KWFinder ↗</a>
@@ -88,6 +123,12 @@ export default function KeywordPanel({ initialTopic = '' }: { initialTopic?: str
             {loading ? 'Analyzing…' : 'Analyze'}
           </button>
         </div>
+
+        {health === 'degraded' && (
+          <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">
+            Keyword data is not connected. Set MANGOOLS_API_TOKEN (and verify your Mangools plan includes API access) so drafts are generated with real search volume and difficulty. Until then, generation continues without keyword data.
+          </p>
+        )}
 
         {rows.length > 0 && (
           <div className="mt-4 overflow-hidden rounded-2xl ring-1 ring-line">
