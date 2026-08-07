@@ -14,9 +14,9 @@
 
 export type KeywordMetric = {
   keyword: string;
-  volume: number | null;      // avg monthly search volume
-  difficulty: number | null;  // 0-100 keyword difficulty
-  cpc: number | null;         // cost per click (USD)
+  volume: number | null; // avg monthly search volume
+  difficulty: number | null; // 0-100 keyword difficulty
+  cpc: number | null; // cost per click (USD)
 };
 
 export type KeywordResearch = {
@@ -29,6 +29,17 @@ export type KeywordResearch = {
 };
 
 const API_BASE = process.env.MANGOOLS_API_BASE || 'https://api.mangools.com/v3';
+
+// Default buyer-geography location for KWFinder. Cellular Institute serves
+// international patients (largely US/CA) who search *before* travelling to
+// Cancun, so default to the MANGOOLS_LOCATION_ID env value when a caller does
+// not pass one explicitly. Unset -> global results.
+function defaultLocationId(): number | undefined {
+  const raw = process.env.MANGOOLS_LOCATION_ID;
+  if (!raw) return undefined;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? n : undefined;
+}
 
 function num(v: unknown): number | null {
   const n = typeof v === 'string' ? parseFloat(v) : (v as number);
@@ -75,7 +86,8 @@ export async function researchKeywords(
   const limit = Math.max(1, Math.min(opts.limit ?? 12, 50));
   const url = new URL(API_BASE.replace(/\/$/, '') + '/kwfinder/related-keywords');
   url.searchParams.set('kw', seed);
-  if (opts.locationId != null) url.searchParams.set('location_id', String(opts.locationId));
+  const locationId = opts.locationId ?? defaultLocationId();
+  if (locationId != null) url.searchParams.set('location_id', String(locationId));
   url.searchParams.set('language_id', opts.languageId || 'en');
 
   const ctl = new AbortController();
