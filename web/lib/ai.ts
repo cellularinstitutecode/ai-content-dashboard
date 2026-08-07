@@ -111,7 +111,7 @@ function buildUserPrompt(input: GenerateInput) {
 Target audience: ${input.audience || brand?.audience || 'a general audience'}
 Tone: ${input.tone || 'professional, friendly'}
 Channels to produce: ${channels}
-${input.keywordHint ? input.keywordHint + '\n' : ''}${input.performanceHint ? input.performanceHint + '\n' : ''}Return strict JSON only. No prose, no markdown fences.`;
+${input.keywordHint ? input.keywordHint + '\nWork these real, data-backed keywords into the copy naturally (headings, body, hashtags) without keyword-stuffing.\n' : ''}${input.performanceHint ? input.performanceHint + '\n' : ''}Return strict JSON only. No prose, no markdown fences.`;
 }
 
 async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
@@ -395,6 +395,10 @@ export type ResearchInput = {
   provider?: Provider;
   network?: string;
   brand?: BrandContext;
+  // Real SEO keyword data (Mangools KWFinder) prepared by the caller. When
+  // present, the model MUST anchor its keyword picks to these terms rather than
+  // inventing its own. Optional — absent = model uses its own judgement.
+  keywordHint?: string;
 };
 
 export type ResearchResult = {
@@ -423,6 +427,10 @@ markdown fences — with EXACTLY these keys:
   "trendRead": string,         // your best qualitative read of where this topic is trending and why
   "draft": string              // a ready-to-edit post draft for the chosen network
 }
+If the user prompt includes a "SEO keyword research" block with real search volume and
+difficulty, treat those terms as the authoritative keyword set: prioritise the highest-value,
+lower-difficulty terms in your "keywords", "hashtags" and "draft", and do not replace them with
+invented alternatives. Only generate your own keywords when no such block is provided.
 Base your analysis on durable patterns and your knowledge of the subject. Do NOT invent
 specific real-time metrics (exact follower counts, live trending ranks, ad CPCs) — speak
 qualitatively where live data would be required. Keep it practical and specific to the topic.`;
@@ -433,7 +441,8 @@ export async function researchTopic(input: ResearchInput): Promise<{ provider: P
   const useProvider: Provider = input.provider || (anthropicKey ? 'anthropic' : 'openai');
   const topic = String(input.topic || '').slice(0, 2000);
   const network = input.network ? String(input.network).slice(0, 40) : 'social';
-  const userPrompt = `TOPIC: ${topic}\nTARGET NETWORK: ${network}${brandBlock(input.brand)}\nReturn the JSON object now.`;
+  const kwBlock = input.keywordHint ? `\n${input.keywordHint}` : '';
+  const userPrompt = `TOPIC: ${topic}\nTARGET NETWORK: ${network}${brandBlock(input.brand)}${kwBlock}\nReturn the JSON object now.`;
 
   let raw = '';
   let provider: Provider = useProvider;
