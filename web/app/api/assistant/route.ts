@@ -8,6 +8,7 @@ import {
   type ToolMessage,
 } from "@/lib/ai";
 import { opusCreateClipProject } from "@/lib/opus";
+import { researchKeywords, keywordHintFrom } from "@/lib/keywords";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -316,7 +317,12 @@ async function runAgent(session: Session, input: string, userId: string | null) 
         if (!topic) {
           toolResult = "No topic provided. Ask the user what they want researched.";
         } else {
-          const research: any = await researchTopic({ topic, provider: session.provider === "openai" ? "openai" : "anthropic", network });
+          // Ground the research in REAL Mangools KWFinder data when available so the
+          // chatbot recommends keywords with genuine search volume/difficulty rather
+          // than inventing them. Degrades gracefully (link-out only) without a token.
+          const kwResearch = await researchKeywords(topic, { limit: 12 });
+          const { hint: kwHint } = keywordHintFrom(kwResearch);
+          const research: any = await researchTopic({ topic, provider: session.provider === "openai" ? "openai" : "anthropic", network, keywordHint: kwHint || undefined });
           const r = (research && research.result) ? research.result : research;
           const angles = Array.isArray(r?.angles) ? r.angles.slice(0, 5).join("; ") : "";
           const keywords = Array.isArray(r?.keywords) ? r.keywords.map((k: any) => (k && (k.term || k)) || "").filter(Boolean).slice(0, 8).join(", ") : "";
@@ -327,7 +333,13 @@ async function runAgent(session: Session, input: string, userId: string | null) 
             session.lastTopic = topic;
             session.provider = session.provider === "openai" ? "openai" : "anthropic";
           }
-          toolResult = "Research for " + topic + ":\nAngles: " + angles + "\nKeywords: " + keywords + "\nHashtags: " + hashtags + "\nHooks: " + hooks + "\nA ready-to-edit draft is prepared; call save_draft to keep it.";
+          const realKw = kwResearch.ok
+            ? kwResearch.keywords.slice(0, 8).map((k) => k.keyword + (k.volume != null ? " (" + k.volume + "/mo" + (k.difficulty != null ? ", KD " + k.difficulty : "") + ")" : "")).join(", ")
+            : "";
+          const kwLine = realKw
+            ? "\nMangools keywords (real search data): " + realKw
+            : "\n(Keyword data source: model estimate — set MANGOOLS_API_TOKEN for live search volume/difficulty.)";
+          toolResult = "Research for " + topic + ":\nAngles: " + angles + "\nKeywords: " + keywords + kwLine + "\nHashtags: " + hashtags + "\nHooks: " + hooks + "\nA ready-to-edit draft is prepared; call save_draft to keep it.";
         }
       } catch (e: any) {
         toolResult = "Research failed: " + (e?.message || "unknown error");
