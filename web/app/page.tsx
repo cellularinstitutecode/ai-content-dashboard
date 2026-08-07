@@ -1221,8 +1221,8 @@ return (
 </div>
 <div className="mt-6 flex flex-wrap gap-3 border-t border-line pt-5 text-[12px]">
 <a href={'https://app.metricool.com/inbox'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">💬 Open Inbox ↗</a>
-<a href={'https://app.metricool.com/smartlinks'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">🔗 Smartlinks ↗</a>
-<a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">📅 Full planner ↗</a>
+<a href={'https://app.metricool.com/smartlink?blogId=4308292&userId=3377431'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">🔗 Smartlinks ↗</a>
+<a href={'https://app.metricool.com/planner/calendar?blogId=4308292&userId=3377431'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">📅 Full planner ↗</a>
 </div>
 </div>
 </div>
