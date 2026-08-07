@@ -36,6 +36,9 @@ export type GenerateInput = {
   brand?: BrandContext;
   // Optional summary of recent top-performing posts to bias generation.
   performanceHint?: string;
+  // Optional Mangools KWFinder hint (search volume + difficulty) so the model
+  // writes with real keyword data. Injected by the generate route.
+  keywordHint?: string;
 };
 
 // Retryable transient statuses: 408 timeout, 409 conflict, 429 rate limit, 5xx overloaded/errors
@@ -108,7 +111,7 @@ function buildUserPrompt(input: GenerateInput) {
 Target audience: ${input.audience || brand?.audience || 'a general audience'}
 Tone: ${input.tone || 'professional, friendly'}
 Channels to produce: ${channels}
-${input.performanceHint ? input.performanceHint + '\n' : ''}Return strict JSON only. No prose, no markdown fences.`;
+${input.keywordHint ? input.keywordHint + '\n' : ''}${input.performanceHint ? input.performanceHint + '\n' : ''}Return strict JSON only. No prose, no markdown fences.`;
 }
 
 async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
