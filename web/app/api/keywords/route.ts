@@ -11,6 +11,26 @@ export const maxDuration = 30;
 
 export async function GET(req: NextRequest) {
   const topic = (req.nextUrl.searchParams.get('topic') || req.nextUrl.searchParams.get('kw') || '').trim();
+
+  // Diagnostics mode: /api/keywords?diag=1 reports whether the integration is
+  // wired up WITHOUT exposing the token value. Safe to call to debug the
+  // 'still says not set' situation after configuring Vercel env vars.
+  if (req.nextUrl.searchParams.get('diag')) {
+    const hasToken = Boolean(process.env.MANGOOLS_API_TOKEN);
+    const hasLocation = Boolean(process.env.MANGOOLS_LOCATION_ID);
+    let probe: unknown = null;
+    if (hasToken) {
+      // Live round-trip against Mangools so 'reason' tells you auth vs plan vs ok.
+      const r = await researchKeywords(topic || 'seo', { limit: 1 });
+      probe = { ok: r.ok, source: r.source, reason: r.reason ?? null, upstreamStatus: r.upstreamStatus ?? null, note: r.note ?? null };
+    }
+    return NextResponse.json({
+      diag: true,
+      env: { MANGOOLS_API_TOKEN: hasToken, MANGOOLS_LOCATION_ID: hasLocation },
+      probe,
+    }, { headers: { 'Cache-Control': 'no-store' } });
+  }
+
   if (!topic) {
     return NextResponse.json({ error: 'topic required' }, { status: 400 });
   }
