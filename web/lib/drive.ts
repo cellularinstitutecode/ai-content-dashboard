@@ -46,6 +46,7 @@ export async function persistToDrive(
 
   const drive = driveClient();
   const created = await drive.files.create({
+    supportsAllDrives: true,
     requestBody: { name: filename, parents: [folderId] },
     media: { mimeType: 'video/mp4', body: Readable.from(buf) },
     fields: 'id, webViewLink, webContentLink',
@@ -53,6 +54,7 @@ export async function persistToDrive(
 
     // Make the file readable by anyone with the link so <video> can stream it.
   await drive.permissions.create({
+      supportsAllDrives: true,
       fileId: created.data.id as string,
       requestBody: { role: 'reader', type: 'anyone' },
   });
