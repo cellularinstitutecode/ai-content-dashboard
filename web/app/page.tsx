@@ -361,9 +361,31 @@ try { if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'sm
 // Manual "Refresh clips" affordance so the viewer can pull the latest Opus
 // render status on demand instead of waiting for the 15s poll.
 const [refreshingClips, setRefreshingClips] = useState(false);
+const [resyncingId, setResyncingId] = useState<string | null>(null);
 async function refreshClips() {
 setRefreshingClips(true);
 try { await refreshDrafts(0, false); await refreshStats(); } finally { setRefreshingClips(false); }
+}
+
+// Re-sync a clip draft's videos. Opus preview/export URLs are short-lived signed
+// CDN links that expire; hitting GET /api/opus/clip?projectId=... re-fetches them and
+// (server-side) re-persists to permanent Drive links, then we refresh the drafts so
+// the player picks up fresh, playable URLs.
+async function resyncClips(d: any) {
+const projectId = d && d.pack && d.pack.projectId;
+if (!projectId) return;
+setResyncingId(d.id || projectId);
+try {
+const r = await fetch('/api/opus/clip?projectId=' + encodeURIComponent(projectId));
+if (r.ok) {
+const j = await r.json().catch(() => null);
+if (j && j.status === 'ready' && Array.isArray(j.clips) && j.clips.length > 0) {
+await refreshDrafts(0, false);
+}
+}
+} finally {
+setResyncingId(null);
+}
 }
 
 // Draft pagination
@@ -1503,6 +1525,7 @@ className="aspect-video w-full bg-black" />
 {c.hashtags ? <p className="mt-1 truncate text-[11px] text-accent">{c.hashtags}</p> : null}
 <div className="mt-2 flex items-center gap-2">
 <button type="button" onClick={() => prefillComposerFromClip(c)} className="rounded-full bg-accent px-3 py-1 text-[12px] font-semibold text-white transition hover:bg-accent-hover">Publish / Schedule</button>
+<button type="button" onClick={() => resyncClips(selectedDraft)} disabled={resyncingId === (selectedDraft && (selectedDraft.id || (selectedDraft.pack && selectedDraft.pack.projectId)))} className="rounded-full px-4 py-2 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle disabled:opacity-60">{resyncingId === (selectedDraft && (selectedDraft.id || (selectedDraft.pack && selectedDraft.pack.projectId))) ? 'Re-syncing…' : 'Re-sync'}</button>
 {c.export ? (
 <a href={c.export} target="_blank" rel="noopener noreferrer"
 className="rounded-full bg-ink px-3 py-1 text-[12px] font-medium text-white transition-opacity hover:opacity-90">Download</a>
