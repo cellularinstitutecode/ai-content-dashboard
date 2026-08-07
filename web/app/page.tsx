@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLiveContent } from "@/components/LiveContentProvider";
+import KeywordPanel from "./KeywordPanel";
 
 type Provider = 'anthropic' | 'openai';
 type ContentType = 'social' | 'blog' | 'email' | 'video' | 'ad';
@@ -178,6 +179,8 @@ const [prompt, setPrompt] = useState('');
 const [copied, setCopied] = useState(false);
 const [loading, setLoading] = useState(false);
 const [err, setErr] = useState<string | null>(null);
+const [keywordsApplied, setKeywordsApplied] = useState<string[]>([]);
+const [keywordSource, setKeywordSource] = useState<string>('none');
 
 const [mLoading, setMLoading] = useState(false);
 const [mAnalytics, setMAnalytics] = useState<any>(null);
@@ -669,6 +672,8 @@ body: JSON.stringify({ topic: prompt, provider, model, type }),
 const data = await r.json().catch(() => ({}));
 if (!r.ok) throw new Error(data?.error || ('Generation failed ('+r.status+')'));
 const pack = data.pack || {};
+setKeywordsApplied(Array.isArray(data.keywordsApplied) ? data.keywordsApplied : []);
+setKeywordSource(typeof data.keywordSource === 'string' ? data.keywordSource : 'none');
 setOutput(formatOutputString({ ...pack, format: type }));
 try {
 await fetch('/api/drafts', {
@@ -955,6 +960,17 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
 </button>
 )}
 </div>
+{keywordSource === 'mangools' && keywordsApplied.length > 0 && (
+  <div className="mb-3 flex flex-wrap items-center gap-1.5 rounded-xl bg-emerald-50 p-2.5 ring-1 ring-emerald-100">
+    <span className="mr-1 inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">🔑 Keywords applied</span>
+    {keywordsApplied.map((k, i) => (
+      <span key={k + i} className="rounded-full bg-white px-2 py-0.5 text-[11px] text-emerald-800 ring-1 ring-emerald-200">{k}</span>
+    ))}
+  </div>
+)}
+{keywordSource === 'none' && output && (
+  <p className="mb-3 text-[11px] text-ink-faint">Keyword research skipped (Mangools token not set) — draft generated without live keyword data.</p>
+)}
 {output ? (
 <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap rounded-2xl bg-white p-4 text-[13px] leading-relaxed text-ink-soft ring-1 ring-line">{typeof output === 'string' ? output : JSON.stringify(output, null, 2)}</pre>
 ) : (
@@ -1241,6 +1257,10 @@ return (
 </div>
 </div>
 </div>
+              {/* Keyword Intelligence — Mangools KWFinder data shared with the AI */}
+              <div className="border-t border-line p-6 sm:p-8">
+                <KeywordPanel initialTopic={researchTopicText || prompt} />
+              </div>
               {/* AI Research & Draft Copilot — full-width band below the two columns */}
               <div className="border-t border-line p-6 sm:p-8">
               <div className="overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-50 to-white ring-1 ring-indigo-100">

@@ -6,6 +6,7 @@ import { reviewPack } from '@/lib/safety';
 import { supabaseServer, supabaseAdmin } from '@/lib/supabase';
 import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { researchKeywords, keywordHintFrom } from '@/lib/keywords';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -94,6 +95,20 @@ export async function POST(req: NextRequest) {
       // ignore performance-load failures; generation proceeds without the hint.
     }
 
+    // Keyword research gate: every draft is informed by Mangools KWFinder.
+    // Runs server-side; degrades to no-op (link-out only) without a token.
+    let keywordHint: string | undefined;
+    let keywordsApplied: string[] = [];
+    let keywordSource: 'mangools' | 'none' = 'none';
+    try {
+      const research = await researchKeywords(topic, { limit: 12 });
+      keywordSource = research.source;
+      const built = keywordHintFrom(research);
+      keywordHint = built.hint || undefined;
+      keywordsApplied = built.applied;
+    } catch {
+      // never block generation on keyword lookup
+    }
     const { provider: used, pack } = await generateContentPack({
       topic,
       audience,
@@ -104,6 +119,7 @@ export async function POST(req: NextRequest) {
       contentType,
       brand,
       performanceHint,
+      keywordHint,
     });
     // Advisory content-safety review (medical domain). Never blocks generation.
     let safetyAdvisory: { code: string; message: string }[] = [];
@@ -114,8 +130,8 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json(
       safetyAdvisory.length
-        ? { provider: used, pack, safetyAdvisory }
-        : { provider: used, pack }
+        ? { provider: used, pack, safetyAdvisory, keywordsApplied, keywordSource }
+        : { provider: used, pack, keywordsApplied, keywordSource }
     );
   } catch (e: any) {
     return NextResponse.json(
