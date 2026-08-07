@@ -1,6 +1,7 @@
 import './globals.css';
 import type { Metadata } from 'next';
 import DraftingAssistant from '@/components/DraftingAssistant';
+import VersionWatcher from '@/components/VersionWatcher';
 import { LiveContentProvider } from "@/components/LiveContentProvider";
 
 
@@ -22,6 +23,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <LiveContentProvider>
           {children}
           <DraftingAssistant />
+          <VersionWatcher />
         </LiveContentProvider>
       </body>
     </html>
