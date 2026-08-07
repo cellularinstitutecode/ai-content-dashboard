@@ -953,6 +953,121 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 tex
 </section>
 
 
+{/* OpusClip — long-form to Shorts (video repurposing workspace) */}
+<section id="section-repurpose" className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<div className="border-b border-line px-6 py-5 sm:px-8">
+<div className="flex flex-wrap items-center justify-between gap-3">
+<div className="flex items-center gap-2">
+<span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 2 · Repurpose</span>
+<h2 className="text-[18px] font-semibold text-ink">Long-form to Shorts</h2>
+</div>
+<span className="rounded-full bg-subtle px-2.5 py-1 text-[11px] font-medium text-ink-muted ring-1 ring-line">Powered by OpusClip</span>
+</div>
+<p className="mt-1.5 text-[13px] text-ink-muted">Drop in one long YouTube or Vimeo video and get back a set of ready-to-post vertical clips — each auto-captioned and cropped for Reels, Shorts and TikTok.</p>
+<div className="mt-4 grid gap-3 sm:grid-cols-3">
+<div className="rounded-2xl bg-subtle p-3 ring-1 ring-line">
+<p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">1 · Paste</p>
+<p className="mt-1 text-[12px] text-ink-muted">Add a YouTube or Vimeo link and name the project.</p>
+</div>
+<div className="rounded-2xl bg-subtle p-3 ring-1 ring-line">
+<p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">2 · Auto-clip</p>
+<p className="mt-1 text-[12px] text-ink-muted">Opus finds the best moments and cuts vertical clips with captions.</p>
+</div>
+<div className="rounded-2xl bg-subtle p-3 ring-1 ring-line">
+<p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">3 · Review</p>
+<p className="mt-1 text-[12px] text-ink-muted">Clips land under Recent Drafts — preview, then send to Metricool.</p>
+</div>
+</div>
+</div>
+<div className="grid lg:grid-cols-5">
+<div className="p-6 sm:p-8 lg:col-span-3 lg:border-r lg:border-line">
+<p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Source video</p>
+<input
+type="url"
+value={opUrl}
+onChange={e => setOpUrl(e.target.value)}
+placeholder="https://youtube.com/watch?v=…  or  https://vimeo.com/…"
+className="w-full rounded-xl bg-white px-4 py-3 text-[14px] text-ink shadow-soft ring-1 ring-line transition placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent"
+/>
+<div className="mt-4 grid gap-3 sm:grid-cols-2">
+<div>
+<label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Project title <span className="text-ink-faint normal-case">(optional)</span></label>
+<input
+type="text"
+value={opTitle}
+onChange={e => setOpTitle(e.target.value)}
+placeholder="e.g. Ben Rothwell — Recovery"
+className="w-full rounded-xl bg-white px-3 py-2.5 text-[13px] text-ink shadow-soft ring-1 ring-line transition placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent"
+/>
+</div>
+<div>
+<label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Caption language</label>
+<select
+value={opLang}
+onChange={e => setOpLang(e.target.value)}
+className="w-full rounded-xl bg-white px-3 py-2.5 text-[13px] text-ink shadow-soft ring-1 ring-line transition focus:outline-none focus:ring-2 focus:ring-accent"
+>
+<option value="en">English</option>
+<option value="es">Spanish</option>
+<option value="pt">Portuguese</option>
+<option value="fr">French</option>
+<option value="de">German</option>
+<option value="it">Italian</option>
+</select>
+</div>
+</div>
+<p className="mb-2 mt-4 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Format preset</p>
+<div className="flex flex-wrap gap-2">
+{OPUS_ASPECTS.map(a => (
+<button
+key={a.value}
+type="button"
+onClick={() => setOpAspect(a.value)}
+className={`rounded-full px-3 py-1.5 text-[12px] font-medium ring-1 transition ${opAspect === a.value ? 'bg-accent text-white ring-accent' : 'bg-white text-ink-muted ring-line hover:ring-accent'}`}
+>
+{a.label}
+</button>
+))}
+</div>
+<div className="mt-5 flex flex-wrap items-center gap-3">
+<button
+type="button"
+onClick={clipVideo}
+disabled={opBusy || !opUrl.trim()}
+className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+>
+{opBusy ? (<><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />Sending to Opus…</>) : 'Generate clips'}
+</button>
+<span className="text-[12px] text-ink-faint">Processing runs in the background — no need to wait here.</span>
+</div>
+{opStatus && (
+<p className="mt-3 rounded-xl bg-subtle px-3 py-2 text-[12px] text-ink-muted ring-1 ring-line">{opStatus}</p>
+)}
+</div>
+<div className="p-6 sm:p-8 lg:col-span-2">
+<p className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">What you&apos;ll get</p>
+<ul className="space-y-2.5">
+<li className="flex items-start gap-2 text-[13px] text-ink-muted"><span className="mt-0.5 text-accent">▸</span>Several short vertical clips from the best moments of your video.</li>
+<li className="flex items-start gap-2 text-[13px] text-ink-muted"><span className="mt-0.5 text-accent">▸</span>Auto-generated captions burned in, in your chosen language.</li>
+<li className="flex items-start gap-2 text-[13px] text-ink-muted"><span className="mt-0.5 text-accent">▸</span>A virality score and suggested title on each clip.</li>
+<li className="flex items-start gap-2 text-[13px] text-ink-muted"><span className="mt-0.5 text-accent">▸</span>Everything saved to Recent Drafts, ready to send to Metricool.</li>
+</ul>
+<div className="mt-6 rounded-2xl bg-subtle p-4 ring-1 ring-line">
+<p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">This run</p>
+<dl className="mt-2 space-y-1.5 text-[12px]">
+<div className="flex items-center justify-between"><dt className="text-ink-muted">Format</dt><dd className="font-medium text-ink">{OPUS_ASPECTS.find(a => a.value === opAspect)?.label || opAspect}</dd></div>
+<div className="flex items-center justify-between"><dt className="text-ink-muted">Captions</dt><dd className="font-medium text-ink">{({en:'English',es:'Spanish',pt:'Portuguese',fr:'French',de:'German',it:'Italian'})[opLang] || opLang}</dd></div>
+<div className="flex items-center justify-between"><dt className="text-ink-muted">Project</dt><dd className="max-w-[150px] truncate font-medium text-ink">{opTitle.trim() || 'Auto from video'}</dd></div>
+</dl>
+</div>
+<div className="mt-4 flex items-start gap-2 rounded-2xl bg-blue-50 p-4 text-[12px] text-blue-700 ring-1 ring-blue-100">
+<span className="mt-0.5">ⓘ</span>
+<span>Clips can take a few minutes. They appear under <span className="font-medium">Recent Drafts</span> below — hit <span className="font-medium">Refresh clips</span> there to check progress. Format is a hint to Opus; final crop depends on your Opus brand settings.</span>
+</div>
+</div>
+</div>
+</section>
+
 {/* Publishing (Metricool) — compose, review flow, and live queue */}
 <section id="section-publish" className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
 <div className="border-b border-line px-6 py-5 sm:px-8">
@@ -1245,122 +1360,6 @@ return (
                 </div>
               </div>
               </div>
-</section>
-
-
-{/* OpusClip — long-form to Shorts (video repurposing workspace) */}
-<section id="section-repurpose" className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
-<div className="border-b border-line px-6 py-5 sm:px-8">
-<div className="flex flex-wrap items-center justify-between gap-3">
-<div className="flex items-center gap-2">
-<span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 2 · Repurpose</span>
-<h2 className="text-[18px] font-semibold text-ink">Long-form to Shorts</h2>
-</div>
-<span className="rounded-full bg-subtle px-2.5 py-1 text-[11px] font-medium text-ink-muted ring-1 ring-line">Powered by OpusClip</span>
-</div>
-<p className="mt-1.5 text-[13px] text-ink-muted">Drop in one long YouTube or Vimeo video and get back a set of ready-to-post vertical clips — each auto-captioned and cropped for Reels, Shorts and TikTok.</p>
-<div className="mt-4 grid gap-3 sm:grid-cols-3">
-<div className="rounded-2xl bg-subtle p-3 ring-1 ring-line">
-<p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">1 · Paste</p>
-<p className="mt-1 text-[12px] text-ink-muted">Add a YouTube or Vimeo link and name the project.</p>
-</div>
-<div className="rounded-2xl bg-subtle p-3 ring-1 ring-line">
-<p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">2 · Auto-clip</p>
-<p className="mt-1 text-[12px] text-ink-muted">Opus finds the best moments and cuts vertical clips with captions.</p>
-</div>
-<div className="rounded-2xl bg-subtle p-3 ring-1 ring-line">
-<p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">3 · Review</p>
-<p className="mt-1 text-[12px] text-ink-muted">Clips land under Recent Drafts — preview, then send to Metricool.</p>
-</div>
-</div>
-</div>
-<div className="grid lg:grid-cols-5">
-<div className="p-6 sm:p-8 lg:col-span-3 lg:border-r lg:border-line">
-<p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Source video</p>
-<input
-type="url"
-value={opUrl}
-onChange={e => setOpUrl(e.target.value)}
-placeholder="https://youtube.com/watch?v=…  or  https://vimeo.com/…"
-className="w-full rounded-xl bg-white px-4 py-3 text-[14px] text-ink shadow-soft ring-1 ring-line transition placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent"
-/>
-<div className="mt-4 grid gap-3 sm:grid-cols-2">
-<div>
-<label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Project title <span className="text-ink-faint normal-case">(optional)</span></label>
-<input
-type="text"
-value={opTitle}
-onChange={e => setOpTitle(e.target.value)}
-placeholder="e.g. Ben Rothwell — Recovery"
-className="w-full rounded-xl bg-white px-3 py-2.5 text-[13px] text-ink shadow-soft ring-1 ring-line transition placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent"
-/>
-</div>
-<div>
-<label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Caption language</label>
-<select
-value={opLang}
-onChange={e => setOpLang(e.target.value)}
-className="w-full rounded-xl bg-white px-3 py-2.5 text-[13px] text-ink shadow-soft ring-1 ring-line transition focus:outline-none focus:ring-2 focus:ring-accent"
->
-<option value="en">English</option>
-<option value="es">Spanish</option>
-<option value="pt">Portuguese</option>
-<option value="fr">French</option>
-<option value="de">German</option>
-<option value="it">Italian</option>
-</select>
-</div>
-</div>
-<p className="mb-2 mt-4 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Format preset</p>
-<div className="flex flex-wrap gap-2">
-{OPUS_ASPECTS.map(a => (
-<button
-key={a.value}
-type="button"
-onClick={() => setOpAspect(a.value)}
-className={`rounded-full px-3 py-1.5 text-[12px] font-medium ring-1 transition ${opAspect === a.value ? 'bg-accent text-white ring-accent' : 'bg-white text-ink-muted ring-line hover:ring-accent'}`}
->
-{a.label}
-</button>
-))}
-</div>
-<div className="mt-5 flex flex-wrap items-center gap-3">
-<button
-type="button"
-onClick={clipVideo}
-disabled={opBusy || !opUrl.trim()}
-className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
->
-{opBusy ? (<><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />Sending to Opus…</>) : 'Generate clips'}
-</button>
-<span className="text-[12px] text-ink-faint">Processing runs in the background — no need to wait here.</span>
-</div>
-{opStatus && (
-<p className="mt-3 rounded-xl bg-subtle px-3 py-2 text-[12px] text-ink-muted ring-1 ring-line">{opStatus}</p>
-)}
-</div>
-<div className="p-6 sm:p-8 lg:col-span-2">
-<p className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">What you&apos;ll get</p>
-<ul className="space-y-2.5">
-<li className="flex items-start gap-2 text-[13px] text-ink-muted"><span className="mt-0.5 text-accent">▸</span>Several short vertical clips from the best moments of your video.</li>
-<li className="flex items-start gap-2 text-[13px] text-ink-muted"><span className="mt-0.5 text-accent">▸</span>Auto-generated captions burned in, in your chosen language.</li>
-<li className="flex items-start gap-2 text-[13px] text-ink-muted"><span className="mt-0.5 text-accent">▸</span>A virality score and suggested title on each clip.</li>
-<li className="flex items-start gap-2 text-[13px] text-ink-muted"><span className="mt-0.5 text-accent">▸</span>Everything saved to Recent Drafts, ready to send to Metricool.</li>
-</ul>
-<div className="mt-6 rounded-2xl bg-subtle p-4 ring-1 ring-line">
-<p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">This run</p>
-<dl className="mt-2 space-y-1.5 text-[12px]">
-<div className="flex items-center justify-between"><dt className="text-ink-muted">Format</dt><dd className="font-medium text-ink">{OPUS_ASPECTS.find(a => a.value === opAspect)?.label || opAspect}</dd></div>
-<div className="flex items-center justify-between"><dt className="text-ink-muted">Captions</dt><dd className="font-medium text-ink">{({en:'English',es:'Spanish',pt:'Portuguese',fr:'French',de:'German',it:'Italian'})[opLang] || opLang}</dd></div>
-<div className="flex items-center justify-between"><dt className="text-ink-muted">Project</dt><dd className="max-w-[150px] truncate font-medium text-ink">{opTitle.trim() || 'Auto from video'}</dd></div>
-</dl>
-</div>
-<div className="mt-4 flex items-start gap-2 rounded-2xl bg-blue-50 p-4 text-[12px] text-blue-700 ring-1 ring-blue-100">
-<span className="mt-0.5">ⓘ</span>
-<span>Clips can take a few minutes. They appear under <span className="font-medium">Recent Drafts</span> below — hit <span className="font-medium">Refresh clips</span> there to check progress. Format is a hint to Opus; final crop depends on your Opus brand settings.</span>
-</div>
-</div>
-</div>
 </section>
 
 
