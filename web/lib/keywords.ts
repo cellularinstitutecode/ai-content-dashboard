@@ -77,7 +77,7 @@ function normalize(raw: any): KeywordMetric[] {
 // KeywordResearch object so draft generation is never blocked.
 export async function researchKeywords(
   topic: string,
-  opts: { limit?: number; locationId?: number; languageId?: string; timeoutMs?: number } = {}
+  opts: { limit?: number; locationId?: number; languageId?: number; timeoutMs?: number } = {}
 ): Promise<KeywordResearch> {
   const seed = (topic || '').trim();
   const base: KeywordResearch = { ok: false, source: 'none', topic: seed, keywords: [] };
@@ -93,7 +93,10 @@ export async function researchKeywords(
   url.searchParams.set('kw', seed);
   const locationId = opts.locationId ?? defaultLocationId();
   if (locationId != null) url.searchParams.set('location_id', String(locationId));
-  url.searchParams.set('language_id', opts.languageId || 'en');
+  // Mangools expects an INTEGER language_id (0 = global). Sending a string
+  // like 'en' triggers an HTTP 500, so coerce and default to 0.
+  const languageId = typeof opts.languageId === 'number' ? opts.languageId : 0;
+  url.searchParams.set('language_id', String(languageId));
 
   const ctl = new AbortController();
   const to = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 8000);
