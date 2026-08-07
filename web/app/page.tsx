@@ -68,6 +68,14 @@ function metricoolPlannerUrl(): string {
 return 'https://app.metricool.com/planning/list?blogId=' + METRICOOL_BLOG_ID;
 }
 
+// Deep-link into Mangools KWFinder for keyword research, pre-filled with the
+// topic the user is working on. Opens in a new tab; no credentials involved.
+function kwfinderUrl(keyword: string): string {
+  const kw = (keyword || '').trim();
+  const base = 'https://app.mangools.com/kwfinder/keywords';
+  return kw ? (base + '?kw=' + encodeURIComponent(kw)) : base;
+}
+
 // Human-readable status for a scheduled post row from /api/posts.
 function postStatusMeta(status: string): { label: string; tone: string } {
 const s = String(status || '').toLowerCase();
@@ -927,6 +935,13 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 tex
 {loading ? (<><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />Generating…</>) : 'Generate'}
 </button>
 {err && <span className="text-[13px] text-danger">{err}</span>}
+<a
+href={kwfinderUrl(prompt)}
+target="_blank"
+rel="noopener noreferrer"
+className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">
+🔑 Keyword research
+</a>
 </div>
 </div>
 
@@ -1267,6 +1282,15 @@ return (
                     >
                       {researchLoading ? "Researching\u2026" : "Research this topic"}
                     </button>
+                  </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <a
+                      href={kwfinderUrl(researchTopicText)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[12px] font-medium text-indigo-600 transition hover:text-indigo-700">
+                      🔑 Research keywords in KWFinder
+                    </a>
                   </div>
 
                   {researchError && (
