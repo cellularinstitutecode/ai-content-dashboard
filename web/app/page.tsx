@@ -69,12 +69,12 @@ function metricoolPlannerUrl(): string {
 return 'https://app.metricool.com/planning/list?blogId=' + METRICOOL_BLOG_ID;
 }
 
-// Deep-link into Mangools KWFinder for keyword research, pre-filled with the
-// topic the user is working on. Opens in a new tab; no credentials involved.
-function kwfinderUrl(keyword: string): string {
+// Deep-link into the Semrush Keyword Magic Tool for keyword research, pre-filled
+// with the topic the user is working on. Opens in a new tab; no credentials involved.
+function semrushUrl(keyword: string): string {
   const kw = (keyword || '').trim();
-  const base = 'https://app.mangools.com/kwfinder/keywords';
-  return kw ? (base + '?kw=' + encodeURIComponent(kw)) : base;
+  const base = 'https://www.semrush.com/analytics/keywordmagic/';
+  return kw ? (base + '?q=' + encodeURIComponent(kw) + '&db=us') : (base + '?db=us');
 }
 
 // Human-readable status for a scheduled post row from /api/posts.
@@ -941,7 +941,7 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 tex
 </button>
 {err && <span className="text-[13px] text-danger">{err}</span>}
 <a
-href={kwfinderUrl(prompt)}
+href={semrushUrl(prompt)}
 target="_blank"
 rel="noopener noreferrer"
 className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">
@@ -960,7 +960,7 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
 </button>
 )}
 </div>
-{keywordSource === 'mangools' && keywordsApplied.length > 0 && (
+{keywordSource === 'semrush' && keywordsApplied.length > 0 && (
   <div className="mb-3 flex flex-wrap items-center gap-1.5 rounded-xl bg-emerald-50 p-2.5 ring-1 ring-emerald-100">
     <span className="mr-1 inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">🔑 Keywords applied</span>
     {keywordsApplied.map((k, i) => (
@@ -969,7 +969,7 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
   </div>
 )}
 {keywordSource === 'none' && output && (
-  <p className="mb-3 text-[11px] text-ink-faint">Keyword research skipped (Mangools token not set) — draft generated without live keyword data.</p>
+  <p className="mb-3 text-[11px] text-ink-faint">Keyword research skipped (Semrush API key not set) — draft generated without live keyword data.</p>
 )}
 {output ? (
 <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap rounded-2xl bg-white p-4 text-[13px] leading-relaxed text-ink-soft ring-1 ring-line">{typeof output === 'string' ? output : JSON.stringify(output, null, 2)}</pre>
@@ -1257,7 +1257,7 @@ return (
 </div>
 </div>
 </div>
-              {/* Keyword Intelligence — Mangools KWFinder data shared with the AI */}
+              {/* Keyword Intelligence — Semrush keyword data shared with the AI */}
               <div className="border-t border-line p-6 sm:p-8">
                 <KeywordPanel initialTopic={researchTopicText || prompt} />
               </div>
@@ -1305,11 +1305,11 @@ return (
                   </div>
                   <div className="mt-3 flex items-center gap-2">
                     <a
-                      href={kwfinderUrl(researchTopicText)}
+                      href={semrushUrl(researchTopicText)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-[12px] font-medium text-indigo-600 transition hover:text-indigo-700">
-                      🔑 Research keywords in KWFinder
+                      🔑 Research keywords in Semrush
                     </a>
                   </div>
 
