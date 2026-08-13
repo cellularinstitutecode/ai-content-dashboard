@@ -1,12 +1,12 @@
 'use client';
 // web/app/KeywordPanel.tsx
-// Keyword Intelligence panel — surfaces Mangools KWFinder data in the dashboard
+// Keyword Intelligence panel — surfaces Semrush keyword data in the dashboard
 // so both you and the AI share the same keyword picture. Type a topic and hit
 // Analyze to pull search volume + difficulty. This is the same data the AI uses
 // automatically during draft generation (see /api/generate).
 //
-// A live health badge shows whether real Mangools data is flowing or the
-// integration has silently degraded to link-out only (MANGOOLS_API_TOKEN unset
+// A live health badge shows whether real Semrush data is flowing or the
+// integration has silently degraded to link-out only (SEMRUSH_API_KEY unset
 // or the API erroring) — so "keyword-informed" can never quietly become a no-op.
 import { useEffect, useState } from 'react';
 
@@ -19,10 +19,11 @@ type KeywordMetric = {
 
 type Health = 'unknown' | 'live' | 'degraded';
 
-function kwfinderUrl(keyword: string): string {
+// Deep-link into the Semrush Keyword Magic Tool, pre-filled with the keyword.
+function semrushUrl(keyword: string): string {
   const kw = (keyword || '').trim();
-  const base = 'https://app.mangools.com/kwfinder/keywords';
-  return kw ? base + '?kw=' + encodeURIComponent(kw) : base;
+  const base = 'https://www.semrush.com/analytics/keywordmagic/';
+  return kw ? base + '?q=' + encodeURIComponent(kw) + '&db=us' : base + '?db=us';
 }
 
 function difficultyTone(d: number | null): string {
@@ -48,7 +49,7 @@ export default function KeywordPanel({ initialTopic = '' }: { initialTopic?: str
       try {
         const r = await fetch('/api/keywords?topic=ping');
         const j = await r.json().catch(() => null);
-        if (!cancelled) setHealth(j && j.source === 'mangools' ? 'live' : 'degraded');
+        if (!cancelled) setHealth(j && j.source === 'semrush' ? 'live' : 'degraded');
       } catch {
         if (!cancelled) setHealth('degraded');
       }
@@ -65,7 +66,7 @@ export default function KeywordPanel({ initialTopic = '' }: { initialTopic?: str
       const r = await fetch('/api/keywords?topic=' + encodeURIComponent(seed));
       const j = await r.json().catch(() => null);
       setRan(true);
-      setHealth(j && j.source === 'mangools' ? 'live' : 'degraded');
+      setHealth(j && j.source === 'semrush' ? 'live' : 'degraded');
       if (j && j.ok && Array.isArray(j.keywords) && j.keywords.length) {
         setRows(j.keywords);
         setNote(null);
@@ -84,7 +85,7 @@ export default function KeywordPanel({ initialTopic = '' }: { initialTopic?: str
 
   const badge =
     health === 'live'
-      ? { cls: 'bg-emerald-100 text-emerald-700', label: 'Live Mangools data' }
+      ? { cls: 'bg-emerald-100 text-emerald-700', label: 'Live Semrush data' }
       : health === 'degraded'
       ? { cls: 'bg-amber-100 text-amber-700', label: 'Not connected · link-out only' }
       : { cls: 'bg-subtle text-ink-muted', label: 'Checking…' };
@@ -99,10 +100,10 @@ export default function KeywordPanel({ initialTopic = '' }: { initialTopic?: str
               <h3 className="text-[15px] font-semibold text-ink">Keyword Intelligence</h3>
               <span className={'rounded-full px-2 py-0.5 text-[11px] font-medium ' + badge.cls}>{badge.label}</span>
             </div>
-            <p className="text-[12px] text-ink-muted">Mangools KWFinder data. When connected, the AI uses these keywords automatically on every draft.</p>
+            <p className="text-[12px] text-ink-muted">Semrush keyword data. When connected, the AI uses these keywords automatically on every draft.</p>
           </div>
         </div>
-        <a href={kwfinderUrl(topic)} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[12px] font-medium text-emerald-700 hover:text-emerald-800">Open in KWFinder ↗</a>
+        <a href={semrushUrl(topic)} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[12px] font-medium text-emerald-700 hover:text-emerald-800">Open in Semrush ↗</a>
       </div>
       <div className="p-6">
         <div className="flex flex-col gap-2 sm:flex-row">
@@ -126,7 +127,7 @@ export default function KeywordPanel({ initialTopic = '' }: { initialTopic?: str
 
         {health === 'degraded' && (
           <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">
-            Keyword data is not connected. Set MANGOOLS_API_TOKEN (and verify your Mangools plan includes API access) so drafts are generated with real search volume and difficulty. Until then, generation continues without keyword data.
+            Keyword data is not connected. Set SEMRUSH_API_KEY (and verify your Semrush plan includes API access) so drafts are generated with real search volume and difficulty. Until then, generation continues without keyword data.
           </p>
         )}
 
@@ -144,7 +145,7 @@ export default function KeywordPanel({ initialTopic = '' }: { initialTopic?: str
                 {rows.map((k, i) => (
                   <tr key={k.keyword + i} className="border-t border-line">
                     <td className="px-3 py-2 text-ink">
-                      <a href={kwfinderUrl(k.keyword)} target="_blank" rel="noopener noreferrer" className="hover:text-emerald-700">{k.keyword}</a>
+                      <a href={semrushUrl(k.keyword)} target="_blank" rel="noopener noreferrer" className="hover:text-emerald-700">{k.keyword}</a>
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{k.volume != null ? k.volume.toLocaleString() : '—'}</td>
                     <td className={'px-3 py-2 text-right tabular-nums font-medium ' + difficultyTone(k.difficulty)}>{k.difficulty != null ? k.difficulty : '—'}</td>
@@ -156,7 +157,7 @@ export default function KeywordPanel({ initialTopic = '' }: { initialTopic?: str
         )}
 
         {ran && note && (
-          <p className="mt-3 text-[12px] text-ink-muted">{note} You can still open KWFinder above for full research.</p>
+          <p className="mt-3 text-[12px] text-ink-muted">{note} You can still open Semrush above for full research.</p>
         )}
       </div>
     </section>
