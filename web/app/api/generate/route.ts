@@ -95,11 +95,11 @@ export async function POST(req: NextRequest) {
       // ignore performance-load failures; generation proceeds without the hint.
     }
 
-    // Keyword research gate: every draft is informed by Mangools KWFinder.
-    // Runs server-side; degrades to no-op (link-out only) without a token.
+    // Keyword research gate: every draft is informed by Semrush keyword data.
+    // Runs server-side; degrades to no-op (link-out only) without an API key.
     let keywordHint: string | undefined;
     let keywordsApplied: string[] = [];
-    let keywordSource: 'mangools' | 'none' = 'none';
+    let keywordSource: 'semrush' | 'none' = 'none';
     try {
       const research = await researchKeywords(topic, { limit: 12 });
       keywordSource = research.source;

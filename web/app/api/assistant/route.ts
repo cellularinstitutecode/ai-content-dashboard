@@ -317,9 +317,9 @@ async function runAgent(session: Session, input: string, userId: string | null) 
         if (!topic) {
           toolResult = "No topic provided. Ask the user what they want researched.";
         } else {
-          // Ground the research in REAL Mangools KWFinder data when available so the
+          // Ground the research in REAL Semrush keyword data when available so the
           // chatbot recommends keywords with genuine search volume/difficulty rather
-          // than inventing them. Degrades gracefully (link-out only) without a token.
+          // than inventing them. Degrades gracefully (link-out only) without a key.
           const kwResearch = await researchKeywords(topic, { limit: 12 });
           const { hint: kwHint } = keywordHintFrom(kwResearch);
           const research: any = await researchTopic({ topic, provider: session.provider === "openai" ? "openai" : "anthropic", network, keywordHint: kwHint || undefined });
@@ -337,8 +337,8 @@ async function runAgent(session: Session, input: string, userId: string | null) 
             ? kwResearch.keywords.slice(0, 8).map((k) => k.keyword + (k.volume != null ? " (" + k.volume + "/mo" + (k.difficulty != null ? ", KD " + k.difficulty : "") + ")" : "")).join(", ")
             : "";
           const kwLine = realKw
-            ? "\nMangools keywords (real search data): " + realKw
-            : "\n(Keyword data source: model estimate — set MANGOOLS_API_TOKEN for live search volume/difficulty.)";
+            ? "\nSemrush keywords (real search data): " + realKw
+            : "\n(Keyword data source: model estimate — set SEMRUSH_API_KEY for live search volume/difficulty.)";
           toolResult = "Research for " + topic + ":\nAngles: " + angles + "\nKeywords: " + keywords + kwLine + "\nHashtags: " + hashtags + "\nHooks: " + hooks + "\nA ready-to-edit draft is prepared; call save_draft to keep it.";
         }
       } catch (e: any) {

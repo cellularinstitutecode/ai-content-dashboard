@@ -36,7 +36,7 @@ export type GenerateInput = {
   brand?: BrandContext;
   // Optional summary of recent top-performing posts to bias generation.
   performanceHint?: string;
-  // Optional Mangools KWFinder hint (search volume + difficulty) so the model
+  // Optional Semrush keyword hint (search volume + difficulty) so the model
   // writes with real keyword data. Injected by the generate route.
   keywordHint?: string;
 };
@@ -395,9 +395,9 @@ export type ResearchInput = {
   provider?: Provider;
   network?: string;
   brand?: BrandContext;
-  // Real SEO keyword data (Mangools KWFinder) prepared by the caller. When
-  // present, the model MUST anchor its keyword picks to these terms rather than
-  // inventing its own. Optional — absent = model uses its own judgement.
+  // Real SEO keyword data (Semrush) prepared by the caller. When present, the
+  // model MUST anchor its keyword picks to these terms rather than inventing its
+  // own. Optional — absent = model uses its own judgement.
   keywordHint?: string;
 };
 
