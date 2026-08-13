@@ -1,6 +1,6 @@
 // web/app/api/keywords/route.ts
-// Server-side Mangools keyword lookup for the Keyword Intelligence panel.
-// The Mangools token stays on the server (read from env), never exposed to the
+// Server-side Semrush keyword lookup for the Keyword Intelligence panel.
+// The Semrush API key stays on the server (read from env), never exposed to the
 // browser. Returns normalized keyword metrics for a topic.
 import { NextRequest, NextResponse } from 'next/server';
 import { researchKeywords } from '@/lib/keywords';
@@ -16,17 +16,17 @@ export async function GET(req: NextRequest) {
   // wired up WITHOUT exposing the token value. Safe to call to debug the
   // 'still says not set' situation after configuring Vercel env vars.
   if (req.nextUrl.searchParams.get('diag')) {
-    const hasToken = Boolean(process.env.MANGOOLS_API_TOKEN);
-    const hasLocation = Boolean(process.env.MANGOOLS_LOCATION_ID);
+    const hasKey = Boolean(process.env.SEMRUSH_API_KEY);
+    const hasDatabase = Boolean(process.env.SEMRUSH_DATABASE);
     let probe: unknown = null;
-    if (hasToken) {
-      // Live round-trip against Mangools so 'reason' tells you auth vs plan vs ok.
+    if (hasKey) {
+      // Live round-trip against Semrush so 'reason' tells you auth vs plan vs ok.
       const r = await researchKeywords(topic || 'seo', { limit: 1 });
       probe = { ok: r.ok, source: r.source, reason: r.reason ?? null, upstreamStatus: r.upstreamStatus ?? null, note: r.note ?? null };
     }
     return NextResponse.json({
       diag: true,
-      env: { MANGOOLS_API_TOKEN: hasToken, MANGOOLS_LOCATION_ID: hasLocation },
+      env: { SEMRUSH_API_KEY: hasKey, SEMRUSH_DATABASE: hasDatabase },
       probe,
     }, { headers: { 'Cache-Control': 'no-store' } });
   }
