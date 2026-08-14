@@ -50,7 +50,9 @@ export async function POST(req: NextRequest) {
     const sys =
       'You are an expert social copy editor for a regenerative-medicine clinic. ' +
       'Return ONLY the rewritten text with no preamble, quotes, or commentary. ' +
-      'Never invent medical outcomes or guarantees.';
+      'Never invent medical outcomes or guarantees. ' +
+      'Preserve any SEO keywords present in the original text — they were selected ' +
+      'from real Semrush search data and must survive the rewrite.';
     const messages = [
       { role: 'user' as const, content: sys + '\n\nINSTRUCTION: ' + instruction + '\n\nTEXT:\n' + text },
     ];

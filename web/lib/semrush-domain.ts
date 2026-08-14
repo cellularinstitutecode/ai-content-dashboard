@@ -31,6 +31,7 @@ import {
   type SemReportResult,
   type SemSource,
 } from '@/lib/semrush';
+import { supabaseAdmin } from '@/lib/supabase';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -113,6 +114,17 @@ export type TrackingSummary = {
   trend: TrackingPoint[];
 };
 
+export type SnapshotRow = {
+  date: string; // YYYY-MM-DD
+  authorityScore: number | null;
+  semrushRank: number | null;
+  organicTraffic: number | null;
+  organicKeywords: number | null;
+  paidKeywords: number | null;
+  backlinksTotal: number | null;
+  refDomains: number | null;
+};
+
 export type DomainBundle = {
   domain: string;
   isPrimaryDomain: boolean;
@@ -124,6 +136,9 @@ export type DomainBundle = {
   topKeywordsMeta: SectionMeta;
   competitors: CompetitorRow[];
   competitorsMeta: SectionMeta;
+  // Daily metric history captured by this app (see semrush-domain.sql) —
+  // powers the trend charts without paying for Semrush historical units.
+  history: SnapshotRow[];
   balance: number | null;
   unitsSpent: number;
 };
@@ -582,6 +597,64 @@ export async function trackingSummary(domain: string): Promise<{ data: TrackingS
 }
 
 // ---------------------------------------------------------------------------
+// Daily snapshots: this app records one row per domain per day so the panel
+// can chart real trends without Semrush historical-data unit costs.
+// Fail-open: DB trouble (e.g. semrush-domain.sql not run yet) never blocks.
+// ---------------------------------------------------------------------------
+
+async function recordSnapshot(domain: string, ov: DomainOverview | null, bl: BacklinksOverview | null): Promise<void> {
+  if (!ov && !bl) return;
+  try {
+    await supabaseAdmin()
+      .from('semrush_domain_snapshots')
+      .upsert(
+        {
+          domain,
+          captured_on: new Date().toISOString().slice(0, 10),
+          authority_score: bl?.authorityScore ?? null,
+          semrush_rank: ov?.rank ?? null,
+          organic_traffic: ov?.organicTraffic ?? null,
+          organic_keywords: ov?.organicKeywords ?? null,
+          organic_cost: ov?.organicCost ?? null,
+          paid_keywords: ov?.paidKeywords ?? null,
+          paid_traffic: ov?.paidTraffic ?? null,
+          backlinks_total: bl?.backlinksTotal ?? null,
+          ref_domains: bl?.refDomains ?? null,
+        },
+        { onConflict: 'domain,captured_on' }
+      );
+  } catch {
+    // ignore — history is best-effort
+  }
+}
+
+async function snapshotHistory(domain: string, days = 90): Promise<SnapshotRow[]> {
+  try {
+    const { data } = await supabaseAdmin()
+      .from('semrush_domain_snapshots')
+      .select('captured_on, authority_score, semrush_rank, organic_traffic, organic_keywords, paid_keywords, backlinks_total, ref_domains')
+      .eq('domain', domain)
+      .order('captured_on', { ascending: false })
+      .limit(days);
+    if (!Array.isArray(data)) return [];
+    return (data as any[])
+      .map((r) => ({
+        date: String(r.captured_on),
+        authorityScore: num(r.authority_score),
+        semrushRank: num(r.semrush_rank),
+        organicTraffic: num(r.organic_traffic),
+        organicKeywords: num(r.organic_keywords),
+        paidKeywords: num(r.paid_keywords),
+        backlinksTotal: num(r.backlinks_total),
+        refDomains: num(r.ref_domains),
+      }))
+      .reverse();
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The bundle: one call powers the whole panel.
 // ---------------------------------------------------------------------------
 
@@ -594,6 +667,9 @@ export async function domainBundle(rawDomain?: string): Promise<DomainBundle> {
     organicCompetitors(domain, 5),
     getUnitsBalance(),
   ]);
+  // Record today's snapshot, then read the accumulated history for charts.
+  await recordSnapshot(domain, ov.data, bl.data);
+  const history = await snapshotHistory(domain);
   return {
     domain,
     isPrimaryDomain: domain === primaryDomain(),
@@ -605,7 +681,46 @@ export async function domainBundle(rawDomain?: string): Promise<DomainBundle> {
     topKeywordsMeta: kw.meta,
     competitors: comp.rows,
     competitorsMeta: comp.meta,
+    history,
     balance,
     unitsSpent: ov.meta.unitsSpent + bl.meta.unitsSpent + kw.meta.unitsSpent + comp.meta.unitsSpent,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Keyword-research activity: which AI drafts passed through the Semrush
+// filter (draft_keywords is written by every generation path). Powers the
+// "automatic keyword research" feed in the panel.
+// ---------------------------------------------------------------------------
+
+export type ResearchActivityRow = {
+  topic: string;
+  keyword: string;
+  volume: number | null;
+  difficulty: number | null;
+  role: string;
+  createdAt: string;
+};
+
+export async function keywordResearchActivity(userId: string, limit = 12): Promise<ResearchActivityRow[]> {
+  try {
+    const { data } = await supabaseAdmin()
+      .from('draft_keywords')
+      .select('topic, keyword, volume, difficulty, role, created_at')
+      .eq('user_id', userId)
+      .eq('role', 'primary')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (!Array.isArray(data)) return [];
+    return (data as any[]).map((r) => ({
+      topic: String(r.topic || ''),
+      keyword: String(r.keyword || ''),
+      volume: num(r.volume),
+      difficulty: num(r.difficulty),
+      role: String(r.role || 'primary'),
+      createdAt: String(r.created_at || ''),
+    }));
+  } catch {
+    return [];
+  }
 }

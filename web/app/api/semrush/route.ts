@@ -13,7 +13,7 @@
 //                                                (needs SEMRUSH_PROJECT_ID)
 import { NextRequest, NextResponse } from 'next/server';
 import { researchBundle, serpCompetitors, getUnitsBalance, opportunityScore } from '@/lib/semrush';
-import { domainBundle, primaryDomain, siteAudit, trackingSummary, normalizeDomain } from '@/lib/semrush-domain';
+import { domainBundle, primaryDomain, siteAudit, trackingSummary, normalizeDomain, keywordResearchActivity } from '@/lib/semrush-domain';
 import { supabaseServer } from '@/lib/supabase';
 
 export const runtime = 'nodejs';
@@ -48,6 +48,19 @@ export async function GET(req: NextRequest) {
     const domain = normalizeDomain(req.nextUrl.searchParams.get('domain') || '') || primaryDomain();
     const bundle = await domainBundle(domain);
     return NextResponse.json(bundle, { headers: { 'Cache-Control': 'private, max-age=300' } });
+  }
+
+  if (action === 'activity') {
+    // Recent AI drafts that passed through the Semrush keyword filter.
+    let rows: Awaited<ReturnType<typeof keywordResearchActivity>> = [];
+    try {
+      const sb = supabaseServer();
+      const { data: { user } } = await sb.auth.getUser();
+      if (user) rows = await keywordResearchActivity(user.id, 12);
+    } catch {
+      // fail-open: empty feed
+    }
+    return NextResponse.json({ rows }, { headers: { 'Cache-Control': 'no-store' } });
   }
 
   if (action === 'project') {

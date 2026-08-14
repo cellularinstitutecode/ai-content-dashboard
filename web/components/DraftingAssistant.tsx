@@ -28,6 +28,7 @@ export default function DraftingAssistant() {
   const [genOutput, setGenOutput] = useState('');
   const [genBusy, setGenBusy] = useState(false);
   const [genErr, setGenErr] = useState('');
+  const [genKeywords, setGenKeywords] = useState<{ primary: string | null; keywords: string[]; source: string } | null>(null);
 
   const GEN_MODELS: Record<'anthropic' | 'openai', { value: string; label: string }[]> = {
     anthropic: [
@@ -70,6 +71,9 @@ export default function DraftingAssistant() {
       const pack = data?.pack || {};
       const out = pack.instagram || pack.facebook || pack.linkedin || pack.blog || '';
       setGenOutput(out || 'No content returned.');
+      // Surface the automatic Semrush keyword research that shaped this draft.
+      const sem = pack._semrush || null;
+      setGenKeywords(sem ? { primary: sem.primary ?? null, keywords: Array.isArray(sem.keywords) ? sem.keywords : [], source: String(sem.source || 'none') } : null);
       // Persist to Recent Drafts so nothing generated here is lost (parity with
       // the main dashboard + chat flows). Stamp the chosen format on the pack so
       // the renderer can label it faithfully (email/video/ad).
@@ -237,6 +241,17 @@ export default function DraftingAssistant() {
               {genOutput && (
                 <div className="mt-3">
                   <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-ink/40">Output</p>
+                  {genKeywords && genKeywords.source === 'semrush' && (
+                    <div className="mb-1.5 flex flex-wrap items-center gap-1">
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">🔑 Semrush ✓</span>
+                      {genKeywords.keywords.slice(0, 4).map((k, ki) => (
+                        <span key={k + ki} className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-800 ring-1 ring-emerald-200">{k}</span>
+                      ))}
+                    </div>
+                  )}
+                  {genKeywords && genKeywords.source !== 'semrush' && (
+                    <p className="mb-1.5 text-[10px] text-ink/40">Generated without live Semrush keyword data.</p>
+                  )}
                   <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-xl bg-surface px-3 py-2 text-sm leading-relaxed text-ink ring-1 ring-black/10">{genOutput}</div>
                   <button
                     type="button"

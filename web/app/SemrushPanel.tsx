@@ -1,21 +1,20 @@
 'use client';
 // web/app/SemrushPanel.tsx
-// Semrush Intelligence — the comprehensive SEO command center that replaces the
-// old single-topic Keyword Intelligence card. Six views:
-//   Overview      — authority score, Semrush rank, organic/paid traffic &
-//                   keywords, backlinks, ref domains (domain_ranks +
-//                   backlinks_overview), position distribution
-//   Top Keywords  — the domain's ranking keywords with positions, volume, KD,
-//                   traffic share (domain_organic) — one click to draft
-//   Competitors   — organic rivals with competition level + common keywords
-//   Backlinks     — link profile breakdown (follow/nofollow, text/image)
-//   Site Health   — Site Audit score, errors/warnings + Position Tracking
-//                   visibility trend (Projects API, needs SEMRUSH_PROJECT_ID)
-//   Keyword Research — the existing topic-based keyword brief that feeds every
-//                   AI draft (unchanged, embedded)
-// Cache-first and budget-guarded like everything else in the Semrush brain:
-// repeat loads cost 0 API units; a live unit-balance chip keeps spending honest.
-import { useEffect, useRef, useState } from 'react';
+// Semrush Intelligence — the visual SEO command center. Modeled on the Semrush
+// dashboard itself: an SEO overview band (Authority Score, traffic + keyword
+// trend charts, backlinks, ref domains), a Position-Tracking-style block
+// (visibility trend, Top 3/10/20/100 rings, top keywords), a Site Audit block
+// (health gauge, errors/warnings, crawled-pages bar), and — because every AI
+// draft in this app passes through the Semrush keyword filter automatically —
+// a live "Automatic keyword research" feed proving research ran before each
+// autonomous post.
+//
+// Data: /api/semrush?action=domain (overview/backlinks/keywords/competitors +
+// daily snapshot history), action=project (Site Audit + Position Tracking),
+// action=activity (draft keyword provenance). Everything is cache-first and
+// unit-budget-guarded server-side; the panel degrades to link-outs when the
+// key/plan is missing.
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import KeywordIntelligence from './KeywordIntelligence';
 
 // ---------------------------------------------------------------------------
@@ -69,6 +68,17 @@ type CompetitorRow = {
   organicCost: number | null;
 };
 
+type SnapshotRow = {
+  date: string;
+  authorityScore: number | null;
+  semrushRank: number | null;
+  organicTraffic: number | null;
+  organicKeywords: number | null;
+  paidKeywords: number | null;
+  backlinksTotal: number | null;
+  refDomains: number | null;
+};
+
 type DomainBundle = {
   domain: string;
   isPrimaryDomain: boolean;
@@ -80,6 +90,7 @@ type DomainBundle = {
   topKeywordsMeta: SectionMeta;
   competitors: CompetitorRow[];
   competitorsMeta: SectionMeta;
+  history: SnapshotRow[];
   balance: number | null;
   unitsSpent: number;
 };
@@ -108,7 +119,9 @@ type TrackingSummary = {
 
 type ProjectData = { audit: SiteAuditSnapshot; auditMeta: SectionMeta; tracking: TrackingSummary; trackingMeta: SectionMeta };
 
-type Tab = 'overview' | 'keywords' | 'competitors' | 'backlinks' | 'health' | 'research';
+type ActivityRow = { topic: string; keyword: string; volume: number | null; difficulty: number | null; role: string; createdAt: string };
+
+type Tab = 'overview' | 'keywords' | 'competitors' | 'backlinks' | 'research';
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -130,6 +143,30 @@ function fmtMoney(v: number | null | undefined): string {
   return '$' + fmtNum(Math.round(v));
 }
 
+function fmtDateShort(iso: string): string {
+  try {
+    const d = new Date(iso + (iso.length === 10 ? 'T00:00:00' : ''));
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  } catch {
+    return iso;
+  }
+}
+
+function timeAgo(iso: string): string {
+  try {
+    const ms = Date.now() - new Date(iso).getTime();
+    const m = Math.floor(ms / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm ago';
+    const h = Math.floor(m / 60);
+    if (h < 24) return h + 'h ago';
+    const d = Math.floor(h / 24);
+    return d + 'd ago';
+  } catch {
+    return '';
+  }
+}
+
 function kdTone(d: number | null | undefined): string {
   if (d == null) return 'text-ink-faint';
   if (d < 30) return 'text-emerald-600';
@@ -145,27 +182,35 @@ function posTone(p: number | null | undefined): string {
   return 'bg-subtle text-ink-muted';
 }
 
-function healthTone(h: number | null): { text: string; hex: string } {
-  if (h == null) return { text: 'text-ink-faint', hex: '#a1a1a6' };
-  if (h >= 90) return { text: 'text-emerald-600', hex: '#34c759' };
-  if (h >= 70) return { text: 'text-amber-600', hex: '#ff9f0a' };
-  return { text: 'text-rose-600', hex: '#ff3b30' };
+function healthHex(h: number | null): string {
+  if (h == null) return '#a1a1a6';
+  if (h >= 90) return '#34c759';
+  if (h >= 70) return '#ff9f0a';
+  return '#ff3b30';
 }
 
-function ascoreTone(a: number | null): { text: string; hex: string } {
-  if (a == null) return { text: 'text-ink-faint', hex: '#a1a1a6' };
-  if (a >= 60) return { text: 'text-emerald-600', hex: '#34c759' };
-  if (a >= 30) return { text: 'text-sky-600', hex: '#0071e3' };
-  return { text: 'text-amber-600', hex: '#ff9f0a' };
+function ascoreHex(a: number | null): string {
+  if (a == null) return '#a1a1a6';
+  if (a >= 60) return '#34c759';
+  if (a >= 30) return '#0071e3';
+  return '#ff9f0a';
 }
 
-function deltaChip(d: number | null | undefined, invert = false): { label: string; cls: string } | null {
-  if (d == null || d === 0) return null;
-  const good = invert ? d < 0 : d > 0;
-  return {
-    label: (d > 0 ? '▲ ' : '▼ ') + Math.abs(d),
-    cls: good ? 'text-emerald-600' : 'text-rose-600',
-  };
+// Percent change between the first and last non-null values of a series.
+function pctChange(vals: (number | null)[]): number | null {
+  const v = vals.filter((x): x is number => x != null);
+  if (v.length < 2 || v[0] === 0) return null;
+  return ((v[v.length - 1] - v[0]) / Math.abs(v[0])) * 100;
+}
+
+function DeltaText({ pct, suffix = '%' }: { pct: number | null; suffix?: string }) {
+  if (pct == null || Math.abs(pct) < 0.005) return null;
+  const up = pct > 0;
+  return (
+    <span className={'text-[12px] font-semibold tabular-nums ' + (up ? 'text-emerald-600' : 'text-rose-600')}>
+      {(up ? '+' : '') + pct.toFixed(Math.abs(pct) < 10 ? 2 : 1) + suffix}
+    </span>
+  );
 }
 
 // Semrush deep links (always available, even without the API key)
@@ -179,96 +224,191 @@ const SEM = {
 };
 
 // ---------------------------------------------------------------------------
-// Small presentational pieces
+// Chart primitives (SVG, single-series, hover tooltips, recessive grid)
 // ---------------------------------------------------------------------------
 
-function StatTile({ label, value, sub, delta, href }: { label: string; value: string; sub?: string; delta?: { label: string; cls: string } | null; href?: string }) {
-  const inner = (
-    <>
-      <div className="text-[12px] font-medium text-ink-muted">{label}</div>
-      <div className="mt-1 flex items-baseline gap-2">
-        <span className="text-[24px] font-semibold tabular-nums tracking-tight text-ink">{value}</span>
-        {delta && <span className={'text-[12px] font-medium tabular-nums ' + delta.cls}>{delta.label}</span>}
-      </div>
-      {sub && <div className="mt-0.5 text-[11px] text-ink-faint">{sub}</div>}
-    </>
-  );
-  const cls = 'rounded-2xl bg-white p-4 ring-1 ring-line' + (href ? ' block transition hover:ring-accent/40' : '');
-  return href ? (
-    <a href={href} target="_blank" rel="noopener noreferrer" className={cls}>{inner}</a>
-  ) : (
-    <div className={cls}>{inner}</div>
-  );
+const CHART = {
+  trend: '#6366f1', // indigo trend line (Semrush-style periwinkle)
+  trendFill: 'rgba(99,102,241,0.14)',
+  up: '#34c759',
+  upFill: 'rgba(52,199,89,0.14)',
+  down: '#ff3b30',
+  downFill: 'rgba(255,59,48,0.12)',
+  grid: 'rgba(0,0,0,0.05)',
+};
+
+type Pt = { date: string; value: number };
+
+function useMeasuredWidth(): [RefObject<HTMLDivElement>, number] {
+  const ref = useRef<HTMLDivElement>(null);
+  const [w, setW] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const update = () => setW(el.clientWidth);
+    update();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null;
+    if (ro) ro.observe(el);
+    else window.addEventListener('resize', update);
+    return () => {
+      if (ro) ro.disconnect();
+      else window.removeEventListener('resize', update);
+    };
+  }, []);
+  return [ref, w];
 }
 
-// Donut gauge (0..100). Number lives in the center; color signals status.
-function Gauge({ value, hex, label }: { value: number | null; hex: string; label: string }) {
-  const pct = value != null ? Math.max(0, Math.min(100, value)) : 0;
-  const r = 42;
-  const c = 2 * Math.PI * r;
+// Area trend chart with gradient fill + crosshair hover tooltip.
+function AreaChart({
+  points,
+  height = 88,
+  color = CHART.trend,
+  fill = CHART.trendFill,
+  label,
+  formatValue = fmtNum,
+  emptyNote = 'Trend history builds automatically — check back tomorrow.',
+}: {
+  points: Pt[];
+  height?: number;
+  color?: string;
+  fill?: string;
+  label: string;
+  formatValue?: (v: number) => string;
+  emptyNote?: string;
+}) {
+  const [wrapRef, width] = useMeasuredWidth();
+  const [hover, setHover] = useState<number | null>(null);
+
+  if (points.length < 2) {
+    return (
+      <div ref={wrapRef} className="flex items-center justify-center rounded-xl bg-subtle/70" style={{ height }}>
+        <span className="px-3 text-center text-[11px] text-ink-faint">{emptyNote}</span>
+      </div>
+    );
+  }
+
+  const pad = { l: 6, r: 6, t: 10, b: 6 };
+  const w = Math.max(width, 80);
+  const min = Math.min(...points.map((p) => p.value));
+  const max = Math.max(...points.map((p) => p.value));
+  const span = max - min || Math.abs(max) * 0.1 || 1;
+  const x = (i: number) => pad.l + (i / (points.length - 1)) * (w - pad.l - pad.r);
+  const y = (v: number) => pad.t + (1 - (v - min) / span) * (height - pad.t - pad.b);
+  const line = points.map((p, i) => (i === 0 ? 'M' : 'L') + x(i).toFixed(1) + ' ' + y(p.value).toFixed(1)).join(' ');
+  const area = line + ' L' + x(points.length - 1).toFixed(1) + ' ' + (height - pad.b) + ' L' + x(0).toFixed(1) + ' ' + (height - pad.b) + ' Z';
+  const hv = hover != null ? points[hover] : null;
+
   return (
-    <div className="flex flex-col items-center">
-      <svg width="120" height="120" viewBox="0 0 120 120" role="img" aria-label={label + ': ' + (value != null ? value : 'no data')}>
-        <circle cx="60" cy="60" r={r} fill="none" stroke="rgba(0,0,0,0.07)" strokeWidth="10" />
-        <circle
-          cx="60" cy="60" r={r} fill="none"
-          stroke={value != null ? hex : 'rgba(0,0,0,0.07)'}
-          strokeWidth="10" strokeLinecap="round"
-          strokeDasharray={c}
-          strokeDashoffset={c * (1 - pct / 100)}
-          transform="rotate(-90 60 60)"
-        />
-        <text x="60" y="58" textAnchor="middle" className="fill-ink" style={{ font: '600 24px -apple-system, BlinkMacSystemFont, sans-serif' }}>
-          {value != null ? Math.round(value) + '%' : '—'}
-        </text>
-        <text x="60" y="76" textAnchor="middle" style={{ font: '400 10px -apple-system, BlinkMacSystemFont, sans-serif', fill: '#6e6e73' }}>
-          {label}
-        </text>
-      </svg>
+    <div ref={wrapRef} className="relative" style={{ height }}>
+      {width > 0 && (
+        <svg
+          width={w}
+          height={height}
+          role="img"
+          aria-label={label + ', ' + points.length + ' data points from ' + points[0].date + ' to ' + points[points.length - 1].date}
+          onMouseMove={(e) => {
+            const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
+            const rel = (e.clientX - rect.left - pad.l) / (w - pad.l - pad.r);
+            setHover(Math.round(Math.max(0, Math.min(1, rel)) * (points.length - 1)));
+          }}
+          onMouseLeave={() => setHover(null)}
+        >
+          {/* recessive grid: 3 light horizontal lines */}
+          {[0.25, 0.5, 0.75].map((f) => (
+            <line key={f} x1={pad.l} x2={w - pad.r} y1={pad.t + f * (height - pad.t - pad.b)} y2={pad.t + f * (height - pad.t - pad.b)} stroke={CHART.grid} strokeWidth="1" />
+          ))}
+          <path d={area} fill={fill} />
+          <path d={line} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+          {hv && (
+            <>
+              <line x1={x(hover!)} x2={x(hover!)} y1={pad.t} y2={height - pad.b} stroke="rgba(0,0,0,0.18)" strokeWidth="1" />
+              <circle cx={x(hover!)} cy={y(hv.value)} r="4" fill={color} stroke="#fff" strokeWidth="2" />
+            </>
+          )}
+        </svg>
+      )}
+      {hv && (
+        <div
+          className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-lg bg-ink px-2.5 py-1.5 text-center shadow-pop"
+          style={{ left: Math.max(44, Math.min(w - 44, x(hover!))), top: -6 }}
+        >
+          <div className="text-[11px] font-semibold tabular-nums text-white">{formatValue(hv.value)}</div>
+          <div className="text-[10px] text-white/70">{fmtDateShort(hv.date)}</div>
+        </div>
+      )}
     </div>
   );
 }
 
-// Single-series sparkline: 2px accent line, no legend (title names the series).
-function Sparkline({ points, width = 220, height = 48 }: { points: { date: string; visibility: number | null }[]; width?: number; height?: number }) {
-  const vals = points.filter((p) => p.visibility != null) as { date: string; visibility: number }[];
-  if (vals.length < 2) return <div className="text-[12px] text-ink-faint">Not enough history yet.</div>;
-  const min = Math.min(...vals.map((p) => p.visibility));
-  const max = Math.max(...vals.map((p) => p.visibility));
-  const span = max - min || 1;
-  const pad = 4;
-  const pts = vals.map((p, i) => {
-    const x = pad + (i / (vals.length - 1)) * (width - pad * 2);
-    const y = pad + (1 - (p.visibility - min) / span) * (height - pad * 2);
-    return x.toFixed(1) + ',' + y.toFixed(1);
-  });
+// Donut ring with the count in the middle (Semrush "Top N" style).
+function RingStat({ count, total, label, sub, color = '#34c759' }: { count: number; total: number; label: string; sub?: string; color?: string }) {
+  const r = 24;
+  const c = 2 * Math.PI * r;
+  const frac = total > 0 ? Math.max(0.02, Math.min(1, count / total)) : 0;
   return (
-    <svg width={width} height={height} viewBox={'0 0 ' + width + ' ' + height} role="img" aria-label="Visibility trend, last 30 days">
-      <polyline points={pts.join(' ')} fill="none" stroke="#0071e3" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+    <div className="flex flex-col items-center gap-1">
+      <div className="relative">
+        <svg width="64" height="64" viewBox="0 0 64 64" role="img" aria-label={label + ': ' + count + ' of ' + total}>
+          <circle cx="32" cy="32" r={r} fill="none" stroke="rgba(0,0,0,0.07)" strokeWidth="6" />
+          {count > 0 && (
+            <circle cx="32" cy="32" r={r} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c * (1 - frac)} transform="rotate(-90 32 32)" />
+          )}
+          <text x="32" y="37" textAnchor="middle" style={{ font: '600 16px -apple-system, BlinkMacSystemFont, sans-serif', fill: '#1d1d1f' }}>
+            {count}
+          </text>
+        </svg>
+      </div>
+      <div className="text-[11px] font-medium text-ink-muted">{label}</div>
+      {sub && <div className="-mt-1 text-[10px] text-ink-faint">{sub}</div>}
+    </div>
+  );
+}
+
+// Donut gauge (0..100) with % in the center.
+function Gauge({ value, label, size = 132 }: { value: number | null; label: string; size?: number }) {
+  const r = size * 0.35;
+  const c = 2 * Math.PI * r;
+  const pct = value != null ? Math.max(0, Math.min(100, value)) : 0;
+  const hex = healthHex(value);
+  const half = size / 2;
+  return (
+    <svg width={size} height={size} viewBox={'0 0 ' + size + ' ' + size} role="img" aria-label={label + ': ' + (value != null ? Math.round(value) + '%' : 'no data')}>
+      <circle cx={half} cy={half} r={r} fill="none" stroke="rgba(0,0,0,0.07)" strokeWidth={size * 0.085} />
+      <circle
+        cx={half} cy={half} r={r} fill="none"
+        stroke={value != null ? hex : 'rgba(0,0,0,0.07)'}
+        strokeWidth={size * 0.085} strokeLinecap="round"
+        strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)}
+        transform={'rotate(-90 ' + half + ' ' + half + ')'}
+      />
+      <text x={half} y={half - 2} textAnchor="middle" style={{ font: '600 ' + Math.round(size * 0.2) + 'px -apple-system, BlinkMacSystemFont, sans-serif', fill: '#1d1d1f' }}>
+        {value != null ? Math.round(value) + '%' : '—'}
+      </text>
+      <text x={half} y={half + size * 0.13} textAnchor="middle" style={{ font: '400 ' + Math.round(size * 0.085) + 'px -apple-system, BlinkMacSystemFont, sans-serif', fill: '#6e6e73' }}>
+        {label}
+      </text>
     </svg>
   );
 }
 
-// Segmented distribution bar — sequential single hue (accent, light→dark),
-// 2px white gaps between segments, labels carry identity (never color alone).
-function Distribution({ buckets }: { buckets: { label: string; count: number }[] }) {
-  const total = buckets.reduce((s, b) => s + b.count, 0);
-  const shades = ['rgba(0,113,227,0.25)', 'rgba(0,113,227,0.45)', 'rgba(0,113,227,0.7)', '#0071e3'];
+// Segmented horizontal bar with 2px gaps + labeled legend (never color-alone).
+function SegmentBar({ segments, ariaLabel }: { segments: { label: string; count: number; color: string }[]; ariaLabel: string }) {
+  const total = segments.reduce((s, b) => s + b.count, 0);
   if (!total) return null;
   return (
     <div>
-      <div className="flex h-3 w-full overflow-hidden rounded-full bg-subtle" role="img" aria-label={'Position distribution: ' + buckets.map((b) => b.label + ' ' + b.count).join(', ')}>
-        {buckets.map((b, i) =>
-          b.count > 0 ? (
-            <div key={b.label} style={{ width: (b.count / total) * 100 + '%', background: shades[i % shades.length], marginRight: i < buckets.length - 1 ? 2 : 0 }} />
+      <div className="flex h-3.5 w-full overflow-hidden rounded-full bg-subtle" role="img" aria-label={ariaLabel}>
+        {segments.map((s, i) =>
+          s.count > 0 ? (
+            <div key={s.label} style={{ width: (s.count / total) * 100 + '%', background: s.color, marginRight: i < segments.length - 1 ? 2 : 0 }} />
           ) : null
         )}
       </div>
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-        {buckets.map((b, i) => (
-          <span key={b.label} className="inline-flex items-center gap-1.5 text-[12px] text-ink-muted">
-            <span aria-hidden className="h-2.5 w-2.5 rounded-[3px]" style={{ background: shades[i % shades.length] }} />
-            {b.label} <span className="font-medium tabular-nums text-ink">{b.count}</span>
+        {segments.map((s) => (
+          <span key={s.label} className="inline-flex items-center gap-1.5 text-[11px] text-ink-muted">
+            <span aria-hidden className="h-2.5 w-2.5 rounded-[3px]" style={{ background: s.color }} />
+            {s.label} <span className="font-semibold tabular-nums text-ink">{fmtExact(s.count)}</span>
           </span>
         ))}
       </div>
@@ -293,6 +433,24 @@ function SectionNotice({ meta, what }: { meta: SectionMeta; what: string }) {
   return <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">{msg}</p>;
 }
 
+// Card shell shared by the dashboard blocks (Semrush-dashboard look).
+function Card({ tag, title, right, children, className = '' }: { tag?: string; title?: string; right?: ReactNode; children: ReactNode; className?: string }) {
+  return (
+    <div className={'rounded-2xl bg-white p-5 ring-1 ring-line shadow-soft ' + className}>
+      {(tag || title || right) && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            {tag && <span className="rounded-lg bg-accent-soft px-2 py-0.5 text-[11px] font-semibold text-accent">{tag}</span>}
+            {title && <span className="text-[13px] font-semibold text-ink">{title}</span>}
+          </div>
+          {right}
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // The panel
 // ---------------------------------------------------------------------------
@@ -309,8 +467,7 @@ export default function SemrushPanel({
   const [bundle, setBundle] = useState<DomainBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [project, setProject] = useState<ProjectData | null>(null);
-  const [projectLoading, setProjectLoading] = useState(false);
-  const projectLoaded = useRef(false);
+  const [activity, setActivity] = useState<ActivityRow[] | null>(null);
 
   async function loadDomain(domain?: string) {
     setLoading(true);
@@ -327,29 +484,26 @@ export default function SemrushPanel({
     }
   }
 
-  async function loadProject() {
-    if (projectLoaded.current) return;
-    projectLoaded.current = true;
-    setProjectLoading(true);
-    try {
-      const r = await fetch('/api/semrush?action=project');
-      const j = (await r.json().catch(() => null)) as ProjectData | null;
-      setProject(j);
-    } catch {
-      setProject(null);
-    } finally {
-      setProjectLoading(false);
-    }
-  }
-
-  // Load the primary domain bundle once on mount (cache-first server side).
+  // Everything loads on mount: the overview IS the dashboard.
   useEffect(() => {
     void loadDomain();
+    (async () => {
+      try {
+        const r = await fetch('/api/semrush?action=project');
+        setProject((await r.json().catch(() => null)) as ProjectData | null);
+      } catch { setProject(null); }
+    })();
+    (async () => {
+      try {
+        const r = await fetch('/api/semrush?action=activity');
+        const j = await r.json().catch(() => null);
+        setActivity(j && Array.isArray(j.rows) ? j.rows : []);
+      } catch { setActivity([]); }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const domain = bundle?.domain || domainInput || 'cellularhopeinstitute.com';
-  const connected = bundle != null && (bundle.overviewMeta.reason !== 'no_token' || bundle.overviewMeta.ok);
   const anyLive = bundle != null && (bundle.overviewMeta.ok || bundle.backlinksMeta.ok || bundle.topKeywordsMeta.ok);
   const fromCache = bundle != null && [bundle.overviewMeta, bundle.backlinksMeta, bundle.topKeywordsMeta].some((m) => m.source === 'cache');
 
@@ -359,56 +513,62 @@ export default function SemrushPanel({
     ? fromCache
       ? { cls: 'bg-sky-100 text-sky-700', label: 'Semrush data · cached' }
       : { cls: 'bg-emerald-100 text-emerald-700', label: 'Semrush data · live' }
-    : connected
-    ? { cls: 'bg-amber-100 text-amber-700', label: 'No data' }
     : { cls: 'bg-amber-100 text-amber-700', label: 'Not connected · link-out only' };
-
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'keywords', label: 'Top keywords' },
-    { id: 'competitors', label: 'Competitors' },
-    { id: 'backlinks', label: 'Backlinks' },
-    { id: 'health', label: 'Site health' },
-    { id: 'research', label: 'Keyword research' },
-  ];
 
   const ov = bundle?.overview ?? null;
   const bl = bundle?.backlinks ?? null;
-  const kws = bundle?.topKeywords ?? [];
+  const kws = useMemo(() => bundle?.topKeywords ?? [], [bundle]);
+  const history = useMemo(() => bundle?.history ?? [], [bundle]);
 
-  const distBuckets = (() => {
-    const b = [
-      { label: 'Top 3', count: 0 },
-      { label: 'Top 10', count: 0 },
-      { label: 'Top 20', count: 0 },
-      { label: 'Top 100', count: 0 },
-    ];
+  const trafficPts: Pt[] = useMemo(() => history.filter((h) => h.organicTraffic != null).map((h) => ({ date: h.date, value: h.organicTraffic as number })), [history]);
+  const kwPts: Pt[] = useMemo(() => history.filter((h) => h.organicKeywords != null).map((h) => ({ date: h.date, value: h.organicKeywords as number })), [history]);
+  const blPts: Pt[] = useMemo(() => history.filter((h) => h.backlinksTotal != null).map((h) => ({ date: h.date, value: h.backlinksTotal as number })), [history]);
+  const trafficDelta = pctChange(trafficPts.map((p) => p.value));
+  const kwDelta = pctChange(kwPts.map((p) => p.value));
+  const blDelta = pctChange(blPts.map((p) => p.value));
+
+  const dist = useMemo(() => {
+    const b = { top3: 0, top10: 0, top20: 0, top100: 0 };
     for (const k of kws) {
       const p = k.position;
       if (p == null) continue;
-      if (p <= 3) b[0].count++;
-      else if (p <= 10) b[1].count++;
-      else if (p <= 20) b[2].count++;
-      else b[3].count++;
+      if (p <= 3) b.top3++;
+      if (p <= 10) b.top10++;
+      if (p <= 20) b.top20++;
+      b.top100++;
     }
     return b;
-  })();
+  }, [kws]);
 
-  const aTone = ascoreTone(bl?.authorityScore ?? null);
+  const tracking = project?.tracking ?? null;
+  const audit = project?.audit ?? null;
+  const visPts: Pt[] = useMemo(
+    () => (tracking?.trend ?? []).filter((t) => t.visibility != null).map((t) => ({ date: t.date, value: t.visibility as number })),
+    [tracking]
+  );
+  const visFalling = (tracking?.visibilityDelta ?? 0) < 0;
 
   function sendToDraft(text: string) {
     if (onUseTopic) onUseTopic(text);
   }
 
+  const tabs: { id: Tab; label: string }[] = [
+    { id: 'overview', label: 'Dashboard' },
+    { id: 'keywords', label: 'Top keywords' },
+    { id: 'competitors', label: 'Competitors' },
+    { id: 'backlinks', label: 'Backlinks' },
+    { id: 'research', label: 'Keyword research' },
+  ];
+
   return (
-    <section className="overflow-hidden rounded-3xl bg-white ring-1 ring-line shadow-soft">
+    <section className="overflow-hidden rounded-3xl bg-canvas ring-1 ring-line shadow-soft">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-6 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-white px-6 py-4">
         <div className="flex items-center gap-3">
-          <span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent-soft text-accent">📈</span>
+          <span aria-hidden className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-soft text-[18px] text-accent">📈</span>
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-[15px] font-semibold text-ink">Semrush Intelligence</h3>
+              <h3 className="text-[16px] font-semibold text-ink">Semrush Intelligence</h3>
               <span className={'rounded-full px-2 py-0.5 text-[11px] font-medium ' + statusChip.cls}>{statusChip.label}</span>
               {bundle?.balance != null && (
                 <span className="rounded-full bg-subtle px-2 py-0.5 text-[11px] tabular-nums text-ink-muted" title="Semrush API units remaining">
@@ -416,31 +576,52 @@ export default function SemrushPanel({
                 </span>
               )}
             </div>
-            <p className="text-[12px] text-ink-muted">Domain health, rankings, competitors and backlinks — the full SEO picture behind every draft.</p>
+            <p className="text-[12px] text-ink-muted">
+              Every AI draft passes through this data automatically — keyword research runs before a single word is written.
+            </p>
           </div>
         </div>
-        <a href={SEM.overview(domain)} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[12px] font-medium text-accent hover:text-accent-hover">Open in Semrush ↗</a>
+        <div className="flex items-center gap-3">
+          <a href={SEM.overview(domain)} target="_blank" rel="noopener noreferrer" className="text-[12px] font-medium text-accent hover:text-accent-hover">Open in Semrush ↗</a>
+        </div>
       </div>
 
-      <div className="p-6">
-        {/* Domain row */}
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <input
-            type="text"
-            value={domainInput}
-            onChange={(e) => setDomainInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void loadDomain(domainInput); }}
-            placeholder="cellularhopeinstitute.com — or type any competitor domain"
-            className="flex-1 rounded-xl bg-subtle px-3.5 py-2.5 text-[14px] text-ink ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-accent/40"
-          />
-          <button
-            type="button"
-            onClick={() => void loadDomain(domainInput)}
-            disabled={loading}
-            className="shrink-0 rounded-xl bg-accent px-4 py-2.5 text-[14px] font-medium text-white transition hover:bg-accent-hover disabled:opacity-50"
-          >
-            {loading ? 'Analyzing…' : 'Analyze domain'}
-          </button>
+      <div className="p-5 sm:p-6">
+        {/* Domain row + tabs */}
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-1 gap-2">
+            <input
+              type="text"
+              value={domainInput}
+              onChange={(e) => setDomainInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void loadDomain(domainInput); }}
+              placeholder="cellularhopeinstitute.com — or any competitor domain"
+              className="w-full max-w-md rounded-xl bg-white px-3.5 py-2 text-[13px] text-ink ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-accent/40"
+            />
+            <button
+              type="button"
+              onClick={() => void loadDomain(domainInput)}
+              disabled={loading}
+              className="shrink-0 rounded-xl bg-accent px-4 py-2 text-[13px] font-medium text-white transition hover:bg-accent-hover disabled:opacity-50"
+            >
+              {loading ? 'Analyzing…' : 'Analyze'}
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-1 rounded-xl bg-white p-1 ring-1 ring-line">
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={
+                  'rounded-lg px-3 py-1.5 text-[13px] font-medium transition ' +
+                  (tab === t.id ? 'bg-accent-soft text-accent' : 'text-ink-muted hover:text-ink')
+                }
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
         </div>
         {bundle && !bundle.isPrimaryDomain && (
           <p className="mt-2 text-[12px] text-ink-muted">
@@ -450,292 +631,452 @@ export default function SemrushPanel({
             </button>
           </p>
         )}
+        {!loading && bundle && !anyLive && <SectionNotice meta={bundle.overviewMeta} what="Domain intelligence" />}
 
-        {!loading && bundle && !anyLive && (
-          <SectionNotice meta={bundle.overviewMeta} what="Domain intelligence" />
-        )}
-
-        {/* Tabs */}
-        <div className="mt-5 flex flex-wrap gap-1 rounded-xl bg-subtle p-1">
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => { setTab(t.id); if (t.id === 'health') void loadProject(); }}
-              className={
-                'rounded-lg px-3 py-1.5 text-[13px] font-medium transition ' +
-                (tab === t.id ? 'bg-white text-ink shadow-soft ring-1 ring-line' : 'text-ink-muted hover:text-ink')
+        {/* ============================================== DASHBOARD */}
+        {tab === 'overview' && (
+          <div className="mt-4 space-y-4">
+            {/* --- SEO overview band --- */}
+            <Card
+              tag="SEO"
+              title={domain}
+              right={
+                <span className="text-[11px] text-ink-faint">
+                  Root domain · US database{history.length > 0 ? ' · history since ' + fmtDateShort(history[0].date) : ''}
+                </span>
               }
             >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        {/* ------------------------------------------------ Overview */}
-        {tab === 'overview' && (
-          <div className="mt-4">
-            {loading ? (
-              <p className="text-[13px] text-ink-muted">Loading domain intelligence…</p>
-            ) : (
-              <>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  <div className="rounded-2xl bg-white p-4 ring-1 ring-line">
+              {loading ? (
+                <p className="text-[13px] text-ink-muted">Loading domain intelligence…</p>
+              ) : (
+                <div className="grid gap-x-6 gap-y-5 sm:grid-cols-2 lg:grid-cols-4">
+                  {/* Authority Score */}
+                  <div>
                     <div className="text-[12px] font-medium text-ink-muted">Authority Score</div>
-                    <div className="mt-1 flex items-baseline gap-2">
-                      <span className={'text-[24px] font-semibold tabular-nums tracking-tight ' + aTone.text}>{bl?.authorityScore ?? '—'}</span>
+                    <div className="mt-1 flex items-baseline gap-1.5">
+                      <span className="text-[28px] font-semibold tabular-nums tracking-tight text-ink">{bl?.authorityScore ?? '—'}</span>
                       <span className="text-[11px] text-ink-faint">/ 100</span>
                     </div>
-                    <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-subtle">
-                      <div className="h-full rounded-full" style={{ width: (bl?.authorityScore ?? 0) + '%', background: aTone.hex }} />
+                    <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-subtle">
+                      <div className="h-full rounded-full" style={{ width: (bl?.authorityScore ?? 0) + '%', background: ascoreHex(bl?.authorityScore ?? null) }} />
+                    </div>
+                    <div className="mt-1.5 text-[11px] text-ink-faint">Semrush Rank {ov?.rank != null ? '#' + fmtNum(ov.rank) : '—'}</div>
+                  </div>
+                  {/* Organic traffic + trend */}
+                  <div>
+                    <div className="text-[12px] font-medium text-ink-muted">Organic Traffic</div>
+                    <div className="mt-1 flex items-baseline gap-2">
+                      <span className="text-[28px] font-semibold tabular-nums tracking-tight text-ink">{fmtNum(ov?.organicTraffic)}</span>
+                      <DeltaText pct={trafficDelta} />
+                    </div>
+                    <div className="mt-2">
+                      <AreaChart points={trafficPts} height={56} label="Organic traffic trend" />
                     </div>
                   </div>
-                  <StatTile label="Semrush Rank" value={ov?.rank != null ? '#' + fmtNum(ov.rank) : '—'} sub="global rank by organic traffic" href={SEM.overview(domain)} />
-                  <StatTile label="Organic Traffic" value={fmtNum(ov?.organicTraffic)} sub={'est. visits / month · value ' + fmtMoney(ov?.organicCost)} href={SEM.organic(domain)} />
-                  <StatTile label="Organic Keywords" value={fmtNum(ov?.organicKeywords)} sub="ranking in Google top 100" href={SEM.organic(domain)} />
-                  <StatTile label="Backlinks" value={fmtNum(bl?.backlinksTotal)} sub={bl?.follows != null ? fmtNum(bl.follows) + ' follow · ' + fmtNum(bl.nofollows) + ' nofollow' : undefined} href={SEM.backlinks(domain)} />
-                  <StatTile label="Referring Domains" value={fmtNum(bl?.refDomains)} sub={bl?.refIps != null ? fmtNum(bl.refIps) + ' referring IPs' : undefined} href={SEM.backlinks(domain)} />
-                  <StatTile label="Paid Keywords" value={fmtNum(ov?.paidKeywords)} sub={ov?.paidTraffic != null ? fmtNum(ov.paidTraffic) + ' paid visits / mo' : 'no active ads detected'} />
-                  <StatTile label="Paid Traffic Cost" value={fmtMoney(ov?.paidCost)} sub="est. monthly ad spend" />
+                  {/* Organic keywords + trend */}
+                  <div>
+                    <div className="text-[12px] font-medium text-ink-muted">Organic Keywords</div>
+                    <div className="mt-1 flex items-baseline gap-2">
+                      <span className="text-[28px] font-semibold tabular-nums tracking-tight text-ink">{fmtNum(ov?.organicKeywords)}</span>
+                      <DeltaText pct={kwDelta} />
+                    </div>
+                    <div className="mt-2">
+                      <AreaChart points={kwPts} height={56} label="Organic keywords trend" />
+                    </div>
+                  </div>
+                  {/* Backlinks / ref domains / paid */}
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                    <div>
+                      <div className="text-[12px] font-medium text-ink-muted">Ref. Domains</div>
+                      <div className="mt-0.5 text-[20px] font-semibold tabular-nums text-ink">{fmtNum(bl?.refDomains)}</div>
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1 text-[12px] font-medium text-ink-muted">Backlinks</div>
+                      <div className="mt-0.5 flex items-baseline gap-1.5">
+                        <span className="text-[20px] font-semibold tabular-nums text-ink">{fmtNum(bl?.backlinksTotal)}</span>
+                        <DeltaText pct={blDelta} />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[12px] font-medium text-ink-muted">Paid Keywords</div>
+                      <div className="mt-0.5 text-[20px] font-semibold tabular-nums text-ink">{fmtNum(ov?.paidKeywords)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[12px] font-medium text-ink-muted">Traffic Value</div>
+                      <div className="mt-0.5 text-[20px] font-semibold tabular-nums text-ink">{fmtMoney(ov?.organicCost)}</div>
+                    </div>
+                  </div>
                 </div>
-                <SectionNotice meta={bundle?.overviewMeta ?? { ok: false, source: 'none', reason: 'http', unitsSpent: 0 }} what="Domain overview" />
-                {bundle?.backlinksMeta && !bundle.backlinksMeta.ok && bundle.overviewMeta.ok && (
-                  <SectionNotice meta={bundle.backlinksMeta} what="Backlink metrics" />
-                )}
+              )}
+              {!loading && bundle && bundle.overviewMeta.ok && !bundle.backlinksMeta.ok && <SectionNotice meta={bundle.backlinksMeta} what="Backlink metrics" />}
+            </Card>
 
+            {/* --- Position tracking + Site audit row --- */}
+            <div className="grid gap-4 lg:grid-cols-5">
+              {/* Position tracking */}
+              <Card
+                tag="Position Tracking"
+                title="United States (Google) · English"
+                className="lg:col-span-3"
+                right={<a href={SEM.organic(domain)} target="_blank" rel="noopener noreferrer" className="text-[12px] font-medium text-accent hover:underline">View full report ↗</a>}
+              >
+                <div className="grid gap-5 sm:grid-cols-[1fr_auto]">
+                  <div>
+                    <div className="text-[12px] font-medium text-ink-muted">Visibility</div>
+                    <div className="mt-1 flex items-baseline gap-2">
+                      <span className="text-[28px] font-semibold tabular-nums tracking-tight text-ink">
+                        {tracking?.visibility != null ? tracking.visibility.toFixed(2) + '%' : '—'}
+                      </span>
+                      {tracking?.visibilityDelta != null && tracking.visibilityDelta !== 0 && (
+                        <span className={'text-[12px] font-semibold tabular-nums ' + (visFalling ? 'text-rose-600' : 'text-emerald-600')}>
+                          {(visFalling ? '' : '+') + tracking.visibilityDelta.toFixed(2)} pts
+                        </span>
+                      )}
+                      {tracking?.avgPosition != null && <span className="text-[12px] text-ink-muted">avg. pos {tracking.avgPosition.toFixed(1)}</span>}
+                    </div>
+                    <div className="mt-2">
+                      <AreaChart
+                        points={visPts}
+                        height={104}
+                        color={visFalling ? CHART.down : CHART.up}
+                        fill={visFalling ? CHART.downFill : CHART.upFill}
+                        label="Position tracking visibility, last 30 days"
+                        formatValue={(v) => v.toFixed(2) + '%'}
+                        emptyNote={
+                          tracking?.configured
+                            ? 'No tracking history yet — data appears after the campaign collects positions.'
+                            : 'Connect your Semrush project (SEMRUSH_PROJECT_ID in Vercel) to chart tracked visibility.'
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-row items-center justify-center gap-4 sm:flex-col sm:gap-3 lg:flex-row">
+                    <RingStat count={dist.top3} total={kws.length || 1} label="Top 3" color="#34c759" />
+                    <RingStat count={dist.top10} total={kws.length || 1} label="Top 10" color="#30b0c7" />
+                    <RingStat count={dist.top20} total={kws.length || 1} label="Top 20" color="#6366f1" />
+                    <RingStat count={dist.top100} total={kws.length || 1} label="Top 100" color="#a1a1a6" />
+                  </div>
+                </div>
+                {/* Top keywords mini table */}
                 {kws.length > 0 && (
-                  <div className="mt-4 rounded-2xl bg-subtle/60 p-4 ring-1 ring-line">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-[12px] font-medium text-ink-muted">Position distribution <span className="text-ink-faint">(top {kws.length} keywords by traffic)</span></div>
-                      <a href={SEM.organic(domain)} target="_blank" rel="noopener noreferrer" className="text-[12px] font-medium text-accent hover:underline">Full report ↗</a>
-                    </div>
-                    <Distribution buckets={distBuckets} />
+                  <div className="mt-4 overflow-hidden rounded-xl ring-1 ring-line">
+                    <table className="w-full text-left text-[12px]">
+                      <thead className="bg-subtle text-ink-muted">
+                        <tr>
+                          <th className="px-3 py-1.5 font-medium">Top Keywords</th>
+                          <th className="px-3 py-1.5 text-right font-medium">Position</th>
+                          <th className="px-3 py-1.5 text-right font-medium">Volume</th>
+                          <th className="px-3 py-1.5 text-right font-medium">Traffic %</th>
+                          <th className="px-3 py-1.5" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {kws.slice(0, 6).map((k, i) => (
+                          <tr key={k.keyword + i} className="border-t border-line">
+                            <td className="max-w-[220px] truncate px-3 py-1.5 text-ink" title={k.keyword}>
+                              <a href={SEM.keyword(k.keyword)} target="_blank" rel="noopener noreferrer" className="hover:text-accent">{k.keyword}</a>
+                            </td>
+                            <td className="px-3 py-1.5 text-right">
+                              <span className={'inline-block min-w-[24px] rounded-full px-1.5 py-0.5 text-center text-[11px] font-semibold tabular-nums ' + posTone(k.position)}>{k.position ?? '—'}</span>
+                            </td>
+                            <td className="px-3 py-1.5 text-right tabular-nums text-ink-muted">{fmtExact(k.volume)}</td>
+                            <td className="px-3 py-1.5 text-right tabular-nums text-ink-muted">{k.trafficPct != null ? k.trafficPct.toFixed(2) : '—'}</td>
+                            <td className="px-3 py-1.5 text-right">
+                              <button type="button" onClick={() => sendToDraft(k.keyword)} className="rounded-full px-2 py-0.5 text-[11px] font-medium text-accent ring-1 ring-accent/30 transition hover:bg-accent-soft">Draft</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
+                {project && !project.trackingMeta.ok && tracking?.configured && <SectionNotice meta={project.trackingMeta} what="Position Tracking" />}
+              </Card>
 
-                <div className="mt-4 flex flex-wrap gap-3 text-[12px]">
-                  <a href={'https://www.semrush.com/analytics/overview/?searchType=domain&q=' + encodeURIComponent(domain)} target="_blank" rel="noopener noreferrer" className="font-medium text-accent hover:underline">🤖 AI visibility (Semrush AI toolkit) ↗</a>
-                  <a href={SEM.projects()} target="_blank" rel="noopener noreferrer" className="font-medium text-accent hover:underline">📊 Position tracking project ↗</a>
-                </div>
-              </>
-            )}
-          </div>
-        )}
+              {/* Site audit */}
+              <Card
+                tag="Site Audit"
+                title={audit?.lastAudit ? 'Updated ' + new Date(audit.lastAudit).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : undefined}
+                className="lg:col-span-2"
+                right={<a href={SEM.projects()} target="_blank" rel="noopener noreferrer" className="text-[12px] font-medium text-accent hover:underline">View full report ↗</a>}
+              >
+                {audit && audit.configured && project?.auditMeta.ok ? (
+                  <>
+                    <div className="flex items-center gap-5">
+                      <Gauge value={audit.health} label="Site Health" />
+                      <div className="grid flex-1 grid-cols-2 gap-3">
+                        <div>
+                          <div className="text-[12px] font-medium text-ink-muted">Errors</div>
+                          <div className="mt-0.5 text-[26px] font-semibold tabular-nums text-rose-600">{fmtExact(audit.errors)}</div>
+                        </div>
+                        <div>
+                          <div className="text-[12px] font-medium text-ink-muted">Warnings</div>
+                          <div className="mt-0.5 text-[26px] font-semibold tabular-nums text-amber-600">{fmtExact(audit.warnings)}</div>
+                        </div>
+                        <div>
+                          <div className="text-[12px] font-medium text-ink-muted">Notices</div>
+                          <div className="mt-0.5 text-[20px] font-semibold tabular-nums text-ink">{fmtExact(audit.notices)}</div>
+                        </div>
+                        <div>
+                          <div className="text-[12px] font-medium text-ink-muted">Crawled Pages</div>
+                          <div className="mt-0.5 text-[20px] font-semibold tabular-nums text-ink">{fmtExact(audit.pagesCrawled)}</div>
+                        </div>
+                      </div>
+                    </div>
+                    {audit.pagesCrawled != null && audit.pagesHealthy != null && audit.pagesWithIssues != null && (
+                      <div className="mt-4">
+                        <SegmentBar
+                          ariaLabel={'Crawled pages: ' + audit.pagesHealthy + ' healthy, ' + audit.pagesWithIssues + ' with issues'}
+                          segments={[
+                            { label: 'Healthy', count: audit.pagesHealthy, color: '#34c759' },
+                            { label: 'With issues', count: audit.pagesWithIssues, color: '#ff9f0a' },
+                            { label: 'Other', count: Math.max(0, audit.pagesCrawled - audit.pagesHealthy - audit.pagesWithIssues), color: 'rgba(0,0,0,0.12)' },
+                          ]}
+                        />
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex h-full min-h-[180px] flex-col items-center justify-center gap-2 text-center">
+                    <Gauge value={null} label="Site Health" />
+                    <p className="max-w-[260px] text-[12px] text-ink-muted">
+                      {audit?.configured
+                        ? 'Site Audit data is unavailable right now' + (project?.auditMeta.note ? ' (' + project.auditMeta.note + ')' : '') + '.'
+                        : 'Set SEMRUSH_PROJECT_ID in Vercel to pull your Site Audit score, errors and warnings here.'}
+                    </p>
+                  </div>
+                )}
+              </Card>
+            </div>
 
-        {/* ------------------------------------------------ Top keywords */}
-        {tab === 'keywords' && (
-          <div className="mt-4">
-            {loading ? (
-              <p className="text-[13px] text-ink-muted">Loading rankings…</p>
-            ) : kws.length === 0 ? (
-              <SectionNotice meta={bundle?.topKeywordsMeta ?? { ok: false, source: 'none', reason: 'empty', unitsSpent: 0 }} what="Ranking keywords" />
-            ) : (
-              <div className="overflow-x-auto rounded-2xl ring-1 ring-line">
-                <table className="w-full min-w-[640px] text-left text-[13px]">
-                  <thead className="bg-subtle text-ink-muted">
-                    <tr>
-                      <th className="px-3 py-2 font-medium">Keyword</th>
-                      <th className="px-3 py-2 font-medium text-right">Pos</th>
-                      <th className="px-3 py-2 font-medium text-right">Δ</th>
-                      <th className="px-3 py-2 font-medium text-right">Volume</th>
-                      <th className="px-3 py-2 font-medium text-right">KD</th>
-                      <th className="px-3 py-2 font-medium text-right">Traffic %</th>
-                      <th className="px-3 py-2 font-medium">URL</th>
-                      <th className="px-3 py-2" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {kws.map((k, i) => {
-                      const d = deltaChip(k.positionDiff);
-                      return (
-                        <tr key={k.keyword + i} className="border-t border-line">
-                          <td className="px-3 py-2 text-ink">
-                            <a href={SEM.keyword(k.keyword)} target="_blank" rel="noopener noreferrer" className="hover:text-accent">{k.keyword}</a>
-                          </td>
-                          <td className="px-3 py-2 text-right">
-                            <span className={'inline-block min-w-[28px] rounded-full px-1.5 py-0.5 text-center text-[12px] font-semibold tabular-nums ' + posTone(k.position)}>{k.position ?? '—'}</span>
-                          </td>
-                          <td className={'px-3 py-2 text-right text-[12px] font-medium tabular-nums ' + (d ? d.cls : 'text-ink-faint')}>{d ? d.label : '·'}</td>
-                          <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{fmtExact(k.volume)}</td>
-                          <td className={'px-3 py-2 text-right tabular-nums font-medium ' + kdTone(k.difficulty)}>{k.difficulty ?? '—'}</td>
-                          <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{k.trafficPct != null ? k.trafficPct.toFixed(2) : '—'}</td>
-                          <td className="max-w-[220px] truncate px-3 py-2 text-[12px] text-ink-faint" title={k.url}>{k.url.replace(/^https?:\/\/(www\.)?/, '')}</td>
-                          <td className="px-3 py-2 text-right">
-                            <button type="button" onClick={() => sendToDraft(k.keyword)} className="rounded-full px-2.5 py-1 text-[11px] font-medium text-accent ring-1 ring-accent/30 transition hover:bg-accent-soft">Draft</button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            {!loading && kws.length > 0 && (
-              <p className="mt-2 text-[11px] text-ink-faint">Sorted by traffic contribution. Positions are Google US organic. Click a keyword for the full Semrush view.</p>
-            )}
-          </div>
-        )}
-
-        {/* ------------------------------------------------ Competitors */}
-        {tab === 'competitors' && (
-          <div className="mt-4">
-            {loading ? (
-              <p className="text-[13px] text-ink-muted">Loading competitors…</p>
-            ) : (bundle?.competitors.length ?? 0) === 0 ? (
-              <SectionNotice meta={bundle?.competitorsMeta ?? { ok: false, source: 'none', reason: 'empty', unitsSpent: 0 }} what="Organic competitors" />
-            ) : (
-              <>
-                <div className="overflow-x-auto rounded-2xl ring-1 ring-line">
-                  <table className="w-full min-w-[560px] text-left text-[13px]">
+            {/* --- Automatic AI keyword research band --- */}
+            <Card
+              tag="AI × Semrush"
+              title="Automatic keyword research"
+              right={<span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">✓ Active on every draft</span>}
+            >
+              <p className="text-[12px] leading-relaxed text-ink-muted">
+                Before the AI writes anything — dashboard generator, chat assistant, guided wizard or research copilot — it runs a Semrush
+                Keyword Brief on the topic (primary keyword, supporting terms, real searcher questions, intent) and writes to that contract.
+                Each draft is stamped with the research that shaped it, so autonomous posts only ever need your final confirmation.
+              </p>
+              {activity == null ? (
+                <p className="mt-3 text-[12px] text-ink-faint">Loading research activity…</p>
+              ) : activity.length === 0 ? (
+                <p className="mt-3 rounded-xl bg-subtle px-3 py-2.5 text-[12px] text-ink-muted">
+                  No stamped drafts yet — generate your first draft and the research record will appear here.
+                </p>
+              ) : (
+                <div className="mt-3 overflow-hidden rounded-xl ring-1 ring-line">
+                  <table className="w-full text-left text-[12px]">
                     <thead className="bg-subtle text-ink-muted">
                       <tr>
-                        <th className="px-3 py-2 font-medium">Competitor</th>
-                        <th className="px-3 py-2 font-medium">Competition level</th>
-                        <th className="px-3 py-2 font-medium text-right">Common keywords</th>
-                        <th className="px-3 py-2 font-medium text-right">Their keywords</th>
-                        <th className="px-3 py-2 font-medium text-right">Their traffic</th>
-                        <th className="px-3 py-2" />
+                        <th className="px-3 py-1.5 font-medium">Draft topic</th>
+                        <th className="px-3 py-1.5 font-medium">Primary keyword applied</th>
+                        <th className="px-3 py-1.5 text-right font-medium">Volume</th>
+                        <th className="px-3 py-1.5 text-right font-medium">KD</th>
+                        <th className="px-3 py-1.5 text-right font-medium">When</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {bundle!.competitors.map((c, i) => (
-                        <tr key={c.domain + i} className="border-t border-line">
-                          <td className="px-3 py-2 font-medium text-ink">
-                            <a href={SEM.overview(c.domain)} target="_blank" rel="noopener noreferrer" className="hover:text-accent">{c.domain}</a>
+                      {activity.slice(0, 8).map((a, i) => (
+                        <tr key={a.topic + a.createdAt + i} className="border-t border-line">
+                          <td className="max-w-[260px] truncate px-3 py-1.5 text-ink" title={a.topic}>{a.topic}</td>
+                          <td className="px-3 py-1.5">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-800 ring-1 ring-emerald-200">
+                              🔑 {a.keyword}
+                            </span>
                           </td>
-                          <td className="px-3 py-2">
-                            <div className="flex items-center gap-2">
-                              <div className="h-1.5 w-24 overflow-hidden rounded-full bg-subtle">
-                                <div className="h-full rounded-full bg-accent" style={{ width: Math.round((c.competitionLevel ?? 0) * 100) + '%' }} />
-                              </div>
-                              <span className="text-[11px] tabular-nums text-ink-muted">{c.competitionLevel != null ? Math.round(c.competitionLevel * 100) + '%' : '—'}</span>
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{fmtExact(c.commonKeywords)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{fmtNum(c.organicKeywords)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{fmtNum(c.organicTraffic)}</td>
-                          <td className="px-3 py-2 text-right">
-                            <button type="button" onClick={() => { setDomainInput(c.domain); void loadDomain(c.domain); setTab('overview'); }} className="rounded-full px-2.5 py-1 text-[11px] font-medium text-accent ring-1 ring-accent/30 transition hover:bg-accent-soft">Inspect</button>
-                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums text-ink-muted">{fmtExact(a.volume)}</td>
+                          <td className={'px-3 py-1.5 text-right tabular-nums font-medium ' + kdTone(a.difficulty)}>{a.difficulty ?? '—'}</td>
+                          <td className="px-3 py-1.5 text-right tabular-nums text-ink-faint">{timeAgo(a.createdAt)}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-                <p className="mt-2 text-[11px] text-ink-faint">Competition level = share of keyword overlap with {domain}. “Inspect” loads that domain in this panel.</p>
-              </>
-            )}
+              )}
+              <div className="mt-3 flex flex-wrap gap-3 text-[12px]">
+                <a href={SEM.overview(domain)} target="_blank" rel="noopener noreferrer" className="font-medium text-accent hover:underline">🤖 AI visibility (Semrush AI toolkit) ↗</a>
+                <a href={SEM.projects()} target="_blank" rel="noopener noreferrer" className="font-medium text-accent hover:underline">📊 Manage Semrush project ↗</a>
+              </div>
+            </Card>
           </div>
         )}
 
-        {/* ------------------------------------------------ Backlinks */}
+        {/* ============================================== TOP KEYWORDS */}
+        {tab === 'keywords' && (
+          <div className="mt-4">
+            <Card tag="Organic Research" title={'Top ranking keywords — ' + domain} right={<a href={SEM.organic(domain)} target="_blank" rel="noopener noreferrer" className="text-[12px] font-medium text-accent hover:underline">Full report ↗</a>}>
+              {loading ? (
+                <p className="text-[13px] text-ink-muted">Loading rankings…</p>
+              ) : kws.length === 0 ? (
+                <SectionNotice meta={bundle?.topKeywordsMeta ?? { ok: false, source: 'none', reason: 'empty', unitsSpent: 0 }} what="Ranking keywords" />
+              ) : (
+                <div className="overflow-x-auto rounded-xl ring-1 ring-line">
+                  <table className="w-full min-w-[640px] text-left text-[13px]">
+                    <thead className="bg-subtle text-ink-muted">
+                      <tr>
+                        <th className="px-3 py-2 font-medium">Keyword</th>
+                        <th className="px-3 py-2 text-right font-medium">Pos</th>
+                        <th className="px-3 py-2 text-right font-medium">Δ</th>
+                        <th className="px-3 py-2 text-right font-medium">Volume</th>
+                        <th className="px-3 py-2 text-right font-medium">KD</th>
+                        <th className="px-3 py-2 text-right font-medium">Traffic %</th>
+                        <th className="px-3 py-2 font-medium">URL</th>
+                        <th className="px-3 py-2" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {kws.map((k, i) => {
+                        const d = k.positionDiff;
+                        return (
+                          <tr key={k.keyword + i} className="border-t border-line">
+                            <td className="px-3 py-2 text-ink">
+                              <a href={SEM.keyword(k.keyword)} target="_blank" rel="noopener noreferrer" className="hover:text-accent">{k.keyword}</a>
+                            </td>
+                            <td className="px-3 py-2 text-right">
+                              <span className={'inline-block min-w-[28px] rounded-full px-1.5 py-0.5 text-center text-[12px] font-semibold tabular-nums ' + posTone(k.position)}>{k.position ?? '—'}</span>
+                            </td>
+                            <td className={'px-3 py-2 text-right text-[12px] font-medium tabular-nums ' + (d == null || d === 0 ? 'text-ink-faint' : d > 0 ? 'text-emerald-600' : 'text-rose-600')}>
+                              {d == null || d === 0 ? '·' : (d > 0 ? '▲ ' : '▼ ') + Math.abs(d)}
+                            </td>
+                            <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{fmtExact(k.volume)}</td>
+                            <td className={'px-3 py-2 text-right tabular-nums font-medium ' + kdTone(k.difficulty)}>{k.difficulty ?? '—'}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{k.trafficPct != null ? k.trafficPct.toFixed(2) : '—'}</td>
+                            <td className="max-w-[220px] truncate px-3 py-2 text-[12px] text-ink-faint" title={k.url}>{k.url.replace(/^https?:\/\/(www\.)?/, '')}</td>
+                            <td className="px-3 py-2 text-right">
+                              <button type="button" onClick={() => sendToDraft(k.keyword)} className="rounded-full px-2.5 py-1 text-[11px] font-medium text-accent ring-1 ring-accent/30 transition hover:bg-accent-soft">Draft</button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {!loading && kws.length > 0 && (
+                <p className="mt-2 text-[11px] text-ink-faint">Sorted by traffic contribution · Google US organic · “Draft” sends the keyword through the automatic Semrush filter into a new AI draft.</p>
+              )}
+            </Card>
+          </div>
+        )}
+
+        {/* ============================================== COMPETITORS */}
+        {tab === 'competitors' && (
+          <div className="mt-4">
+            <Card tag="Competitive Research" title={'Organic competitors — ' + domain} right={<a href={SEM.competitors(domain)} target="_blank" rel="noopener noreferrer" className="text-[12px] font-medium text-accent hover:underline">Full report ↗</a>}>
+              {loading ? (
+                <p className="text-[13px] text-ink-muted">Loading competitors…</p>
+              ) : (bundle?.competitors.length ?? 0) === 0 ? (
+                <SectionNotice meta={bundle?.competitorsMeta ?? { ok: false, source: 'none', reason: 'empty', unitsSpent: 0 }} what="Organic competitors" />
+              ) : (
+                <>
+                  <div className="overflow-x-auto rounded-xl ring-1 ring-line">
+                    <table className="w-full min-w-[560px] text-left text-[13px]">
+                      <thead className="bg-subtle text-ink-muted">
+                        <tr>
+                          <th className="px-3 py-2 font-medium">Competitor</th>
+                          <th className="px-3 py-2 font-medium">Competition level</th>
+                          <th className="px-3 py-2 text-right font-medium">Common keywords</th>
+                          <th className="px-3 py-2 text-right font-medium">Their keywords</th>
+                          <th className="px-3 py-2 text-right font-medium">Their traffic</th>
+                          <th className="px-3 py-2" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {bundle!.competitors.map((c, i) => (
+                          <tr key={c.domain + i} className="border-t border-line">
+                            <td className="px-3 py-2 font-medium text-ink">
+                              <a href={SEM.overview(c.domain)} target="_blank" rel="noopener noreferrer" className="hover:text-accent">{c.domain}</a>
+                            </td>
+                            <td className="px-3 py-2">
+                              <div className="flex items-center gap-2">
+                                <div className="h-2 w-24 overflow-hidden rounded-full bg-subtle">
+                                  <div className="h-full rounded-full bg-accent" style={{ width: Math.round((c.competitionLevel ?? 0) * 100) + '%' }} />
+                                </div>
+                                <span className="text-[11px] tabular-nums text-ink-muted">{c.competitionLevel != null ? Math.round(c.competitionLevel * 100) + '%' : '—'}</span>
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{fmtExact(c.commonKeywords)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{fmtNum(c.organicKeywords)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{fmtNum(c.organicTraffic)}</td>
+                            <td className="px-3 py-2 text-right">
+                              <button type="button" onClick={() => { setDomainInput(c.domain); void loadDomain(c.domain); setTab('overview'); }} className="rounded-full px-2.5 py-1 text-[11px] font-medium text-accent ring-1 ring-accent/30 transition hover:bg-accent-soft">Inspect</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="mt-2 text-[11px] text-ink-faint">Competition level = share of keyword overlap with {domain}. “Inspect” loads that domain in this panel.</p>
+                </>
+              )}
+            </Card>
+          </div>
+        )}
+
+        {/* ============================================== BACKLINKS */}
         {tab === 'backlinks' && (
           <div className="mt-4">
-            {loading ? (
-              <p className="text-[13px] text-ink-muted">Loading link profile…</p>
-            ) : !bl ? (
-              <SectionNotice meta={bundle?.backlinksMeta ?? { ok: false, source: 'none', reason: 'empty', unitsSpent: 0 }} what="Backlink metrics" />
-            ) : (
-              <>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  <StatTile label="Total Backlinks" value={fmtNum(bl.backlinksTotal)} href={SEM.backlinks(domain)} />
-                  <StatTile label="Referring Domains" value={fmtNum(bl.refDomains)} href={SEM.backlinks(domain)} />
-                  <StatTile label="Referring URLs" value={fmtNum(bl.refUrls)} />
-                  <StatTile label="Referring IPs" value={fmtNum(bl.refIps)} />
-                </div>
-                {bl.follows != null && bl.nofollows != null && bl.follows + bl.nofollows > 0 && (
-                  <div className="mt-4 rounded-2xl bg-subtle/60 p-4 ring-1 ring-line">
-                    <div className="text-[12px] font-medium text-ink-muted">Link attributes</div>
-                    <div className="mt-2 flex h-3 w-full overflow-hidden rounded-full bg-subtle" role="img" aria-label={'Follow ' + bl.follows + ', nofollow ' + bl.nofollows}>
-                      <div style={{ width: (bl.follows / (bl.follows + bl.nofollows)) * 100 + '%', background: '#0071e3', marginRight: 2 }} />
-                      <div style={{ width: (bl.nofollows / (bl.follows + bl.nofollows)) * 100 + '%', background: 'rgba(0,113,227,0.25)' }} />
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-ink-muted">
-                      <span className="inline-flex items-center gap-1.5"><span aria-hidden className="h-2.5 w-2.5 rounded-[3px]" style={{ background: '#0071e3' }} />Follow <span className="font-medium tabular-nums text-ink">{fmtNum(bl.follows)}</span></span>
-                      <span className="inline-flex items-center gap-1.5"><span aria-hidden className="h-2.5 w-2.5 rounded-[3px]" style={{ background: 'rgba(0,113,227,0.25)' }} />Nofollow <span className="font-medium tabular-nums text-ink">{fmtNum(bl.nofollows)}</span></span>
-                      {bl.texts != null && <span>Text links <span className="font-medium tabular-nums text-ink">{fmtNum(bl.texts)}</span></span>}
-                      {bl.images != null && <span>Image links <span className="font-medium tabular-nums text-ink">{fmtNum(bl.images)}</span></span>}
-                    </div>
-                  </div>
-                )}
-                <p className="mt-3 text-[11px] text-ink-faint">Backlink quality drives Authority Score ({bl.authorityScore ?? '—'}/100). Earn links from relevant medical and health publications to raise it.</p>
-              </>
-            )}
-          </div>
-        )}
-
-        {/* ------------------------------------------------ Site health */}
-        {tab === 'health' && (
-          <div className="mt-4">
-            {projectLoading && <p className="text-[13px] text-ink-muted">Loading Site Audit &amp; Position Tracking…</p>}
-            {!projectLoading && project && (
-              <>
-                {project.audit.configured && project.auditMeta.ok ? (
-                  <div className="grid gap-3 lg:grid-cols-[auto_1fr]">
-                    <div className="flex items-center justify-center rounded-2xl bg-subtle/60 p-4 ring-1 ring-line">
-                      <Gauge value={project.audit.health} hex={healthTone(project.audit.health).hex} label="Site Health" />
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                      <StatTile label="Errors" value={fmtExact(project.audit.errors)} sub="fix these first" />
-                      <StatTile label="Warnings" value={fmtExact(project.audit.warnings)} />
-                      <StatTile label="Notices" value={fmtExact(project.audit.notices)} />
-                      <StatTile label="Pages crawled" value={fmtExact(project.audit.pagesCrawled)} />
-                      <StatTile label="Healthy pages" value={fmtExact(project.audit.pagesHealthy)} />
-                      <StatTile label="Pages with issues" value={fmtExact(project.audit.pagesWithIssues)} />
-                    </div>
-                  </div>
-                ) : (
-                  <SectionNotice
-                    meta={project.auditMeta}
-                    what={project.audit.configured ? 'Site Audit' : 'Site Audit (set SEMRUSH_PROJECT_ID in Vercel to connect your Semrush project)'}
-                  />
-                )}
-
-                <div className="mt-4 rounded-2xl bg-subtle/60 p-4 ring-1 ring-line">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
+            <Card tag="Backlink Analytics" title={domain} right={<a href={SEM.backlinks(domain)} target="_blank" rel="noopener noreferrer" className="text-[12px] font-medium text-accent hover:underline">Full report ↗</a>}>
+              {loading ? (
+                <p className="text-[13px] text-ink-muted">Loading link profile…</p>
+              ) : !bl ? (
+                <SectionNotice meta={bundle?.backlinksMeta ?? { ok: false, source: 'none', reason: 'empty', unitsSpent: 0 }} what="Backlink metrics" />
+              ) : (
+                <>
+                  <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
                     <div>
-                      <div className="text-[12px] font-medium text-ink-muted">Position Tracking visibility <span className="text-ink-faint">(last 30 days)</span></div>
-                      <div className="mt-1 flex items-baseline gap-2">
-                        <span className="text-[24px] font-semibold tabular-nums tracking-tight text-ink">
-                          {project.tracking.visibility != null ? project.tracking.visibility.toFixed(2) + '%' : '—'}
-                        </span>
-                        {project.tracking.visibilityDelta != null && project.tracking.visibilityDelta !== 0 && (
-                          <span className={'text-[12px] font-medium tabular-nums ' + (project.tracking.visibilityDelta > 0 ? 'text-emerald-600' : 'text-rose-600')}>
-                            {(project.tracking.visibilityDelta > 0 ? '▲ ' : '▼ ') + Math.abs(project.tracking.visibilityDelta).toFixed(2)} pts
-                          </span>
-                        )}
-                        {project.tracking.avgPosition != null && (
-                          <span className="text-[12px] text-ink-muted">avg. position {project.tracking.avgPosition.toFixed(1)}</span>
-                        )}
+                      <div className="text-[12px] font-medium text-ink-muted">Total Backlinks</div>
+                      <div className="mt-0.5 flex items-baseline gap-2">
+                        <span className="text-[26px] font-semibold tabular-nums text-ink">{fmtNum(bl.backlinksTotal)}</span>
+                        <DeltaText pct={blDelta} />
+                      </div>
+                      <div className="mt-1"><AreaChart points={blPts} height={44} label="Backlinks trend" /></div>
+                    </div>
+                    <div>
+                      <div className="text-[12px] font-medium text-ink-muted">Referring Domains</div>
+                      <div className="mt-0.5 text-[26px] font-semibold tabular-nums text-ink">{fmtNum(bl.refDomains)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[12px] font-medium text-ink-muted">Referring URLs</div>
+                      <div className="mt-0.5 text-[26px] font-semibold tabular-nums text-ink">{fmtNum(bl.refUrls)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[12px] font-medium text-ink-muted">Referring IPs</div>
+                      <div className="mt-0.5 text-[26px] font-semibold tabular-nums text-ink">{fmtNum(bl.refIps)}</div>
+                    </div>
+                  </div>
+                  {bl.follows != null && bl.nofollows != null && bl.follows + bl.nofollows > 0 && (
+                    <div className="mt-5">
+                      <div className="mb-2 text-[12px] font-medium text-ink-muted">Link attributes</div>
+                      <SegmentBar
+                        ariaLabel={'Follow ' + bl.follows + ', nofollow ' + bl.nofollows}
+                        segments={[
+                          { label: 'Follow', count: bl.follows, color: '#6366f1' },
+                          { label: 'Nofollow', count: bl.nofollows, color: 'rgba(99,102,241,0.3)' },
+                        ]}
+                      />
+                      <div className="mt-2 flex flex-wrap gap-x-4 text-[11px] text-ink-muted">
+                        {bl.texts != null && <span>Text links <span className="font-semibold tabular-nums text-ink">{fmtNum(bl.texts)}</span></span>}
+                        {bl.images != null && <span>Image links <span className="font-semibold tabular-nums text-ink">{fmtNum(bl.images)}</span></span>}
                       </div>
                     </div>
-                    <Sparkline points={project.tracking.trend} />
-                  </div>
-                  {!project.trackingMeta.ok && (
-                    <SectionNotice
-                      meta={project.trackingMeta}
-                      what={project.tracking.configured ? 'Position Tracking' : 'Position Tracking (set SEMRUSH_PROJECT_ID in Vercel to connect your campaign)'}
-                    />
                   )}
-                </div>
-
-                {project.audit.lastAudit && (
-                  <p className="mt-2 text-[11px] text-ink-faint">Last audit: {new Date(project.audit.lastAudit).toLocaleDateString()} · <a href={SEM.projects()} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">manage in Semrush ↗</a></p>
-                )}
-              </>
-            )}
-            {!projectLoading && !project && (
-              <p className="rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">
-                Could not reach the Site Audit / Position Tracking endpoint. Check the Semrush connection and try again.
-              </p>
-            )}
+                  <p className="mt-4 text-[11px] text-ink-faint">Backlink quality drives Authority Score ({bl.authorityScore ?? '—'}/100). Earn links from relevant medical and health publications to raise it.</p>
+                </>
+              )}
+            </Card>
           </div>
         )}
 
-        {/* ------------------------------------------------ Keyword research */}
+        {/* ============================================== KEYWORD RESEARCH */}
         {tab === 'research' && (
           <div className="mt-4">
-            <KeywordIntelligence embedded initialTopic={initialTopic} onUseTopic={onUseTopic} />
+            <Card tag="Keyword Magic" title="Topic research — the same brief the AI drafts with">
+              <KeywordIntelligence embedded initialTopic={initialTopic} onUseTopic={onUseTopic} />
+            </Card>
           </div>
         )}
       </div>

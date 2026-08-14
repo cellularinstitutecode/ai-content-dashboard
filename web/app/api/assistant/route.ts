@@ -8,7 +8,7 @@ import {
   type ToolMessage,
 } from "@/lib/ai";
 import { opusCreateClipProject } from "@/lib/opus";
-import { researchBundle, briefPromptFrom, getUnitsBalance, type SemKeyword } from "@/lib/semrush";
+import { researchBundle, briefPromptFrom, getUnitsBalance, recordDraftKeywords, type SemKeyword } from "@/lib/semrush";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 // Compact, chat-friendly rendering of Semrush keyword rows.
@@ -228,6 +228,8 @@ async function runAgent(session: Session, input: string, userId: string | null) 
     if (call.name === "generate_content") {
       const topic = String(call.input.topic || "").trim();
       const provider = call.input.provider === "openai" ? "openai" : "anthropic";
+      // Semrush pre-filter runs automatically inside generateContentPack and
+      // stamps the pack with `_semrush` provenance (visible on saved drafts).
       const result = await generateContentPack({
         topic,
         audience: call.input.audience,
@@ -240,8 +242,13 @@ async function runAgent(session: Session, input: string, userId: string | null) 
       session.lastPack = pack;
       session.lastTopic = topic;
       session.provider = provider;
+      if (userId && result.keywordBrief) void recordDraftKeywords(userId, topic, result.keywordBrief);
+      const kwNote =
+        result.semrush && result.semrush.source === "semrush"
+          ? "\n\n[Semrush keyword research applied" + (result.semrush.fromCache ? " (cached)" : "") + " — primary: " + (result.semrush.primary || "n/a") + (result.semrush.volume != null ? " (" + result.semrush.volume + "/mo)" : "") + "; tell the user their draft was optimized with real search data.]"
+          : "\n\n[Semrush keyword data was unavailable for this topic (" + (result.semrush?.reason || "unknown") + ") — the draft was generated without live keyword research; mention this briefly.]";
       const preview = textFromPack(pack, "instagram").slice(0, 500);
-      toolResult = "Generated content for topic: " + topic + "\n\n" + preview;
+      toolResult = "Generated content for topic: " + topic + "\n\n" + preview + kwNote;
     } else if (call.name === "save_draft") {
       if (!session.lastPack) {
         toolResult = "No generated content to save yet. Call generate_content first.";
@@ -584,6 +591,7 @@ export async function POST(req: Request) {
       case "provider": {
         session.provider = /openai|gpt/i.test(input) ? "openai" : "anthropic";
         session.model = MODELS[session.provider];
+        // Semrush pre-filter runs automatically inside generateContentPack.
         const result = await generateContentPack({
           topic: session.topic!,
           audience: session.audience,
@@ -595,6 +603,13 @@ export async function POST(req: Request) {
         });
         const pack = (result?.pack || result) as Record<string, any>;
         session.pack = pack;
+        if (userId && result.keywordBrief) void recordDraftKeywords(userId, session.topic!, result.keywordBrief);
+        if (result.semrush && result.semrush.source === "semrush") {
+          session.confirmations!.push(
+            "Semrush keyword research applied — primary keyword: " + (result.semrush.primary || "n/a") +
+            (result.semrush.volume != null ? " (" + result.semrush.volume.toLocaleString() + "/mo)" : "")
+          );
+        }
         if (userId) {
           const sb = supabaseServer();
           const { data: draft } = await sb
