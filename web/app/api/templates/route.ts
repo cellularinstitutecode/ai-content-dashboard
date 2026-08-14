@@ -1,6 +1,7 @@
 // web/app/api/templates/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
+import { normalizeStrategy } from '@/lib/autopilot';
 
 export const runtime = 'nodejs';
 
@@ -13,6 +14,8 @@ type TemplateInput = {
   weekdays?: number[]; // 0=Sun .. 6=Sat
   time_of_day?: string; // "HH:MM"
   active?: boolean;
+  // Autopilot: how the engine should treat each occurrence of this template.
+  strategy?: unknown;
 };
 
 function cleanWeekdays(x: any): number[] {
@@ -71,13 +74,23 @@ export async function POST(req: NextRequest) {
     active: body.active === false ? false : true,
     updated_at: new Date().toISOString(),
   };
+  // Only persist a strategy when the client sent one, so older clients (and
+  // databases without the column yet) keep working unchanged.
+  if (body.strategy !== undefined) row.strategy = normalizeStrategy(body.strategy);
   if (body.id) row.id = body.id;
 
-  const { data, error } = await sb
+  let { data, error } = await sb
     .from('schedule_templates')
     .upsert(row)
     .select()
     .maybeSingle();
+  // Graceful degrade: if the autopilot migration hasn't been run yet the
+  // strategy column is missing — save the template without it instead of
+  // failing the whole request.
+  if (error && row.strategy !== undefined && /strategy/i.test(String(error.message || ''))) {
+    delete row.strategy;
+    ({ data, error } = await sb.from('schedule_templates').upsert(row).select().maybeSingle());
+  }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ template: data });
 }

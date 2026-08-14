@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLiveContent } from "@/components/LiveContentProvider";
 import SemrushPanel from "./SemrushPanel";
+import AutopilotQueue from "./AutopilotQueue";
 
 type Provider = 'anthropic' | 'openai';
 type ContentType = 'social' | 'blog' | 'email' | 'video' | 'ad';
@@ -853,6 +854,9 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
           )}
         </section>
       )}
+
+{/* Autopilot: dynamic-template runs waiting for review — everything but publish */}
+<AutopilotQueue />
 
 {/* Stat cards */}
 <section className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
