@@ -121,7 +121,39 @@ type ProjectData = { audit: SiteAuditSnapshot; auditMeta: SectionMeta; tracking:
 
 type ActivityRow = { topic: string; keyword: string; volume: number | null; difficulty: number | null; role: string; createdAt: string };
 
-type Tab = 'overview' | 'keywords' | 'competitors' | 'backlinks' | 'research';
+type MoverRow = {
+  keyword: string;
+  position: number | null;
+  prevPosition: number | null;
+  positionDiff: number | null;
+  volume: number | null;
+  difficulty: number | null;
+  url: string;
+};
+
+type KeywordMovers = {
+  newKeywords: MoverRow[];
+  lostKeywords: MoverRow[];
+  improved: MoverRow[];
+  declined: MoverRow[];
+  meta: SectionMeta;
+};
+
+type AdvicePriority = {
+  rank: number;
+  category: string;
+  title: string;
+  why: string;
+  action: string;
+  impact: string;
+  effort: string;
+  keywords: string[];
+  draftPrompt: string;
+};
+
+type AdvicePlan = { summary: string; priorities: AdvicePriority[] };
+
+type Tab = 'overview' | 'rankings' | 'keywords' | 'competitors' | 'backlinks' | 'research';
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -468,6 +500,12 @@ export default function SemrushPanel({
   const [loading, setLoading] = useState(true);
   const [project, setProject] = useState<ProjectData | null>(null);
   const [activity, setActivity] = useState<ActivityRow[] | null>(null);
+  const [movers, setMovers] = useState<KeywordMovers | null>(null);
+  const [moversLoading, setMoversLoading] = useState(false);
+  const [advice, setAdvice] = useState<AdvicePlan | null>(null);
+  const [adviceLoading, setAdviceLoading] = useState(false);
+  const [adviceErr, setAdviceErr] = useState('');
+  const moversFor = useRef<string | null>(null);
 
   async function loadDomain(domain?: string) {
     setLoading(true);
@@ -477,10 +515,47 @@ export default function SemrushPanel({
       const j = (await r.json().catch(() => null)) as DomainBundle | null;
       setBundle(j);
       if (j && !domainInput) setDomainInput(j.domain);
+      // Reset per-domain sections when switching domains.
+      if (j && moversFor.current && moversFor.current !== j.domain) {
+        moversFor.current = null;
+        setMovers(null);
+        setAdvice(null);
+        setAdviceErr('');
+      }
     } catch {
       setBundle(null);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadMovers(d: string) {
+    if (moversFor.current === d) return;
+    moversFor.current = d;
+    setMoversLoading(true);
+    try {
+      const r = await fetch('/api/semrush?action=movers&domain=' + encodeURIComponent(d));
+      setMovers((await r.json().catch(() => null)) as KeywordMovers | null);
+    } catch {
+      setMovers(null);
+    } finally {
+      setMoversLoading(false);
+    }
+  }
+
+  async function loadAdvice(d: string) {
+    if (adviceLoading) return;
+    setAdviceLoading(true);
+    setAdviceErr('');
+    try {
+      const r = await fetch('/api/semrush?action=advise&domain=' + encodeURIComponent(d));
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j?.ok) throw new Error(j?.error === 'rate_limited' ? 'Rate limit reached — try again in a few minutes.' : j?.error || 'Advisor failed');
+      setAdvice(j.plan as AdvicePlan);
+    } catch (e: any) {
+      setAdviceErr(e?.message || 'Advisor failed');
+    } finally {
+      setAdviceLoading(false);
     }
   }
 
@@ -554,11 +629,49 @@ export default function SemrushPanel({
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'overview', label: 'Dashboard' },
+    { id: 'rankings', label: 'Ranking assistant' },
     { id: 'keywords', label: 'Top keywords' },
     { id: 'competitors', label: 'Competitors' },
     { id: 'backlinks', label: 'Backlinks' },
     { id: 'research', label: 'Keyword research' },
   ];
+
+  // Quick wins: page-1-cusp and page-2 keywords (positions 4-20) worth pushing
+  // into the top 3 — the highest-leverage ranking work.
+  const quickWins = useMemo(() => {
+    const score = (k: OrganicKeywordRow) => Math.pow(k.volume ?? 0, 0.7) * ((100 - Math.min(k.difficulty ?? 50, 95)) / 100) * ((21 - (k.position ?? 21)) / 20 + 0.5);
+    return kws
+      .filter((k) => k.position != null && k.position >= 4 && k.position <= 20 && (k.volume ?? 0) > 0)
+      .sort((a, b) => score(b) - score(a))
+      .slice(0, 8);
+  }, [kws]);
+
+  const intentBreakdown = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const k of kws) for (const i of k.intents) counts[i] = (counts[i] || 0) + 1;
+    const palette: Record<string, string> = { informational: '#0ea5e9', commercial: '#8b5cf6', transactional: '#10b981', navigational: '#94a3b8' };
+    return Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([label, count]) => ({ label, count, color: palette[label] || '#a1a1a6' }));
+  }, [kws]);
+
+  const kdBreakdown = useMemo(() => {
+    const b = [
+      { label: 'Easy (KD < 30)', count: 0, color: '#34c759' },
+      { label: 'Possible (30-49)', count: 0, color: '#ffcc00' },
+      { label: 'Hard (50-69)', count: 0, color: '#ff9f0a' },
+      { label: 'Very hard (70+)', count: 0, color: '#ff3b30' },
+    ];
+    for (const k of kws) {
+      const d = k.difficulty;
+      if (d == null) continue;
+      if (d < 30) b[0].count++;
+      else if (d < 50) b[1].count++;
+      else if (d < 70) b[2].count++;
+      else b[3].count++;
+    }
+    return b.filter((x) => x.count > 0);
+  }, [kws]);
 
   return (
     <section className="overflow-hidden rounded-3xl bg-canvas ring-1 ring-line shadow-soft">
@@ -612,7 +725,7 @@ export default function SemrushPanel({
               <button
                 key={t.id}
                 type="button"
-                onClick={() => setTab(t.id)}
+                onClick={() => { setTab(t.id); if (t.id === 'rankings') void loadMovers(domain); }}
                 className={
                   'rounded-lg px-3 py-1.5 text-[13px] font-medium transition ' +
                   (tab === t.id ? 'bg-accent-soft text-accent' : 'text-ink-muted hover:text-ink')
@@ -900,6 +1013,193 @@ export default function SemrushPanel({
                 <a href={SEM.overview(domain)} target="_blank" rel="noopener noreferrer" className="font-medium text-accent hover:underline">🤖 AI visibility (Semrush AI toolkit) ↗</a>
                 <a href={SEM.projects()} target="_blank" rel="noopener noreferrer" className="font-medium text-accent hover:underline">📊 Manage Semrush project ↗</a>
               </div>
+            </Card>
+          </div>
+        )}
+
+        {/* ============================================== RANKING ASSISTANT */}
+        {tab === 'rankings' && (
+          <div className="mt-4 space-y-4">
+            {/* Movement metrics */}
+            <Card
+              tag="Ranking Movement"
+              title="Recent position changes"
+              right={<span className="text-[11px] text-ink-faint">Top movers by volume · Google US</span>}
+            >
+              {moversLoading ? (
+                <p className="text-[13px] text-ink-muted">Loading ranking changes…</p>
+              ) : !movers || !movers.meta.ok ? (
+                <SectionNotice meta={movers?.meta ?? { ok: false, source: 'none', reason: 'http', unitsSpent: 0 }} what="Ranking movement" />
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    { label: 'Improved', rows: movers.improved, color: 'text-emerald-600', chip: 'bg-emerald-50 ring-emerald-200 text-emerald-800', sign: '▲' },
+                    { label: 'Declined', rows: movers.declined, color: 'text-rose-600', chip: 'bg-rose-50 ring-rose-200 text-rose-800', sign: '▼' },
+                    { label: 'New rankings', rows: movers.newKeywords, color: 'text-sky-600', chip: 'bg-sky-50 ring-sky-200 text-sky-800', sign: '＋' },
+                    { label: 'Lost rankings', rows: movers.lostKeywords, color: 'text-ink-muted', chip: 'bg-subtle ring-line text-ink-muted', sign: '−' },
+                  ].map((g) => (
+                    <div key={g.label} className="rounded-xl bg-subtle/60 p-3.5 ring-1 ring-line">
+                      <div className="flex items-baseline justify-between">
+                        <span className="text-[12px] font-medium text-ink-muted">{g.label}</span>
+                        <span className={'text-[20px] font-semibold tabular-nums ' + g.color}>{g.rows.length}</span>
+                      </div>
+                      <div className="mt-2 space-y-1">
+                        {g.rows.length === 0 && <div className="text-[11px] text-ink-faint">None detected</div>}
+                        {g.rows.slice(0, 4).map((m, mi) => (
+                          <div key={m.keyword + mi} className={'flex items-center justify-between gap-2 rounded-lg px-2 py-1 text-[11px] ring-1 ' + g.chip}>
+                            <span className="truncate" title={m.keyword}>{m.keyword}</span>
+                            <span className="shrink-0 tabular-nums font-semibold">
+                              {g.sign} {m.position != null ? '#' + m.position : ''}{m.positionDiff != null && m.positionDiff !== 0 ? ' (' + (m.positionDiff > 0 ? '+' : '') + m.positionDiff + ')' : ''}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+
+            {/* Quick wins */}
+            <Card
+              tag="Quick Wins"
+              title="Positions 4–20 — closest to the top 3"
+              right={<span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">Highest leverage</span>}
+            >
+              {loading ? (
+                <p className="text-[13px] text-ink-muted">Loading…</p>
+              ) : quickWins.length === 0 ? (
+                <p className="text-[13px] text-ink-muted">No page-1-cusp keywords found in the current sample{kws.length ? ' — everything is either top 3 or beyond position 20' : ''}.</p>
+              ) : (
+                <div className="overflow-x-auto rounded-xl ring-1 ring-line">
+                  <table className="w-full min-w-[640px] text-left text-[13px]">
+                    <thead className="bg-subtle text-ink-muted">
+                      <tr>
+                        <th className="px-3 py-2 font-medium">Keyword</th>
+                        <th className="px-3 py-2 text-right font-medium">Pos</th>
+                        <th className="px-3 py-2 text-right font-medium">Volume</th>
+                        <th className="px-3 py-2 text-right font-medium">KD</th>
+                        <th className="px-3 py-2 font-medium">Ranking URL</th>
+                        <th className="px-3 py-2 text-right font-medium">Assist</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {quickWins.map((k, i) => (
+                        <tr key={k.keyword + i} className="border-t border-line">
+                          <td className="px-3 py-2 font-medium text-ink">
+                            <a href={SEM.keyword(k.keyword)} target="_blank" rel="noopener noreferrer" className="hover:text-accent">{k.keyword}</a>
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <span className={'inline-block min-w-[28px] rounded-full px-1.5 py-0.5 text-center text-[12px] font-semibold tabular-nums ' + posTone(k.position)}>{k.position}</span>
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{fmtExact(k.volume)}</td>
+                          <td className={'px-3 py-2 text-right tabular-nums font-medium ' + kdTone(k.difficulty)}>{k.difficulty ?? '—'}</td>
+                          <td className="max-w-[200px] truncate px-3 py-2 text-[12px] text-ink-faint" title={k.url}>{k.url.replace(/^https?:\/\/(www\.)?/, '')}</td>
+                          <td className="px-3 py-2 text-right">
+                            <div className="flex justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => sendToDraft('Write a new supporting article targeting "' + k.keyword + '" (currently ranking #' + k.position + ', ' + (k.volume ?? '?') + ' searches/mo). Cover the topic more completely than the current page and answer the real questions patients search.')}
+                                className="rounded-full px-2.5 py-1 text-[11px] font-medium text-accent ring-1 ring-accent/30 transition hover:bg-accent-soft"
+                              >
+                                Draft
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => sendToDraft('Rewrite and expand the content at ' + k.url + ' to improve its Google ranking for "' + k.keyword + '" (currently position ' + k.position + '). Fully satisfy the search intent, add depth and real patient questions, keep medical claims compliant.')}
+                                className="rounded-full bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-accent-hover"
+                              >
+                                Optimize
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <p className="mt-2 text-[11px] text-ink-faint">Ranked by volume × ease × proximity to page-1 top. “Optimize” prefills the AI with a ranking-improvement brief for the exact page and keyword.</p>
+            </Card>
+
+            {/* Portfolio breakdowns */}
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Card tag="Intent Mix" title={'What your top ' + kws.length + ' keywords are for'}>
+                {intentBreakdown.length === 0 ? (
+                  <p className="text-[13px] text-ink-muted">No intent data in the current sample.</p>
+                ) : (
+                  <SegmentBar ariaLabel={'Search intent mix: ' + intentBreakdown.map((b) => b.label + ' ' + b.count).join(', ')} segments={intentBreakdown} />
+                )}
+                <p className="mt-3 text-[11px] text-ink-faint">Informational intent wants education content; commercial/transactional wants comparison and treatment pages.</p>
+              </Card>
+              <Card tag="Difficulty Mix" title="How hard your ranking keywords are">
+                {kdBreakdown.length === 0 ? (
+                  <p className="text-[13px] text-ink-muted">No difficulty data in the current sample.</p>
+                ) : (
+                  <SegmentBar ariaLabel={'Keyword difficulty mix: ' + kdBreakdown.map((b) => b.label + ' ' + b.count).join(', ')} segments={kdBreakdown} />
+                )}
+                <p className="mt-3 text-[11px] text-ink-faint">With Authority Score {bl?.authorityScore ?? '—'}/100, keywords under KD ~50 are the realistic battleground.</p>
+              </Card>
+            </div>
+
+            {/* AI Ranking Advisor */}
+            <Card
+              tag="AI Ranking Advisor"
+              title="Data-grounded action plan"
+              right={
+                <button
+                  type="button"
+                  onClick={() => void loadAdvice(domain)}
+                  disabled={adviceLoading || loading}
+                  className="rounded-xl bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-white transition hover:bg-accent-hover disabled:opacity-50"
+                >
+                  {adviceLoading ? 'Analyzing…' : advice ? 'Regenerate plan' : 'Generate action plan'}
+                </button>
+              }
+            >
+              {adviceErr && <p className="rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">{adviceErr}</p>}
+              {!advice && !adviceLoading && !adviceErr && (
+                <p className="text-[13px] text-ink-muted">
+                  The advisor reads everything on this panel — rankings, movers, competitors, backlinks, site audit — and returns a prioritized
+                  plan of the highest-impact moves. Content recommendations come with one-click AI draft prompts.
+                </p>
+              )}
+              {adviceLoading && <p className="text-[13px] text-ink-muted">Reading the Semrush data and building your plan…</p>}
+              {advice && (
+                <div className="space-y-3">
+                  {advice.summary && <p className="rounded-xl bg-accent-soft/60 px-3.5 py-2.5 text-[13px] leading-relaxed text-ink">{advice.summary}</p>}
+                  {advice.priorities.map((p, i) => (
+                    <div key={i} className="rounded-xl bg-subtle/60 p-4 ring-1 ring-line">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-ink text-[12px] font-bold text-white">{p.rank || i + 1}</span>
+                        <span className="text-[14px] font-semibold text-ink">{p.title}</span>
+                        <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-muted ring-1 ring-line">{p.category}</span>
+                        <span className={'rounded-full px-2 py-0.5 text-[10px] font-semibold ' + (p.impact === 'high' ? 'bg-emerald-100 text-emerald-700' : p.impact === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-subtle text-ink-muted')}>impact: {p.impact}</span>
+                        <span className="rounded-full bg-subtle px-2 py-0.5 text-[10px] font-semibold text-ink-muted ring-1 ring-line">effort: {p.effort}</span>
+                      </div>
+                      {p.why && <p className="mt-2 text-[12px] leading-relaxed text-ink-muted">{p.why}</p>}
+                      {p.action && <p className="mt-1.5 text-[13px] text-ink"><span className="font-semibold">Do this:</span> {p.action}</p>}
+                      {(p.keywords?.length > 0 || p.draftPrompt) && (
+                        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                          {(p.keywords || []).slice(0, 6).map((k, ki) => (
+                            <span key={k + ki} className="rounded-full bg-white px-2 py-0.5 text-[11px] text-ink-soft ring-1 ring-line">{k}</span>
+                          ))}
+                          {p.draftPrompt && (
+                            <button
+                              type="button"
+                              onClick={() => sendToDraft(p.draftPrompt)}
+                              className="ml-auto rounded-full bg-accent px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-accent-hover"
+                            >
+                              ✍️ Draft with AI
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  <p className="text-[11px] text-ink-faint">Grounded only in the Semrush numbers shown on this panel — regenerate after data refreshes to keep the plan current.</p>
+                </div>
+              )}
             </Card>
           </div>
         )}

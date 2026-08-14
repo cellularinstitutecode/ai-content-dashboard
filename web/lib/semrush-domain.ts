@@ -409,6 +409,89 @@ export async function topOrganicKeywords(
 }
 
 // ---------------------------------------------------------------------------
+// Keyword movers: recent ranking changes (domain_organic + display_positions).
+// Four small cached reports — new / lost / improved (rise) / declined (fall).
+// ---------------------------------------------------------------------------
+
+export type MoverRow = {
+  keyword: string;
+  position: number | null;
+  prevPosition: number | null;
+  positionDiff: number | null;
+  volume: number | null;
+  difficulty: number | null;
+  url: string;
+};
+
+export type KeywordMovers = {
+  newKeywords: MoverRow[];
+  lostKeywords: MoverRow[];
+  improved: MoverRow[];
+  declined: MoverRow[];
+  meta: SectionMeta;
+};
+
+async function moverReport(domain: string, kind: 'new' | 'lost' | 'rise' | 'fall', limit = 6): Promise<{ rows: MoverRow[]; meta: SectionMeta }> {
+  const lim = Math.max(1, Math.min(limit, 10));
+  const r = await rawCsvReport(
+    'domain_organic',
+    domain + ':mv:' + kind + ':' + lim,
+    {
+      domain,
+      database: db(),
+      display_limit: String(lim),
+      display_positions: kind,
+      display_sort: 'nq_desc',
+      export_columns: 'Ph,Po,Pp,Pd,Nq,Kd,Ur',
+    },
+    { estLines: lim }
+  );
+  const toRows = (rows: Record<string, string>[]): MoverRow[] =>
+    rows
+      .map((row) => ({
+        keyword: row['Keyword'] || '',
+        position: num(row['Position']),
+        prevPosition: num(row['Previous Position']),
+        positionDiff: num(row['Position Difference']),
+        volume: num(row['Search Volume']),
+        difficulty: num(row['Keyword Difficulty Index'] ?? row['Keyword Difficulty']),
+        url: row['Url'] || '',
+      }))
+      .filter((k) => k.keyword.length > 0);
+  if (r.rowsCached) return { rows: toRows(r.rowsCached as Record<string, string>[]), meta: meta(r, 0) };
+  if (!r.ok) return { rows: [], meta: meta(r, 0) };
+  const parsed = parseCsvRows(r.body || '');
+  const units = parsed.length * UNIT_COST.domain_organic;
+  if (parsed.length) {
+    void cachePut('domain_organic', db(), domain + ':mv:' + kind + ':' + lim, parsed, units);
+    void logUsage('domain_organic', domain + ' (' + kind + ')', units, 'live');
+  }
+  return { rows: toRows(parsed), meta: meta(r, units) };
+}
+
+export async function keywordMovers(rawDomain?: string): Promise<KeywordMovers> {
+  const domain = normalizeDomain(rawDomain || '') || primaryDomain();
+  const [nw, lost, rise, fall] = await Promise.all([
+    moverReport(domain, 'new'),
+    moverReport(domain, 'lost'),
+    moverReport(domain, 'rise'),
+    moverReport(domain, 'fall'),
+  ]);
+  // Overall meta: ok if any leg succeeded; carry the most informative failure.
+  const legs = [nw.meta, lost.meta, rise.meta, fall.meta];
+  const okLeg = legs.find((m) => m.ok);
+  return {
+    newKeywords: nw.rows,
+    lostKeywords: lost.rows,
+    improved: rise.rows,
+    declined: fall.rows,
+    meta: okLeg
+      ? { ok: true, source: legs.some((m) => m.source === 'live') ? 'live' : 'cache', reason: 'ok', unitsSpent: legs.reduce((s, m) => s + m.unitsSpent, 0) }
+      : legs[0],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Organic competitors (domain_organic_organic)
 // ---------------------------------------------------------------------------
 
@@ -663,7 +746,7 @@ export async function domainBundle(rawDomain?: string): Promise<DomainBundle> {
   const [ov, bl, kw, comp, balance] = await Promise.all([
     domainOverview(domain),
     backlinksOverview(domain),
-    topOrganicKeywords(domain, 15),
+    topOrganicKeywords(domain, 30),
     organicCompetitors(domain, 5),
     getUnitsBalance(),
   ]);
