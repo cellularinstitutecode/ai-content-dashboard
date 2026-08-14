@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLiveContent } from "@/components/LiveContentProvider";
-import KeywordIntelligence from "./KeywordIntelligence";
+import SemrushPanel from "./SemrushPanel";
 
 type Provider = 'anthropic' | 'openai';
 type ContentType = 'social' | 'blog' | 'email' | 'video' | 'ad';
@@ -1257,10 +1257,11 @@ return (
 </div>
 </div>
 </div>
-              {/* Semrush Keyword Intelligence — the same brain that pre-filters
-                  every draft and grounds the chatbot's advice */}
+              {/* Semrush Intelligence — the full SEO command center (domain
+                  overview, rankings, competitors, backlinks, site health) plus
+                  the keyword brain that pre-filters every draft */}
               <div className="border-t border-line p-6 sm:p-8">
-                <KeywordIntelligence
+                <SemrushPanel
                   initialTopic={researchTopicText || prompt}
                   onUseTopic={(t) => {
                     setPrompt(t);

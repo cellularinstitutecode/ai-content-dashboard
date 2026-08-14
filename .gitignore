@@ -1,0 +1,17 @@
+# Dependencies & build output
+node_modules/
+web/.next/
+web/out/
+
+# TypeScript / Next.js generated
+*.tsbuildinfo
+web/next-env.d.ts
+
+# Local env files — never commit real keys
+.env
+.env.local
+.env*.local
+
+# Misc
+.DS_Store
+npm-debug.log*

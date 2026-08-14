@@ -6,8 +6,14 @@
 // GET /api/semrush?action=balance
 // GET /api/semrush?action=hub&topic=...        → brief + related + questions
 // GET /api/semrush?action=serp&topic=...       → top ranking domains
+// GET /api/semrush?action=domain[&domain=...]  → full domain intelligence bundle
+//                                                (overview, backlinks, top
+//                                                keywords, competitors)
+// GET /api/semrush?action=project              → Site Audit + Position Tracking
+//                                                (needs SEMRUSH_PROJECT_ID)
 import { NextRequest, NextResponse } from 'next/server';
 import { researchBundle, serpCompetitors, getUnitsBalance, opportunityScore } from '@/lib/semrush';
+import { domainBundle, primaryDomain, siteAudit, trackingSummary, normalizeDomain } from '@/lib/semrush-domain';
 import { supabaseServer } from '@/lib/supabase';
 
 export const runtime = 'nodejs';
@@ -36,6 +42,21 @@ export async function GET(req: NextRequest) {
   if (action === 'balance') {
     const balance = await getUnitsBalance();
     return NextResponse.json({ balance }, { headers: { 'Cache-Control': 'no-store' } });
+  }
+
+  if (action === 'domain') {
+    const domain = normalizeDomain(req.nextUrl.searchParams.get('domain') || '') || primaryDomain();
+    const bundle = await domainBundle(domain);
+    return NextResponse.json(bundle, { headers: { 'Cache-Control': 'private, max-age=300' } });
+  }
+
+  if (action === 'project') {
+    const domain = normalizeDomain(req.nextUrl.searchParams.get('domain') || '') || primaryDomain();
+    const [audit, tracking] = await Promise.all([siteAudit(), trackingSummary(domain)]);
+    return NextResponse.json(
+      { audit: audit.data, auditMeta: audit.meta, tracking: tracking.data, trackingMeta: tracking.meta },
+      { headers: { 'Cache-Control': 'private, max-age=300' } }
+    );
   }
 
   if (!topic) {

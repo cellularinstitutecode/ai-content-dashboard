@@ -85,9 +85,13 @@ function fmtVol(v: number | null | undefined): string {
 export default function KeywordIntelligence({
   initialTopic = '',
   onUseTopic,
+  embedded = false,
 }: {
   initialTopic?: string;
   onUseTopic?: (draftPrompt: string) => void;
+  /** When true the component renders without its own card chrome/header so it
+   *  can live inside another panel (e.g. the Semrush Intelligence hub). */
+  embedded?: boolean;
 }) {
   const [topic, setTopic] = useState(initialTopic);
   const [tab, setTab] = useState<Tab>('overview');
@@ -170,8 +174,9 @@ export default function KeywordIntelligence({
   ];
 
   return (
-    <section className="overflow-hidden rounded-3xl bg-white ring-1 ring-line shadow-soft">
-      {/* Header */}
+    <section className={embedded ? '' : 'overflow-hidden rounded-3xl bg-white ring-1 ring-line shadow-soft'}>
+      {/* Header (hidden when embedded in the Semrush Intelligence panel) */}
+      {!embedded && (
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-6 py-4">
         <div className="flex items-center gap-3">
           <span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">🧠</span>
@@ -190,8 +195,9 @@ export default function KeywordIntelligence({
         </div>
         <a href={semrushUrl(topic)} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[12px] font-medium text-emerald-700 hover:text-emerald-800">Open in Semrush ↗</a>
       </div>
+      )}
 
-      <div className="p-6">
+      <div className={embedded ? 'pt-1' : 'p-6'}>
         {/* Search row */}
         <div className="flex flex-col gap-2 sm:flex-row">
           <input

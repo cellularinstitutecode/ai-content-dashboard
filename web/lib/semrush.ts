@@ -79,9 +79,18 @@ export const UNIT_COST: Record<string, number> = {
   phrase_related: 40,
   phrase_questions: 40,
   phrase_organic: 10,
+  // Domain intelligence reports (see lib/semrush-domain.ts)
+  domain_ranks: 10,
+  domain_organic: 10,
+  domain_organic_organic: 40,
+  backlinks_overview: 40, // per request (1 line)
+  backlinks_refdomains: 40,
+  // Projects API endpoints bill per REQUEST, not per line.
+  siteaudit_info: 100,
+  tracking_report: 100,
 };
 
-function db(): string {
+export function db(): string {
   return (process.env.SEMRUSH_DATABASE || 'us').trim() || 'us';
 }
 function unitFloor(): number {
@@ -181,7 +190,7 @@ export async function getUnitsBalance(force = false): Promise<number | null> {
 }
 
 // May we spend an estimated number of units on a live call right now?
-async function budgetAllows(estUnits: number): Promise<boolean> {
+export async function budgetAllows(estUnits: number): Promise<boolean> {
   const bal = await getUnitsBalance();
   if (bal == null) return true; // can't read balance → let the API itself decide
   return bal - estUnits >= unitFloor();
@@ -197,7 +206,7 @@ function cacheKey(report: string, database: string, phrase: string): string {
   return report + ':' + database + ':' + phrase.toLowerCase().trim();
 }
 
-async function cacheGet(report: string, database: string, phrase: string): Promise<any[] | null> {
+export async function cacheGet(report: string, database: string, phrase: string, ttlMs?: number): Promise<any[] | null> {
   try {
     const { data } = await supabaseAdmin()
       .from('semrush_cache')
@@ -206,14 +215,14 @@ async function cacheGet(report: string, database: string, phrase: string): Promi
       .maybeSingle();
     if (!data) return null;
     const hit = data as unknown as { payload: any; fetched_at: string };
-    if (Date.now() - new Date(hit.fetched_at).getTime() > cacheTtlMs()) return null;
+    if (Date.now() - new Date(hit.fetched_at).getTime() > (ttlMs ?? cacheTtlMs())) return null;
     return Array.isArray(hit.payload) ? hit.payload : null;
   } catch {
     return null;
   }
 }
 
-async function cachePut(report: string, database: string, phrase: string, rows: any[], units: number): Promise<void> {
+export async function cachePut(report: string, database: string, phrase: string, rows: any[], units: number): Promise<void> {
   try {
     await supabaseAdmin()
       .from('semrush_cache')
@@ -234,7 +243,7 @@ async function cachePut(report: string, database: string, phrase: string, rows: 
   }
 }
 
-async function logUsage(report: string, phrase: string, units: number, source: SemSource): Promise<void> {
+export async function logUsage(report: string, phrase: string, units: number, source: SemSource): Promise<void> {
   try {
     await supabaseAdmin().from('semrush_usage').insert({ report, phrase, units, source });
   } catch {
