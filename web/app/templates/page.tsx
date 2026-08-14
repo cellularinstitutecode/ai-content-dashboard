@@ -5,6 +5,17 @@ import { useEffect, useRef, useState } from 'react';
 type Provider = 'instagram' | 'facebook' | 'linkedin' | 'blog';
 type AiProvider = 'anthropic' | 'openai';
 
+type StrategyMode = 'off' | 'fixed_topic' | 'pillars' | 'auto';
+
+type Strategy = {
+  mode: StrategyMode;
+  topic?: string;
+  pillars?: string[];
+  goal?: 'rank' | 'traffic' | 'engagement' | 'authority';
+  format?: 'social' | 'blog' | 'email' | 'video' | 'ad';
+  lead_hours?: number;
+};
+
 type Template = {
   id?: string;
   name?: string;
@@ -13,6 +24,14 @@ type Template = {
   weekdays?: number[];
   time_of_day?: string;
   active?: boolean;
+  strategy?: Strategy;
+};
+
+const MODE_LABELS: Record<StrategyMode, string> = {
+  off: 'Static text (classic)',
+  fixed_topic: 'Autopilot · fixed topic',
+  pillars: 'Autopilot · rotate pillars',
+  auto: 'Autopilot · full auto',
 };
 
 type CompareResults = {
@@ -43,7 +62,10 @@ const ghost: React.CSSProperties = {
 };
 
 function emptyDraft(): Template {
-  return { name: '', providers: [], text: '', weekdays: [], time_of_day: '09:00', active: true };
+  return {
+    name: '', providers: [], text: '', weekdays: [], time_of_day: '09:00', active: true,
+    strategy: { mode: 'off', pillars: [], goal: 'rank', format: 'social', lead_hours: 24 },
+  };
 }
 
 function toggle<T>(list: T[], value: T): T[] {
@@ -257,6 +279,105 @@ export default function TemplatesPage() {
             <input type="time" style={{ ...inputStyle, width: 160 }} value={draft.time_of_day || '09:00'} onChange={(e) => setDraft((prev) => ({ ...prev, time_of_day: e.target.value }))} />
           </label>
 
+          {/* Autopilot: how the engine treats each occurrence of this template. */}
+          <div style={{ marginTop: 22, padding: 16, borderRadius: 10, background: '#f0f6ff', border: '1px solid #cfe3ff' }}>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>Autopilot</div>
+            <div style={{ fontSize: 12, opacity: .7, marginTop: 2 }}>
+              In Autopilot modes each scheduled slot gets a FRESH post: the engine researches keywords
+              and rankings, picks a distinct angle every week, drafts, scores, and waits for your approval
+              on the dashboard. It never publishes by itself.
+            </div>
+            <label style={{ display: 'block', marginTop: 12, fontSize: 13, opacity: .8 }}>Mode
+              <select
+                style={{ ...inputStyle, width: 260 }}
+                value={draft.strategy?.mode || 'off'}
+                onChange={(e) => setDraft((prev) => ({
+                  ...prev,
+                  strategy: { ...(prev.strategy || { mode: 'off' }), mode: e.target.value as StrategyMode },
+                }))}
+              >
+                {(Object.keys(MODE_LABELS) as StrategyMode[]).map((m) => (
+                  <option key={m} value={m}>{MODE_LABELS[m]}</option>
+                ))}
+              </select>
+            </label>
+            {draft.strategy?.mode === 'fixed_topic' && (
+              <label style={{ display: 'block', marginTop: 12, fontSize: 13, opacity: .8 }}>Topic
+                <input
+                  style={inputStyle}
+                  value={draft.strategy?.topic || ''}
+                  placeholder="e.g. stem cell therapy for knees"
+                  onChange={(e) => setDraft((prev) => ({
+                    ...prev,
+                    strategy: { ...(prev.strategy || { mode: 'fixed_topic' }), topic: e.target.value },
+                  }))}
+                />
+              </label>
+            )}
+            {(draft.strategy?.mode === 'pillars' || draft.strategy?.mode === 'auto') && (
+              <label style={{ display: 'block', marginTop: 12, fontSize: 13, opacity: .8 }}>Content pillars (one per line — occurrences rotate through them)
+                <textarea
+                  style={{ ...inputStyle, minHeight: 70, resize: 'vertical' }}
+                  value={(draft.strategy?.pillars || []).join('\n')}
+                  placeholder={'stem cell therapy for knees\nexosome therapy\nanti-aging treatments'}
+                  onChange={(e) => setDraft((prev) => ({
+                    ...prev,
+                    strategy: {
+                      ...(prev.strategy || { mode: 'pillars' }),
+                      pillars: e.target.value.split('\n').map((l) => l.trim()).filter(Boolean),
+                    },
+                  }))}
+                />
+              </label>
+            )}
+            {draft.strategy?.mode !== 'off' && (
+              <div style={{ display: 'flex', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
+                <label style={{ fontSize: 13, opacity: .8 }}>Goal
+                  <select
+                    style={{ ...inputStyle, width: 160 }}
+                    value={draft.strategy?.goal || 'rank'}
+                    onChange={(e) => setDraft((prev) => ({
+                      ...prev,
+                      strategy: { ...(prev.strategy || { mode: 'auto' }), goal: e.target.value as Strategy['goal'] },
+                    }))}
+                  >
+                    <option value="rank">Rank in search</option>
+                    <option value="traffic">Drive clicks</option>
+                    <option value="engagement">Engagement</option>
+                    <option value="authority">Authority</option>
+                  </select>
+                </label>
+                <label style={{ fontSize: 13, opacity: .8 }}>Format
+                  <select
+                    style={{ ...inputStyle, width: 150 }}
+                    value={draft.strategy?.format || 'social'}
+                    onChange={(e) => setDraft((prev) => ({
+                      ...prev,
+                      strategy: { ...(prev.strategy || { mode: 'auto' }), format: e.target.value as Strategy['format'] },
+                    }))}
+                  >
+                    <option value="social">Social post</option>
+                    <option value="blog">Blog article</option>
+                    <option value="email">Email</option>
+                    <option value="video">Video script</option>
+                    <option value="ad">Ad copy</option>
+                  </select>
+                </label>
+                <label style={{ fontSize: 13, opacity: .8 }}>Prepare drafts (hours before slot)
+                  <input
+                    type="number" min={1} max={96}
+                    style={{ ...inputStyle, width: 120 }}
+                    value={draft.strategy?.lead_hours ?? 24}
+                    onChange={(e) => setDraft((prev) => ({
+                      ...prev,
+                      strategy: { ...(prev.strategy || { mode: 'auto' }), lead_hours: parseInt(e.target.value, 10) || 24 },
+                    }))}
+                  />
+                </label>
+              </div>
+            )}
+          </div>
+
           <div style={{ marginTop: 22, fontSize: 13, opacity: .8 }}>Draft with AI</div>
           <div style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
             <label style={{ fontSize: 13, opacity: .8 }} htmlFor="ai-provider">Model</label>
@@ -325,6 +446,11 @@ export default function TemplatesPage() {
                   <div style={{ fontSize: 12, opacity: .7 }}>
                     {(t.weekdays || []).map((w) => DOW[w]).join(', ') || 'no days'} at {t.time_of_day || '09:00'} · {(t.providers || []).join(', ') || 'no providers'}
                   </div>
+                  {t.strategy && t.strategy.mode !== 'off' && (
+                    <div style={{ display: 'inline-block', marginTop: 6, fontSize: 11, fontWeight: 600, color: '#0b57d0', background: '#e8f0fe', borderRadius: 999, padding: '3px 10px' }}>
+                      {MODE_LABELS[t.strategy.mode] || 'Autopilot'} · {t.strategy.goal || 'rank'} · fresh post per slot
+                    </div>
+                  )}
                   {t.text && <div style={{ fontSize: 13, opacity: .85, marginTop: 6, whiteSpace: 'pre-wrap' }}>{t.text}</div>}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

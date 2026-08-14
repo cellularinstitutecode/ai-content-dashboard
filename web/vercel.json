@@ -3,6 +3,10 @@
     {
       "path": "/api/metricool/sync",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/autopilot/tick",
+      "schedule": "30 6 * * *"
     }
   ]
 }

@@ -1,0 +1,125 @@
+-- Autopilot Content Engine: dynamic templates that research, decide, draft,
+-- score and stage a FRESH post for every scheduled occurrence — everything
+-- but publish (a human always approves).
+-- Run this in your Supabase SQL editor once (safe to re-run).
+
+-- 0) Prerequisites from schema.sql that older databases may predate
+--    (idempotent). The engine reads post_metrics for performance hints and
+--    the rate limiter uses usage_events.
+create table if not exists public.usage_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  action text not null,
+  created_at timestamptz default now()
+);
+create index if not exists usage_events_user_action_time_idx
+  on public.usage_events (user_id, action, created_at desc);
+alter table public.usage_events enable row level security;
+
+create table if not exists public.post_metrics (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  network text not null,
+  external_id text,
+  text text,
+  published_at timestamptz,
+  impressions integer not null default 0,
+  engagement integer not null default 0,
+  fetched_at timestamptz default now(),
+  unique (user_id, network, external_id)
+);
+create index if not exists post_metrics_user_engagement_idx
+  on public.post_metrics (user_id, engagement desc);
+alter table public.post_metrics enable row level security;
+
+do $$
+begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='usage_events' and policyname='usage_events: owner read') then
+    create policy "usage_events: owner read" on public.usage_events for select using (auth.uid() = user_id);
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='post_metrics' and policyname='post_metrics: owner read') then
+    create policy "post_metrics: owner read" on public.post_metrics for select using (auth.uid() = user_id);
+  end if;
+end $$;
+
+-- 1) Templates gain a strategy: what the engine should do each occurrence,
+--    instead of copying the same static text into every slot.
+--    { mode: 'off'|'fixed_topic'|'pillars'|'auto',
+--      topic?, pillars?: string[], goal?, format?, lead_hours?, max_regens? }
+alter table public.schedule_templates
+  add column if not exists strategy jsonb not null default '{"mode":"off"}'::jsonb;
+
+-- 2) One row per template occurrence: the state machine the daily tick
+--    advances. planned → researched → drafted → ready_for_review →
+--    approved | skipped (failed after repeated errors).
+create table if not exists public.template_runs (
+  id uuid primary key default gen_random_uuid(),
+  template_id uuid not null references public.schedule_templates(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  scheduled_for timestamptz not null,
+  state text not null default 'planned',
+  attempts integer not null default 0,
+  regens integer not null default 0,
+  brief jsonb,        -- KeywordBrief snapshot for the chosen angle
+  angle jsonb,        -- { type, query, seedTopic, rationale, volume, difficulty, intent }
+  score jsonb,        -- { total, breakdown: {...}, safetyFlags: [...] }
+  draft_id uuid references public.drafts(id) on delete set null,
+  log jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (template_id, scheduled_for)
+);
+
+create index if not exists template_runs_due_idx
+  on public.template_runs (state, scheduled_for);
+create index if not exists template_runs_user_idx
+  on public.template_runs (user_id, scheduled_for desc);
+
+drop trigger if exists trg_template_runs_updated on public.template_runs;
+create trigger trg_template_runs_updated before update on public.template_runs
+for each row execute function public.touch_updated_at();
+
+alter table public.template_runs enable row level security;
+
+-- Users may read + act on their own runs; the engine writes via the
+-- service-role client (bypasses RLS), so no insert policy is required.
+-- (Guarded DO blocks: CREATE POLICY has no IF NOT EXISTS in Postgres.)
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'template_runs'
+      and policyname = 'template_runs: owner read'
+  ) then
+    create policy "template_runs: owner read" on public.template_runs
+      for select using (auth.uid() = user_id);
+  end if;
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'template_runs'
+      and policyname = 'template_runs: owner update'
+  ) then
+    create policy "template_runs: owner update" on public.template_runs
+      for update using (auth.uid() = user_id);
+  end if;
+end $$;
+
+-- 3) Learning loop: which primary keywords actually earned engagement.
+--    Joins the keywords each draft applied (draft_keywords) with measured
+--    post performance (post_metrics) by fuzzy text containment. Used to bias
+--    future angle choices toward what works for THIS audience.
+create or replace view public.keyword_performance as
+select
+  dk.user_id,
+  dk.keyword,
+  count(distinct pm.id)               as measured_posts,
+  coalesce(sum(pm.engagement), 0)     as total_engagement,
+  coalesce(sum(pm.impressions), 0)    as total_impressions,
+  max(pm.published_at)                as last_published_at
+from public.draft_keywords dk
+join public.post_metrics pm
+  on pm.user_id = dk.user_id
+ and pm.text is not null
+ and pm.text ilike '%' || dk.keyword || '%'
+where dk.role = 'primary'
+group by dk.user_id, dk.keyword;
