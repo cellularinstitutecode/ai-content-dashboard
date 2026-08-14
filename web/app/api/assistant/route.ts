@@ -8,8 +8,16 @@ import {
   type ToolMessage,
 } from "@/lib/ai";
 import { opusCreateClipProject } from "@/lib/opus";
-import { researchKeywords, keywordHintFrom } from "@/lib/keywords";
+import { researchBundle, briefPromptFrom, getUnitsBalance, type SemKeyword } from "@/lib/semrush";
 import { checkRateLimit } from "@/lib/rate-limit";
+
+// Compact, chat-friendly rendering of Semrush keyword rows.
+function fmtKw(k: SemKeyword): string {
+  const bits = [k.volume != null ? k.volume + "/mo" : "n/a"];
+  if (k.difficulty != null) bits.push("KD " + k.difficulty);
+  if (k.intents && k.intents.length) bits.push(k.intents.join("+"));
+  return k.keyword + " (" + bits.join(", ") + ")";
+}
 
 export const runtime = "nodejs";
 
@@ -317,11 +325,11 @@ async function runAgent(session: Session, input: string, userId: string | null) 
         if (!topic) {
           toolResult = "No topic provided. Ask the user what they want researched.";
         } else {
-          // Ground the research in REAL Semrush keyword data when available so the
-          // chatbot recommends keywords with genuine search volume/difficulty rather
-          // than inventing them. Degrades gracefully (link-out only) without a key.
-          const kwResearch = await researchKeywords(topic, { limit: 12 });
-          const { hint: kwHint } = keywordHintFrom(kwResearch);
+          // Ground the research in the REAL Semrush Keyword Brief (cache-first,
+          // budget-guarded) so the chatbot recommends keywords with genuine
+          // volume/difficulty/intent rather than inventing them.
+          const bundle = await researchBundle(topic, { relatedLimit: 12, questionLimit: 6 });
+          const kwHint = briefPromptFrom(bundle.brief);
           const research: any = await researchTopic({ topic, provider: session.provider === "openai" ? "openai" : "anthropic", network, keywordHint: kwHint || undefined });
           const r = (research && research.result) ? research.result : research;
           const angles = Array.isArray(r?.angles) ? r.angles.slice(0, 5).join("; ") : "";
@@ -333,16 +341,47 @@ async function runAgent(session: Session, input: string, userId: string | null) 
             session.lastTopic = topic;
             session.provider = session.provider === "openai" ? "openai" : "anthropic";
           }
-          const realKw = kwResearch.ok
-            ? kwResearch.keywords.slice(0, 8).map((k) => k.keyword + (k.volume != null ? " (" + k.volume + "/mo" + (k.difficulty != null ? ", KD " + k.difficulty : "") + ")" : "")).join(", ")
+          const briefKws = bundle.brief.source === "semrush"
+            ? [bundle.brief.primary, ...bundle.brief.supporting].filter(Boolean).map((k) => fmtKw(k as SemKeyword)).join(", ")
             : "";
-          const kwLine = realKw
-            ? "\nSemrush keywords (real search data): " + realKw
+          const kwLine = briefKws
+            ? "\nSemrush keywords (real search data" + (bundle.brief.fromCache ? ", cached" : "") + "): " + briefKws
             : "\n(Keyword data source: model estimate — set SEMRUSH_API_KEY for live search volume/difficulty.)";
           toolResult = "Research for " + topic + ":\nAngles: " + angles + "\nKeywords: " + keywords + kwLine + "\nHashtags: " + hashtags + "\nHooks: " + hooks + "\nA ready-to-edit draft is prepared; call save_draft to keep it.";
         }
       } catch (e: any) {
         toolResult = "Research failed: " + (e?.message || "unknown error");
+      }
+    } else if (call.name === "keyword_lookup") {
+      try {
+        const topic = String(call.input.topic || "").trim();
+        if (!topic) {
+          toolResult = "No topic provided. Ask the user what keyword or topic to look up.";
+        } else {
+          const bundle = await researchBundle(topic, { relatedLimit: 12, questionLimit: 6 });
+          if (bundle.brief.source !== "semrush") {
+            toolResult =
+              bundle.reason === "no_token"
+                ? "Semrush is not connected (SEMRUSH_API_KEY not set) and this topic is not in the cache. Tell the user to add the key in Vercel, and offer your best editorial judgement clearly labeled as an estimate."
+                : bundle.reason === "budget"
+                ? "Semrush unit balance is at the protection floor, and this topic is not cached. Recommend re-using recently analyzed topics, and label any further advice as an estimate."
+                : "No Semrush data available for this topic (" + (bundle.note || bundle.reason) + "). Offer editorial judgement clearly labeled as an estimate.";
+          } else {
+            const b = bundle.brief;
+            const lines: string[] = [];
+            lines.push("Semrush data for \"" + topic + "\"" + (b.fromCache ? " (cached, 0 units)" : " (live)") + ":");
+            if (b.primary) lines.push("PRIMARY: " + fmtKw(b.primary));
+            if (b.supporting.length) lines.push("SUPPORTING: " + b.supporting.map((k) => fmtKw(k)).join(", "));
+            if (bundle.questions.length) lines.push("REAL QUESTIONS: " + bundle.questions.slice(0, 5).map((q) => q.keyword + (q.volume ? " (" + q.volume + "/mo)" : "")).join("; "));
+            lines.push("Dominant intent: " + b.intentSummary + ".");
+            const balance = await getUnitsBalance();
+            if (balance != null) lines.push("(API unit balance: " + balance.toLocaleString() + ".)");
+            lines.push("Ground your recommendation in these numbers: prefer high volume with KD under ~60, match the intent, and cite figures in your reply.");
+            toolResult = lines.join("\n");
+          }
+        }
+      } catch (e: any) {
+        toolResult = "Keyword lookup failed: " + (e?.message || "unknown error");
       }
     } else {
       toolResult = "Unknown tool.";
