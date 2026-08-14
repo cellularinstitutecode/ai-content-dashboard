@@ -21,6 +21,7 @@ import 'server-only';
 
 import { supabaseAdmin } from '@/lib/supabase';
 import {
+  chatAssistant,
   generateContentPack,
   type BrandContext,
   type ContentPack,
@@ -36,7 +37,7 @@ import {
   type KeywordBrief,
   type SemKeyword,
 } from '@/lib/semrush';
-import { keywordMovers, primaryDomain, type KeywordMovers } from '@/lib/semrush-domain';
+import { keywordMovers, primaryDomain, topOrganicKeywords, type KeywordMovers } from '@/lib/semrush-domain';
 import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
 import { metricoolSchedulePost, type Provider as McProvider } from '@/lib/metricool';
 
@@ -66,6 +67,11 @@ export type Angle = {
   volume: number | null;
   difficulty: number | null;
   intent: string | null;
+  // v2 enrichments (all optional, all fail-soft):
+  strategistNote?: string; // AI strategist's 2-3 sentence guidance for the writer
+  reviewerNote?: string; // human feedback carried into a regeneration
+  provenPerformer?: boolean; // boosted by the measured-engagement learning loop
+  media?: { url: string; title: string } | null; // matching clip to attach on approve
 };
 
 export type RunScore = {
@@ -199,13 +205,39 @@ export async function planRuns(scopeUserId?: string): Promise<{ planned: number;
 // Step 1: research + decide. Gathers live data and picks a distinct angle.
 // ---------------------------------------------------------------------------
 
-function pickSeedTopic(strategy: TemplateStrategy, occurrenceIndex: number, brandKeywords: string[]): string {
+function pickSeedTopic(strategy: TemplateStrategy, occurrenceIndex: number, seedPool: string[]): string {
   if (strategy.mode === 'fixed_topic' && strategy.topic) return strategy.topic;
-  const pillars = strategy.pillars && strategy.pillars.length ? strategy.pillars : [];
-  if (pillars.length) return pillars[occurrenceIndex % pillars.length];
+  if (seedPool.length) return seedPool[occurrenceIndex % seedPool.length];
   if (strategy.topic) return strategy.topic;
-  if (brandKeywords.length) return brandKeywords[occurrenceIndex % brandKeywords.length];
   return 'stem cell therapy';
+}
+
+// Full-auto seed discovery: the pool rotates through the user's pillars PLUS
+// what the domain data says matters right now — keywords we are losing (write
+// to defend) and keywords already earning traffic (write to consolidate).
+async function autoSeedPool(pillars: string[], brandKeywords: string[]): Promise<string[]> {
+  const pool: string[] = [...pillars];
+  try {
+    const movers = await keywordMovers(primaryDomain());
+    for (const m of [...movers.lostKeywords, ...movers.declined].slice(0, 3)) {
+      if (m.keyword) pool.push(m.keyword);
+    }
+  } catch { /* cache/link-out mode */ }
+  try {
+    const top = await topOrganicKeywords(primaryDomain(), 30);
+    for (const k of top.rows.slice(0, 5)) {
+      if (k.keyword && (k.position ?? 99) > 3) pool.push(k.keyword); // consolidate non-#1 winners
+    }
+  } catch { /* cache/link-out mode */ }
+  for (const b of brandKeywords) pool.push(b);
+  // Dedupe, keep order.
+  const seen = new Set<string>();
+  return pool.filter((p) => {
+    const key = p.toLowerCase().trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function isCommercial(k: SemKeyword): boolean {
@@ -224,10 +256,24 @@ function decideAngle(
   brief: KeywordBrief,
   questions: SemKeyword[],
   movers: KeywordMovers | null,
-  recent: Set<string>
+  recent: Set<string>,
+  learned: Map<string, number> = new Map()
 ): Angle {
   const related = [brief.primary, ...brief.supporting].filter((k): k is SemKeyword => Boolean(k));
-  const byOpportunity = [...related].sort((a, b) => opportunityScore(b) - opportunityScore(a));
+  // Learning loop: keywords that measurably earned engagement for THIS
+  // audience get a boost on top of the volume-vs-difficulty score.
+  const learnBoost = (k: SemKeyword): number => {
+    let boost = 0;
+    for (const [kw, eng] of learned) {
+      if (k.keyword.toLowerCase().includes(kw) || kw.includes(k.keyword.toLowerCase())) {
+        boost = Math.max(boost, Math.log10(1 + eng) * 10);
+      }
+    }
+    return boost;
+  };
+  const byOpportunity = [...related].sort(
+    (a, b) => opportunityScore(b) + learnBoost(b) - (opportunityScore(a) + learnBoost(a))
+  );
 
   const candidates: (Angle | null)[] = [];
 
@@ -293,8 +339,10 @@ function decideAngle(
       : null
   );
 
-  // opportunity: best remaining keyword by the clinic-tuned opportunity score.
+  // opportunity: best remaining keyword by the clinic-tuned opportunity score
+  // (plus the measured-engagement learning boost).
   const o = byOpportunity.find((k) => usable(k, recent));
+  const oProven = o ? learnBoost(o) > 0 : false;
   candidates.push(
     o
       ? {
@@ -304,10 +352,12 @@ function decideAngle(
           rationale:
             'Top opportunity "' + o.keyword + '"' +
             (o.volume != null ? ' (' + o.volume + '/mo, KD ' + (o.difficulty ?? '?') + ')' : '') +
-            ' by the volume-vs-difficulty score.',
+            ' by the volume-vs-difficulty score' +
+            (oProven ? ' — related posts already earned measurable engagement with your audience.' : '.'),
           volume: o.volume,
           difficulty: o.difficulty,
           intent: o.intents.join(', ') || null,
+          provenPerformer: oProven,
         }
       : null
   );
@@ -357,7 +407,13 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
     }
   } catch { /* optional */ }
 
-  const seedTopic = pickSeedTopic(strategy, occurrenceIndex, brandKeywords);
+  // Seed pool: pillars for 'pillars' mode; pillars + live domain data
+  // (lost/declining keywords, consolidatable winners) for full 'auto'.
+  let seedPool = (strategy.pillars || []).length ? [...(strategy.pillars as string[])] : [...brandKeywords];
+  if (strategy.mode === 'auto') {
+    seedPool = await autoSeedPool(strategy.pillars || [], brandKeywords);
+  }
+  const seedTopic = pickSeedTopic(strategy, occurrenceIndex, seedPool);
 
   // Anti-repetition: primary keywords used in the last 30 days.
   const recent = new Set<string>();
@@ -373,6 +429,23 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
     for (const r of used || []) recent.add(String((r as { keyword: string }).keyword || '').toLowerCase());
   } catch { /* table optional */ }
 
+  // Learning loop: measured engagement per primary keyword (view joins
+  // draft_keywords × post_metrics). Empty until posts get measured — fail-soft.
+  const learned = new Map<string, number>();
+  try {
+    const { data: perf } = await db
+      .from('keyword_performance')
+      .select('keyword, total_engagement')
+      .eq('user_id', run.user_id)
+      .order('total_engagement', { ascending: false })
+      .limit(50);
+    for (const r of perf || []) {
+      const kw = String((r as { keyword: string }).keyword || '').toLowerCase();
+      const eng = Number((r as { total_engagement: number }).total_engagement) || 0;
+      if (kw && eng > 0) learned.set(kw, eng);
+    }
+  } catch { /* view optional */ }
+
   // Live data (all cache-first + unit-floor guarded).
   const bundle = await researchBundle(seedTopic, { relatedLimit: 12, questionLimit: 6 });
   let movers: KeywordMovers | null = null;
@@ -380,7 +453,23 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
     movers = await keywordMovers(primaryDomain());
   } catch { movers = null; }
 
-  const angle = decideAngle(occurrenceIndex, seedTopic, bundle.brief, bundle.brief.questions, movers, recent);
+  const angle = decideAngle(occurrenceIndex, seedTopic, bundle.brief, bundle.brief.questions, movers, recent, learned);
+
+  // AI strategist note: 2-3 sentences of editorial direction for the writer,
+  // grounded in the chosen angle. Purely additive — skipped without API keys.
+  try {
+    const note = await chatAssistant([
+      {
+        role: 'user',
+        content:
+          'In 2-3 short sentences, give editorial direction for a ' +
+          (strategy.format || 'social') + ' post targeting the search "' + angle.query +
+          '" (angle: ' + angle.type + '; rationale: ' + angle.rationale +
+          '). What should the writer emphasize and avoid? Be specific and compliant — no medical claims. Plain text only.',
+      },
+    ]);
+    if (note && note.trim()) angle.strategistNote = note.trim().slice(0, 500);
+  } catch { /* optional */ }
 
   return {
     state: 'researched',
@@ -408,7 +497,45 @@ function topicPromptFor(angle: Angle, strategy: TemplateStrategy): string {
     'Editorial angle (' + angle.type + '): ' + angle.rationale,
     GOAL_INSTRUCTION[strategy.goal || 'rank'],
   ];
+  if (angle.strategistNote) parts.push('Strategist direction: ' + angle.strategistNote);
+  if (angle.reviewerNote) parts.push('REVIEWER FEEDBACK (must address): ' + angle.reviewerNote);
   return parts.join(' ');
+}
+
+// Media enrichment: find the user's best matching finished clip for an angle.
+// clips.result is the OpusClip webhook payload (title/text/hashtags + mp4 urls).
+async function findMatchingClip(
+  userId: string,
+  angle: Angle
+): Promise<{ url: string; title: string } | null> {
+  try {
+    const db = supabaseAdmin();
+    const { data: rows } = await db
+      .from('clips')
+      .select('result')
+      .eq('user_id', userId)
+      .not('result', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(10);
+    const words = angle.query.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+    let best: { url: string; title: string; score: number } | null = null;
+    for (const row of rows || []) {
+      const clips = (row as { result?: unknown }).result;
+      if (!Array.isArray(clips)) continue;
+      for (const c of clips as Record<string, unknown>[]) {
+        const url = String(c.export || c.preview || '');
+        if (!url) continue;
+        const hay = (String(c.title || '') + ' ' + String(c.text || '') + ' ' + String(c.description || '') + ' ' + String(c.hashtags || '')).toLowerCase();
+        const score = words.filter((w) => hay.includes(w)).length;
+        if (score > 0 && (!best || score > best.score)) {
+          best = { url, title: String(c.title || 'Clip'), score };
+        }
+      }
+    }
+    return best ? { url: best.url, title: best.title } : null;
+  } catch {
+    return null;
+  }
 }
 
 async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateStrategy): Promise<Partial<RunRow>> {
@@ -417,6 +544,8 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   if (!angle) throw new Error('run has no angle');
 
   // Brief for the CHOSEN query (cache-first; distinct from the seed brief).
+  // Falls back to the seed-topic brief already gathered at research time so
+  // the model still writes with real numbers in cache-only mode.
   let brief: KeywordBrief | null = null;
   let hint = '';
   try {
@@ -424,6 +553,9 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
     if (brief.source === 'semrush') hint = briefPromptFrom(brief);
     else brief = null;
   } catch { brief = null; }
+  if (!brief && run.brief && run.brief.source === 'semrush') {
+    hint = briefPromptFrom(run.brief);
+  }
 
   // Brand voice.
   let brand: BrandContext | undefined;
@@ -478,28 +610,65 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
     angle,
   };
 
-  const { data: draft, error } = await db
-    .from('drafts')
-    .insert({
-      user_id: run.user_id,
-      topic: '[Autopilot] ' + angle.query,
-      goal: strategy.goal || 'rank',
-      channels: template.providers || [],
-      pack,
-      provider,
-    })
-    .select('id')
-    .single();
-  if (error) throw new Error('draft insert failed: ' + error.message);
+  // Media enrichment: remember the best matching finished clip so approval
+  // can attach it to the Metricool draft. Purely additive.
+  const media = await findMatchingClip(run.user_id, angle);
+  const angleOut: Angle = { ...angle, media };
 
-  // Learnings: log the applied keywords for the feedback loop.
-  if (brief) void recordDraftKeywords(run.user_id, angle.query, brief);
+  // Reuse the existing draft row on regeneration so the library doesn't
+  // accumulate orphans; insert on first pass.
+  let draftId = run.draft_id;
+  if (draftId) {
+    const { error } = await db.from('drafts').update({ pack, provider }).eq('id', draftId);
+    if (error) throw new Error('draft update failed: ' + error.message);
+  } else {
+    const { data: draft, error } = await db
+      .from('drafts')
+      .insert({
+        user_id: run.user_id,
+        topic: '[Autopilot] ' + angle.query,
+        goal: strategy.goal || 'rank',
+        channels: template.providers || [],
+        pack,
+        provider,
+      })
+      .select('id')
+      .single();
+    if (error) throw new Error('draft insert failed: ' + error.message);
+    draftId = (draft as { id: string }).id;
+  }
+
+  // Learnings: log the applied keywords for the feedback loop. When the
+  // chosen query has no brief of its own (cache-only mode), still record the
+  // primary from the angle's data — anti-repetition and the learning view
+  // both depend on this row existing.
+  if (brief) {
+    void recordDraftKeywords(run.user_id, angle.query, brief);
+  } else {
+    try {
+      await db.from('draft_keywords').insert({
+        user_id: run.user_id,
+        topic: angle.seedTopic,
+        keyword: angle.query,
+        volume: angle.volume != null ? Math.round(angle.volume) : null,
+        difficulty: angle.difficulty != null ? Math.round(angle.difficulty) : null,
+        intent: angle.intent,
+        role: 'primary',
+      });
+    } catch { /* learnings are best-effort */ }
+  }
 
   return {
     state: 'drafted',
-    draft_id: (draft as { id: string }).id,
+    draft_id: draftId,
+    angle: angleOut,
     brief: brief ?? run.brief,
-    log: logLine(run, 'draft', 'Drafted via ' + provider + ' for channels: ' + (template.providers || []).join(', ')),
+    log: logLine(
+      run,
+      'draft',
+      'Drafted via ' + provider + ' for channels: ' + (template.providers || []).join(', ') +
+        (media ? ' — matched clip "' + media.title + '" will attach on approval' : '')
+    ),
   };
 }
 
@@ -732,14 +901,19 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
   // Push a Metricool DRAFT (autoPublish: false) so it lands in the approval
   // queue there too. Fail-soft: missing env just means dashboard-only staging.
   if (mcProviders.length) {
+    const media = run.angle?.media?.url ? [{ url: run.angle.media.url }] : [];
     try {
       await metricoolSchedulePost({
         text,
         providers: mcProviders,
         publicationDate: run.scheduled_for,
+        media,
         autoPublish: false,
       });
-      note = 'Sent to Metricool as a DRAFT for ' + mcProviders.join(', ') + ' — publish happens only there.';
+      note =
+        'Sent to Metricool as a DRAFT for ' + mcProviders.join(', ') +
+        (media.length ? ' with clip "' + (run.angle?.media?.title || 'video') + '" attached' : '') +
+        ' — publish happens only there.';
     } catch (e) {
       note = 'Approved locally; Metricool handoff unavailable (' + (e instanceof Error ? e.message : 'error') + ').';
     }
@@ -758,6 +932,34 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
     .update({ state: 'approved', log: logLine(run, 'approve', note) })
     .eq('id', run.id);
   return { ok: true, note };
+}
+
+// Reviewer feedback loop: send a run back for a redraft that MUST address
+// the note. The existing draft row is reused, the pipeline restarts at the
+// draft step with the feedback embedded in the prompt.
+export async function regenerateRun(runId: string, userId: string, note?: string): Promise<boolean> {
+  const db = supabaseAdmin();
+  const { data: r } = await db
+    .from('template_runs')
+    .select('*')
+    .eq('id', runId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  const run = r as RunRow | null;
+  if (!run || !run.angle) return false;
+  if (!['ready_for_review', 'drafted', 'failed'].includes(run.state)) return false;
+  const angle: Angle = { ...run.angle, reviewerNote: (note || '').trim().slice(0, 500) || run.angle.reviewerNote };
+  await db
+    .from('template_runs')
+    .update({
+      state: 'researched',
+      attempts: 0,
+      regens: 0,
+      angle,
+      log: logLine(run, 'regenerate', note ? 'Reviewer asked for changes: ' + note : 'Reviewer asked for a fresh take.'),
+    })
+    .eq('id', runId);
+  return true;
 }
 
 export async function skipRun(runId: string, userId: string): Promise<boolean> {

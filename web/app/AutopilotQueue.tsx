@@ -14,6 +14,9 @@ type Angle = {
   rationale: string;
   volume: number | null;
   difficulty: number | null;
+  strategistNote?: string;
+  provenPerformer?: boolean;
+  media?: { url: string; title: string } | null;
 };
 
 type RunScore = {
@@ -31,6 +34,7 @@ type Run = {
   angle: Angle | null;
   score: RunScore | null;
   pack: Record<string, string> | null;
+  recent_angles?: { query: string; type: string }[];
 };
 
 const ANGLE_META: Record<Angle['type'], { label: string; cls: string }> = {
@@ -70,7 +74,7 @@ export default function AutopilotQueue() {
 
   useEffect(() => { void load(); }, [load]);
 
-  async function act(id: string, action: 'approve' | 'skip' | 'run_now') {
+  async function act(id: string, action: 'approve' | 'skip' | 'run_now' | 'regenerate', extraNote?: string) {
     setBusyId(id);
     setErr(null);
     setNote(null);
@@ -78,7 +82,7 @@ export default function AutopilotQueue() {
       const r = await fetch('/api/autopilot/runs', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id, action }),
+        body: JSON.stringify({ id, action, note: extraNote }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j?.error || 'Action failed (' + r.status + ')');
@@ -186,9 +190,30 @@ export default function AutopilotQueue() {
                   </div>
 
                   {r.angle && (
-                    <p className="border-b border-line px-5 py-3 text-[13px] leading-relaxed text-ink-muted">
-                      <span className="font-medium text-ink">Why this angle: </span>{r.angle.rationale}
-                    </p>
+                    <div className="border-b border-line px-5 py-3 text-[13px] leading-relaxed text-ink-muted">
+                      <p>
+                        <span className="font-medium text-ink">Why this angle: </span>{r.angle.rationale}
+                        {r.angle.provenPerformer && (
+                          <span className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">proven performer</span>
+                        )}
+                      </p>
+                      {r.angle.strategistNote && (
+                        <p className="mt-1.5 italic">
+                          <span className="font-medium not-italic text-ink">Strategist: </span>{r.angle.strategistNote}
+                        </p>
+                      )}
+                      {r.angle.media && (
+                        <p className="mt-1.5">
+                          🎬 <span className="font-medium text-ink">Clip attached on approve:</span> {r.angle.media.title}
+                        </p>
+                      )}
+                      {Boolean(r.recent_angles?.length) && (
+                        <p className="mt-1.5 text-[12px]">
+                          <span className="font-medium text-ink">Previous occurrences targeted: </span>
+                          {r.recent_angles!.map((h) => '"' + h.query + '"').join(' · ')}
+                        </p>
+                      )}
+                    </div>
                   )}
 
                   {r.score && r.score.safetyFlags.length > 0 && (
@@ -226,6 +251,17 @@ export default function AutopilotQueue() {
                       className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
                     >
                       {busyId === r.id ? 'Working…' : 'Approve → Metricool draft'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const feedback = window.prompt('What should change? The engine redrafts and must address your note.', '');
+                        if (feedback !== null) void act(r.id, 'regenerate', feedback);
+                      }}
+                      disabled={busyId === r.id}
+                      className="rounded-full px-4 py-1.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
+                    >
+                      {busyId === r.id ? 'Redrafting…' : 'Ask for changes'}
                     </button>
                     <button
                       type="button"
