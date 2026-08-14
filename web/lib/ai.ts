@@ -249,7 +249,7 @@ export async function chatAssistant(
 // server (assistant route) can run it with the authed user + confirmation gate.
 // ---------------------------------------------------------------------------
 
-export type ToolName = "generate_content" | "save_draft" | "schedule_post" | "clip_video" | "research_topic";
+export type ToolName = "generate_content" | "save_draft" | "schedule_post" | "clip_video" | "research_topic" | "keyword_lookup";
 
 export type ToolCall = {
   name: ToolName;
@@ -272,6 +272,9 @@ Tool guidance:
 - schedule_post: schedule a post to a social network at a date/time via the connected scheduler. Networks: facebook, instagram, linkedin, twitter (x), tiktok, youtube, threads. publishAt must be an ISO datetime (YYYY-MM-DDTHH:MM). The server will ask the user to confirm before anything goes live, so it is fine to call this when the user asks; do not refuse.
 - clip_video: turn a long YouTube or Vimeo video into short vertical clips via OpusClip. Use when the user gives a video URL and asks for clips/shorts/reels. Requires a videoUrl; title and language are optional.
 - research_topic: run topic research (angles, keywords, hashtags, hooks, and a ready draft) for a network. Use when the user asks to research a topic or wants ideas/angles/keywords before drafting. Requires a topic; network is optional (default instagram).
+- keyword_lookup: fetch REAL Semrush search data for a topic — monthly volume, keyword difficulty (KD), CPC, searcher intent, and the questions people actually ask. Call this BEFORE recommending topics, angles, or keywords, and whenever the user asks what to write about or how content might perform.
+
+Semrush grounding rules: recommendations about WHAT to write must be grounded in keyword_lookup or research_topic data, not guesses. Prefer high-volume, lower-difficulty (KD under ~60) terms; say the numbers out loud (e.g. "1,900 searches/mo, KD 26") so the user can judge; when data is unavailable, say so plainly rather than inventing metrics.
 
 Keep replies concise and friendly. Only reference the clinic own website and YouTube content. Never invent medical claims; keep language compliant and non-exaggerated. If a scheduling request is missing the network or the date/time, ask a brief clarifying question instead of calling schedule_post.`;
 
@@ -336,6 +339,17 @@ const TOOL_DEFS = [
       properties: {
         topic: { type: "string", description: "The topic to research." },
         network: { type: "string", enum: ["instagram", "facebook", "linkedin", "x", "blog"], description: "Target network. Default instagram." },
+      },
+      required: ["topic"],
+    },
+  },
+  {
+    name: "keyword_lookup",
+    description: "Fetch real Semrush search data for a topic: monthly volume, keyword difficulty, CPC, searcher intent, and real searcher questions. Use before recommending topics/angles or judging demand.",
+    input_schema: {
+      type: "object",
+      properties: {
+        topic: { type: "string", description: "The topic or keyword to look up." },
       },
       required: ["topic"],
     },
