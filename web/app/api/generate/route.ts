@@ -6,7 +6,7 @@ import { reviewPack } from '@/lib/safety';
 import { supabaseServer, supabaseAdmin } from '@/lib/supabase';
 import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { researchKeywords, keywordHintFrom } from '@/lib/keywords';
+import { researchBundle, briefPromptFrom, recordDraftKeywords, type KeywordBrief } from '@/lib/semrush';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -95,17 +95,23 @@ export async function POST(req: NextRequest) {
       // ignore performance-load failures; generation proceeds without the hint.
     }
 
-    // Keyword research gate: every draft is informed by Semrush keyword data.
-    // Runs server-side; degrades to no-op (link-out only) without an API key.
+    // Semrush pre-filter: the Keyword Brief ALWAYS runs before the AI writes.
+    // Cache-first (repeat topics cost 0 units) and budget-guarded; degrades to
+    // no-op without an API key or below the unit floor. Never blocks drafting.
     let keywordHint: string | undefined;
     let keywordsApplied: string[] = [];
     let keywordSource: 'semrush' | 'none' = 'none';
+    let keywordBrief: KeywordBrief | null = null;
     try {
-      const research = await researchKeywords(topic, { limit: 12 });
-      keywordSource = research.source;
-      const built = keywordHintFrom(research);
-      keywordHint = built.hint || undefined;
-      keywordsApplied = built.applied;
+      const bundle = await researchBundle(topic, { relatedLimit: 12, questionLimit: 6 });
+      if (bundle.brief.source === 'semrush') {
+        keywordBrief = bundle.brief;
+        keywordSource = 'semrush';
+        keywordHint = briefPromptFrom(bundle.brief) || undefined;
+        keywordsApplied = [bundle.brief.primary, ...bundle.brief.supporting]
+          .filter(Boolean)
+          .map((k) => (k as { keyword: string }).keyword);
+      }
     } catch {
       // never block generation on keyword lookup
     }
@@ -128,10 +134,14 @@ export async function POST(req: NextRequest) {
     } catch {
       // ignore review failures; content is returned regardless.
     }
+    // Learnings: log which keywords this draft applied (best-effort).
+    if (keywordBrief) {
+      void recordDraftKeywords(user.id, topic, keywordBrief);
+    }
     return NextResponse.json(
       safetyAdvisory.length
-        ? { provider: used, pack, safetyAdvisory, keywordsApplied, keywordSource }
-        : { provider: used, pack, keywordsApplied, keywordSource }
+        ? { provider: used, pack, safetyAdvisory, keywordsApplied, keywordSource, keywordBrief }
+        : { provider: used, pack, keywordsApplied, keywordSource, keywordBrief }
     );
   } catch (e: any) {
     return NextResponse.json(
