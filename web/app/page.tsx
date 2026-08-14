@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLiveContent } from "@/components/LiveContentProvider";
-import KeywordPanel from "./KeywordPanel";
+import KeywordIntelligence from "./KeywordIntelligence";
 
 type Provider = 'anthropic' | 'openai';
 type ContentType = 'social' | 'blog' | 'email' | 'video' | 'ad';
@@ -1257,9 +1257,16 @@ return (
 </div>
 </div>
 </div>
-              {/* Keyword Intelligence — Semrush keyword data shared with the AI */}
+              {/* Semrush Keyword Intelligence — the same brain that pre-filters
+                  every draft and grounds the chatbot's advice */}
               <div className="border-t border-line p-6 sm:p-8">
-                <KeywordPanel initialTopic={researchTopicText || prompt} />
+                <KeywordIntelligence
+                  initialTopic={researchTopicText || prompt}
+                  onUseTopic={(t) => {
+                    setPrompt(t);
+                    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { /* noop */ }
+                  }}
+                />
               </div>
               {/* AI Research & Draft Copilot — full-width band below the two columns */}
               <div className="border-t border-line p-6 sm:p-8">
