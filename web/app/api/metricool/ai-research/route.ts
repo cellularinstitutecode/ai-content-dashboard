@@ -47,8 +47,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { provider: used, result } = await researchTopic({ topic, provider, network, brand });
-    return NextResponse.json({ provider: used, ...result });
+    // Semrush pre-filter runs automatically inside researchTopic (cache-first,
+    // budget-guarded) so the copilot's keyword picks are grounded in real
+    // search data. `keywordResearch` tells the UI it happened.
+    const { provider: used, result, semrush } = await researchTopic({ topic, provider, network, brand });
+    return NextResponse.json({ provider: used, ...result, keywordResearch: semrush });
   } catch (err) {
     console.error('[ai-research] failed:', err);
     return NextResponse.json(

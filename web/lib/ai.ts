@@ -4,6 +4,7 @@
 import 'server-only';
 
 import { MEDICAL_SAFETY_GUARDRAILS } from '@/lib/safety';
+import { researchBundle, briefPromptFrom, type KeywordBrief } from '@/lib/semrush';
 
 export type Provider = 'anthropic' | 'openai';
 
@@ -188,10 +189,94 @@ function parseJsonStrict(text: string): ContentPack {
   };
 }
 
-export async function generateContentPack(input: GenerateInput): Promise<{ provider: Provider; pack: ContentPack }> {
+// ---------------------------------------------------------------------------
+// Semrush auto-filter: EVERY generation path passes through keyword research.
+// generateContentPack() and researchTopic() fetch the Keyword Brief themselves
+// when the caller didn't supply one, so no route — present or future — can
+// skip the filter. The result is stamped on the pack as `_semrush`, which
+// persists into saved drafts, giving autonomous posts a visible, auditable
+// record that real keyword research ran before the AI wrote a word.
+// Cache-first + budget-guarded (lib/semrush): a repeat topic costs 0 units and
+// a missing key degrades to a stamped "none" — generation is never blocked.
+// ---------------------------------------------------------------------------
+
+export type SemrushStamp = {
+  checked: boolean; // keyword research was attempted for this generation
+  source: 'semrush' | 'none'; // real data applied vs unavailable
+  primary: string | null;
+  volume: number | null;
+  difficulty: number | null;
+  keywords: string[]; // primary + supporting actually given to the model
+  questions: string[];
+  intent: string | null;
+  fromCache: boolean;
+  unitsSpent: number;
+  reason?: string; // why source === 'none' (no_token / budget / empty / ...)
+  checkedAt: string; // ISO timestamp
+};
+
+export async function autoKeywordBrief(
+  topic: string
+): Promise<{ hint?: string; brief: KeywordBrief | null; stamp: SemrushStamp }> {
+  const base: SemrushStamp = {
+    checked: true,
+    source: 'none',
+    primary: null,
+    volume: null,
+    difficulty: null,
+    keywords: [],
+    questions: [],
+    intent: null,
+    fromCache: false,
+    unitsSpent: 0,
+    checkedAt: new Date().toISOString(),
+  };
+  try {
+    const bundle = await researchBundle(topic, { relatedLimit: 12, questionLimit: 6 });
+    if (bundle.brief.source !== 'semrush') {
+      return { brief: null, stamp: { ...base, reason: bundle.reason } };
+    }
+    const b = bundle.brief;
+    const hint = briefPromptFrom(b) || undefined;
+    return {
+      hint,
+      brief: b,
+      stamp: {
+        ...base,
+        source: 'semrush',
+        primary: b.primary?.keyword ?? null,
+        volume: b.primary?.volume ?? null,
+        difficulty: b.primary?.difficulty ?? null,
+        keywords: [b.primary, ...b.supporting].filter(Boolean).map((k) => (k as { keyword: string }).keyword),
+        questions: b.questions.map((q) => q.keyword),
+        intent: b.intentSummary || null,
+        fromCache: b.fromCache,
+        unitsSpent: b.unitsSpent,
+      },
+    };
+  } catch {
+    // Keyword research must NEVER block generation.
+    return { brief: null, stamp: { ...base, reason: 'error' } };
+  }
+}
+
+export async function generateContentPack(
+  input: GenerateInput
+): Promise<{ provider: Provider; pack: ContentPack; keywordBrief: KeywordBrief | null; semrush: SemrushStamp | null }> {
   const provider: Provider =
     input.provider ||
     (process.env.AI_PROVIDER === 'openai' ? 'openai' : 'anthropic');
+
+  // Mandatory Semrush pre-filter (unless the caller already prepared one).
+  let keywordBrief: KeywordBrief | null = null;
+  let semrush: SemrushStamp | null = null;
+  if (input.keywordHint === undefined) {
+    const auto = await autoKeywordBrief(input.topic);
+    input = { ...input, keywordHint: auto.hint };
+    keywordBrief = auto.brief;
+    semrush = auto.stamp;
+  }
+
   const call = () => (provider === 'openai' ? callOpenAI(input) : callAnthropic(input));
   let pack: ContentPack;
   try {
@@ -204,7 +289,9 @@ export async function generateContentPack(input: GenerateInput): Promise<{ provi
       throw e;
     }
   }
-  return { provider, pack };
+  // Stamp provenance on the pack so every saved draft carries the audit trail.
+  if (semrush) (pack as ContentPack & { _semrush?: SemrushStamp })._semrush = semrush;
+  return { provider, pack, keywordBrief, semrush };
 }
 
 // Free-form conversational assistant for the dashboard chatbot.
@@ -449,12 +536,21 @@ Base your analysis on durable patterns and your knowledge of the subject. Do NOT
 specific real-time metrics (exact follower counts, live trending ranks, ad CPCs) — speak
 qualitatively where live data would be required. Keep it practical and specific to the topic.`;
 
-export async function researchTopic(input: ResearchInput): Promise<{ provider: Provider; result: ResearchResult }> {
+export async function researchTopic(
+  input: ResearchInput
+): Promise<{ provider: Provider; result: ResearchResult; semrush: SemrushStamp | null }> {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
   const useProvider: Provider = input.provider || (anthropicKey ? 'anthropic' : 'openai');
   const topic = String(input.topic || '').slice(0, 2000);
   const network = input.network ? String(input.network).slice(0, 40) : 'social';
+  // Mandatory Semrush pre-filter (unless the caller already prepared one).
+  let semrush: SemrushStamp | null = null;
+  if (input.keywordHint === undefined) {
+    const auto = await autoKeywordBrief(topic);
+    input = { ...input, keywordHint: auto.hint };
+    semrush = auto.stamp;
+  }
   const kwBlock = input.keywordHint ? `\n${input.keywordHint}` : '';
   const userPrompt = `TOPIC: ${topic}\nTARGET NETWORK: ${network}${brandBlock(input.brand)}${kwBlock}\nReturn the JSON object now.`;
 
@@ -502,7 +598,10 @@ export async function researchTopic(input: ResearchInput): Promise<{ provider: P
     hooks: arr(obj.hooks),
     trendRead: String(obj.trendRead ?? ''),
     draft: String(obj.draft ?? ''),
-    liveDataNote: 'Qualitative research from the AI model. Connect an X API and keyword-data provider to add live trending ranks and search-volume numbers.',
+    liveDataNote:
+      semrush && semrush.source === 'semrush'
+        ? 'Keyword picks are grounded in live Semrush search data (volume + difficulty + intent).'
+        : 'Qualitative research from the AI model. Connect Semrush (SEMRUSH_API_KEY) to ground keywords in live search-volume numbers.',
   };
-  return { provider, result };
+  return { provider, result, semrush };
 }

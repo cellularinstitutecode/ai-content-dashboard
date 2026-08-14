@@ -6,7 +6,7 @@ import { reviewPack } from '@/lib/safety';
 import { supabaseServer, supabaseAdmin } from '@/lib/supabase';
 import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { researchBundle, briefPromptFrom, recordDraftKeywords, type KeywordBrief } from '@/lib/semrush';
+import { recordDraftKeywords } from '@/lib/semrush';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -95,27 +95,10 @@ export async function POST(req: NextRequest) {
       // ignore performance-load failures; generation proceeds without the hint.
     }
 
-    // Semrush pre-filter: the Keyword Brief ALWAYS runs before the AI writes.
-    // Cache-first (repeat topics cost 0 units) and budget-guarded; degrades to
-    // no-op without an API key or below the unit floor. Never blocks drafting.
-    let keywordHint: string | undefined;
-    let keywordsApplied: string[] = [];
-    let keywordSource: 'semrush' | 'none' = 'none';
-    let keywordBrief: KeywordBrief | null = null;
-    try {
-      const bundle = await researchBundle(topic, { relatedLimit: 12, questionLimit: 6 });
-      if (bundle.brief.source === 'semrush') {
-        keywordBrief = bundle.brief;
-        keywordSource = 'semrush';
-        keywordHint = briefPromptFrom(bundle.brief) || undefined;
-        keywordsApplied = [bundle.brief.primary, ...bundle.brief.supporting]
-          .filter(Boolean)
-          .map((k) => (k as { keyword: string }).keyword);
-      }
-    } catch {
-      // never block generation on keyword lookup
-    }
-    const { provider: used, pack } = await generateContentPack({
+    // Semrush pre-filter: generateContentPack() now runs the Keyword Brief
+    // itself (cache-first, budget-guarded, never blocking) and stamps the pack
+    // with `_semrush` provenance — this route just surfaces the result.
+    const { provider: used, pack, keywordBrief, semrush } = await generateContentPack({
       topic,
       audience,
       tone,
@@ -125,8 +108,9 @@ export async function POST(req: NextRequest) {
       contentType,
       brand,
       performanceHint,
-      keywordHint,
     });
+    const keywordSource: 'semrush' | 'none' = semrush?.source === 'semrush' ? 'semrush' : 'none';
+    const keywordsApplied: string[] = semrush?.keywords ?? [];
     // Advisory content-safety review (medical domain). Never blocks generation.
     let safetyAdvisory: { code: string; message: string }[] = [];
     try {

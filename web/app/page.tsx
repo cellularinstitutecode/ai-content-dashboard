@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLiveContent } from "@/components/LiveContentProvider";
-import KeywordIntelligence from "./KeywordIntelligence";
+import SemrushPanel from "./SemrushPanel";
 
 type Provider = 'anthropic' | 'openai';
 type ContentType = 'social' | 'blog' | 'email' | 'video' | 'ad';
@@ -1257,10 +1257,11 @@ return (
 </div>
 </div>
 </div>
-              {/* Semrush Keyword Intelligence — the same brain that pre-filters
-                  every draft and grounds the chatbot's advice */}
+              {/* Semrush Intelligence — the full SEO command center (domain
+                  overview, rankings, competitors, backlinks, site health) plus
+                  the keyword brain that pre-filters every draft */}
               <div className="border-t border-line p-6 sm:p-8">
-                <KeywordIntelligence
+                <SemrushPanel
                   initialTopic={researchTopicText || prompt}
                   onUseTopic={(t) => {
                     setPrompt(t);
@@ -1489,7 +1490,12 @@ return (
 ) : null}
 <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-subtle text-[13px] font-semibold text-ink-muted ring-1 ring-line">{i + 1}</div>
 <div className="min-w-0">
-<div className="truncate text-[14px] font-medium text-ink">{String(title)}</div>
+<div className="flex min-w-0 items-center gap-2">
+<span className="truncate text-[14px] font-medium text-ink">{String(title)}</span>
+{d?.pack?._semrush?.source === 'semrush' && (
+<span title={'Semrush keyword research applied — primary: ' + (d.pack._semrush.primary || 'n/a')} className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-emerald-200">🔑 Semrush ✓</span>
+)}
+</div>
 {body && <div className="mt-0.5 line-clamp-2 text-[13px] text-ink-muted">{String(body)}</div>}
 </div>
 <div className="ml-auto flex shrink-0 items-center gap-1 self-center">
@@ -1534,6 +1540,32 @@ className="min-w-0 flex-1 rounded-xl bg-subtle px-3 py-2 text-[16px] font-semibo
 <button onClick={() => { setSelectedDraft(null); setEditingDraft(false); }} className="rounded-xl px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Close</button>
 </div>
 </div>
+{/* Semrush provenance: proof that keyword research ran before this draft was written */}
+{selectedDraft?.pack?._semrush?.source === 'semrush' && !editingDraft ? (
+<div className="mb-4 rounded-2xl bg-emerald-50/70 p-3.5 ring-1 ring-emerald-100">
+<div className="flex flex-wrap items-center gap-2">
+<span className="inline-flex items-center gap-1 rounded-full bg-emerald-600 px-2.5 py-0.5 text-[11px] font-semibold text-white">🔑 Semrush keyword research applied</span>
+{selectedDraft.pack._semrush.fromCache ? <span className="text-[11px] text-emerald-700">cached · 0 units</span> : null}
+{selectedDraft.pack._semrush.checkedAt ? <span className="ml-auto text-[11px] text-emerald-700/70">{new Date(selectedDraft.pack._semrush.checkedAt).toLocaleString()}</span> : null}
+</div>
+<div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px]">
+{selectedDraft.pack._semrush.primary ? (
+<span className="rounded-full bg-white px-2.5 py-0.5 font-semibold text-emerald-800 ring-1 ring-emerald-200">
+{selectedDraft.pack._semrush.primary}
+{selectedDraft.pack._semrush.volume != null ? ' · ' + Number(selectedDraft.pack._semrush.volume).toLocaleString() + '/mo' : ''}
+{selectedDraft.pack._semrush.difficulty != null ? ' · KD ' + selectedDraft.pack._semrush.difficulty : ''}
+</span>
+) : null}
+{(Array.isArray(selectedDraft.pack._semrush.keywords) ? selectedDraft.pack._semrush.keywords.slice(1, 7) : []).map((k: string, ki: number) => (
+<span key={k + ki} className="rounded-full bg-white px-2 py-0.5 text-emerald-800 ring-1 ring-emerald-200">{k}</span>
+))}
+{selectedDraft.pack._semrush.intent ? <span className="text-[11px] text-emerald-700">intent: {selectedDraft.pack._semrush.intent}</span> : null}
+</div>
+</div>
+) : null}
+{selectedDraft?.pack && selectedDraft.pack.kind !== 'clip' && selectedDraft.pack._semrush && selectedDraft.pack._semrush.source !== 'semrush' && !editingDraft ? (
+<p className="mb-4 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">⚠️ Generated without live Semrush data ({String(selectedDraft.pack._semrush.reason || 'unavailable')}) — connect SEMRUSH_API_KEY for keyword-checked drafts.</p>
+) : null}
 {selectedDraft?.pack?.kind === 'clip' ? (
 (() => {
 const clips = clipsOf(selectedDraft);
