@@ -68,29 +68,23 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
     mic.getTracks().forEach((t) => pc.addTrack(t, mic));
 
     const dc = pc.createDataChannel("oai-events");
-    dc.onopen = () => {
-      dc.send(JSON.stringify({
-        type: "session.update",
-        session: {
-          type: "realtime",
-          instructions: "You are the voice assistant for the AI Content Dashboard, a tool for drafting and scheduling social media posts (Instagram, Facebook, LinkedIn, blog) and managing posting-schedule templates. You are warm, quick, and effortlessly capable, like a calm confident assistant who already understands the app and the user's intent without being told exactly how to phrase things. Interpret casual, vague, or shorthand speech generously and infer what the user most likely wants, then act on it; do not demand precise commands or make the user repeat themselves in a rigid format. To take any action, call run_command with a clear natural-language description of what the user wants, for example 'draft an Instagram post about our new summer menu' or 'set up a template that posts to LinkedIn every Monday at 9am'. Keep spoken replies short and natural, a sentence or two, confirming what you are doing rather than how it works internally. If a request is genuinely ambiguous, ask one brief clarifying question rather than guessing wildly. Every action you trigger is staged on screen for the user to review and confirm; you never publish or send anything directly, so reassure the user it is ready for their review rather than claiming it is already done or live.",
-          tools: [{
-            type: "function",
-            name: "run_command",
-            description: "Send a natural-language command to the text assistant, which stages any action and asks the user to confirm on screen. Never publishes directly.",
-            parameters: {
-              type: "object",
-              properties: { command: { type: "string" } },
-              required: ["command"],
-            },
-          }],
-          tool_choice: "auto",
-        },
-      }));
-    };
+    // Instructions + tools (run_command, keyword_lookup) are now minted
+    // SERVER-SIDE in /api/realtime-session, where the session is grounded in
+    // a live Semrush snapshot of the clinic's domain. No client-side
+    // session.update — it would overwrite that grounding.
     dc.onmessage = async (e) => {
       const evt = JSON.parse(e.data);
-      if (evt.type === "response.function_call_arguments.done" && evt.name === "run_command") {
+      if (evt.type !== "response.function_call_arguments.done") return;
+
+      const reply = (output: string) => {
+        dc.send(JSON.stringify({
+          type: "conversation.item.create",
+          item: { type: "function_call_output", call_id: evt.call_id, output },
+        }));
+        dc.send(JSON.stringify({ type: "response.create" }));
+      };
+
+      if (evt.name === "run_command") {
         const { command } = JSON.parse(evt.arguments || "{}");
         const data = await (await fetch("/api/assistant", {
           method: "POST",
@@ -98,12 +92,33 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
           body: JSON.stringify({ session: getSession(), text: command }),
         })).json();
         applyResult(data, command);
-        dc.send(JSON.stringify({
-          type: "conversation.item.create",
-          item: { type: "function_call_output", call_id: evt.call_id,
-            output: data.message ?? "done - ask the user to review on screen" },
-        }));
-        dc.send(JSON.stringify({ type: "response.create" }));
+        reply(data.message ?? "done - ask the user to review on screen");
+        return;
+      }
+
+      if (evt.name === "keyword_lookup") {
+        // Real Semrush data (cache-first, budget-guarded server-side).
+        try {
+          const { topic } = JSON.parse(evt.arguments || "{}");
+          const r = await fetch("/api/semrush?action=hub&topic=" + encodeURIComponent(String(topic || "")));
+          const d = await r.json();
+          if (!r.ok || !d?.ok || !d?.brief) {
+            reply("No Semrush data available for that topic right now — say so plainly and do not invent numbers.");
+            return;
+          }
+          const b = d.brief;
+          const compact = {
+            topic: b.topic,
+            primary: b.primary,
+            supporting: (b.supporting || []).slice(0, 5),
+            questions: (b.questions || []).slice(0, 4),
+            intent: b.intentSummary || null,
+            fromCache: b.fromCache,
+          };
+          reply("Real Semrush data (volume = searches/mo, difficulty = KD 0-100): " + JSON.stringify(compact));
+        } catch {
+          reply("Keyword lookup failed — tell the user the data is unavailable rather than guessing.");
+        }
       }
     };
 
