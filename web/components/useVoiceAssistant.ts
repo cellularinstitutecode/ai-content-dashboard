@@ -11,9 +11,23 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
   const start = useCallback(async () => {
     setError(null);
     setConnecting(true);
+    let failed = false; // local flag: avoids overwriting a specific error from the stale closure state
+    const fail = (msg: string) => { failed = true; setError(msg); };
     try {
-    const s = await (await fetch("/api/realtime-session", { method: "POST" })).json();
+    const sessionRes = await fetch("/api/realtime-session", { method: "POST" });
+    const s = await sessionRes.json().catch(() => ({}));
+    if (!sessionRes.ok) {
+      const detail = typeof s?.detail === "string" ? s.detail.slice(0, 300) : "";
+      fail("Could not start a voice session (" + sessionRes.status + "). " + (detail || "Check that OPENAI_API_KEY is set in Vercel."));
+      setConnecting(false);
+      return;
+    }
     const EPHEMERAL = s.value ?? s.client_secret?.value;
+    if (!EPHEMERAL) {
+      fail("The voice session came back without a usable key — the OpenAI Realtime API may have changed shape. Check the /api/realtime-session response.");
+      setConnecting(false);
+      return;
+    }
 
     const pc = new RTCPeerConnection();
     pcRef.current = pc;
@@ -95,23 +109,46 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    const sdp = await (await fetch("https://api.openai.com/v1/realtime/calls?model=gpt-realtime", {
+    const callRes = await fetch("https://api.openai.com/v1/realtime/calls?model=gpt-realtime", {
       method: "POST",
       body: offer.sdp,
       headers: { Authorization: `Bearer ${EPHEMERAL}`, "Content-Type": "application/sdp" },
-    })).text();
+    });
+    const sdp = await callRes.text();
+    // OpenAI returns a JSON error body (not SDP) on failure — surface the real
+    // message instead of letting setRemoteDescription crash on "{".
+    if (!callRes.ok || !sdp.trimStart().startsWith("v=")) {
+      let msg = "OpenAI rejected the voice call (" + callRes.status + ").";
+      try {
+        const j = JSON.parse(sdp);
+        const apiMsg = j?.error?.message ? String(j.error.message) : "";
+        const code = j?.error?.code ? String(j.error.code) : "";
+        if (code === "credit_balance_exhausted" || code === "insufficient_quota" || /credits/i.test(apiMsg)) {
+          msg = "Your OpenAI account is out of API credits, so voice can't connect. Add credits at platform.openai.com → Billing, then try again.";
+        } else if (apiMsg) {
+          msg = "OpenAI voice error: " + apiMsg.slice(0, 300);
+        }
+      } catch { /* body wasn't JSON either */ }
+      fail(msg);
+      try { mic.getTracks().forEach((t) => t.stop()); } catch {}
+      pc.close();
+      pcRef.current = null;
+      setConnecting(false);
+      setActive(false);
+      return;
+    }
     await pc.setRemoteDescription({ type: "answer", sdp });
     setActive(true);
     setConnecting(false);
     } catch (err) {
       console.error("voice: start failed", err);
-      if (!error) setError("Voice assistant failed to start. Please try again.");
+      if (!failed) setError("Voice assistant failed to start. Please try again.");
       try { pcRef.current?.close(); } catch {}
       pcRef.current = null;
       setConnecting(false);
       setActive(false);
     }
-  }, [getSession, applyResult, error]);
+  }, [getSession, applyResult]);
 
   const stop = useCallback(() => {
     pcRef.current?.close();
