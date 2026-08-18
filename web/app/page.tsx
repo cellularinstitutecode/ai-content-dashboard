@@ -184,6 +184,8 @@ const [keywordsApplied, setKeywordsApplied] = useState<string[]>([]);
 const [keywordSource, setKeywordSource] = useState<string>('none');
 const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string } | null>(null);
 const [genImageLoading, setGenImageLoading] = useState(false);
+const [lastDraftId, setLastDraftId] = useState<string | null>(null);
+const [modalImgBusy, setModalImgBusy] = useState(false);
 
 const [mLoading, setMLoading] = useState(false);
 const [mAnalytics, setMAnalytics] = useState<any>(null);
@@ -668,7 +670,7 @@ refreshDrafts();
 }
 
 async function generate() {
-setLoading(true); setErr(null); setOutput(''); setGenImage(null);
+setLoading(true); setErr(null); setOutput(''); setGenImage(null); setLastDraftId(null);
 try {
 const r = await fetch('/api/generate', {
 method: 'POST', headers: { 'content-type': 'application/json' },
@@ -690,6 +692,7 @@ body: JSON.stringify({ topic: prompt, pack: { ...pack, format: type }, provider 
 const dj = await dr.json().catch(() => ({}));
 draftId = dj?.draft?.id || null;
 } catch {}
+setLastDraftId(draftId);
 refreshDrafts();
 // Visual pack: generate the AI hero image in the background so the text
 // shows instantly and the image fills in when ready (fail-soft).
@@ -708,6 +711,42 @@ if (ir.ok && ij?.image?.url) setGenImage(ij.image);
 .finally(() => { setGenImageLoading(false); refreshDrafts(); });
 }
 } catch (e: any) { setErr(friendlyGenError(e?.message || 'Generation failed')); } finally { setLoading(false); }
+}
+
+// Reject the current hero image and get a fresh proposition (the server
+// advances the composition variant so every regenerate looks different).
+async function regenGenImage() {
+if (!lastDraftId || genImageLoading) return;
+setGenImageLoading(true);
+try {
+const ir = await fetch('/api/drafts/image', {
+method: 'POST',
+headers: { 'content-type': 'application/json' },
+body: JSON.stringify({ id: lastDraftId, regenerate: true }),
+});
+const ij = await ir.json().catch(() => ({}));
+if (ir.ok && ij?.image?.url) setGenImage(ij.image);
+} catch {} finally { setGenImageLoading(false); refreshDrafts(); }
+}
+
+// Same, from the draft detail modal (works for any saved draft).
+async function regenDraftImage(d: any) {
+const id = d && (d.id || d._id);
+if (!id || modalImgBusy) return;
+setModalImgBusy(true);
+try {
+const r = await fetch('/api/drafts/image', {
+method: 'POST',
+headers: { 'content-type': 'application/json' },
+body: JSON.stringify({ id, regenerate: true }),
+});
+const j = await r.json().catch(() => ({}));
+if (r.ok && j?.image?.url) {
+const updated = { ...d, pack: { ...((d && d.pack) || {}), _image: j.image } };
+setSelectedDraft(updated);
+refreshDrafts();
+}
+} catch {} finally { setModalImgBusy(false); }
 }
 
 // Load analytics from GET /api/metricool. When silent (mount auto-load), we do
@@ -1000,9 +1039,17 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
 )}
 {output && genImage?.url ? (
   <div className="mb-3 overflow-hidden rounded-2xl ring-1 ring-line">
-    {/* eslint-disable-next-line @next/next/no-img-element */}
-    <img src={genImage.url} alt={genImage.alt || 'AI hero image'} className="max-h-64 w-full object-cover" />
-    <div className="bg-white px-3 py-1.5 text-[11px] text-ink-faint">🖼 AI hero image ({genImage.model || 'OpenAI'}) — saved on the draft, attaches when you schedule.</div>
+    <a href={genImage.url} target="_blank" rel="noopener noreferrer" title="Open full size">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={genImage.url} alt={genImage.alt || 'AI hero image'} className={"max-h-96 w-full object-cover transition hover:opacity-95 " + (genImageLoading ? 'opacity-50' : '')} />
+    </a>
+    <div className="flex flex-wrap items-center gap-2 bg-white px-3 py-1.5">
+      <span className="text-[11px] text-ink-faint">🖼 AI hero image ({genImage.model || 'OpenAI'}) — saved on the draft, attaches when you schedule. Click to view full size.</span>
+      <button type="button" onClick={regenGenImage} disabled={genImageLoading}
+        className="ml-auto rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle disabled:opacity-50">
+        {genImageLoading ? 'Regenerating…' : '↻ New image'}
+      </button>
+    </div>
   </div>
 ) : output && genImageLoading ? (
   <div className="mb-3 flex items-center gap-2 rounded-2xl border border-dashed border-line bg-white px-4 py-3 text-[12px] text-ink-muted">
@@ -1612,9 +1659,17 @@ className="min-w-0 flex-1 rounded-xl bg-subtle px-3 py-2 text-[16px] font-semibo
 ) : null}
 {selectedDraft?.pack?._image?.url && selectedDraft?.pack?.kind !== 'clip' && !editingDraft ? (
 <div className="mb-4 overflow-hidden rounded-2xl ring-1 ring-line/60">
+<a href={selectedDraft.pack._image.url} target="_blank" rel="noopener noreferrer" title="Open full size">
 {/* eslint-disable-next-line @next/next/no-img-element */}
-<img src={selectedDraft.pack._image.url} alt={selectedDraft.pack._image.alt || 'AI hero image'} className="w-full object-cover" />
-<div className="bg-subtle/60 px-3 py-2 text-[11px] text-ink-faint">🖼 AI hero image ({String(selectedDraft.pack._image.model || 'OpenAI')}) — attaches automatically when you schedule or approve this draft.</div>
+<img src={selectedDraft.pack._image.url} alt={selectedDraft.pack._image.alt || 'AI hero image'} className={"w-full object-cover transition hover:opacity-95 " + (modalImgBusy ? 'opacity-50' : '')} />
+</a>
+<div className="flex flex-wrap items-center gap-2 bg-subtle/60 px-3 py-2">
+<span className="text-[11px] text-ink-faint">🖼 AI hero image ({String(selectedDraft.pack._image.model || 'OpenAI')}) — attaches automatically when you schedule or approve. Click to view full size.</span>
+<button type="button" onClick={() => regenDraftImage(selectedDraft)} disabled={modalImgBusy}
+className="ml-auto rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-white disabled:opacity-50">
+{modalImgBusy ? 'Regenerating…' : '↻ New image'}
+</button>
+</div>
 </div>
 ) : null}
 {selectedDraft?.pack?.kind === 'clip' ? (

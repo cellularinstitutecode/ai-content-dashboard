@@ -27,6 +27,10 @@ export type PackImage = {
   alt: string;
   model: string;
   createdAt: string;
+  // Which composition variant produced this image. Regeneration advances the
+  // variant, so "New image" always yields a visibly different take — never a
+  // re-roll of the same prompt.
+  variant: number;
 };
 
 const BUCKET = process.env.IMAGE_BUCKET || 'content-images';
@@ -56,20 +60,31 @@ function excerptOf(pack: Record<string, unknown> | null | undefined): string {
     .slice(0, 240);
 }
 
+// Composition variants: regeneration cycles through these so every "New
+// image" is a genuinely different visual proposition, not a near-duplicate.
+export const STYLE_VARIANTS: string[] = [
+  'Composition: wide editorial hero shot — premium modern clinic interior or a calm physician-patient consultation moment.',
+  'Composition: macro scientific beauty — laboratory glassware, pipettes, cell-culture plates, abstract luminous cellular forms.',
+  'Composition: warm lifestyle — healthy, active adults (40-70) outdoors in bright coastal light, vitality and movement.',
+  'Composition: minimal premium still-life — clean medical/wellness objects on a soft neutral background, generous negative space.',
+];
+
 export function buildImagePrompt(opts: {
   topic: string;
   pack?: Record<string, unknown> | null;
   brand?: BrandContext | null;
+  variant?: number;
 }): string {
   const brandName = opts.brand?.name || 'a premium regenerative medicine and longevity clinic';
   const excerpt = excerptOf(opts.pack);
+  const variant = STYLE_VARIANTS[Math.abs(Math.round(opts.variant ?? 0)) % STYLE_VARIANTS.length];
   return [
     `Editorial hero photograph for ${brandName}.`,
     `Subject: ${opts.topic}.`,
     excerpt ? `Context from the article: ${excerpt}` : '',
+    variant,
     'Style: bright, clean, modern medical-wellness aesthetic; soft natural light;',
-    'calm, hopeful, trustworthy mood; photorealistic; shallow depth of field;',
-    'premium clinic interiors, laboratory detail, or healthy active adults (40-70) enjoying life.',
+    'calm, hopeful, trustworthy mood; photorealistic; shallow depth of field.',
     'Strict rules: NO text, NO words, NO letters, NO logos, NO watermarks,',
     'no needles piercing skin, no blood, no graphic medical procedures, nothing that implies a medical claim.',
   ].filter(Boolean).join(' ');
@@ -186,9 +201,11 @@ export async function generatePackImage(opts: {
   topic: string;
   pack?: Record<string, unknown> | null;
   brand?: BrandContext | null;
+  variant?: number;
 }): Promise<PackImage> {
   if (!imagesEnabled()) throw new Error('image generation disabled (IMAGE_GEN=off or no OPENAI_API_KEY)');
-  const prompt = buildImagePrompt(opts);
+  const variant = Math.abs(Math.round(opts.variant ?? 0)) % STYLE_VARIANTS.length;
+  const prompt = buildImagePrompt({ ...opts, variant });
   const { b64, model } = await generateImageB64(prompt);
   const url = await storeImage(b64, opts.topic);
   return {
@@ -197,6 +214,7 @@ export async function generatePackImage(opts: {
     alt: `${opts.topic} — illustrative image for ${opts.brand?.name || 'Cellular Institute'}`,
     model,
     createdAt: new Date().toISOString(),
+    variant,
   };
 }
 

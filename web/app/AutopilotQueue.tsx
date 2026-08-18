@@ -26,7 +26,7 @@ type RunScore = {
   critique: string[];
 };
 
-type PackImage = { url: string; alt?: string; model?: string };
+type PackImage = { url: string; alt?: string; model?: string; variant?: number };
 
 type Run = {
   id: string;
@@ -66,6 +66,8 @@ export default function AutopilotQueue() {
   const [err, setErr] = useState<string | null>(null);
   const [openChannel, setOpenChannel] = useState<Record<string, string>>({});
   const [imagingIds, setImagingIds] = useState<Set<string>>(new Set());
+  const [regenId, setRegenId] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<{ url: string; alt: string } | null>(null);
   // Draft ids we already asked an image for this session — avoids re-requesting
   // on every poll while a generation is in flight or after it failed.
   const imageAsked = useRef<Set<string>>(new Set());
@@ -128,6 +130,29 @@ export default function AutopilotQueue() {
       setErr(e instanceof Error ? e.message : 'Action failed');
     } finally {
       setBusyId(null);
+    }
+  }
+
+  // Reject a hallucinated/off-brand image and get a fresh proposition: the
+  // server advances the composition variant so every regenerate is a visibly
+  // different take (hero shot → macro lab → lifestyle → still-life → …).
+  async function regenImage(r: Run) {
+    if (!r.draft_id || regenId) return;
+    setRegenId(r.id);
+    setErr(null);
+    try {
+      const res = await fetch('/api/drafts/image', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: r.draft_id, regenerate: true }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || 'Image regeneration failed');
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Image regeneration failed');
+    } finally {
+      setRegenId(null);
     }
   }
 
@@ -261,20 +286,57 @@ export default function AutopilotQueue() {
 
                   {r.pack?._image?.url ? (
                     <div className="border-b border-line px-5 py-4">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={r.pack._image.url}
-                        alt={r.pack._image.alt || 'AI hero image'}
-                        className="max-h-56 w-full rounded-xl object-cover ring-1 ring-line"
-                      />
-                      <p className="mt-1.5 text-[11px] text-ink-faint">
-                        🖼 AI hero image ({r.pack._image.model || 'OpenAI'}) — attaches to the Metricool draft on approve.
-                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setLightbox({ url: r.pack!._image!.url, alt: r.pack!._image!.alt || 'AI hero image' })}
+                        className="group/img relative block w-full overflow-hidden rounded-xl ring-1 ring-line"
+                        title="Click to view full size"
+                      >
+                        {regenId === r.id && (
+                          <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-white/70 text-[13px] font-medium text-ink backdrop-blur-sm">
+                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-line border-t-accent" />
+                            Generating a new proposition…
+                          </div>
+                        )}
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={r.pack._image.url}
+                          alt={r.pack._image.alt || 'AI hero image'}
+                          className="max-h-[480px] w-full object-cover transition group-hover/img:scale-[1.01]"
+                        />
+                        <span className="absolute bottom-2 right-2 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-medium text-white opacity-0 transition group-hover/img:opacity-100">
+                          ⤢ View full size
+                        </span>
+                      </button>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <p className="text-[11px] text-ink-faint">
+                          🖼 AI hero image ({r.pack._image.model || 'OpenAI'}) — generated fresh from THIS article&apos;s text; attaches to the Metricool draft on approve.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => regenImage(r)}
+                          disabled={regenId === r.id || busyId === r.id}
+                          className="ml-auto rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
+                        >
+                          {regenId === r.id ? 'Regenerating…' : '↻ New image'}
+                        </button>
+                      </div>
                     </div>
-                  ) : imagingIds.has(r.id) ? (
+                  ) : imagingIds.has(r.id) || regenId === r.id ? (
                     <div className="flex items-center gap-2 border-b border-line px-5 py-3 text-[12px] text-ink-muted">
                       <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-accent" />
                       Generating hero image…
+                    </div>
+                  ) : r.draft_id ? (
+                    <div className="flex items-center gap-2 border-b border-line px-5 py-3 text-[12px] text-ink-muted">
+                      <span>No image yet.</span>
+                      <button
+                        type="button"
+                        onClick={() => regenImage(r)}
+                        className="rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle"
+                      >
+                        Generate image
+                      </button>
                     </div>
                   ) : null}
 
@@ -292,7 +354,7 @@ export default function AutopilotQueue() {
                           </button>
                         ))}
                       </div>
-                      <div className="max-h-52 overflow-y-auto whitespace-pre-wrap rounded-xl bg-subtle/50 p-4 text-[13px] leading-relaxed text-ink ring-1 ring-line">
+                      <div className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded-xl bg-subtle/50 p-4 text-[13px] leading-relaxed text-ink ring-1 ring-line">
                         {r.pack[open]}
                       </div>
                     </div>
@@ -381,6 +443,30 @@ export default function AutopilotQueue() {
           </div>
         )}
       </div>
+
+      {/* Full-size image lightbox: click anywhere (or Close) to dismiss. */}
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 sm:p-8"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setLightbox(null)}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={lightbox.url}
+            alt={lightbox.alt}
+            className="max-h-full max-w-full rounded-2xl object-contain shadow-2xl"
+          />
+          <button
+            type="button"
+            onClick={() => setLightbox(null)}
+            className="absolute right-4 top-4 rounded-full bg-white/90 px-4 py-1.5 text-[13px] font-medium text-ink shadow-card transition hover:bg-white"
+          >
+            ✕ Close
+          </button>
+        </div>
+      )}
     </section>
   );
 }

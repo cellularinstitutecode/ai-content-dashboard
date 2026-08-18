@@ -23,6 +23,10 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json().catch(() => ({}));
     const id = typeof body?.id === 'string' ? body.id : '';
+    // regenerate: true → discard the current image and produce a fresh take
+    // with the NEXT composition variant, so the reviewer always gets a
+    // visibly different proposition (never a re-roll of the same prompt).
+    const regenerate = body?.regenerate === true;
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
 
     if (!imagesEnabled()) {
@@ -41,7 +45,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'clip drafts already have video stills' }, { status: 400 });
     }
     const existing = (pack as { _image?: PackImage })._image;
-    if (existing?.url) return NextResponse.json({ image: existing, cached: true });
+    if (existing?.url && !regenerate) return NextResponse.json({ image: existing, cached: true });
 
     // Rate limit only when we are actually about to spend image credits.
     const rl = await checkRateLimit(user.id, 'image');
@@ -67,6 +71,9 @@ export async function POST(req: NextRequest) {
       topic: String((d as { topic?: string }).topic || 'regenerative medicine'),
       pack,
       brand,
+      // Fresh generations start at variant 0; each regenerate advances to the
+      // next composition (hero shot → macro lab → lifestyle → still-life → …).
+      variant: regenerate ? (existing?.variant ?? 0) + 1 : 0,
     });
 
     // Owner update passes RLS via the session client.
