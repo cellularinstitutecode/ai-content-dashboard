@@ -182,6 +182,8 @@ const [loading, setLoading] = useState(false);
 const [err, setErr] = useState<string | null>(null);
 const [keywordsApplied, setKeywordsApplied] = useState<string[]>([]);
 const [keywordSource, setKeywordSource] = useState<string>('none');
+const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string } | null>(null);
+const [genImageLoading, setGenImageLoading] = useState(false);
 
 const [mLoading, setMLoading] = useState(false);
 const [mAnalytics, setMAnalytics] = useState<any>(null);
@@ -208,7 +210,9 @@ const [mBusy, setMBusy] = useState(false);
       const secs = formatSections(d && d.pack);
       const body = secs.length ? secs.map((s: any) => s.text).join("\n\n") : (typeof (d && d.pack) === "string" ? d.pack : "");
       if (body) setMText(body);
-      setMMedia(""); setMMediaLabel("");
+      const heroUrl = d && d.pack && d.pack._image && d.pack._image.url ? String(d.pack._image.url) : "";
+      if (heroUrl) { setMMedia(heroUrl); setMMediaLabel("AI hero image"); }
+      else { setMMedia(""); setMMediaLabel(""); }
       setMNetworks(platformsForFormat(fmt).filter((n) => PUBLISH_NETWORKS.some((p) => p.id === n)));
       setMAutoPublish(false);
       setMStatus(null);
@@ -664,7 +668,7 @@ refreshDrafts();
 }
 
 async function generate() {
-setLoading(true); setErr(null); setOutput('');
+setLoading(true); setErr(null); setOutput(''); setGenImage(null);
 try {
 const r = await fetch('/api/generate', {
 method: 'POST', headers: { 'content-type': 'application/json' },
@@ -676,14 +680,33 @@ const pack = data.pack || {};
 setKeywordsApplied(Array.isArray(data.keywordsApplied) ? data.keywordsApplied : []);
 setKeywordSource(typeof data.keywordSource === 'string' ? data.keywordSource : 'none');
 setOutput(formatOutputString({ ...pack, format: type }));
+let draftId: string | null = null;
 try {
-await fetch('/api/drafts', {
+const dr = await fetch('/api/drafts', {
 method: 'POST',
 headers: { 'Content-Type': 'application/json' },
 body: JSON.stringify({ topic: prompt, pack: { ...pack, format: type }, provider }),
 });
+const dj = await dr.json().catch(() => ({}));
+draftId = dj?.draft?.id || null;
 } catch {}
 refreshDrafts();
+// Visual pack: generate the AI hero image in the background so the text
+// shows instantly and the image fills in when ready (fail-soft).
+if (draftId) {
+setGenImageLoading(true);
+fetch('/api/drafts/image', {
+method: 'POST',
+headers: { 'content-type': 'application/json' },
+body: JSON.stringify({ id: draftId }),
+})
+.then(async (ir) => {
+const ij = await ir.json().catch(() => ({}));
+if (ir.ok && ij?.image?.url) setGenImage(ij.image);
+})
+.catch(() => {})
+.finally(() => { setGenImageLoading(false); refreshDrafts(); });
+}
 } catch (e: any) { setErr(friendlyGenError(e?.message || 'Generation failed')); } finally { setLoading(false); }
 }
 
@@ -975,6 +998,18 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
 {keywordSource === 'none' && output && (
   <p className="mb-3 text-[11px] text-ink-faint">Keyword research skipped (Semrush API key not set) — draft generated without live keyword data.</p>
 )}
+{output && genImage?.url ? (
+  <div className="mb-3 overflow-hidden rounded-2xl ring-1 ring-line">
+    {/* eslint-disable-next-line @next/next/no-img-element */}
+    <img src={genImage.url} alt={genImage.alt || 'AI hero image'} className="max-h-64 w-full object-cover" />
+    <div className="bg-white px-3 py-1.5 text-[11px] text-ink-faint">🖼 AI hero image ({genImage.model || 'OpenAI'}) — saved on the draft, attaches when you schedule.</div>
+  </div>
+) : output && genImageLoading ? (
+  <div className="mb-3 flex items-center gap-2 rounded-2xl border border-dashed border-line bg-white px-4 py-3 text-[12px] text-ink-muted">
+    <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-accent" />
+    Generating hero image…
+  </div>
+) : null}
 {output ? (
 <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap rounded-2xl bg-white p-4 text-[13px] leading-relaxed text-ink-soft ring-1 ring-line">{typeof output === 'string' ? output : JSON.stringify(output, null, 2)}</pre>
 ) : (
@@ -1492,7 +1527,12 @@ return (
 <img src={d.pack.thumb} alt="Video still" className="h-32 w-full object-cover" />
 </div>
 ) : null}
+{d?.pack?._image?.url && d?.pack?.kind !== 'clip' ? (
+// eslint-disable-next-line @next/next/no-img-element
+<img src={d.pack._image.url} alt={d.pack._image.alt || ''} className="mt-0.5 h-14 w-14 shrink-0 rounded-xl object-cover ring-1 ring-line" />
+) : (
 <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-subtle text-[13px] font-semibold text-ink-muted ring-1 ring-line">{i + 1}</div>
+)}
 <div className="min-w-0">
 <div className="flex min-w-0 items-center gap-2">
 <span className="truncate text-[14px] font-medium text-ink">{String(title)}</span>
@@ -1569,6 +1609,13 @@ className="min-w-0 flex-1 rounded-xl bg-subtle px-3 py-2 text-[16px] font-semibo
 ) : null}
 {selectedDraft?.pack && selectedDraft.pack.kind !== 'clip' && selectedDraft.pack._semrush && selectedDraft.pack._semrush.source !== 'semrush' && !editingDraft ? (
 <p className="mb-4 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">⚠️ Generated without live Semrush data ({String(selectedDraft.pack._semrush.reason || 'unavailable')}) — connect SEMRUSH_API_KEY for keyword-checked drafts.</p>
+) : null}
+{selectedDraft?.pack?._image?.url && selectedDraft?.pack?.kind !== 'clip' && !editingDraft ? (
+<div className="mb-4 overflow-hidden rounded-2xl ring-1 ring-line/60">
+{/* eslint-disable-next-line @next/next/no-img-element */}
+<img src={selectedDraft.pack._image.url} alt={selectedDraft.pack._image.alt || 'AI hero image'} className="w-full object-cover" />
+<div className="bg-subtle/60 px-3 py-2 text-[11px] text-ink-faint">🖼 AI hero image ({String(selectedDraft.pack._image.model || 'OpenAI')}) — attaches automatically when you schedule or approve this draft.</div>
+</div>
 ) : null}
 {selectedDraft?.pack?.kind === 'clip' ? (
 (() => {

@@ -5,7 +5,7 @@
 // itself — your approval. Approve pushes a Metricool DRAFT (never a live
 // publish); Skip discards the occurrence.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 type Angle = {
   type: 'answer' | 'commercial' | 'defense' | 'opportunity';
@@ -26,14 +26,17 @@ type RunScore = {
   critique: string[];
 };
 
+type PackImage = { url: string; alt?: string; model?: string };
+
 type Run = {
   id: string;
+  draft_id: string | null;
   template_name: string;
   scheduled_for: string;
   state: string;
   angle: Angle | null;
   score: RunScore | null;
-  pack: Record<string, string> | null;
+  pack: (Record<string, string> & { _image?: PackImage }) | null;
   recent_angles?: { query: string; type: string }[];
 };
 
@@ -62,6 +65,10 @@ export default function AutopilotQueue() {
   const [note, setNote] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [openChannel, setOpenChannel] = useState<Record<string, string>>({});
+  const [imagingIds, setImagingIds] = useState<Set<string>>(new Set());
+  // Draft ids we already asked an image for this session — avoids re-requesting
+  // on every poll while a generation is in flight or after it failed.
+  const imageAsked = useRef<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     try {
@@ -73,6 +80,35 @@ export default function AutopilotQueue() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Visual enrichment: every ready-for-review run gets its AI hero image
+  // generated automatically (idempotent server-side), so the reviewer sees
+  // exactly what will attach to the Metricool draft on approve.
+  useEffect(() => {
+    const needing = runs.filter(
+      (r) => r.state === 'ready_for_review' && r.draft_id && r.pack && !r.pack._image?.url && !imageAsked.current.has(r.draft_id)
+    );
+    if (!needing.length) return;
+    let cancelled = false;
+    (async () => {
+      for (const r of needing.slice(0, 3)) {
+        const draftId = r.draft_id as string;
+        imageAsked.current.add(draftId);
+        setImagingIds((prev) => new Set(prev).add(r.id));
+        try {
+          await fetch('/api/drafts/image', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id: draftId }),
+          });
+        } catch { /* best-effort */ }
+        if (cancelled) return;
+        setImagingIds((prev) => { const next = new Set(prev); next.delete(r.id); return next; });
+      }
+      if (!cancelled) await load();
+    })();
+    return () => { cancelled = true; };
+  }, [runs, load]);
 
   async function act(id: string, action: 'approve' | 'skip' | 'run_now' | 'regenerate', extraNote?: string) {
     setBusyId(id);
@@ -222,6 +258,25 @@ export default function AutopilotQueue() {
                       {r.score.safetyFlags.map((f) => f.message).join(' ')}
                     </div>
                   )}
+
+                  {r.pack?._image?.url ? (
+                    <div className="border-b border-line px-5 py-4">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={r.pack._image.url}
+                        alt={r.pack._image.alt || 'AI hero image'}
+                        className="max-h-56 w-full rounded-xl object-cover ring-1 ring-line"
+                      />
+                      <p className="mt-1.5 text-[11px] text-ink-faint">
+                        🖼 AI hero image ({r.pack._image.model || 'OpenAI'}) — attaches to the Metricool draft on approve.
+                      </p>
+                    </div>
+                  ) : imagingIds.has(r.id) ? (
+                    <div className="flex items-center gap-2 border-b border-line px-5 py-3 text-[12px] text-ink-muted">
+                      <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-accent" />
+                      Generating hero image…
+                    </div>
+                  ) : null}
 
                   {channels.length > 0 && r.pack && (
                     <div className="px-5 py-4">

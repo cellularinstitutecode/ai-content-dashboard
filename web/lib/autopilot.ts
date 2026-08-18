@@ -40,6 +40,7 @@ import {
 import { keywordMovers, primaryDomain, topOrganicKeywords, type KeywordMovers } from '@/lib/semrush-domain';
 import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
 import { metricoolSchedulePost, type Provider as McProvider } from '@/lib/metricool';
+import { ensureDraftImage, type PackImage } from '@/lib/images';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -897,11 +898,24 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
   const text = channelText(pack, providers[0] || 'instagram');
   const mcProviders = providers.filter((p): p is McProvider => (MC_PROVIDERS as string[]).includes(p));
 
+  // Image enrichment: make sure the draft carries its AI hero image before
+  // the handoff, so the Metricool draft ships with a visual. Best-effort —
+  // an image failure never blocks approval.
+  let packImage: PackImage | null = (pack as ContentPack & { _image?: PackImage })._image || null;
+  if (!packImage) {
+    try { packImage = await ensureDraftImage(run.draft_id); } catch { packImage = null; }
+  }
+
   let note = 'Staged for publishing review.';
   // Push a Metricool DRAFT (autoPublish: false) so it lands in the approval
   // queue there too. Fail-soft: missing env just means dashboard-only staging.
   if (mcProviders.length) {
-    const media = run.angle?.media?.url ? [{ url: run.angle.media.url }] : [];
+    // A matched video clip wins; otherwise attach the generated hero image.
+    const media = run.angle?.media?.url
+      ? [{ url: run.angle.media.url }]
+      : packImage?.url
+        ? [{ url: packImage.url }]
+        : [];
     try {
       await metricoolSchedulePost({
         text,
@@ -912,7 +926,11 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
       });
       note =
         'Sent to Metricool as a DRAFT for ' + mcProviders.join(', ') +
-        (media.length ? ' with clip "' + (run.angle?.media?.title || 'video') + '" attached' : '') +
+        (run.angle?.media?.url
+          ? ' with clip "' + (run.angle?.media?.title || 'video') + '" attached'
+          : packImage?.url
+            ? ' with the AI hero image attached'
+            : '') +
         ' — publish happens only there.';
     } catch (e) {
       note = 'Approved locally; Metricool handoff unavailable (' + (e instanceof Error ? e.message : 'error') + ').';
