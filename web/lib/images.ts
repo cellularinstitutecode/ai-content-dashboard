@@ -94,10 +94,13 @@ export function buildImagePrompt(opts: {
 // OpenAI Images call (gpt-image-1 primary, DALL·E 3 fallback on API errors).
 // ---------------------------------------------------------------------------
 
+// One Images-API call. Returns whichever the API gives us — inline base64 or
+// a short-lived asset URL — so callers survive response-shape differences
+// between models and API revisions.
 async function callImagesApi(
   body: Record<string, unknown>,
   timeoutMs: number
-): Promise<string> {
+): Promise<{ b64?: string; url?: string }> {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('OPENAI_API_KEY missing');
   const controller = new AbortController();
@@ -116,18 +119,49 @@ async function callImagesApi(
       throw err;
     }
     const data = await res.json();
-    const b64 = data?.data?.[0]?.b64_json;
-    if (!b64) throw new Error('openai images: empty response');
-    return String(b64);
+    const first = data?.data?.[0] || {};
+    if (!first.b64_json && !first.url) throw new Error('openai images: empty response');
+    return { b64: first.b64_json ? String(first.b64_json) : undefined, url: first.url ? String(first.url) : undefined };
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function generateImageB64(prompt: string): Promise<{ b64: string; model: string }> {
+// Download an API-returned image asset (OpenAI serves short-lived URLs for
+// some models) so we can persist it in our own storage before it expires.
+async function fetchImageBytes(url: string, timeoutMs: number): Promise<Buffer> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const b64 = await callImagesApi(
-      {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`image asset fetch ${res.status}`);
+    return Buffer.from(await res.arrayBuffer());
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Byte-sniff the real format (the API's default output differs per model).
+function sniffImage(bytes: Buffer): { contentType: string; ext: string } {
+  if (bytes.length > 3 && bytes[0] === 0x89 && bytes[1] === 0x50) return { contentType: 'image/png', ext: 'png' };
+  if (bytes.length > 12 && bytes.subarray(8, 12).toString('ascii') === 'WEBP') return { contentType: 'image/webp', ext: 'webp' };
+  return { contentType: 'image/jpeg', ext: 'jpg' };
+}
+
+type GeneratedImage = { bytes: Buffer; contentType: string; ext: string; model: string };
+
+// The OpenAI Images API drifts: parameters like response_format / output_*
+// have been added and removed across revisions, and gpt-image access varies
+// by org. So we try a ladder of requests — richest first, most-compatible
+// last — falling through ONLY on 4xx API rejections (never on timeouts,
+// where a second slow call would bust the serverless budget). Every rung's
+// error is kept so a total failure surfaces the full story, not just the
+// last fallback's complaint.
+async function generateImageBytes(prompt: string): Promise<GeneratedImage> {
+  const attempts: { model: string; body: Record<string, unknown> }[] = [
+    {
+      model: PRIMARY_MODEL,
+      body: {
         model: PRIMARY_MODEL,
         prompt,
         n: 1,
@@ -136,30 +170,32 @@ async function generateImageB64(prompt: string): Promise<{ b64: string; model: s
         output_format: 'jpeg',
         output_compression: 80,
       },
-      50_000
-    );
-    return { b64, model: PRIMARY_MODEL };
-  } catch (e) {
-    // Fall back to DALL·E 3 only on API-level rejections (e.g. gpt-image-1
-    // needs a verified org, or the param set is unsupported) — not on
-    // timeouts, where a second slow call would bust the function budget.
-    const status = (e as Error & { apiStatus?: number }).apiStatus;
-    if (status && status >= 400 && status < 500) {
-      const b64 = await callImagesApi(
-        {
-          model: FALLBACK_MODEL,
-          prompt: prompt.slice(0, 3900), // dall-e-3 prompt cap
-          n: 1,
-          size: '1792x1024',
-          quality: 'standard',
-          response_format: 'b64_json',
-        },
-        50_000
-      );
-      return { b64, model: FALLBACK_MODEL };
+    },
+    // Same model, minimal parameter set — survives parameter deprecations.
+    { model: PRIMARY_MODEL, body: { model: PRIMARY_MODEL, prompt, n: 1, size: '1536x1024' } },
+    // Different model, minimal parameter set — survives model-access issues.
+    { model: FALLBACK_MODEL, body: { model: FALLBACK_MODEL, prompt: prompt.slice(0, 3900), n: 1, size: '1792x1024' } },
+  ];
+
+  const errors: string[] = [];
+  for (let i = 0; i < attempts.length; i++) {
+    try {
+      const out = await callImagesApi(attempts[i].body, 50_000);
+      const bytes = out.b64 ? Buffer.from(out.b64, 'base64') : await fetchImageBytes(out.url as string, 30_000);
+      if (!bytes.length) throw new Error('empty image payload');
+      return { bytes, ...sniffImage(bytes), model: attempts[i].model };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'unknown error';
+      errors.push(`[${attempts[i].model}#${i + 1}] ${msg}`);
+      const status = (e as Error & { apiStatus?: number }).apiStatus;
+      const isLast = i === attempts.length - 1;
+      // Only API-level rejections fall through to the next rung.
+      if (isLast || !(status && status >= 400 && status < 500)) {
+        throw new Error('image generation failed: ' + errors.join(' | '));
+      }
     }
-    throw e;
   }
+  throw new Error('image generation failed: ' + errors.join(' | '));
 }
 
 // ---------------------------------------------------------------------------
@@ -170,12 +206,11 @@ function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'image';
 }
 
-async function storeImage(b64: string, nameHint: string): Promise<string> {
+async function storeImage(img: GeneratedImage, nameHint: string): Promise<string> {
   const db = supabaseAdmin();
-  const bytes = Buffer.from(b64, 'base64');
-  const path = `packs/${Date.now()}-${slugify(nameHint)}.jpg`;
+  const path = `packs/${Date.now()}-${slugify(nameHint)}.${img.ext}`;
   const doUpload = () =>
-    db.storage.from(BUCKET).upload(path, bytes, { contentType: 'image/jpeg', upsert: true });
+    db.storage.from(BUCKET).upload(path, img.bytes, { contentType: img.contentType, upsert: true });
 
   let { error } = await doUpload();
   if (error && /bucket/i.test(error.message || '')) {
@@ -206,13 +241,13 @@ export async function generatePackImage(opts: {
   if (!imagesEnabled()) throw new Error('image generation disabled (IMAGE_GEN=off or no OPENAI_API_KEY)');
   const variant = Math.abs(Math.round(opts.variant ?? 0)) % STYLE_VARIANTS.length;
   const prompt = buildImagePrompt({ ...opts, variant });
-  const { b64, model } = await generateImageB64(prompt);
-  const url = await storeImage(b64, opts.topic);
+  const img = await generateImageBytes(prompt);
+  const url = await storeImage(img, opts.topic);
   return {
     url,
     prompt,
     alt: `${opts.topic} — illustrative image for ${opts.brand?.name || 'Cellular Institute'}`,
-    model,
+    model: img.model,
     createdAt: new Date().toISOString(),
     variant,
   };
