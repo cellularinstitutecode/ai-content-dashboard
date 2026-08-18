@@ -27,6 +27,7 @@ const POLICIES: Record<string, Policy> = {
   generate: { limit: 30, windowSec: 3600 },
   assistant: { limit: 60, windowSec: 3600 },
   'opus-clip': { limit: 10, windowSec: 3600 },
+  image: { limit: 20, windowSec: 3600 },
 };
 
 const DEFAULT_POLICY: Policy = { limit: 60, windowSec: 3600 };
