@@ -21,6 +21,18 @@ import 'server-only';
 import { supabaseAdmin } from '@/lib/supabase';
 import type { BrandContext } from '@/lib/ai';
 
+// Machine verification: every generated image is inspected by a vision model
+// before it is accepted, so hallucinated output (garbled text, warped
+// anatomy, logos, off-topic or medically inappropriate scenes) is caught
+// WITHOUT waiting for a human to notice.
+export type ImageVerification = {
+  status: 'approved' | 'flagged' | 'unchecked'; // unchecked = the check itself was unavailable
+  score: number | null; // 0-100 quality/safety confidence from the checker
+  issues: string[];
+  model: string | null;
+  checkedAt: string;
+};
+
 export type PackImage = {
   url: string;
   prompt: string;
@@ -31,11 +43,16 @@ export type PackImage = {
   // variant, so "New image" always yields a visibly different take — never a
   // re-roll of the same prompt.
   variant: number;
+  verification?: ImageVerification;
 };
 
 const BUCKET = process.env.IMAGE_BUCKET || 'content-images';
 const PRIMARY_MODEL = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1';
 const FALLBACK_MODEL = 'dall-e-3';
+const VISION_MODEL = process.env.OPENAI_VISION_MODEL || 'gpt-4o-mini';
+// A flagged image triggers ONE automatic regeneration with the next
+// composition variant (time-budget permitting) before surfacing to a human.
+const MAX_GEN_ATTEMPTS = 2;
 
 // Kill switch: set IMAGE_GEN=off to disable image generation everywhere
 // without redeploying callers. Default is ON whenever OPENAI_API_KEY exists.
@@ -199,6 +216,86 @@ async function generateImageBytes(prompt: string): Promise<GeneratedImage> {
 }
 
 // ---------------------------------------------------------------------------
+// Verification: a vision model inspects every generated image before it is
+// accepted. AI image models hallucinate — garbled pseudo-text, extra fingers,
+// warped faces, accidental logos — and none of that may reach a patient-facing
+// channel unnoticed. Fail-soft: if the CHECK itself is unavailable the image
+// is stamped 'unchecked' (surfaced as "review manually" in the UI), because
+// verification must never take down image generation entirely.
+// ---------------------------------------------------------------------------
+
+const VERIFY_SYSTEM = `You are a strict visual QA reviewer for a premium regenerative medicine clinic's marketing images. You will be shown ONE AI-generated image plus its intended topic. Inspect it for generation defects and brand-safety problems:
+1. Any visible text, letters, numbers, or garbled pseudo-typography (AI text artifacts) — automatic fail.
+2. Anatomical errors: wrong number of fingers, warped hands/faces/limbs, merged bodies, impossible poses.
+3. Logos, watermarks, brand marks, or recognizable trademarks.
+4. Graphic or inappropriate medical content: needles piercing skin, blood, wounds, distressing imagery.
+5. Uncanny, distorted, or low-quality rendering unfit for a premium medical brand.
+6. Relevance: the scene should plausibly illustrate the given topic for a clinic audience.
+Return STRICT JSON only: {"approved": boolean, "score": number 0-100, "issues": string[]}. approved=false whenever any check 1-5 fails or relevance is clearly wrong; issues lists each problem in a short phrase (empty when approved with no concerns).`;
+
+async function verifyGeneratedImage(img: GeneratedImage, topic: string): Promise<ImageVerification> {
+  const base: ImageVerification = {
+    status: 'unchecked',
+    score: null,
+    issues: ['automatic check unavailable — review the image manually'],
+    model: null,
+    checkedAt: new Date().toISOString(),
+  };
+  if (String(process.env.IMAGE_VERIFY || '').toLowerCase() === 'off') {
+    return { ...base, issues: ['automatic verification disabled (IMAGE_VERIFY=off)'] };
+  }
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return base;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25_000);
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: VISION_MODEL,
+        max_tokens: 300,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: VERIFY_SYSTEM },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: `Topic: ${topic.slice(0, 300)}. Verify this AI-generated image now.` },
+              { type: 'image_url', image_url: { url: `data:${img.contentType};base64,${img.bytes.toString('base64')}` } },
+            ],
+          },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`vision ${res.status}`);
+    const data = await res.json();
+    const raw = String(data?.choices?.[0]?.message?.content ?? '{}');
+    const obj = JSON.parse(raw) as { approved?: unknown; score?: unknown; issues?: unknown };
+    const approved = obj.approved === true;
+    const score = typeof obj.score === 'number' && Number.isFinite(obj.score)
+      ? Math.max(0, Math.min(100, Math.round(obj.score)))
+      : null;
+    const issues = Array.isArray(obj.issues)
+      ? obj.issues.map((i) => String(i).slice(0, 160)).filter(Boolean).slice(0, 8)
+      : [];
+    return {
+      status: approved ? 'approved' : 'flagged',
+      score,
+      issues,
+      model: VISION_MODEL,
+      checkedAt: new Date().toISOString(),
+    };
+  } catch {
+    // Verification must never break generation — surface as 'unchecked'.
+    return base;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Storage: public Supabase bucket, created on first use.
 // ---------------------------------------------------------------------------
 
@@ -230,8 +327,15 @@ async function storeImage(img: GeneratedImage, nameHint: string): Promise<string
 // Public API
 // ---------------------------------------------------------------------------
 
-// Generate + store one hero image for a pack. Throws on failure — callers
-// decide whether that is fatal (it never should be).
+// Generate, VERIFY, and store one hero image for a pack. Throws on failure —
+// callers decide whether that is fatal (it never should be).
+//
+// The verify-retry loop: every candidate is inspected by the vision checker;
+// a flagged image is automatically regenerated ONCE with the next composition
+// variant (time-budget permitting) before anything is stored. If the retry is
+// also flagged, the best candidate is stored anyway WITH its flag — the UI
+// shows the issues so the human reviewer sees exactly why, and "New image"
+// rolls again. Silent discards would just burn credits with nothing to show.
 export async function generatePackImage(opts: {
   topic: string;
   pack?: Record<string, unknown> | null;
@@ -239,17 +343,35 @@ export async function generatePackImage(opts: {
   variant?: number;
 }): Promise<PackImage> {
   if (!imagesEnabled()) throw new Error('image generation disabled (IMAGE_GEN=off or no OPENAI_API_KEY)');
-  const variant = Math.abs(Math.round(opts.variant ?? 0)) % STYLE_VARIANTS.length;
-  const prompt = buildImagePrompt({ ...opts, variant });
-  const img = await generateImageBytes(prompt);
-  const url = await storeImage(img, opts.topic);
+  const baseVariant = Math.abs(Math.round(opts.variant ?? 0)) % STYLE_VARIANTS.length;
+  const started = Date.now();
+
+  let best: { img: GeneratedImage; prompt: string; variant: number; verification: ImageVerification } | null = null;
+  for (let attempt = 0; attempt < MAX_GEN_ATTEMPTS; attempt++) {
+    const variant = (baseVariant + attempt) % STYLE_VARIANTS.length;
+    const prompt = buildImagePrompt({ ...opts, variant });
+    const img = await generateImageBytes(prompt);
+    const verification = await verifyGeneratedImage(img, opts.topic);
+    const candidate = { img, prompt, variant, verification };
+    // Keep the better candidate: approved > unchecked > flagged, then score.
+    const rank = (v: ImageVerification) =>
+      (v.status === 'approved' ? 200 : v.status === 'unchecked' ? 100 : 0) + (v.score ?? 0);
+    if (!best || rank(verification) > rank(best.verification)) best = candidate;
+    if (verification.status !== 'flagged') break; // clean (or uncheckable) — done
+    // Flagged: retry only while there is real time left in the serverless budget.
+    if (Date.now() - started > 30_000) break;
+  }
+  if (!best) throw new Error('image generation produced no candidate');
+
+  const url = await storeImage(best.img, opts.topic);
   return {
     url,
-    prompt,
+    prompt: best.prompt,
     alt: `${opts.topic} — illustrative image for ${opts.brand?.name || 'Cellular Institute'}`,
-    model: img.model,
+    model: best.img.model,
     createdAt: new Date().toISOString(),
-    variant,
+    variant: best.variant,
+    verification: best.verification,
   };
 }
 
