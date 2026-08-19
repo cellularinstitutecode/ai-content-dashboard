@@ -6,6 +6,18 @@ import { useLiveContent } from "@/components/LiveContentProvider";
 import SemrushPanel from "./SemrushPanel";
 import AutopilotQueue from "./AutopilotQueue";
 import ImageStudio from "./ImageStudio";
+import ProcessTracker, { makeSteps, stepActive, stepError, stepSkip, stepsDone, type ProcessStep } from "@/components/ProcessTracker";
+
+// The visible pipeline every manual generation walks through. Steps light up
+// as the real calls behind them start/finish so the viewer can follow the
+// process live instead of staring at a spinner.
+const GEN_STEPS = [
+  { id: 'research', label: 'Keyword research', detail: 'Checking live search volumes and difficulty…' },
+  { id: 'draft', label: 'AI drafting', detail: 'Writing your multi-channel content pack…' },
+  { id: 'save', label: 'Saving to library', detail: 'Storing the draft so nothing is lost…' },
+  { id: 'image', label: 'Hero image', detail: 'Generating an on-brand visual with the OpenAI image pipeline…' },
+  { id: 'verify', label: 'Machine verification', detail: 'Checking the image for AI glitches (garbled text, warped anatomy, logos)…' },
+];
 
 type Provider = 'anthropic' | 'openai';
 type ContentType = 'social' | 'blog' | 'email' | 'video' | 'ad';
@@ -187,6 +199,14 @@ const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: st
 const [genImageLoading, setGenImageLoading] = useState(false);
 const [lastDraftId, setLastDraftId] = useState<string | null>(null);
 const [modalImgBusy, setModalImgBusy] = useState(false);
+
+// Live process pipeline for the Content Generator (see GEN_STEPS above).
+const [proc, setProc] = useState<ProcessStep[] | null>(null);
+const procTimers = useRef<any[]>([]);
+function clearProcTimers() { procTimers.current.forEach((t) => clearTimeout(t)); procTimers.current = []; }
+function procAdvanceLater(id: string, ms: number) {
+  procTimers.current.push(setTimeout(() => setProc((p) => (p ? stepActive(p, id) : p)), ms));
+}
 
 const [mLoading, setMLoading] = useState(false);
 const [mAnalytics, setMAnalytics] = useState<any>(null);
@@ -673,6 +693,10 @@ refreshDrafts();
 
 async function generate() {
 setLoading(true); setErr(null); setOutput(''); setGenImage(null); setLastDraftId(null);
+// Light up the live pipeline: research → draft → save → image → verify.
+clearProcTimers();
+setProc(stepActive(makeSteps(GEN_STEPS), 'research'));
+procAdvanceLater('draft', 4000); // research + drafting happen inside one call; pace the display
 try {
 const r = await fetch('/api/generate', {
 method: 'POST', headers: { 'content-type': 'application/json' },
@@ -684,6 +708,8 @@ const pack = data.pack || {};
 setKeywordsApplied(Array.isArray(data.keywordsApplied) ? data.keywordsApplied : []);
 setKeywordSource(typeof data.keywordSource === 'string' ? data.keywordSource : 'none');
 setOutput(formatOutputString({ ...pack, format: type }));
+clearProcTimers();
+setProc((p) => (p ? stepActive(p, 'save') : p));
 let draftId: string | null = null;
 try {
 const dr = await fetch('/api/drafts', {
@@ -700,6 +726,8 @@ refreshDrafts();
 // shows instantly and the image fills in when ready (fail-soft).
 if (draftId) {
 setGenImageLoading(true);
+setProc((p) => (p ? stepActive(p, 'image') : p));
+procAdvanceLater('verify', 20000); // generation ~20s, then the vision check
 fetch('/api/drafts/image', {
 method: 'POST',
 headers: { 'content-type': 'application/json' },
@@ -707,12 +735,24 @@ body: JSON.stringify({ id: draftId }),
 })
 .then(async (ir) => {
 const ij = await ir.json().catch(() => ({}));
-if (ir.ok && ij?.image?.url) setGenImage(ij.image);
-})
-.catch(() => {})
-.finally(() => { setGenImageLoading(false); refreshDrafts(); });
+clearProcTimers();
+if (ir.ok && ij?.image?.url) {
+setGenImage(ij.image);
+setProc((p) => (p ? stepsDone(p) : p));
+} else {
+setProc((p) => (p ? stepError(stepActive(p, 'image'), 'image') : p));
 }
-} catch (e: any) { setErr(friendlyGenError(e?.message || 'Generation failed')); } finally { setLoading(false); }
+})
+.catch(() => { clearProcTimers(); setProc((p) => (p ? stepError(stepActive(p, 'image'), 'image') : p)); })
+.finally(() => { setGenImageLoading(false); refreshDrafts(); });
+} else {
+setProc((p) => (p ? stepsDone(stepSkip(p, ['image', 'verify'])) : p));
+}
+} catch (e: any) {
+clearProcTimers();
+setProc((p) => (p ? stepError(p) : p));
+setErr(friendlyGenError(e?.message || 'Generation failed'));
+} finally { setLoading(false); }
 }
 
 // Reject the current hero image and get a fresh proposition (the server
@@ -929,7 +969,7 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 <section className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
 {statCards.map(s => (
 <div key={s.label} className="rounded-2xl bg-surface p-5 shadow-card ring-1 ring-line/60">
-<div className="text-[28px] font-semibold leading-none tracking-tight">{s.value}</div>
+<div className="text-[28px] font-semibold leading-none tracking-tight tabular-nums">{s.value}</div>
 <div className="mt-2 text-[13px] text-ink-muted">{s.label}</div>
 </div>
 ))}
@@ -1005,7 +1045,7 @@ placeholder="e.g. 3 Instagram captions about exosome therapy benefits for athlet
 className="w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
 </div>
 
-<div className="flex items-center gap-3">
+<div className="flex flex-wrap items-center gap-3">
 <button onClick={generate} disabled={loading || !prompt.trim()}
 className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">
 {loading ? (<><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />Generating…</>) : 'Generate'}
@@ -1031,6 +1071,11 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
 </button>
 )}
 </div>
+{proc && (
+  <div className="mb-3">
+    <ProcessTracker title="Creating your content pack" steps={proc} onClose={() => setProc(null)} />
+  </div>
+)}
 {keywordSource === 'semrush' && keywordsApplied.length > 0 && (
   <div className="mb-3 flex flex-wrap items-center gap-1.5 rounded-xl bg-emerald-50 p-2.5 ring-1 ring-emerald-100">
     <span className="mr-1 inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">🔑 Keywords applied</span>
@@ -1262,7 +1307,7 @@ className="rounded-full bg-subtle px-3 py-1 text-[12px] font-medium text-ink-mut
 <input type="datetime-local" value={mDate} onChange={(e) => setMDate(e.target.value)} className="mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring-1 ring-line focus:ring-accent" />
 <div className="mt-4 text-[12px] font-medium text-ink-muted">What should it say?</div>
 <textarea value={mText} onChange={(e) => setMText(e.target.value)} rows={4} placeholder="Write your post… you can paste anything you generated above." className="mt-1 w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
-{mMedia ? (<div className="mt-2 flex items-center justify-between gap-2 rounded-2xl bg-subtle p-2.5 ring-1 ring-line"><div className="flex min-w-0 items-center gap-2"><span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">\uD83C\uDFAC</span><div className="min-w-0"><div className="truncate text-[13px] font-medium text-ink">{mMediaLabel || "Video attached"}</div><div className="text-[11px] text-ink-faint">This video will be attached to the post.</div></div></div><button type="button" onClick={() => { setMMedia(""); setMMediaLabel(""); }} className="shrink-0 rounded-full px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white">Remove</button></div>) : null}
+{mMedia ? (<div className="mt-2 flex items-center justify-between gap-2 rounded-2xl bg-subtle p-2.5 ring-1 ring-line"><div className="flex min-w-0 items-center gap-2"><span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">{'\uD83C\uDFAC'}</span><div className="min-w-0"><div className="truncate text-[13px] font-medium text-ink">{mMediaLabel || "Video attached"}</div><div className="text-[11px] text-ink-faint">This video will be attached to the post.</div></div></div><button type="button" onClick={() => { setMMedia(""); setMMediaLabel(""); }} className="shrink-0 rounded-full px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white">Remove</button></div>) : null}
 <div className="mt-2 flex items-center justify-between text-[11px] text-ink-faint">
 <span>{mText.trim().length} characters</span>
 <span>{mDate ? 'Scheduled for ' + fmtDateTime(mDate) : 'No time set — sends as a draft'}</span>
