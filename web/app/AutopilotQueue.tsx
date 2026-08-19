@@ -6,6 +6,30 @@
 // publish); Skip discards the occurrence.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import ProcessTracker, { makeSteps, stepActive, stepError, stepsDone, type ProcessStep } from '@/components/ProcessTracker';
+
+// The visible pipeline an engine run walks through. The tick call does all of
+// this server-side in one request; the tracker paces the display so the viewer
+// can follow the process live.
+const ENGINE_STEPS = [
+  { id: 'plan', label: 'Planning occurrences', detail: 'Reading templates and upcoming slots…' },
+  { id: 'research', label: 'Researching angles', detail: 'Keyword briefs, ranking defense, real searcher questions…' },
+  { id: 'draft', label: 'Drafting content', detail: 'Writing each occurrence with the full research brief…' },
+  { id: 'score', label: 'Scoring & queueing', detail: 'Quality-scoring drafts and lining them up for your review…' },
+];
+
+// Per-run mini pipeline, mapped from the run.state the engine reports.
+const RUN_STAGES = [
+  { id: 'research', label: 'Research' },
+  { id: 'draft', label: 'Draft' },
+  { id: 'score', label: 'Score' },
+  { id: 'review', label: 'Review' },
+];
+function runStageSteps(state: string): ProcessStep[] {
+  const activeId = state === 'planned' ? 'research' : state === 'researched' ? 'draft' : state === 'drafted' ? 'score' : 'review';
+  const base = makeSteps(RUN_STAGES);
+  return state === 'ready_for_review' ? stepsDone(base) : stepActive(base, activeId);
+}
 
 type Angle = {
   type: 'answer' | 'commercial' | 'defense' | 'opportunity';
@@ -162,20 +186,34 @@ export default function AutopilotQueue() {
     }
   }
 
+  const [engineProc, setEngineProc] = useState<ProcessStep[] | null>(null);
+  const engineTimers = useRef<any[]>([]);
+  function clearEngineTimers() { engineTimers.current.forEach((t) => clearTimeout(t)); engineTimers.current = []; }
+
   async function runEngine() {
     setEngineBusy(true);
     setErr(null);
     setNote(null);
+    clearEngineTimers();
+    setEngineProc(stepActive(makeSteps(ENGINE_STEPS), 'plan'));
+    // One server call does everything; pace the display through the stages.
+    ([['research', 3000], ['draft', 10000], ['score', 25000]] as [string, number][]).forEach(([id, ms]) => {
+      engineTimers.current.push(setTimeout(() => setEngineProc((p) => (p ? stepActive(p, id) : p)), ms));
+    });
     try {
       const r = await fetch('/api/autopilot/tick', { method: 'POST' });
       const j = await r.json().catch(() => ({}));
+      clearEngineTimers();
       if (!r.ok) throw new Error(j?.error || 'Engine tick failed');
+      setEngineProc((p) => (p ? stepsDone(p) : p));
       setNote(
         'Engine ran: ' + (j.planned ?? 0) + ' occurrence(s) planned, ' +
         (j.advanced ?? 0) + ' step(s) advanced, ' + (j.ready ?? 0) + ' ready for review.'
       );
       await load();
     } catch (e) {
+      clearEngineTimers();
+      setEngineProc((p) => (p ? stepError(p) : p));
       setErr(e instanceof Error ? e.message : 'Engine tick failed');
     } finally {
       setEngineBusy(false);
@@ -188,7 +226,7 @@ export default function AutopilotQueue() {
 
   return (
     <section id="section-autopilot" className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-6 py-4 sm:px-8">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-6 py-5 sm:px-8">
         <div>
           <h2 className="flex items-center gap-2 text-[15px] font-semibold text-ink">
             Autopilot
@@ -212,6 +250,11 @@ export default function AutopilotQueue() {
       </div>
 
       <div className="p-6 sm:p-8">
+        {engineProc && (
+          <div className="mb-4">
+            <ProcessTracker title="Autopilot engine is working" steps={engineProc} onClose={() => setEngineProc(null)} />
+          </div>
+        )}
         {note && <div role="status" className="mb-4 rounded-xl bg-emerald-50 px-4 py-2.5 text-[13px] text-emerald-700 ring-1 ring-emerald-100">{note}</div>}
         {err && <div role="alert" className="mb-4 rounded-xl bg-red-50 px-4 py-2.5 text-[13px] text-red-700 ring-1 ring-red-100">{err}</div>}
 
@@ -373,7 +416,7 @@ export default function AutopilotQueue() {
                     </div>
                   )}
 
-                  <div className="flex items-center gap-2 border-t border-line bg-subtle/30 px-5 py-3">
+                  <div className="flex flex-wrap items-center gap-2 border-t border-line bg-subtle/30 px-5 py-3">
                     <button
                       type="button"
                       onClick={() => act(r.id, 'approve')}
@@ -413,15 +456,13 @@ export default function AutopilotQueue() {
           <div className={'space-y-2 ' + (ready.length ? 'mt-6' : '')}>
             <div className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">In the pipeline</div>
             {inFlight.map((r) => (
-              <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-subtle/50 px-4 py-2.5 text-[13px] ring-1 ring-line">
-                <div className="flex items-center gap-2">
+              <div key={r.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl bg-subtle/50 px-4 py-2.5 text-[13px] ring-1 ring-line">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <span className="font-medium text-ink">{r.template_name}</span>
                   <span className="text-ink-muted">{fmtSlot(r.scheduled_for)}</span>
-                  <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-ink-muted ring-1 ring-line">
-                    {r.state === 'planned' ? 'queued' : r.state}
-                  </span>
-                  {r.angle && <span className="text-[12px] text-ink-muted">→ &ldquo;{r.angle.query}&rdquo;</span>}
+                  {r.angle && <span className="min-w-0 truncate text-[12px] text-ink-muted">→ &ldquo;{r.angle.query}&rdquo;</span>}
                 </div>
+                <ProcessTracker compact steps={runStageSteps(r.state)} title={r.template_name + ' progress'} />
                 <button
                   type="button"
                   onClick={() => act(r.id, 'run_now')}
