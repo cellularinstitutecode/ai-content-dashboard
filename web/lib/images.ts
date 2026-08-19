@@ -48,7 +48,9 @@ export type PackImage = {
 
 const BUCKET = process.env.IMAGE_BUCKET || 'content-images';
 const PRIMARY_MODEL = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1';
-const FALLBACK_MODEL = 'dall-e-3';
+// Live testing (Aug 2026) showed 'dall-e-3' no longer exists on the Images
+// API — the fallback is now the cheaper gpt-image tier, overridable by env.
+const FALLBACK_MODEL = process.env.OPENAI_IMAGE_FALLBACK_MODEL || 'gpt-image-1-mini';
 const VISION_MODEL = process.env.OPENAI_VISION_MODEL || 'gpt-4o-mini';
 // A flagged image triggers ONE automatic regeneration with the next
 // composition variant (time-budget permitting) before surfacing to a human.
