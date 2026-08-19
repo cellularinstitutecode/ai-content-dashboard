@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { useLiveContent } from "@/components/LiveContentProvider";
 import SemrushPanel from "./SemrushPanel";
 import AutopilotQueue from "./AutopilotQueue";
+import ImageStudio from "./ImageStudio";
 
 type Provider = 'anthropic' | 'openai';
 type ContentType = 'social' | 'blog' | 'email' | 'video' | 'ad';
@@ -182,7 +183,7 @@ const [loading, setLoading] = useState(false);
 const [err, setErr] = useState<string | null>(null);
 const [keywordsApplied, setKeywordsApplied] = useState<string[]>([]);
 const [keywordSource, setKeywordSource] = useState<string>('none');
-const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string } | null>(null);
+const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string; verification?: { status?: string; score?: number | null; issues?: string[] } } | null>(null);
 const [genImageLoading, setGenImageLoading] = useState(false);
 const [lastDraftId, setLastDraftId] = useState<string | null>(null);
 const [modalImgBusy, setModalImgBusy] = useState(false);
@@ -627,6 +628,7 @@ if (!d) return '';
 if (typeof d.body === 'string') return d.body;
 const pack = d.pack;
 if (pack && pack.kind === 'clip') return typeof pack.caption === 'string' ? pack.caption : '';
+if (pack && pack.kind === 'image') return (pack._image && typeof pack._image.alt === 'string') ? pack._image.alt : 'AI image';
 if (pack && typeof pack === 'object') {
 const k = primaryBodyKey(pack);
 if (typeof pack[k] === 'string') return pack[k];
@@ -918,6 +920,9 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
       )}
 
 {/* Autopilot: dynamic-template runs waiting for review — everything but publish */}
+{/* AI Image Studio — every generated + verified visual, front and center */}
+<ImageStudio />
+
 <AutopilotQueue />
 
 {/* Stat cards */}
@@ -1044,6 +1049,11 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
       <img src={genImage.url} alt={genImage.alt || 'AI hero image'} className={"max-h-96 w-full object-cover transition hover:opacity-95 " + (genImageLoading ? 'opacity-50' : '')} />
     </a>
     <div className="flex flex-wrap items-center gap-2 bg-white px-3 py-1.5">
+      {genImage.verification?.status === 'approved' ? (
+        <span className="rounded-full bg-emerald-600/90 px-2 py-0.5 text-[10px] font-semibold text-white" title={'Machine-verified' + (genImage.verification?.score != null ? ' · ' + genImage.verification.score + '/100' : '')}>✓ verified</span>
+      ) : genImage.verification?.status === 'flagged' ? (
+        <span className="rounded-full bg-amber-500/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(genImage.verification?.issues || []).join(' · ')}>⚠ flagged — reroll recommended</span>
+      ) : null}
       <span className="text-[11px] text-ink-faint">🖼 AI hero image ({genImage.model || 'OpenAI'}) — saved on the draft, attaches when you schedule. Click to view full size.</span>
       <button type="button" onClick={regenGenImage} disabled={genImageLoading}
         className="ml-auto rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle disabled:opacity-50">
@@ -1664,6 +1674,11 @@ className="min-w-0 flex-1 rounded-xl bg-subtle px-3 py-2 text-[16px] font-semibo
 <img src={selectedDraft.pack._image.url} alt={selectedDraft.pack._image.alt || 'AI hero image'} className={"w-full object-cover transition hover:opacity-95 " + (modalImgBusy ? 'opacity-50' : '')} />
 </a>
 <div className="flex flex-wrap items-center gap-2 bg-subtle/60 px-3 py-2">
+{selectedDraft.pack._image.verification?.status === 'approved' ? (
+<span className="rounded-full bg-emerald-600/90 px-2 py-0.5 text-[10px] font-semibold text-white" title={'Machine-verified' + (selectedDraft.pack._image.verification?.score != null ? ' · ' + selectedDraft.pack._image.verification.score + '/100' : '')}>✓ verified</span>
+) : selectedDraft.pack._image.verification?.status === 'flagged' ? (
+<span className="rounded-full bg-amber-500/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(selectedDraft.pack._image.verification?.issues || []).join(' · ')}>⚠ flagged: {(selectedDraft.pack._image.verification?.issues || []).slice(0, 2).join('; ')}</span>
+) : null}
 <span className="text-[11px] text-ink-faint">🖼 AI hero image ({String(selectedDraft.pack._image.model || 'OpenAI')}) — attaches automatically when you schedule or approve. Click to view full size.</span>
 <button type="button" onClick={() => regenDraftImage(selectedDraft)} disabled={modalImgBusy}
 className="ml-auto rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-white disabled:opacity-50">
@@ -1736,6 +1751,13 @@ className="w-full resize-y rounded-2xl bg-subtle/50 p-4 text-[14px] leading-rela
           </div>
         ))}
       </div>
+    );
+  }
+  if (selectedDraft?.pack?.kind === 'image') {
+    return (
+      <p className="rounded-2xl bg-subtle/50 p-4 text-[13px] text-ink-muted ring-1 ring-line/60">
+        Standalone AI image created in the Image Studio — schedule it, or reroll it with &ldquo;New image&rdquo; above.
+      </p>
     );
   }
   return (

@@ -26,7 +26,13 @@ type RunScore = {
   critique: string[];
 };
 
-type PackImage = { url: string; alt?: string; model?: string; variant?: number };
+type PackImage = {
+  url: string;
+  alt?: string;
+  model?: string;
+  variant?: number;
+  verification?: { status?: 'approved' | 'flagged' | 'unchecked'; score?: number | null; issues?: string[] };
+};
 
 type Run = {
   id: string;
@@ -309,6 +315,13 @@ export default function AutopilotQueue() {
                         </span>
                       </button>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
+                        {r.pack._image.verification?.status === 'approved' ? (
+                          <span className="rounded-full bg-emerald-600/90 px-2 py-0.5 text-[10px] font-semibold text-white" title={'Machine-verified clean' + (r.pack._image.verification?.score != null ? ' · ' + r.pack._image.verification.score + '/100' : '')}>✓ verified</span>
+                        ) : r.pack._image.verification?.status === 'flagged' ? (
+                          <span className="rounded-full bg-amber-500/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(r.pack._image.verification?.issues || []).join(' · ')}>⚠ flagged: {(r.pack._image.verification?.issues || []).slice(0, 2).join('; ') || 'check before approving'}</span>
+                        ) : (
+                          <span className="rounded-full bg-black/50 px-2 py-0.5 text-[10px] font-medium text-white" title="Generated before machine verification existed — reroll to get a verified image">review manually</span>
+                        )}
                         <p className="text-[11px] text-ink-faint">
                           🖼 AI hero image ({r.pack._image.model || 'OpenAI'}) — generated fresh from THIS article&apos;s text; attaches to the Metricool draft on approve.
                         </p>
