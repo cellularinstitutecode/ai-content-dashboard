@@ -7,6 +7,7 @@ import SemrushPanel from "./SemrushPanel";
 import AutopilotQueue from "./AutopilotQueue";
 import ImageStudio from "./ImageStudio";
 import ProcessTracker, { makeSteps, stepActive, stepError, stepSkip, stepsDone, type ProcessStep } from "@/components/ProcessTracker";
+import { announce, onRefresh } from "@/components/refreshBus";
 
 // The visible pipeline every manual generation walks through. Steps light up
 // as the real calls behind them start/finish so the viewer can follow the
@@ -203,10 +204,26 @@ const [modalImgBusy, setModalImgBusy] = useState(false);
 // Live process pipeline for the Content Generator (see GEN_STEPS above).
 const [proc, setProc] = useState<ProcessStep[] | null>(null);
 const procTimers = useRef<any[]>([]);
+// Monotonic run id: late responses from a superseded generation (e.g. its
+// hero image resolving after the user hit Generate again) are discarded
+// instead of scrambling the new run's tracker/image.
+const genRun = useRef(0);
 function clearProcTimers() { procTimers.current.forEach((t) => clearTimeout(t)); procTimers.current = []; }
 function procAdvanceLater(id: string, ms: number) {
   procTimers.current.push(setTimeout(() => setProc((p) => (p ? stepActive(p, id) : p)), ms));
 }
+useEffect(() => () => clearProcTimers(), []);
+
+// Interconnection: refetch whatever another panel (Image Studio, Autopilot,
+// assistant) announces it changed, so this page never shows stale data.
+useEffect(() => {
+  return onRefresh((scopes) => {
+    if (scopes.includes('drafts')) refreshDrafts(0, false);
+    if (scopes.includes('stats')) refreshStats();
+    if (scopes.includes('posts')) refreshPosts();
+  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
 
 const [mLoading, setMLoading] = useState(false);
 const [mAnalytics, setMAnalytics] = useState<any>(null);
@@ -483,7 +500,7 @@ return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.cu
   // in parallel; the API persists the clips onto the draft for an instant open.
   async function warmClips() {
     try {
-      const lr = await fetch('/api/drafts?limit=100&offset=0');
+      const lr = await fetch('/api/drafts?limit=50&offset=0');
       if (!lr.ok) return;
       const lj = await lr.json().catch(() => null);
       const list = Array.isArray(lj) ? lj : (lj && (lj.drafts || lj.data || lj.rows)) || [];
@@ -563,7 +580,7 @@ if (!id) return;
 if (typeof window !== 'undefined' && !window.confirm('Delete this draft? This cannot be undone.')) return;
 try {
 const r = await fetch('/api/drafts?id=' + encodeURIComponent(id), { method: 'DELETE' });
-if (r.ok) refreshDrafts();
+if (r.ok) announce('drafts', 'stats', 'images');
 } catch {}
 }
 
@@ -590,7 +607,7 @@ method: 'PATCH',
 headers: { 'Content-Type': 'application/json' },
 body: JSON.stringify({ id: d.id || d._id, topic }),
 });
-if (r.ok) refreshDrafts();
+if (r.ok) announce('drafts', 'images');
 } catch {}
 }
 
@@ -686,12 +703,13 @@ const j = await r.json().catch(() => null);
 const updated = (j && j.draft) ? j.draft : { ...d, topic: topic || d.topic, pack: basePack };
 setSelectedDraft(updated);
 setEditingDraft(false);
-refreshDrafts();
+announce('drafts', 'images');
 }
 } catch {} finally { setSavingEdit(false); }
 }
 
 async function generate() {
+const runId = ++genRun.current;
 setLoading(true); setErr(null); setOutput(''); setGenImage(null); setLastDraftId(null);
 // Light up the live pipeline: research → draft → save → image → verify.
 clearProcTimers();
@@ -721,7 +739,7 @@ const dj = await dr.json().catch(() => ({}));
 draftId = dj?.draft?.id || null;
 } catch {}
 setLastDraftId(draftId);
-refreshDrafts();
+announce('drafts', 'stats');
 // Visual pack: generate the AI hero image in the background so the text
 // shows instantly and the image fills in when ready (fail-soft).
 if (draftId) {
@@ -735,6 +753,7 @@ body: JSON.stringify({ id: draftId }),
 })
 .then(async (ir) => {
 const ij = await ir.json().catch(() => ({}));
+if (genRun.current !== runId) return; // superseded by a newer Generate
 clearProcTimers();
 if (ir.ok && ij?.image?.url) {
 setGenImage(ij.image);
@@ -743,8 +762,15 @@ setProc((p) => (p ? stepsDone(p) : p));
 setProc((p) => (p ? stepError(stepActive(p, 'image'), 'image') : p));
 }
 })
-.catch(() => { clearProcTimers(); setProc((p) => (p ? stepError(stepActive(p, 'image'), 'image') : p)); })
-.finally(() => { setGenImageLoading(false); refreshDrafts(); });
+.catch(() => {
+if (genRun.current !== runId) return;
+clearProcTimers();
+setProc((p) => (p ? stepError(stepActive(p, 'image'), 'image') : p));
+})
+.finally(() => {
+if (genRun.current === runId) setGenImageLoading(false);
+announce('drafts', 'images');
+});
 } else {
 setProc((p) => (p ? stepsDone(stepSkip(p, ['image', 'verify'])) : p));
 }
@@ -768,7 +794,7 @@ body: JSON.stringify({ id: lastDraftId, regenerate: true }),
 });
 const ij = await ir.json().catch(() => ({}));
 if (ir.ok && ij?.image?.url) setGenImage(ij.image);
-} catch {} finally { setGenImageLoading(false); refreshDrafts(); }
+} catch {} finally { setGenImageLoading(false); announce('drafts', 'images'); }
 }
 
 // Same, from the draft detail modal (works for any saved draft).
@@ -786,7 +812,7 @@ const j = await r.json().catch(() => ({}));
 if (r.ok && j?.image?.url) {
 const updated = { ...d, pack: { ...((d && d.pack) || {}), _image: j.image } };
 setSelectedDraft(updated);
-refreshDrafts();
+announce('drafts', 'images');
 }
 } catch {} finally { setModalImgBusy(false); }
 }
@@ -831,8 +857,7 @@ setMStatus('Error: failed on ' + failed.join(', ') + '.');
 } else {
 setMStatus('Saved on ' + ok.join(', ') + '; failed on ' + failed.join(', ') + '.');
 }
-refreshPosts();
-refreshStats();
+announce('posts', 'stats');
 } catch (e: any) {
 setMStatus('Error: ' + (e?.message || 'failed'));
 } finally { setMBusy(false); }
@@ -859,8 +884,7 @@ if (data && data.draft) {
 setDrafts((prev: any) => [data.draft, ...(Array.isArray(prev) ? prev : [])]);
 }
 setOpUrl('');
-refreshDrafts();
-refreshStats();
+announce('drafts', 'stats');
 } catch (e: any) { setOpStatus('Error: ' + (e?.message || 'failed')); } finally { setOpBusy(false); }
 }
 

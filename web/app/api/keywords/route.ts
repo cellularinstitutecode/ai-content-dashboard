@@ -12,6 +12,16 @@ export const maxDuration = 30;
 export async function GET(req: NextRequest) {
   const topic = (req.nextUrl.searchParams.get('topic') || req.nextUrl.searchParams.get('kw') || '').trim();
 
+  // Require an authenticated user BEFORE doing anything that can spend
+  // Semrush units or reveal config state. Fail closed on auth errors.
+  try {
+    const sb = supabaseServer();
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  } catch {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
   // Diagnostics mode: /api/keywords?diag=1 reports whether the integration is
   // wired up WITHOUT exposing the token value. Safe to call to debug the
   // 'still says not set' situation after configuring Vercel env vars.
@@ -33,15 +43,6 @@ export async function GET(req: NextRequest) {
 
   if (!topic) {
     return NextResponse.json({ error: 'topic required' }, { status: 400 });
-  }
-
-  // Require an authenticated user (mirrors the generate route).
-  try {
-    const sb = supabaseServer();
-    const { data: { user } } = await sb.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  } catch {
-    // if auth check itself fails, fall through — researchKeywords is safe/no-op without a token
   }
 
   const research = await researchKeywords(topic, { limit: 15 });

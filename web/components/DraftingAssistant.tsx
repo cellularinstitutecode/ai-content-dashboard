@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useVoiceAssistant } from "@/components/useVoiceAssistant";
 import { useLiveContent } from "@/components/LiveContentProvider";
+import { announce } from "@/components/refreshBus";
 
 type Msg = { id: string; role: "assistant" | "user"; text: string; options?: string[] | null };
 let __msgSeq = 0;
@@ -83,6 +84,9 @@ export default function DraftingAssistant() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ topic: genIdea, pack: { ...pack, format: genFormat }, provider: genProvider }),
         });
+        // Interconnection: the new draft should appear in Recent Drafts, the
+        // stat cards and the Image Studio immediately, not after a reload.
+        announce('drafts', 'stats');
       } catch {}
     } catch (e: any) {
       setGenErr(e?.message || 'Failed to generate');

@@ -17,6 +17,7 @@ export async function GET(req: NextRequest) {
   const { data, error, count } = await sb
     .from('drafts')
     .select('*', { count: 'exact' })
+    .eq('user_id', user.id)
     .order('updated_at', { ascending: false })
     .range(offset, offset + limit - 1);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
