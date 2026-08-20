@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ProcessTracker, { makeSteps, stepActive, stepError, stepsDone, type ProcessStep } from '@/components/ProcessTracker';
+import { announce, onRefresh } from '@/components/refreshBus';
 
 // The visible pipeline a standalone image walks through — each step lights up
 // as the real call behind it starts/finishes.
@@ -92,6 +93,18 @@ export default function ImageStudio() {
 
   useEffect(() => { void load(); }, [load]);
 
+  // Interconnection: refresh the gallery whenever ANY panel announces new or
+  // changed images/drafts (Content Generator packs, Autopilot hero images,
+  // assistant drafts, deletions) — the studio shows every visual, live.
+  useEffect(() => {
+    return onRefresh((scopes) => {
+      if (scopes.includes('images') || scopes.includes('drafts')) void load();
+    });
+  }, [load]);
+
+  // Clear any pending display timers if the component unmounts mid-run.
+  useEffect(() => () => clearProcTimers(), []);
+
   const withImage = drafts.filter((d) => d?.pack?._image?.url);
   const missing = drafts.filter((d) => d?.id && !d?.pack?._image?.url && d?.pack?.kind !== 'clip').slice(0, 4);
 
@@ -114,6 +127,7 @@ export default function ImageStudio() {
       setProc((p) => (p ? stepActive(p, 'gallery') : p));
       await load();
       setProc((p) => (p ? stepsDone(p) : p));
+      announce('drafts'); // draft now carries an image → refresh the library view
       // Keep the lightbox in sync with the fresh image.
       if (lightbox && lightbox.id === id && j?.image?.url) {
         setLightbox({ ...lightbox, pack: { ...(lightbox.pack || {}), _image: j.image } });
@@ -159,6 +173,7 @@ export default function ImageStudio() {
       setQuickTopic('');
       await load();
       setProc((p) => (p ? stepsDone(p) : p));
+      announce('drafts', 'stats'); // new image draft → update library + counters everywhere
     } catch (e) {
       clearProcTimers();
       setProc((p) => (p ? stepError(p) : p));
@@ -196,7 +211,7 @@ export default function ImageStudio() {
           <button
             type="button"
             onClick={() => void quickCreate()}
-            disabled={quickBusy || !quickTopic.trim()}
+            disabled={quickBusy || Boolean(busyId) || !quickTopic.trim()}
             className="shrink-0 rounded-full bg-accent px-4 py-2 text-[13px] font-medium text-white shadow-soft transition hover:opacity-90 disabled:opacity-50"
           >
             {quickBusy ? 'Creating…' : 'Create image'}
@@ -255,7 +270,7 @@ export default function ImageStudio() {
                 key={d.id}
                 type="button"
                 onClick={() => void generateFor(d.id, false)}
-                disabled={busyId === d.id}
+                disabled={Boolean(busyId) || quickBusy}
                 className="rounded-full bg-white px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
               >
                 {busyId === d.id ? 'Generating…' : '⚡ ' + String(d.topic || 'Untitled').slice(0, 40)}

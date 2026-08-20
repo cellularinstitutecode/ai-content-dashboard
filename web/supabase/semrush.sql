@@ -52,8 +52,12 @@ alter table public.semrush_usage enable row level security;
 alter table public.draft_keywords enable row level security;
 
 -- Users may read their own draft-keyword history (for the learnings view).
-create policy if not exists "draft_keywords: owner read" on public.draft_keywords
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'draft_keywords: owner read') then
+    create policy "draft_keywords: owner read" on public.draft_keywords
   for select using (auth.uid() = user_id);
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------------------
 -- Seed: real Semrush data pulled 2026-08-13 for the clinic's core topics, so

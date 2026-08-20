@@ -150,6 +150,21 @@ export async function GET(req: NextRequest) {
     const projectId = (req.nextUrl.searchParams.get('projectId') || '').trim();
     if (!projectId) return NextResponse.json({ error: 'projectId required' }, { status: 400 });
 
+    // Ownership gate: only poll Opus for projects this user actually owns
+    // (either a clips bookkeeping row or a clip draft). Without this, any
+    // signed-in user could read another tenant's Opus project by guessing ids.
+    const admin = supabaseAdmin();
+    const ownedRow = await admin
+      .from('clips')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('opus_project_id', projectId)
+      .limit(1);
+    const draftRow = await findClipDraft(admin, user.id, projectId);
+    if (!(ownedRow.data && ownedRow.data[0]) && !draftRow) {
+      return NextResponse.json({ error: 'not_found' }, { status: 404 });
+    }
+
     let clips = await opusGetExportableClips(projectId);
     const ready = clips.length > 0;
     const status = ready ? 'ready' : 'processing';
@@ -164,8 +179,7 @@ export async function GET(req: NextRequest) {
 
     // Best-effort, idempotent persist onto this user's clip draft.
     try {
-      const admin = supabaseAdmin();
-      const row = await findClipDraft(admin, user.id, projectId);
+      const row = draftRow;
       if (row) {
         // Only write when something actually changed, so repeated polls don't
         // churn updated_at or clobber a webhook that already marked it ready.
@@ -176,7 +190,7 @@ export async function GET(req: NextRequest) {
         }
       }
       if (ready) {
-        await admin.from('clips').update({ status: 'ready', result: clips }).eq('opus_project_id', projectId);
+        await admin.from('clips').update({ status: 'ready', result: clips }).eq('opus_project_id', projectId).eq('user_id', user.id);
       }
     } catch {}
 

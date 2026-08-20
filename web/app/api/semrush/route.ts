@@ -30,9 +30,9 @@ async function requireUser(): Promise<boolean> {
     const { data: { user } } = await sb.auth.getUser();
     return Boolean(user);
   } catch {
-    // If the auth check itself breaks, fall through: lib/semrush is safe
-    // without a key and everything degrades to cache/link-out.
-    return true;
+    // Fail CLOSED: if the auth check itself breaks, do not open an endpoint
+    // that can spend Semrush API units to anonymous callers.
+    return false;
   }
 }
 

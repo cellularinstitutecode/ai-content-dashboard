@@ -47,18 +47,58 @@ alter table public.drafts enable row level security;
 alter table public.posts enable row level security;
 alter table public.clips enable row level security;
 
-create policy if not exists "drafts: owner read" on public.drafts for select using (auth.uid() = user_id);
-create policy if not exists "drafts: owner write" on public.drafts for insert with check (auth.uid() = user_id);
-create policy if not exists "drafts: owner update" on public.drafts for update using (auth.uid() = user_id);
-create policy if not exists "drafts: owner delete" on public.drafts for delete using (auth.uid() = user_id);
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'drafts: owner read') then
+    create policy "drafts: owner read" on public.drafts for select using (auth.uid() = user_id);
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'drafts: owner write') then
+    create policy "drafts: owner write" on public.drafts for insert with check (auth.uid() = user_id);
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'drafts: owner update') then
+    create policy "drafts: owner update" on public.drafts for update using (auth.uid() = user_id);
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'drafts: owner delete') then
+    create policy "drafts: owner delete" on public.drafts for delete using (auth.uid() = user_id);
+  end if;
+end $$;
 
-create policy if not exists "posts: owner read" on public.posts for select using (auth.uid() = user_id);
-create policy if not exists "posts: owner write" on public.posts for insert with check (auth.uid() = user_id);
-create policy if not exists "posts: owner update" on public.posts for update using (auth.uid() = user_id);
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'posts: owner read') then
+    create policy "posts: owner read" on public.posts for select using (auth.uid() = user_id);
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'posts: owner write') then
+    create policy "posts: owner write" on public.posts for insert with check (auth.uid() = user_id);
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'posts: owner update') then
+    create policy "posts: owner update" on public.posts for update using (auth.uid() = user_id);
+  end if;
+end $$;
 
-create policy if not exists "clips: owner read" on public.clips for select using (auth.uid() = user_id);
-create policy if not exists "clips: owner write" on public.clips for insert with check (auth.uid() = user_id);
-create policy if not exists "clips: owner update" on public.clips for update using (auth.uid() = user_id);
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'clips: owner read') then
+    create policy "clips: owner read" on public.clips for select using (auth.uid() = user_id);
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'clips: owner write') then
+    create policy "clips: owner write" on public.clips for insert with check (auth.uid() = user_id);
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'clips: owner update') then
+    create policy "clips: owner update" on public.clips for update using (auth.uid() = user_id);
+  end if;
+end $$;
 
 -- Updated_at trigger for drafts
 create or replace function public.touch_updated_at() returns trigger as $$
@@ -87,9 +127,21 @@ create table if not exists public.brand_profiles (
 
 alter table public.brand_profiles enable row level security;
 
-create policy if not exists "brand: owner read" on public.brand_profiles for select using (auth.uid() = user_id);
-create policy if not exists "brand: owner insert" on public.brand_profiles for insert with check (auth.uid() = user_id);
-create policy if not exists "brand: owner update" on public.brand_profiles for update using (auth.uid() = user_id);
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'brand: owner read') then
+    create policy "brand: owner read" on public.brand_profiles for select using (auth.uid() = user_id);
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'brand: owner insert') then
+    create policy "brand: owner insert" on public.brand_profiles for insert with check (auth.uid() = user_id);
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'brand: owner update') then
+    create policy "brand: owner update" on public.brand_profiles for update using (auth.uid() = user_id);
+  end if;
+end $$;
 -- Schedule templates: reusable recurring posting cadences.
 -- A template describes what to post (text + providers) and when (weekly on
 -- chosen weekdays at a given local time). Users "apply" a template to
@@ -111,10 +163,26 @@ create table if not exists public.schedule_templates (
 
 alter table public.schedule_templates enable row level security;
 
-create policy if not exists "templates: owner read" on public.schedule_templates for select using (auth.uid() = user_id);
-create policy if not exists "templates: owner insert" on public.schedule_templates for insert with check (auth.uid() = user_id);
-create policy if not exists "templates: owner update" on public.schedule_templates for update using (auth.uid() = user_id);
-create policy if not exists "templates: owner delete" on public.schedule_templates for delete using (auth.uid() = user_id);
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'templates: owner read') then
+    create policy "templates: owner read" on public.schedule_templates for select using (auth.uid() = user_id);
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'templates: owner insert') then
+    create policy "templates: owner insert" on public.schedule_templates for insert with check (auth.uid() = user_id);
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'templates: owner update') then
+    create policy "templates: owner update" on public.schedule_templates for update using (auth.uid() = user_id);
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'templates: owner delete') then
+    create policy "templates: owner delete" on public.schedule_templates for delete using (auth.uid() = user_id);
+  end if;
+end $$;
 
 -- Usage events: append-only log used by the rate limiter to count a user's
 -- recent calls to expensive AI actions (generate, assistant, opus-clip).
@@ -133,7 +201,11 @@ alter table public.usage_events enable row level security;
 
 -- Users may read their own usage; writes happen via the service-role client
 -- (rate limiter), which bypasses RLS, so no insert policy is required.
-create policy if not exists "usage_events: owner read" on public.usage_events for select using (auth.uid() = user_id);
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'usage_events: owner read') then
+    create policy "usage_events: owner read" on public.usage_events for select using (auth.uid() = user_id);
+  end if;
+end $$;
 
 -- Post metrics: normalized per-post performance pulled from Metricool. Used by
 -- the generation prompt to bias new content toward what has performed well.
@@ -157,4 +229,8 @@ alter table public.post_metrics enable row level security;
 
 -- Users may read their own metrics; the sync route writes via the service-role
 -- client, which bypasses RLS, so no insert policy is required.
-create policy if not exists "post_metrics: owner read" on public.post_metrics for select using (auth.uid() = user_id);
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'post_metrics: owner read') then
+    create policy "post_metrics: owner read" on public.post_metrics for select using (auth.uid() = user_id);
+  end if;
+end $$;

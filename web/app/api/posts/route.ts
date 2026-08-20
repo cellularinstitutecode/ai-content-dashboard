@@ -14,6 +14,7 @@ export async function GET() {
   const { data, error } = await sb
     .from('posts')
     .select('*')
+    .eq('user_id', user.id)
     .order('publication_date', { ascending: true })
     .limit(200);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -51,6 +52,7 @@ export async function PATCH(req: Request) {
     .from('posts')
     .update({ publication_date: publicationDate })
     .eq('id', id)
+    .eq('user_id', user.id)
     .select('*')
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

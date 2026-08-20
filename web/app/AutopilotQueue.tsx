@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ProcessTracker, { makeSteps, stepActive, stepError, stepsDone, type ProcessStep } from '@/components/ProcessTracker';
+import { announce, onRefresh } from '@/components/refreshBus';
 
 // The visible pipeline an engine run walks through. The tick call does all of
 // this server-side in one request; the tracker paces the display so the viewer
@@ -113,6 +114,21 @@ export default function AutopilotQueue() {
 
   useEffect(() => { void load(); }, [load]);
 
+  // Interconnection: reload the queue when another panel announces autopilot
+  // changes, and gently poll while runs are mid-pipeline so server-side
+  // progress (cron ticks, long engine steps) is visible without a reload.
+  useEffect(() => {
+    return onRefresh((scopes) => {
+      if (scopes.includes('autopilot')) void load();
+    });
+  }, [load]);
+  const hasInFlight = runs.some((r) => ['planned', 'researched', 'drafted'].includes(r.state));
+  useEffect(() => {
+    if (!hasInFlight) return;
+    const t = setInterval(() => { void load(); }, 20000);
+    return () => clearInterval(t);
+  }, [hasInFlight, load]);
+
   // Visual enrichment: every ready-for-review run gets its AI hero image
   // generated automatically (idempotent server-side), so the reviewer sees
   // exactly what will attach to the Metricool draft on approve.
@@ -137,7 +153,7 @@ export default function AutopilotQueue() {
         if (cancelled) return;
         setImagingIds((prev) => { const next = new Set(prev); next.delete(r.id); return next; });
       }
-      if (!cancelled) await load();
+      if (!cancelled) { await load(); announce('images', 'drafts'); }
     })();
     return () => { cancelled = true; };
   }, [runs, load]);
@@ -156,6 +172,10 @@ export default function AutopilotQueue() {
       if (!r.ok) throw new Error(j?.error || 'Action failed (' + r.status + ')');
       if (j?.note) setNote(String(j.note));
       await load();
+      // Interconnection: approving queues a Metricool draft (posts row) and
+      // every action can touch drafts — update the rest of the dashboard.
+      if (action === 'approve') announce('posts', 'stats', 'drafts');
+      else announce('drafts');
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Action failed');
     } finally {
@@ -179,6 +199,7 @@ export default function AutopilotQueue() {
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j?.error || 'Image regeneration failed');
       await load();
+      announce('images', 'drafts'); // fresh hero image → Image Studio + library update live
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Image regeneration failed');
     } finally {
@@ -189,6 +210,7 @@ export default function AutopilotQueue() {
   const [engineProc, setEngineProc] = useState<ProcessStep[] | null>(null);
   const engineTimers = useRef<any[]>([]);
   function clearEngineTimers() { engineTimers.current.forEach((t) => clearTimeout(t)); engineTimers.current = []; }
+  useEffect(() => () => clearEngineTimers(), []);
 
   async function runEngine() {
     setEngineBusy(true);
@@ -211,6 +233,7 @@ export default function AutopilotQueue() {
         (j.advanced ?? 0) + ' step(s) advanced, ' + (j.ready ?? 0) + ' ready for review.'
       );
       await load();
+      announce('drafts', 'stats', 'images'); // engine creates drafts + images → sync every panel
     } catch (e) {
       clearEngineTimers();
       setEngineProc((p) => (p ? stepError(p) : p));
@@ -389,7 +412,8 @@ export default function AutopilotQueue() {
                       <button
                         type="button"
                         onClick={() => regenImage(r)}
-                        className="rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle"
+                        disabled={Boolean(regenId) || busyId === r.id}
+                        className="rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
                       >
                         Generate image
                       </button>
@@ -442,7 +466,7 @@ export default function AutopilotQueue() {
                       disabled={busyId === r.id}
                       className="rounded-full px-4 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
                     >
-                      Skip this one
+                      {busyId === r.id ? 'Working…' : 'Skip this one'}
                     </button>
                     <span className="ml-auto text-[11px] text-ink-muted">Publishing stays manual, always.</span>
                   </div>

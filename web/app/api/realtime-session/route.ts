@@ -106,6 +106,10 @@ export async function POST() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
+  if (!process.env.OPENAI_API_KEY) {
+    return NextResponse.json({ error: "OPENAI_API_KEY is not configured on the server" }, { status: 500 });
+  }
+
   const context = await buildSemrushContext();
   const instructions = context ? BASE_INSTRUCTIONS + "\n\n" + context : BASE_INSTRUCTIONS;
 

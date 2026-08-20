@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { supabaseServer } from '@/lib/supabase';
 
 // GET /api/metricool/insights?blogId=123
 // Aggregates several Metricool datasets in one call so the dashboard can show
@@ -31,6 +32,16 @@ async function mcGet(path: string, token: string): Promise<any> {
 }
 
 export async function GET(request: Request) {
+  // Explicit session guard, matching every sibling Metricool route (defense in
+  // depth — middleware covers this path today, but don't rely on it alone).
+  try {
+    const sb = supabaseServer();
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  } catch {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
   const token = process.env.METRICOOL_USER_TOKEN || '';
   const userId = process.env.METRICOOL_USER_ID || '';
   const { searchParams } = new URL(request.url);
