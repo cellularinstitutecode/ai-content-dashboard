@@ -13,6 +13,7 @@ export async function GET() {
 
   const { data, error } = await sb
     .from('posts')
+    .eq('user_id', user.id)
     .select('*')
     .eq('user_id', user.id)
     .order('publication_date', { ascending: true })
