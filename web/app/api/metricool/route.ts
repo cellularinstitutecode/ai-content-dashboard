@@ -35,9 +35,12 @@ export async function GET(req: NextRequest) {
       const text = await r.text();
       let body: any;
       try { body = JSON.parse(text); } catch { body = { raw: text.slice(0, 800) }; }
-      attempts.push({ url, status: r.status, ok: r.ok, body });
+      // Keep only status metadata for the error report — never buffer or echo
+      // upstream response bodies back to the browser (debug scaffolding leak).
+      attempts.push({ url, status: r.status, ok: r.ok });
       if (r.ok) {
-        return NextResponse.json({ blogId, userId, range: { start: fmt(start), end: fmt(today) }, endpoint: url, data: body });
+        // Note: no userId in the payload — it's server config, not client data.
+        return NextResponse.json({ blogId, range: { start: fmt(start), end: fmt(today) }, endpoint: url, data: body });
       }
     } catch (e: any) {
       attempts.push({ url, error: e && e.message ? e.message : String(e) });

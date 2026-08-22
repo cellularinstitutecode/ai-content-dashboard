@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createHmac, timingSafeEqual } from "crypto";
 import { supabaseServer, supabaseAdmin } from "@/lib/supabase";
 import {
   generateContentPack,
@@ -73,6 +74,10 @@ type Session = {
   lastPack?: Record<string, any>;
   lastTopic?: string;
   pendingSchedule?: PendingSchedule | null;
+  // Server-issued HMAC over pendingSchedule. The whole session round-trips
+  // through the client, so anything action-bearing must be tamper-evident:
+  // a forged/edited pendingSchedule + "yes" must not schedule anything.
+  _sig?: string | null;
 };
 
 const NETWORKS = ["instagram", "facebook", "linkedin", "blog"];
@@ -119,7 +124,30 @@ function normalizePublishAt(input: string): string {
   return s;
 }
 
+// Key material for signing the client-round-tripped session. Service-role key
+// is always present in this deployment; CRON_SECRET wins when set.
+function sessionKey(): string {
+  return process.env.CRON_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+}
+function signPending(p: PendingSchedule | null | undefined): string | null {
+  const key = sessionKey();
+  if (!key || !p) return null;
+  return createHmac("sha256", key).update(JSON.stringify([p.network, p.text, p.publishAt])).digest("hex");
+}
+// True only when the pendingSchedule the client sent back carries a valid
+// server-issued signature. On any mismatch we drop the pending action.
+function pendingIsAuthentic(session: Session): boolean {
+  const p = session.pendingSchedule;
+  if (!p) return false;
+  const expect = signPending(p);
+  const got = String(session._sig || "");
+  if (!expect || !got || expect.length !== got.length) return false;
+  try { return timingSafeEqual(Buffer.from(expect), Buffer.from(got)); } catch { return false; }
+}
+
 function reply(session: Session, message: string, options?: string[]) {
+  // Stamp (or clear) the signature so only server-created pending actions survive the round-trip.
+  session._sig = signPending(session.pendingSchedule);
   return NextResponse.json({ session, message, options: options || null });
 }
 
@@ -492,6 +520,11 @@ export async function POST(req: Request) {
     }
 
     // If a schedule is awaiting confirmation, handle yes/no first.
+    // Reject any pendingSchedule the server didn't sign — the session object
+    // is client-supplied, so an unsigned/forged one must never schedule.
+    if (session.pendingSchedule && !pendingIsAuthentic(session)) {
+      session.pendingSchedule = null;
+    }
     if (session.pendingSchedule && input) {
       if (AFFIRM.test(input)) {
         const p = session.pendingSchedule;

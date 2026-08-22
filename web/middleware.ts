@@ -4,9 +4,12 @@ import { createServerClient, type CookieOptions } from '@supabase/ssr';
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
 
-  // Only enforce auth on app routes; let /sign-in and /api/public pass.
+  // Only enforce auth on app routes; let the sign-in/auth flows pass.
+  // Exact-or-segment matching: '/auth/...' yes, '/authanything' no.
   const { pathname } = req.nextUrl;
-  if (pathname.startsWith('/sign-in') || pathname.startsWith('/sign-up') || pathname.startsWith('/auth') || pathname.startsWith('/api/public')) {    return res;
+  const openPrefixes = ['/sign-in', '/sign-up', '/auth'];
+  if (openPrefixes.some((p) => pathname === p || pathname.startsWith(p + '/'))) {
+    return res;
   }
 
   // Machine endpoints authenticate themselves (CRON_SECRET bearer / Opus HMAC
