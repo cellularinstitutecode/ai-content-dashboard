@@ -704,6 +704,7 @@ export default function SemrushPanel({
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-1 gap-2">
             <input
+              aria-label="Domain to analyse"
               type="text"
               value={domainInput}
               onChange={(e) => setDomainInput(e.target.value)}

@@ -20,20 +20,25 @@ export async function GET() {
     sb.from('drafts').select('*', { count: 'exact', head: true }),
     sb.from('posts').select('*', { count: 'exact', head: true }),
     sb.from('posts').select('*', { count: 'exact', head: true }).gte('publication_date', nowIso),
-    sb.from('clips').select('*', { count: 'exact', head: true }),
+    // "Clip jobs" must count the same things the Clips tab lists: one row per
+    // Opus job, which lives in `drafts` as pack.kind = 'clip'. Counting the
+    // `clips` table counted individual rendered clips instead, so the stat card
+    // said 9 while the tab listed 3 — three numbers for one concept on one screen.
+    sb.from('drafts').select('*', { count: 'exact', head: true }).eq('pack->>kind', 'clip'),
   ]);
 
   const draftsCount = drafts.count ?? 0;
   const scheduledCount = posts.count ?? 0;
   const upcomingCount = upcoming.count ?? 0;
-  const clipsCount = clips.count ?? 0;
+  const clipJobsCount = clips.count ?? 0;
 
   return NextResponse.json({
     drafts: draftsCount,
     scheduled: scheduledCount,
     upcoming: upcomingCount,
-    clips: clipsCount,
+    clips: clipJobsCount,
     // Descriptive aliases (kept for any other consumers).
+    clipJobs: clipJobsCount,
     scheduledPosts: scheduledCount,
     upcomingPosts: upcomingCount,
   });

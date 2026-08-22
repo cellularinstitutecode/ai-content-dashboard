@@ -201,6 +201,7 @@ export default function KeywordIntelligence({
         {/* Search row */}
         <div className="flex flex-col gap-2 sm:flex-row">
           <input
+            aria-label="Topic for keyword research"
             type="text"
             value={topic}
             onChange={(e) => setTopic(e.target.value)}

@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ProcessTracker, { makeSteps, stepActive, stepError, stepsDone, type ProcessStep } from '@/components/ProcessTracker';
-import { announce, onRefresh } from '@/components/refreshBus';
+import { announce, onRefresh, fetchDrafts } from '@/components/refreshBus';
 
 // The visible pipeline a standalone image walks through — each step lights up
 // as the real call behind it starts/finishes.
@@ -83,9 +83,9 @@ export default function ImageStudio() {
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch('/api/drafts?limit=50&offset=0');
-      const j = await r.json().catch(() => ({}));
-      const list = Array.isArray(j?.drafts) ? j.drafts : [];
+      // Shared with the clip pre-warmer, which asks for the same page on mount.
+      const j = await fetchDrafts(50, 0).catch(() => ({}));
+      const list = Array.isArray((j as any)?.drafts) ? (j as any).drafts : [];
       setDrafts(list);
     } catch { /* transient */ }
     setLoading(false);
@@ -202,6 +202,7 @@ export default function ImageStudio() {
         </div>
         <div className="flex w-full min-w-0 items-center gap-2 lg:w-auto">
           <input
+            aria-label="Describe the image to create"
             value={quickTopic}
             onChange={(e) => setQuickTopic(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void quickCreate(); }}

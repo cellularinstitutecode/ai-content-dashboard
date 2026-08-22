@@ -17,8 +17,13 @@ const config: Config = {
         ink: {
           DEFAULT: '#1d1d1f',   // primary text
           soft: '#3a3a3c',
-          muted: '#6e6e73',     // secondary text
-          faint: '#a1a1a6'
+          muted: '#6e6e73',     // secondary text  — 4.66:1 on white (AA)
+          // Was #a1a1a6, which measured 2.57:1 on white and 2.36:1 on the canvas
+          // at 11-12px — failing WCAG AA (4.5:1) everywhere it was used,
+          // including the line promising a human reviews every post. #6f6f78
+          // clears AA against all three surfaces: white 4.98, canvas 4.57,
+          // subtle 4.81, while staying visibly lighter than ink-muted.
+          faint: '#6f6f78'
         },
         accent: {
           DEFAULT: '#0071e3',   // Apple system blue

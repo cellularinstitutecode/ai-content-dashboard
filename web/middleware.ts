@@ -42,6 +42,16 @@ export async function middleware(req: NextRequest) {
 
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
+    // API callers get a machine-readable 401. Redirecting them to /sign-in
+    // returned the login page with a 200, which fetch() follows silently — so
+    // an expired session looked identical to "you have no data" and the UI
+    // rendered empty panels instead of asking the user to sign in again.
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json(
+        { error: 'unauthenticated', message: 'Your session has expired. Sign in again.' },
+        { status: 401, headers: { 'cache-control': 'no-store' } }
+      );
+    }
     const url = req.nextUrl.clone();
     url.pathname = '/sign-in';
     url.searchParams.set('next', pathname);

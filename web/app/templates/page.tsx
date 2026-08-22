@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import PageNav from '@/components/PageNav';
 
 type Provider = 'instagram' | 'facebook' | 'linkedin' | 'blog';
 type AiProvider = 'anthropic' | 'openai';
@@ -233,7 +234,7 @@ export default function TemplatesPage() {
           <h1 style={{ margin: 0, fontSize: 22 }}>Schedule Templates</h1>
           <div style={{ fontSize: 13, opacity: .6, marginTop: 4 }}>Reusable weekly posting cadences. Apply one to generate upcoming scheduled posts.</div>
         </div>
-        <a href="/" style={{ color: '#6e6e73', fontSize: 13, textDecoration: 'none', border: '1px solid rgba(0,0,0,0.1)', padding: '6px 12px', borderRadius: 6 }}>Back to dashboard</a>
+        <PageNav current="/templates" />
       </header>
 
       <div style={{ maxWidth: 900, margin: '0 auto', padding: 24, display: 'grid', gap: 24 }}>

@@ -7,7 +7,8 @@ import SemrushPanel from "./SemrushPanel";
 import AutopilotQueue from "./AutopilotQueue";
 import ImageStudio from "./ImageStudio";
 import ProcessTracker, { makeSteps, stepActive, stepError, stepSkip, stepsDone, type ProcessStep } from "@/components/ProcessTracker";
-import { announce, onRefresh } from "@/components/refreshBus";
+import { announce, onRefresh, fetchDrafts } from "@/components/refreshBus";
+import { tightestLimit, networkLabel, parseVideoUrl, localDateTimeValue, draftLabel } from "@/lib/composer";
 
 // The visible pipeline every manual generation walks through. Steps light up
 // as the real calls behind them start/finish so the viewer can follow the
@@ -233,7 +234,39 @@ const [mText, setMText] = useState('');
 const [mDate, setMDate] = useState('');
 const [mStatus, setMStatus] = useState<string | null>(null);
 const [mBusy, setMBusy] = useState(false);
-  const [mAutoPublish, setMAutoPublish] = useState(false);
+  // Auto-publish was removed deliberately. The dashboard's contract is that
+  // nothing reaches a live channel without a human approving it inside
+  // Metricool, and a "Publish now" button in this composer contradicted that
+  // promise three lines below where the promise is made. Everything now goes
+  // out as a Metricool draft; approval happens there.
+  const AUTO_PUBLISH = false as const;
+
+  // --- Composer validation -------------------------------------------------
+  // Everything the Send button depends on is derived here so the button state,
+  // the counter and the inline messages can never disagree with each other.
+  const [nowTick, setNowTick] = useState<Date | null>(null);
+  useEffect(() => {
+    setNowTick(new Date());
+    const id = setInterval(() => setNowTick(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const mChars = mText.trim().length;
+  const mLimit = tightestLimit(mNetworks);
+  const mOverBy = mLimit ? mChars - mLimit.limit : 0;
+  const mTooLong = mOverBy > 0;
+  // `min` is only applied once we know the browser's clock, so the server-rendered
+  // HTML never ships a stale floor.
+  const mMinDateTime = nowTick ? localDateTimeValue(nowTick) : undefined;
+  const mDateInPast = Boolean(mDate && nowTick && new Date(mDate).getTime() < nowTick.getTime());
+  const mProblem =
+    !mNetworks.length ? 'Pick at least one channel.'
+    : !mText.trim() ? 'Write the post first.'
+    : mTooLong && mLimit ? networkLabel(mLimit.network) + ' allows ' + mLimit.limit.toLocaleString() + ' characters. Trim ' + mOverBy.toLocaleString() + '.'
+    : !mDate ? 'Pick the date and time it should go out.'
+    : mDateInPast ? 'That time has already passed. Pick a future time.'
+    : null;
+  const mCanSend = !mProblem && !mBusy;
   const [mMedia, setMMedia] = useState<string>("");
   const [mMediaLabel, setMMediaLabel] = useState<string>("");
   function platformsForFormat(fmt: string): string[] {
@@ -254,7 +287,6 @@ const [mBusy, setMBusy] = useState(false);
       if (heroUrl) { setMMedia(heroUrl); setMMediaLabel("AI hero image"); }
       else { setMMedia(""); setMMediaLabel(""); }
       setMNetworks(platformsForFormat(fmt).filter((n) => PUBLISH_NETWORKS.some((p) => p.id === n)));
-      setMAutoPublish(false);
       setMStatus(null);
       setSelectedDraft(null); setEditingDraft(false);
       scrollToPublisher();
@@ -269,7 +301,6 @@ const [mBusy, setMBusy] = useState(false);
       setMMedia(media);
       setMMediaLabel(String((c && c.title) || "Clip video"));
       setMNetworks(["instagram", "facebook"].filter((n) => PUBLISH_NETWORKS.some((p) => p.id === n)));
-      setMAutoPublish(false);
       setMStatus(null);
       setSelectedDraft(null); setEditingDraft(false);
       scrollToPublisher();
@@ -347,6 +378,13 @@ const [newTrend, setNewTrend] = useState('');
 const [opUrl, setOpUrl] = useState('');
 const [opStatus, setOpStatus] = useState<string | null>(null);
 const [opBusy, setOpBusy] = useState(false);
+
+// --- Repurpose validation --------------------------------------------------
+// Parsed up front so the button, the ring colour and the helper line all agree,
+// and so an unusable link can never start a billable Opus job.
+const opParsed = parseVideoUrl(opUrl);
+const opValid = opParsed.ok;
+const opError = !opParsed.ok && opUrl.trim() ? opParsed.reason : '';
 const [opTitle, setOpTitle] = useState('');
 const [opLang, setOpLang] = useState('en');
 const [opAspect, setOpAspect] = useState('9:16');
@@ -500,9 +538,10 @@ return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.cu
   // in parallel; the API persists the clips onto the draft for an instant open.
   async function warmClips() {
     try {
-      const lr = await fetch('/api/drafts?limit=50&offset=0');
-      if (!lr.ok) return;
-      const lj = await lr.json().catch(() => null);
+      // Shares the Image Studio's identical mount-time request rather than
+      // firing a second copy of it.
+      const lj: any = await fetchDrafts(50, 0).catch(() => null);
+      if (!lj) return;
       const list = Array.isArray(lj) ? lj : (lj && (lj.drafts || lj.data || lj.rows)) || [];
       const pending = list.filter(
         (d: any) => d && d.pack && d.pack.kind === 'clip' && d.pack.projectId && d.pack.status !== 'ready' && d.pack.status !== 'failed'
@@ -536,6 +575,9 @@ async function refreshDrafts(offset = 0, append = false) {
 try {
 if (append) setLoadingMore(true);
 const r = await fetch('/api/drafts?limit=' + PAGE_SIZE + '&offset=' + offset);
+// A lapsed session now answers 401 instead of quietly handing back the
+// sign-in page, so say so rather than rendering an empty list.
+if (r.status === 401) { setErr('Your session has expired. Sign in again to load your drafts.'); return; }
 if (!r.ok) return;
 const ct = r.headers.get('content-type') || '';
 if (!ct.includes('application/json')) return;
@@ -841,7 +883,7 @@ mNetworks.map(async (network) => {
 const r = await fetch('/api/metricool/schedule', {
 method: 'POST',
 headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify({ network, text: mText, publishAt: mDate, blogId: METRICOOL_BLOG_ID, autoPublish: mAutoPublish, mediaUrl: mMedia || undefined }),
+body: JSON.stringify({ network, text: mText, publishAt: mDate, blogId: METRICOOL_BLOG_ID, autoPublish: AUTO_PUBLISH, mediaUrl: mMedia || undefined }),
 });
 const data = await r.json().catch(() => ({}));
 return { network, ok: r.ok, status: r.status, data };
@@ -850,7 +892,7 @@ return { network, ok: r.ok, status: r.status, data };
 const ok = results.filter((x) => x.ok).map((x) => x.network);
 const failed = results.filter((x) => !x.ok).map((x) => x.network);
 if (failed.length === 0) {
-setMStatus(mAutoPublish ? ('Published now on ' + ok.join(', ') + ' via Metricool.') : ('Saved to Metricool as a draft on ' + ok.join(', ') + ' — approve it there to publish.'));
+setMStatus('Saved to Metricool as a draft on ' + ok.join(', ') + ' — approve it there to publish.');
 setMText('');
 } else if (ok.length === 0) {
 setMStatus('Error: failed on ' + failed.join(', ') + '.');
@@ -1013,7 +1055,7 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 {/* Controls */}
 <div className="space-y-5 p-6 sm:p-8">
 <div>
-<label className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Model</label>
+<label htmlFor="gen-model" className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Model</label>
 <div className="flex flex-wrap items-center gap-2">
 {PROVIDERS.map(p => (
 <button key={p.id} onClick={() => setProvider(p.id)}
@@ -1021,7 +1063,7 @@ className={'rounded-full px-4 py-2 text-[13px] font-medium transition-all ' + (p
 {p.label}
 </button>
 ))}
-<select value={model} onChange={e => setModel(e.target.value)}
+<select id="gen-model" value={model} onChange={e => setModel(e.target.value)}
 className="rounded-full bg-subtle px-4 py-2 text-[13px] font-medium text-ink ring-1 ring-line focus:ring-accent">
 {currentModels.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
 </select>
@@ -1029,8 +1071,8 @@ className="rounded-full bg-subtle px-4 py-2 text-[13px] font-medium text-ink rin
 </div>
 
 <div>
-<label className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Format</label>
-<div className="flex flex-wrap gap-2">
+<p id="gen-format-label" className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Format</p>
+<div className="flex flex-wrap gap-2" role="group" aria-labelledby="gen-format-label">
 {CONTENT_TYPES.map(t => (
 <button key={t.id} onClick={() => setType(t.id)}
 className={'rounded-full px-3.5 py-1.5 text-[13px] font-medium transition-all ' + (type === t.id ? 'bg-accent text-white shadow-soft' : 'bg-subtle text-ink-muted ring-1 ring-line hover:text-ink')}>
@@ -1043,7 +1085,7 @@ className={'rounded-full px-3.5 py-1.5 text-[13px] font-medium transition-all ' 
 
 <div>
 <div className="mb-2 flex items-center justify-between">
-<label className="block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Trending in stem cell therapy</label>
+<label htmlFor="trend-input" className="block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Trending in stem cell therapy</label>
 <span className="text-[11px] text-ink-faint">Tap one to start · a person always reviews before anything posts</span>
 </div>
 <div className="flex flex-wrap gap-2">
@@ -1055,7 +1097,7 @@ className={'rounded-full px-3.5 py-1.5 text-[13px] font-medium transition-all ' 
 ))}
 </div>
 <div className="mt-2 flex items-center gap-2">
-<input value={newTrend} onChange={(e) => setNewTrend(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTrend(); } }}
+<input id="trend-input" value={newTrend} onChange={(e) => setNewTrend(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTrend(); } }}
 placeholder="Add a trending topic to track…"
 className="min-w-0 flex-1 rounded-full bg-subtle px-3 py-1.5 text-[12px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
 <button type="button" onClick={addTrend} className="shrink-0 rounded-full bg-ink px-3 py-1.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90">Add</button>
@@ -1063,8 +1105,8 @@ className="min-w-0 flex-1 rounded-full bg-subtle px-3 py-1.5 text-[12px] text-in
 </div>
 
 <div>
-<label className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Your idea</label>
-<textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={5}
+<label htmlFor="gen-idea" className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Your idea</label>
+<textarea id="gen-idea" value={prompt} onChange={e => setPrompt(e.target.value)} rows={5}
 placeholder="e.g. 3 Instagram captions about exosome therapy benefits for athletes"
 className="w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
 </div>
@@ -1177,18 +1219,31 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
 </div>
 <div className="grid lg:grid-cols-5">
 <div className="p-6 sm:p-8 lg:col-span-3 lg:border-r lg:border-line">
-<p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Source video</p>
+<label htmlFor="opus-source-url" className="mb-2 block text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Source video</label>
 <input
+id="opus-source-url"
 type="url"
 value={opUrl}
 onChange={e => setOpUrl(e.target.value)}
 placeholder="https://youtube.com/watch?v=…  or  https://vimeo.com/…"
-className="w-full rounded-xl bg-white px-4 py-3 text-[14px] text-ink shadow-soft ring-1 ring-line transition placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent"
+aria-invalid={Boolean(opError) || undefined}
+aria-describedby="opus-source-help"
+className={"w-full rounded-xl bg-white px-4 py-3 text-[14px] text-ink shadow-soft ring-1 transition placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent " + (opError ? "ring-danger" : "ring-line")}
 />
+<p id="opus-source-help" className="mt-1.5 text-[12px]" role="status">
+{opError ? (
+<span className="font-medium text-danger">{opError}</span>
+) : opParsed.ok ? (
+<span className="font-medium text-success">{opParsed.source} video {opParsed.id} — ready to clip.</span>
+) : (
+<span className="text-ink-muted">Paste a YouTube or Vimeo link. Opus cannot fetch anything else.</span>
+)}
+</p>
 <div className="mt-4 grid gap-3 sm:grid-cols-2">
 <div>
-<label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Project title <span className="text-ink-faint normal-case">(optional)</span></label>
+<label htmlFor="opus-project-title" className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Project title <span className="text-ink-muted normal-case">(optional)</span></label>
 <input
+id="opus-project-title"
 type="text"
 value={opTitle}
 onChange={e => setOpTitle(e.target.value)}
@@ -1197,8 +1252,9 @@ className="w-full rounded-xl bg-white px-3 py-2.5 text-[13px] text-ink shadow-so
 />
 </div>
 <div>
-<label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Caption language</label>
+<label htmlFor="opus-caption-language" className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Caption language</label>
 <select
+id="opus-caption-language"
 value={opLang}
 onChange={e => setOpLang(e.target.value)}
 className="w-full rounded-xl bg-white px-3 py-2.5 text-[13px] text-ink shadow-soft ring-1 ring-line transition focus:outline-none focus:ring-2 focus:ring-accent"
@@ -1229,7 +1285,8 @@ className={`rounded-full px-3 py-1.5 text-[12px] font-medium ring-1 transition $
 <button
 type="button"
 onClick={clipVideo}
-disabled={opBusy || !opUrl.trim()}
+disabled={opBusy || !opValid}
+title={opValid ? undefined : 'Paste a valid YouTube or Vimeo link first'}
 className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
 >
 {opBusy ? (<><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />Sending to Opus…</>) : 'Generate clips'}
@@ -1301,7 +1358,7 @@ return (
 <div className="grid gap-0 lg:grid-cols-5">
 <div className="border-b border-line p-6 sm:p-8 lg:col-span-3 lg:border-b-0 lg:border-r">
 <div className="mb-3 flex items-center justify-between gap-2">
-<label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Schedule a post</label>
+<h3 className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Schedule a post</h3>
 {mBusy && <span className="text-[11px] text-ink-faint">Sending…</span>}
 </div>
 <div className="mb-2 text-[12px] text-ink-muted">Which channels should this go to?</div>
@@ -1319,7 +1376,7 @@ className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px
 </div>
 <p className="mt-1.5 text-[11px] text-ink-faint">{mNetworks.length ? 'Posting to ' + mNetworks.length + ' channel' + (mNetworks.length > 1 ? 's' : '') + '.' : 'Pick at least one channel.'}</p>
 <div className="mt-4 flex items-center justify-between gap-2">
-<span className="text-[12px] font-medium text-ink-muted">When should it go out?</span>
+<label htmlFor="composer-datetime" className="text-[12px] font-medium text-ink-muted">When should it go out?</label>
 <span className="text-[11px] text-ink-faint">Times in America/Cancun</span>
 </div>
 <div className="mt-1 flex flex-wrap gap-2">
@@ -1328,25 +1385,48 @@ className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px
 className="rounded-full bg-subtle px-3 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:ring-accent">{preset.label}</button>
 ))}
 </div>
-<input type="datetime-local" value={mDate} onChange={(e) => setMDate(e.target.value)} className="mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring-1 ring-line focus:ring-accent" />
-<div className="mt-4 text-[12px] font-medium text-ink-muted">What should it say?</div>
-<textarea value={mText} onChange={(e) => setMText(e.target.value)} rows={4} placeholder="Write your post… you can paste anything you generated above." className="mt-1 w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
+<input
+id="composer-datetime"
+type="datetime-local"
+value={mDate}
+min={mMinDateTime}
+onChange={(e) => setMDate(e.target.value)}
+aria-invalid={mDateInPast || undefined}
+className={"mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring-1 focus:ring-accent " + (mDateInPast ? "ring-danger" : "ring-line")}
+/>
+{mDateInPast && (
+<p className="mt-1.5 text-[12px] font-medium text-danger">That time has already passed. Pick a future time.</p>
+)}
+<label htmlFor="composer-text" className="mt-4 block text-[12px] font-medium text-ink-muted">What should it say?</label>
+<textarea id="composer-text" value={mText} onChange={(e) => setMText(e.target.value)} rows={4} placeholder="Write your post… you can paste anything you generated above." aria-invalid={mTooLong || undefined} className={"mt-1 w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 placeholder:text-ink-faint focus:ring-accent " + (mTooLong ? "ring-danger" : "ring-line")} />
 {mMedia ? (<div className="mt-2 flex items-center justify-between gap-2 rounded-2xl bg-subtle p-2.5 ring-1 ring-line"><div className="flex min-w-0 items-center gap-2"><span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">{'\uD83C\uDFAC'}</span><div className="min-w-0"><div className="truncate text-[13px] font-medium text-ink">{mMediaLabel || "Video attached"}</div><div className="text-[11px] text-ink-faint">This video will be attached to the post.</div></div></div><button type="button" onClick={() => { setMMedia(""); setMMediaLabel(""); }} className="shrink-0 rounded-full px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white">Remove</button></div>) : null}
-<div className="mt-2 flex items-center justify-between text-[11px] text-ink-faint">
-<span>{mText.trim().length} characters</span>
-<span>{mDate ? 'Scheduled for ' + fmtDateTime(mDate) : 'No time set — sends as a draft'}</span>
+<div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px]">
+<span className={mTooLong ? 'font-semibold text-danger' : 'text-ink-muted'}>
+{mLimit
+? mChars.toLocaleString() + ' / ' + mLimit.limit.toLocaleString() + ' characters · ' + networkLabel(mLimit.network) + ' is the tightest limit'
+: mChars.toLocaleString() + ' characters'}
+</span>
+<span className="text-ink-muted">{mDate ? 'Goes out ' + fmtDateTime(mDate) : 'Pick a date and time — Metricool needs one'}</span>
 </div>
-<div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="Publishing mode"><button type="button" onClick={() => setMAutoPublish(false)} aria-pressed={!mAutoPublish} className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (!mAutoPublish ? "bg-accent text-white ring-accent" : "bg-white text-ink ring-line hover:ring-accent")}>Save as draft in Metricool</button><button type="button" onClick={() => setMAutoPublish(true)} aria-pressed={mAutoPublish} className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (mAutoPublish ? "bg-red-600 text-white ring-red-600" : "bg-white text-ink ring-line hover:ring-accent")}>Publish now</button></div><p className="mt-1 text-[11px] text-ink-faint">{mAutoPublish ? "Publish now posts live to the selected channels via Metricool." : "Save as draft queues it in Metricool for you to approve there."}</p>
+{mTooLong && mLimit && (
+<p className="mt-1.5 text-[12px] font-medium text-danger">
+Too long for {networkLabel(mLimit.network)} by {mOverBy.toLocaleString()} character{mOverBy === 1 ? '' : 's'}. Trim it, or unselect that channel.
+</p>
+)}
+<p className="mt-3 text-[12px] text-ink-muted">Every post lands in Metricool as a draft. You approve it there to publish.</p>
 <div className="mt-4 flex flex-wrap items-center gap-3">
-<button onClick={schedulePost} disabled={mBusy} className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">{mBusy ? 'Sending…' : (mAutoPublish ? 'Publish now' : 'Send to Metricool for review')}</button>
+<button onClick={schedulePost} disabled={!mCanSend} title={mProblem || undefined} className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">{mBusy ? 'Sending…' : 'Send to Metricool for review'}</button>
 <a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:ring-accent">Open in Metricool ↗</a>
 </div>
 {mStatus && <p className="mt-3 rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink-muted ring-1 ring-line">{mStatus}</p>}
-<p className="mt-3 text-[11px] text-ink-faint">{mAutoPublish ? "Publish now sends straight to your channels via Metricool the moment you click — review carefully first." : "Nothing publishes automatically — it lands in Metricool as a draft for you to approve."}</p>
+{mProblem && !mBusy && (
+<p className="mt-3 text-[12px] font-medium text-ink-muted" role="status">{mProblem}</p>
+)}
+<p className="mt-3 text-[11px] text-ink-muted">Nothing publishes automatically — it lands in Metricool as a draft for you to approve.</p>
 </div>
 <div className="p-6 sm:p-8 lg:col-span-2">
 <div className="mb-3 flex items-center justify-between gap-2">
-<label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Connection health</label>
+<h3 className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Connection health</h3>
 <button type="button" onClick={() => { loadAnalytics(false); loadInsights(activeBlogId); }} className="text-[12px] font-medium text-accent hover:underline">{(mLoading || insightsLoading) ? 'Checking…' : 'Refresh'}</button>
 </div>
 {(() => {
@@ -1449,6 +1529,8 @@ return (
                 <div className="p-5">
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <input
+                      id="research-topic"
+                      aria-label="Topic to research"
                       type="text"
                       value={researchTopicText}
                       onChange={(e) => setResearchTopicText(e.target.value)}
@@ -1457,6 +1539,8 @@ return (
                       className="flex-1 rounded-xl bg-white px-3.5 py-2.5 text-[13px] text-ink ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-indigo-400"
                     />
                     <select
+                      id="research-network"
+                      aria-label="Network to draft for"
                       value={researchNetwork}
                       onChange={(e) => setResearchNetwork(e.target.value)}
                       className="rounded-xl bg-white px-3 py-2.5 text-[13px] text-ink ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-indigo-400"
@@ -1626,7 +1710,7 @@ className="group overflow-hidden rounded-2xl text-left ring-1 ring-line/60 trans
 <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-ink shadow-card">▶</span>
 </div>
 </div>
-<div className="truncate px-3 py-2 text-[12px] font-medium text-ink">{String(d?.topic || d?.title || 'Clip')}</div>
+<div className="truncate px-3 py-2 text-[12px] font-medium text-ink">{draftLabel(d?.topic || d?.title, 'Clip')}</div>
 </button>
 );
 })}
@@ -1643,7 +1727,7 @@ className="group overflow-hidden rounded-2xl text-left ring-1 ring-line/60 trans
 <>
 <ul className="divide-y divide-line">
 {safeDrafts.map((d, i) => {
-const title = (d && (d.title || d.topic || d.name)) || 'Untitled draft';
+const title = draftLabel(d && (d.title || d.topic || d.name));
 const body = (d && (d.body || d.instagram || d.text || d.content)) || '';
 return (
 <li onClick={() => openDraft(d)} role="button" tabIndex={0} key={(d && (d.id || d._id)) || i} className="cursor-pointer rounded-xl transition hover:bg-subtle/60 flex items-start gap-4 py-4">
@@ -1697,10 +1781,10 @@ className="rounded-full bg-subtle px-5 py-2 text-[13px] font-medium text-ink rin
 <div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7" onClick={(e) => e.stopPropagation()}>
 <div className="mb-4 flex items-start justify-between gap-4">
 {editingDraft ? (
-<input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} placeholder="Draft title"
+<input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} aria-label="Draft title" placeholder="Draft title"
 className="min-w-0 flex-1 rounded-xl bg-subtle px-3 py-2 text-[16px] font-semibold text-ink ring-1 ring-line focus:ring-accent" />
 ) : (
-<h3 className="text-headline font-semibold text-ink">{String(selectedDraft?.title || selectedDraft?.topic || selectedDraft?.name || 'Draft')}</h3>
+<h3 className="text-headline font-semibold text-ink">{draftLabel(selectedDraft?.title || selectedDraft?.topic || selectedDraft?.name, 'Draft')}</h3>
 )}
 <div className="flex shrink-0 items-center gap-2">
 {!editingDraft ? (
@@ -1800,7 +1884,7 @@ return (
 })()
 ) : editingDraft ? (
 <div>
-<textarea value={editBody} onChange={(e) => setEditBody(e.target.value)} rows={14} placeholder="Draft content..."
+<textarea value={editBody} onChange={(e) => setEditBody(e.target.value)} rows={14} aria-label="Draft content" placeholder="Draft content..."
 className="w-full resize-y rounded-2xl bg-subtle/50 p-4 text-[14px] leading-relaxed text-ink ring-1 ring-line/60 focus:ring-accent" />
 <div className="mt-4 flex items-center gap-3">
 <button onClick={saveDraftEdits} disabled={savingEdit} className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-white shadow-soft transition-colors hover:bg-accent-hover disabled:opacity-40">{savingEdit ? 'Saving...' : 'Save changes'}</button>
