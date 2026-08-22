@@ -36,8 +36,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // RLS scopes this select to the owner — no draft, no image.
-    const { data: d } = await sb.from('drafts').select('id, topic, pack').eq('id', id).maybeSingle();
+    // Scoped explicitly to the owner as well as by RLS — every sibling route
+    // (drafts, posts, templates, brand) does both, and this was the only
+    // draft read/write in the codebase relying on RLS alone.
+    const { data: d } = await sb
+      .from('drafts')
+      .select('id, topic, pack')
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .maybeSingle();
     if (!d) return NextResponse.json({ error: 'draft not found' }, { status: 404 });
 
     const pack = (d as { pack?: Record<string, unknown> }).pack || {};
@@ -77,7 +84,11 @@ export async function POST(req: NextRequest) {
     });
 
     // Owner update passes RLS via the session client.
-    const { error } = await sb.from('drafts').update({ pack: { ...pack, _image: image } }).eq('id', id);
+    const { error } = await sb
+      .from('drafts')
+      .update({ pack: { ...pack, _image: image } })
+      .eq('id', id)
+      .eq('user_id', user.id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
     return NextResponse.json({ image });

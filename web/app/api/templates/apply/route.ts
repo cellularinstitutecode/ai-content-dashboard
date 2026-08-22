@@ -46,7 +46,9 @@ export async function POST(req: NextRequest) {
     for (const wd of weekdays) {
       // find the date of this weekday in week offset w, relative to today.
       const d = new Date(now);
-      d.setHours(hh || 9, mm || 0, 0, 0);
+      // `hh || 9` turned a legitimate midnight slot into 09:00, because 0 is
+      // falsy. cleanTime() explicitly allows 00:00.
+      d.setHours(Number.isFinite(hh) ? hh : 9, Number.isFinite(mm) ? mm : 0, 0, 0);
       const delta = (wd - d.getDay() + 7) % 7;
       d.setDate(d.getDate() + delta + w * 7);
       if (d.getTime() <= now.getTime()) continue; // skip past slots in the current week

@@ -16,6 +16,8 @@
 // key/plan is missing.
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import KeywordIntelligence from './KeywordIntelligence';
+import { announce, onRefresh } from '@/components/refreshBus';
+import { useWorkspace } from '@/components/workspace';
 
 // ---------------------------------------------------------------------------
 // Types (mirror lib/semrush-domain.ts)
@@ -494,8 +496,10 @@ export default function SemrushPanel({
   initialTopic?: string;
   onUseTopic?: (draftPrompt: string) => void;
 }) {
+  const workspace = useWorkspace();
   const [tab, setTab] = useState<Tab>('overview');
   const [domainInput, setDomainInput] = useState('');
+  const [projectLoading, setProjectLoading] = useState(true);
   const [bundle, setBundle] = useState<DomainBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [project, setProject] = useState<ProjectData | null>(null);
@@ -552,6 +556,7 @@ export default function SemrushPanel({
       const j = await r.json().catch(() => null);
       if (!r.ok || !j?.ok) throw new Error(j?.error === 'rate_limited' ? 'Rate limit reached — try again in a few minutes.' : j?.error || 'Advisor failed');
       setAdvice(j.plan as AdvicePlan);
+      announce('semrush'); // the advisor spends units — refresh the balance chip
     } catch (e: any) {
       setAdviceErr(e?.message || 'Advisor failed');
     } finally {
@@ -567,6 +572,7 @@ export default function SemrushPanel({
         const r = await fetch('/api/semrush?action=project');
         setProject((await r.json().catch(() => null)) as ProjectData | null);
       } catch { setProject(null); }
+      finally { setProjectLoading(false); }
     })();
     (async () => {
       try {
@@ -577,6 +583,21 @@ export default function SemrushPanel({
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Interconnection: when another panel spends Semrush units or the Autopilot
+  // engine finishes a research pass, the domain bundle here is re-read so the
+  // numbers on this page match the rest of the dashboard.
+  useEffect(() => onRefresh((scopes) => {
+    if (scopes.includes('semrush')) void loadDomain();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), []);
+
+  // Keep the shared workspace pointed at the domain under analysis.
+  useEffect(() => {
+    const d = bundle?.domain;
+    if (d && d !== workspace.domain) workspace.setDomain(d);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bundle?.domain]);
 
   const domain = bundle?.domain || domainInput || 'cellularhopeinstitute.com';
   const anyLive = bundle != null && (bundle.overviewMeta.ok || bundle.backlinksMeta.ok || bundle.topKeywordsMeta.ok);
@@ -624,6 +645,10 @@ export default function SemrushPanel({
   const visFalling = (tracking?.visibilityDelta ?? 0) < 0;
 
   function sendToDraft(text: string) {
+    // Publish to the shared workspace as well as the direct prop, so panels
+    // that aren't children of this one (Image Studio, calendar, templates)
+    // pick up the same topic.
+    workspace.setTopic(text, { keyword: text, source: 'semrush' });
     if (onUseTopic) onUseTopic(text);
   }
 
@@ -857,7 +882,11 @@ export default function SemrushPanel({
                         label="Position tracking visibility, last 30 days"
                         formatValue={(v) => v.toFixed(2) + '%'}
                         emptyNote={
-                          tracking?.configured
+                          projectLoading
+                            // While the project request is still in flight this
+                            // used to claim the integration was unconfigured.
+                            ? 'Loading tracked positions…'
+                            : tracking?.configured
                             ? 'No tracking history yet — data appears after the campaign collects positions.'
                             : 'Connect your Semrush project (SEMRUSH_PROJECT_ID in Vercel) to chart tracked visibility.'
                         }

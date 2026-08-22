@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import PageNav from '@/components/PageNav';
+import { announce, onRefresh } from '@/components/refreshBus';
+import { useWorkspace } from '@/components/workspace';
 
 type Provider = 'instagram' | 'facebook' | 'linkedin' | 'blog';
 type AiProvider = 'anthropic' | 'openai';
@@ -117,7 +119,10 @@ export default function TemplatesPage() {
   const [aiBusy, setAiBusy] = useState(false);
   const [compareBusy, setCompareBusy] = useState(false);
   const [compareResults, setCompareResults] = useState<CompareResults | null>(null);
+  const [applyingId, setApplyingId] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
 
+  const workspace = useWorkspace();
   const loadSeq = useRef(0);
 
   useEffect(() => {
@@ -126,6 +131,20 @@ export default function TemplatesPage() {
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Templates drive the Autopilot queue, so a change made anywhere else on the
+  // dashboard (or by the engine itself) refetches this list.
+  useEffect(() => onRefresh((scopes) => {
+    if (scopes.includes('templates') || scopes.includes('autopilot')) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), []);
+
+  // The topic the user is working on follows them here from the generator and
+  // from Semrush, instead of having to be retyped.
+  useEffect(() => {
+    if (workspace.topic && !aiTopic) setAiTopic(workspace.topic);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.topic]);
 
   async function load(signal?: AbortSignal) {
     const seq = ++loadSeq.current;
@@ -189,6 +208,7 @@ export default function TemplatesPage() {
       setDraft(emptyDraft());
       setStatus('Template saved.');
       await load();
+      announce('templates', 'autopilot');
     } catch (e) {
       setErr(errMsg(e));
     } finally {
@@ -202,19 +222,25 @@ export default function TemplatesPage() {
     const label = t?.name ? '"' + t.name + '"' : 'this template';
     if (!window.confirm('Delete ' + label + '? This cannot be undone.')) return;
     setErr(null);
+    setRemovingId(id);
     try {
       await api('/api/templates?id=' + encodeURIComponent(id), { method: 'DELETE' });
       await load();
+      announce('templates', 'autopilot');
     } catch (e) {
       setErr(errMsg(e));
+    } finally {
+      setRemovingId(null);
     }
   }
 
   async function apply(id?: string) {
     if (!id) return;
+    if (applyingId) return;                       // one apply at a time: a double click used to double-book the calendar
     if (!window.confirm('Schedule posts for the next ' + APPLY_WEEKS + ' weeks from this template?')) return;
     setStatus(null);
     setErr(null);
+    setApplyingId(id);
     try {
       const j = await api<{ created?: number }>('/api/templates/apply', {
         method: 'POST',
@@ -222,8 +248,13 @@ export default function TemplatesPage() {
         body: JSON.stringify({ id, weeks: APPLY_WEEKS }),
       });
       setStatus('Scheduled ' + (j.created || 0) + ' posts for the next ' + APPLY_WEEKS + ' weeks.');
+      // The biggest mutation in the app: it creates weeks of posts. Every
+      // panel that shows posts, counts or the Autopilot queue hears about it.
+      announce('posts', 'stats', 'autopilot', 'insights');
     } catch (e) {
       setErr(errMsg(e));
+    } finally {
+      setApplyingId(null);
     }
   }
 
@@ -455,8 +486,20 @@ export default function TemplatesPage() {
                   {t.text && <div style={{ fontSize: 13, opacity: .85, marginTop: 6, whiteSpace: 'pre-wrap' }}>{t.text}</div>}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <button style={btn} onClick={() => apply(t.id)}>Apply</button>
-                  <button style={ghost} onClick={() => remove(t.id)}>Delete</button>
+                  <button
+                    style={{ ...btn, opacity: applyingId === t.id ? 0.6 : 1 }}
+                    onClick={() => apply(t.id)}
+                    disabled={applyingId === t.id || removingId === t.id}
+                  >
+                    {applyingId === t.id ? 'Scheduling…' : 'Apply'}
+                  </button>
+                  <button
+                    style={{ ...ghost, opacity: removingId === t.id ? 0.6 : 1 }}
+                    onClick={() => remove(t.id)}
+                    disabled={removingId === t.id || applyingId === t.id}
+                  >
+                    {removingId === t.id ? 'Deleting…' : 'Delete'}
+                  </button>
                 </div>
               </div>
             ))}

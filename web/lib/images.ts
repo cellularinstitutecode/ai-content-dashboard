@@ -18,7 +18,7 @@
 // - No new secrets: reuses OPENAI_API_KEY + the Supabase service role.
 import 'server-only';
 
-import { supabaseAdmin } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 import type { BrandContext } from '@/lib/ai';
 
 // Machine verification: every generated image is inspected by a vision model

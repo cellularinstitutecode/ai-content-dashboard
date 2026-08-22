@@ -35,15 +35,17 @@ export async function GET(req: NextRequest) {
       const text = await r.text();
       let body: any;
       try { body = JSON.parse(text); } catch { body = { raw: text.slice(0, 800) }; }
-      // Keep only status metadata for the error report — never buffer or echo
-      // upstream response bodies back to the browser (debug scaffolding leak).
+      // Keep the upstream body server-side only: it can carry account
+      // identifiers and internal error detail. The client gets status codes.
       attempts.push({ url, status: r.status, ok: r.ok });
+      if (!r.ok) console.error('Metricool analytics error', url, r.status, text.slice(0, 500));
       if (r.ok) {
         // Note: no userId in the payload — it's server config, not client data.
         return NextResponse.json({ blogId, range: { start: fmt(start), end: fmt(today) }, endpoint: url, data: body });
       }
     } catch (e: any) {
-      attempts.push({ url, error: e && e.message ? e.message : String(e) });
+      console.error('Metricool analytics exception', url, e && e.message ? e.message : String(e));
+      attempts.push({ url, error: 'request failed' });
     }
   }
   return NextResponse.json({ error: 'All Metricool endpoints rejected the request', attempts }, { status: 502 });

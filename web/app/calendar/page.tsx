@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import PageNav from '@/components/PageNav';
 import { localDateKey } from '@/lib/composer';
+import { announce, onRefresh } from '@/components/refreshBus';
+import { useWorkspace } from '@/components/workspace';
 
 type Post = {
   id?: string;
@@ -106,6 +108,7 @@ export default function CalendarPage() {
   const [aiTopic, setAiTopic] = useState('');
   const [aiProvider, setAiProvider] = useState<'anthropic' | 'openai'>('anthropic');
   const [aiBusy, setAiBusy] = useState(false);
+  const workspace = useWorkspace();
 
   async function draftWithAI() {
     if (!aiTopic.trim()) { setErr('Enter a topic for the AI to draft from.'); return; }
@@ -122,6 +125,17 @@ export default function CalendarPage() {
       const pack = data?.pack || {};
       const drafted = pack.instagram || pack.facebook || pack.linkedin || pack.blog || '';
       setPText(drafted);
+      workspace.setTopic(aiTopic, { source: 'calendar' });
+      // Persist it like every other generator does, so a draft written on the
+      // calendar is not lost when the scheduling panel closes.
+      try {
+        const saved = await fetch('/api/drafts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topic: aiTopic, pack }),
+        });
+        if (saved.ok) announce('drafts', 'stats');
+      } catch { /* the draft is still usable in the composer */ }
     } catch (e: any) {
       setErr(e?.message || 'Failed to draft with AI');
     } finally {
@@ -130,6 +144,17 @@ export default function CalendarPage() {
   }
 
   useEffect(() => { refresh(); }, []);
+
+  // The calendar grid is the same `posts` table the dashboard's queue and stat
+  // cards read, so anything that schedules, approves or reschedules a post
+  // anywhere in the app refreshes this grid.
+  useEffect(() => onRefresh((scopes) => { if (scopes.includes('posts')) refresh(); }), []);
+
+  // Carry the current topic in from the generator / Semrush.
+  useEffect(() => {
+    if (workspace.topic && !aiTopic) setAiTopic(workspace.topic);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.topic]);
 
   async function refresh() {
     setLoading(true);
@@ -199,6 +224,7 @@ export default function CalendarPage() {
         body: JSON.stringify({ id, publication_date: iso }),
       });
       if (!r.ok) throw new Error('reschedule failed (' + r.status + ')');
+      announce('posts', 'stats', 'insights');
     } catch (e: any) {
       setErr(e && e.message ? e.message : 'Reschedule failed');
       refresh(); // revert to server truth
@@ -246,6 +272,7 @@ export default function CalendarPage() {
       const ok = results.filter((x) => x.ok).map((x) => x.network);
       const failed = results.filter((x) => !x.ok).map((x) => x.network);
       await refresh();
+      if (ok.length) announce('posts', 'stats', 'insights');
       if (failed.length === 0) {
         setPStatus('Scheduled on ' + ok.join(', ') + '.');
         setScheduleDay(null);

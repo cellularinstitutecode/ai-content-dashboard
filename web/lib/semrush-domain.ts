@@ -31,7 +31,7 @@ import {
   type SemReportResult,
   type SemSource,
 } from '@/lib/semrush';
-import { supabaseAdmin } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 
 // ---------------------------------------------------------------------------
 // Types

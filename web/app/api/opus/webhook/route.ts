@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { opusGetExportableClips } from '@/lib/opus';
-import { supabaseAdmin } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 import { persistToDrive } from '@/lib/drive';
 
 export const runtime = 'nodejs';

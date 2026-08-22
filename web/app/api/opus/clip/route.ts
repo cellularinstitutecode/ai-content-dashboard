@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { opusCreateClipProject, opusGetExportableClips } from '@/lib/opus';
-import { supabaseServer, supabaseAdmin } from '@/lib/supabase';
+import { supabaseServer } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { persistClips } from '@/lib/drive';
 
@@ -61,12 +62,13 @@ export async function POST(req: NextRequest) {
     const admin = supabaseAdmin();
 
     // Bookkeeping row (drives the "Clip jobs" stat) — keyed by projectId + user.
-    await admin.from('clips').insert({
+    const { error: clipErr } = await admin.from('clips').insert({
       user_id: user.id,
       opus_project_id: projectId,
       source_url: videoUrl,
       status: 'processing',
     });
+    if (clipErr) console.error('opus/clip: clips insert failed', clipErr.message);
 
     // Create the gallery draft SERVER-SIDE, in the same request that owns the
     // authoritative projectId. Previously the client created this draft in a
@@ -82,7 +84,7 @@ export async function POST(req: NextRequest) {
       status: 'processing',
       clips: [] as any[],
     };
-    const { data: draft } = await admin
+    const { data: draft, error: draftErr } = await admin
       .from('drafts')
       .insert({
         user_id: user.id,
@@ -92,6 +94,16 @@ export async function POST(req: NextRequest) {
       })
       .select()
       .single();
+    // Without this draft the webhook has nothing to map the finished clips
+    // onto, so the job would silently produce nothing the user can ever see.
+    // Report it instead of returning ok:true with draft:null.
+    if (draftErr || !draft) {
+      console.error('opus/clip: gallery draft insert failed', draftErr?.message);
+      return NextResponse.json(
+        { error: 'Clip job started at OpusClip but could not be saved to your library. Please try again.', projectId },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
       ok: true,

@@ -9,7 +9,8 @@
 //           Metricool credentials are a single org-wide account, so the same
 //           metrics are stored for every user that has a brand profile.
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseServer, supabaseAdmin } from '@/lib/supabase';
+import { supabaseServer } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 import { fetchPostMetrics, type NormalizedMetric } from '@/lib/performance';
 
 export const runtime = 'nodejs';
@@ -82,6 +83,21 @@ export async function GET(req: NextRequest) {
   }
 
   const ids = Array.from(new Set((owners ?? []).map((o: any) => o.user_id).filter(Boolean)));
+
+  // `fetchPostMetrics` reads ONE org-wide Metricool account (shared token +
+  // blogId), so fanning the same rows out to every user makes one tenant's
+  // post text show up as another tenant's "top-performing posts" inside the
+  // generation prompt. With a single owner that is exactly right; with more
+  // than one it has to be a deliberate choice.
+  if (ids.length > 1 && process.env.METRICOOL_SHARED_ACCOUNT !== 'true') {
+    return NextResponse.json({
+      ok: false,
+      users: ids.length,
+      synced: 0,
+      error: 'Multiple accounts share one Metricool profile. Set METRICOOL_SHARED_ACCOUNT=true to confirm they should all receive the same metrics.',
+    }, { status: 409 });
+  }
+
   let synced = 0;
   for (const id of ids) {
     try {

@@ -2,6 +2,8 @@ import './globals.css';
 import type { Metadata } from 'next';
 import DraftingAssistant from '@/components/DraftingAssistant';
 import { LiveContentProvider } from "@/components/LiveContentProvider";
+import { WorkspaceProvider } from "@/components/workspace";
+import ProgressProvider from "@/components/LoadingScreen";
 
 
 export const metadata: Metadata = {
@@ -19,10 +21,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
       </head>
       <body className="glow">
-        <LiveContentProvider>
-          {children}
-          <DraftingAssistant />
-        </LiveContentProvider>
+        <WorkspaceProvider>
+          <LiveContentProvider>
+            <ProgressProvider>
+              {children}
+              <DraftingAssistant />
+            </ProgressProvider>
+          </LiveContentProvider>
+        </WorkspaceProvider>
       </body>
     </html>
   );

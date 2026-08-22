@@ -24,24 +24,40 @@ import { supabaseServer } from '@/lib/supabase';
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
-async function requireUser(): Promise<boolean> {
+async function requireUser(): Promise<string | null> {
   try {
     const sb = supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
-    return Boolean(user);
+    return user?.id || null;
   } catch {
     // Fail CLOSED: if the auth check itself breaks, do not open an endpoint
     // that can spend Semrush API units to anonymous callers.
-    return false;
+    return null;
   }
 }
+
+// Every action below `balance` can miss the cache and spend paid Semrush
+// units. Only `advise` was capped before, so a signed-in client looping over
+// `action=hub` with fresh topics could drain the unit pot on its own.
+const UNIT_SPENDING = new Set(['domain', 'movers', 'project', 'serp', 'hub']);
 
 export async function GET(req: NextRequest) {
   const action = (req.nextUrl.searchParams.get('action') || 'hub').trim();
   const topic = (req.nextUrl.searchParams.get('topic') || '').trim();
 
-  if (!(await requireUser())) {
+  const userId = await requireUser();
+  if (!userId) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
+  if (UNIT_SPENDING.has(action) || (!action && topic)) {
+    const rl = await checkRateLimit(userId, 'semrush');
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'rate_limited', limit: rl.limit },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } }
+      );
+    }
   }
 
   if (action === 'balance') {
@@ -77,13 +93,6 @@ export async function GET(req: NextRequest) {
   if (action === 'advise') {
     // AI Ranking Advisor: turns the (cached) Semrush picture into a
     // prioritized action plan. Spends AI credits → auth + rate limit.
-    let userId: string | null = null;
-    try {
-      const sb = supabaseServer();
-      const { data: { user } } = await sb.auth.getUser();
-      userId = user?.id || null;
-    } catch { userId = null; }
-    if (!userId) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     const rl = await checkRateLimit(userId, 'generate');
     if (!rl.ok) {
       return NextResponse.json({ error: 'rate_limited', limit: rl.limit }, { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } });

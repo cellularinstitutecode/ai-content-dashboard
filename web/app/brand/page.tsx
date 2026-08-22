@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import PageNav from '@/components/PageNav';
+import { announce, onRefresh } from '@/components/refreshBus';
 
 type Brand = {
   name?: string;
@@ -25,6 +26,10 @@ export default function BrandPage() {
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => { load(); }, []);
+
+  // The brand profile steers every generator on the dashboard, so a change
+  // made in another tab or by the assistant refetches it here too.
+  useEffect(() => onRefresh((scopes) => { if (scopes.includes('brand')) load(); }), []);
 
   async function load() {
     setLoading(true);
@@ -57,6 +62,9 @@ export default function BrandPage() {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error((data && data.error) || ('Save failed (' + r.status + ')'));
       setStatus('Saved');
+      // Generators read the brand profile server-side on every call, so the
+      // panels that show brand-derived output are told to refresh.
+      announce('brand', 'insights');
     } catch (e: any) {
       setStatus('Error: ' + (e && e.message ? e.message : 'failed'));
     } finally {

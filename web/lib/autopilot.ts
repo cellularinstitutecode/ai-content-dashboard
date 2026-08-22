@@ -19,7 +19,7 @@
 //   never throws the whole tick.
 import 'server-only';
 
-import { supabaseAdmin } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 import {
   chatAssistant,
   generateContentPack,

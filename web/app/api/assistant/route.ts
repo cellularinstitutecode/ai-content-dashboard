@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
-import { supabaseServer, supabaseAdmin } from "@/lib/supabase";
+import { supabaseServer } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 import {
   generateContentPack,
   chatAssistant,
@@ -475,10 +476,14 @@ async function runAgent(session: Session, input: string, userId: string | null) 
   return { message: finalMessage, options: ((session as any).lastPack ? { preview: (session as any).lastPack, draftId: (session as any).draftId ?? null } : undefined) as any };}
 
 export async function POST(req: Request) {
-  const { session: incoming, text } = (await req.json()) as {
-    session?: Session;
-    text?: string;
-  };
+  // Guarded like every other route in the repo: an unparseable body used to
+  // throw above the handler's try block and surface as an opaque 500 that the
+  // assistant widget rendered as "unexpected response (status 500)".
+  const parsed = (await req.json().catch(() => null)) as { session?: Session; text?: string } | null;
+  if (!parsed || typeof parsed !== 'object') {
+    return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 });
+  }
+  const { session: incoming, text } = parsed;
   const session: Session = incoming || {
     step: "greet",
     links: [],

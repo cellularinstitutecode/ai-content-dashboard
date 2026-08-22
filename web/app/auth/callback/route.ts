@@ -48,5 +48,9 @@ export async function GET(request: Request) {
     return NextResponse.redirect(new URL('/sign-in?error=not_allowed', url.origin));
   }
 
-  return NextResponse.redirect(new URL(next, url.origin));
+  // `next` is attacker-controllable. An absolute URL passed to the URL
+  // constructor overrides the base entirely, so `url.origin` alone is not
+  // containment: only same-site, path-relative destinations are honoured.
+  const safeNext = typeof next === 'string' && next.startsWith('/') && !next.startsWith('//') ? next : '/';
+  return NextResponse.redirect(new URL(safeNext, url.origin));
 }

@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ProcessTracker, { makeSteps, stepActive, stepError, stepsDone, type ProcessStep } from '@/components/ProcessTracker';
 import { announce, onRefresh, fetchDrafts } from '@/components/refreshBus';
+import { useWorkspace } from '@/components/workspace';
 
 // The visible pipeline a standalone image walks through — each step lights up
 // as the real call behind it starts/finishes.
@@ -71,6 +72,7 @@ export default function ImageStudio() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [quickTopic, setQuickTopic] = useState('');
+  const workspace = useWorkspace();
   const [quickBusy, setQuickBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<DraftLite | null>(null);
@@ -81,7 +83,8 @@ export default function ImageStudio() {
     procTimers.current.push(setTimeout(() => setProc((p) => (p ? stepActive(p, id) : p)), ms));
   }
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { quiet?: boolean }) => {
+    if (!opts?.quiet) setLoading(true);
     try {
       // Shared with the clip pre-warmer, which asks for the same page on mount.
       const j = await fetchDrafts(50, 0).catch(() => ({}));
@@ -91,14 +94,23 @@ export default function ImageStudio() {
     setLoading(false);
   }, []);
 
+
   useEffect(() => { void load(); }, [load]);
+
+  // The studio follows whatever the rest of the dashboard is working on: pick
+  // a keyword in Semrush or type a topic in the generator and it lands here,
+  // instead of having to be retyped into this box.
+  useEffect(() => {
+    if (workspace.topic && !quickTopic) setQuickTopic(workspace.topic);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.topic]);
 
   // Interconnection: refresh the gallery whenever ANY panel announces new or
   // changed images/drafts (Content Generator packs, Autopilot hero images,
   // assistant drafts, deletions) — the studio shows every visual, live.
   useEffect(() => {
     return onRefresh((scopes) => {
-      if (scopes.includes('images') || scopes.includes('drafts')) void load();
+      if (scopes.includes('images') || scopes.includes('drafts')) void load({ quiet: true });
     });
   }, [load]);
 
@@ -205,6 +217,7 @@ export default function ImageStudio() {
             aria-label="Describe the image to create"
             value={quickTopic}
             onChange={(e) => setQuickTopic(e.target.value)}
+            onBlur={(e) => { const v = e.target.value.trim(); if (v) workspace.setTopic(v, { source: 'images' }); }}
             onKeyDown={(e) => { if (e.key === 'Enter') void quickCreate(); }}
             placeholder="Describe an image… e.g. stem cell therapy for knees"
             className="min-w-0 flex-1 rounded-full bg-subtle px-4 py-2 text-[13px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent lg:w-72 lg:flex-none"

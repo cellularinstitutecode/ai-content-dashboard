@@ -9,7 +9,9 @@
 // The same data feeds the drafting pre-filter and the chatbot, so what you see
 // here is exactly what the AI writes with. Cache-first: repeat topics cost 0
 // API units; a live unit-balance chip keeps spending honest.
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { announce, onRefresh } from '@/components/refreshBus';
+import { useWorkspace } from '@/components/workspace';
 
 type SemKeyword = {
   keyword: string;
@@ -101,24 +103,36 @@ export default function KeywordIntelligence({
   const [loading, setLoading] = useState(false);
   const [balance, setBalance] = useState<number | null>(null);
   const [connected, setConnected] = useState<'unknown' | 'yes' | 'no'>('unknown');
+  const [probing, setProbing] = useState(true);
+  const workspace = useWorkspace();
 
-  // One free balance probe on mount tells us if the key is wired up at all.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch('/api/semrush?action=balance');
-        const j = await r.json().catch(() => null);
-        if (!cancelled) {
-          setBalance(j && typeof j.balance === 'number' ? j.balance : null);
-          setConnected(j && typeof j.balance === 'number' ? 'yes' : 'no');
-        }
-      } catch {
-        if (!cancelled) setConnected('no');
-      }
-    })();
-    return () => { cancelled = true; };
+  // One free balance probe tells us if the key is wired up at all. It reruns
+  // whenever any panel spends Semrush units, so the chip is never stale.
+  const probeBalance = useCallback(async () => {
+    setProbing(true);
+    try {
+      const r = await fetch('/api/semrush?action=balance');
+      const j = await r.json().catch(() => null);
+      setBalance(j && typeof j.balance === 'number' ? j.balance : null);
+      setConnected(j && typeof j.balance === 'number' ? 'yes' : 'no');
+    } catch {
+      setConnected('no');
+    } finally {
+      setProbing(false);
+    }
   }, []);
+
+  useEffect(() => { probeBalance(); }, [probeBalance]);
+  useEffect(() => onRefresh((scopes) => { if (scopes.includes('semrush')) probeBalance(); }), [probeBalance]);
+
+  // The topic is shared dashboard-wide: whatever the generator, the research
+  // copilot or the Semrush panel is working on shows up here, and vice versa.
+  // (Previously `initialTopic` was read once at mount and never synced.)
+  useEffect(() => {
+    const incoming = (workspace.topic || initialTopic || '').trim();
+    if (incoming && incoming !== topic.trim()) setTopic(incoming);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.topic, initialTopic]);
 
   async function analyze() {
     const seed = topic.trim();
@@ -131,6 +145,8 @@ export default function KeywordIntelligence({
       setData(j);
       if (j && typeof j.balance === 'number') { setBalance(j.balance); setConnected('yes'); }
       setTab('overview');
+      workspace.setTopic(seed, { keyword: j?.brief?.primary?.keyword || seed, source: 'keywords' });
+      if (j && !j.fromCache) announce('semrush');
     } catch {
       setData(null);
     } finally {
@@ -154,11 +170,18 @@ export default function KeywordIntelligence({
   }
 
   function sendToDraft(text: string) {
+    // Both channels: the direct prop (the generator's textarea) and the shared
+    // workspace (the Image Studio, the calendar, the templates page).
+    workspace.setTopic(text, { keyword: text, source: 'keywords' });
     if (onUseTopic) onUseTopic(text);
   }
 
   const live = data?.ok;
-  const statusChip = live
+  const statusChip = probing && !live
+    // Honest state while the balance probe is in flight — it used to claim
+    // "Ready" before it had heard back from Semrush at all.
+    ? { cls: 'bg-subtle text-ink-muted', label: 'Checking Semrush…' }
+    : live
     ? data!.fromCache
       ? { cls: 'bg-sky-100 text-sky-700', label: 'Semrush data · cached' }
       : { cls: 'bg-emerald-100 text-emerald-700', label: 'Semrush data · live' }

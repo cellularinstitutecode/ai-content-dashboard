@@ -9,6 +9,7 @@ import ImageStudio from "./ImageStudio";
 import ProcessTracker, { makeSteps, stepActive, stepError, stepSkip, stepsDone, type ProcessStep } from "@/components/ProcessTracker";
 import { announce, onRefresh, fetchDrafts } from "@/components/refreshBus";
 import { tightestLimit, networkLabel, parseVideoUrl, localDateTimeValue, draftLabel } from "@/lib/composer";
+import { useWorkspace } from "@/components/workspace";
 
 // The visible pipeline every manual generation walks through. Steps light up
 // as the real calls behind them start/finish so the viewer can follow the
@@ -188,6 +189,7 @@ return [];
 
 export default function Dashboard() {
 const { output, setOutput, drafts, setDrafts, stats, setStats } = useLiveContent();
+const workspace = useWorkspace();
 const [provider, setProvider] = useState<Provider>('anthropic');
 const [model, setModel] = useState<string>('claude-sonnet-4-5');
 const [type, setType] = useState<ContentType>('social');
@@ -222,9 +224,41 @@ useEffect(() => {
     if (scopes.includes('drafts')) refreshDrafts(0, false);
     if (scopes.includes('stats')) refreshStats();
     if (scopes.includes('posts')) refreshPosts();
+    // The Metricool panels sit directly under the Schedule button and used to
+    // stay stale after it was pressed — "Coming up next" reads insights, not
+    // posts, so it needs its own scope.
+    if (scopes.includes('insights') || scopes.includes('posts')) loadInsights(activeBlogId);
+    if (scopes.includes('insights')) loadAnalytics(true);
   });
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, []);
+
+// The shared topic: whatever Semrush, Keyword Intelligence, the Image Studio,
+// the calendar or the templates page is working on lands in the generator's
+// prompt, and anything typed here travels back out to them.
+useEffect(() => {
+  const incoming = (workspace.topic || '').trim();
+  if (incoming && incoming !== prompt.trim()) setPrompt(incoming);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [workspace.topic]);
+
+// Every research finding is actionable: clicking one loads it into the
+// generator prompt and shares it with every other panel. They used to be
+// inert text.
+const applyIdea = (text: string, source = 'research') => {
+  const v = (text || '').trim();
+  if (!v) return;
+  setPrompt(v);
+  publishTopic(v, source);
+  if (typeof document !== 'undefined') {
+    document.getElementById('content-generator')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+};
+
+const publishTopic = (value: string, source = 'generator') => {
+  const v = value.trim();
+  if (v && v !== (workspace.topic || '').trim()) workspace.setTopic(v, { source });
+};
 
 const [mLoading, setMLoading] = useState(false);
 const [mAnalytics, setMAnalytics] = useState<any>(null);
@@ -325,6 +359,13 @@ const [mBusy, setMBusy] = useState(false);
 
   // --- AI Research & Draft Copilot state ---
   const [researchTopicText, setResearchTopicText] = useState('');
+  // Two topic inputs on one page used to drift apart; both now read the same
+  // shared value.
+  useEffect(() => {
+    const incoming = (workspace.topic || '').trim();
+    if (incoming && incoming !== researchTopicText.trim()) setResearchTopicText(incoming);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.topic]);
   const [researchNetwork, setResearchNetwork] = useState('instagram');
   const [research, setResearch] = useState<any>(null);
   const [researchLoading, setResearchLoading] = useState(false);
@@ -352,6 +393,7 @@ const [mBusy, setMBusy] = useState(false);
         setResearchError(j && j.error === 'unauthorized' ? 'Please sign in to run AI research.' : ((j && j.error) || 'Research is taking longer than usual. Please try again in a moment.'));
       } else {
         setResearch(j);
+        workspace.setTopic(topic, { source: 'research' });
       }
     } catch {
       setResearch(null);
@@ -433,6 +475,7 @@ setNewTrend('');
 }
 function removeTrend(t: string) { persistTrending(trending.filter((x) => x !== t)); }
 function applyTrend(t: string) {
+  publishTopic(t, 'trending');
 setPrompt(t);
 setType('social');
 try { if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }); } catch {}
@@ -613,7 +656,7 @@ method: 'PATCH',
 headers: { 'Content-Type': 'application/json' },
 body: JSON.stringify({ id, publication_date: iso }),
 });
-if (r.ok) { setRescheduleId(null); setRescheduleAt(''); refreshPosts(); }
+if (r.ok) { setRescheduleId(null); setRescheduleAt(''); refreshPosts(); announce('posts', 'stats', 'insights'); }
 } catch {}
 }
 
@@ -899,7 +942,7 @@ setMStatus('Error: failed on ' + failed.join(', ') + '.');
 } else {
 setMStatus('Saved on ' + ok.join(', ') + '; failed on ' + failed.join(', ') + '.');
 }
-announce('posts', 'stats');
+announce('posts', 'stats', 'insights');
 } catch (e: any) {
 setMStatus('Error: ' + (e?.message || 'failed'));
 } finally { setMBusy(false); }
@@ -1053,7 +1096,7 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 </div>
 <div className="grid gap-0 lg:grid-cols-2">
 {/* Controls */}
-<div className="space-y-5 p-6 sm:p-8">
+<div id="content-generator" className="space-y-5 p-6 sm:p-8">
 <div>
 <label htmlFor="gen-model" className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Model</label>
 <div className="flex flex-wrap items-center gap-2">
@@ -1106,7 +1149,7 @@ className="min-w-0 flex-1 rounded-full bg-subtle px-3 py-1.5 text-[12px] text-in
 
 <div>
 <label htmlFor="gen-idea" className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Your idea</label>
-<textarea id="gen-idea" value={prompt} onChange={e => setPrompt(e.target.value)} rows={5}
+<textarea id="gen-idea" value={prompt} onChange={e => setPrompt(e.target.value)} onBlur={e => publishTopic(e.target.value)} rows={5}
 placeholder="e.g. 3 Instagram captions about exosome therapy benefits for athletes"
 className="w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
 </div>
@@ -1479,6 +1522,48 @@ return (
 })()}
 </div>
 <div className="mt-6 border-t border-line pt-5">
+<div className="flex items-center justify-between gap-2">
+<label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Your publishing queue</label>
+{postsLoading && <span className="text-[11px] text-ink-faint">Refreshing…</span>}
+</div>
+{safePosts.length === 0 && !postsLoading && (
+<div className="mt-2 rounded-2xl bg-subtle p-4 text-center text-[12px] text-ink-faint ring-1 ring-line">Nothing in the queue yet. Anything you schedule here, on the calendar or from a template lands in this list.</div>
+)}
+{safePosts.length > 0 && (
+<ul className="mt-2 space-y-2">
+{safePosts.slice(0, 6).map((p: any, i: number) => {
+const meta = postStatusMeta(p?.status);
+const tone = meta.tone === 'amber' ? 'bg-amber-50 text-amber-700 ring-amber-100' : meta.tone === 'green' ? 'bg-emerald-50 text-emerald-700 ring-emerald-100' : 'bg-blue-50 text-blue-700 ring-blue-100';
+const id = String(p?.id || '');
+return (
+<li key={id || i} className="rounded-2xl bg-white p-3 ring-1 ring-line">
+<div className="flex items-center justify-between gap-2">
+<span className={'rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ' + tone}>{meta.label}</span>
+<span className="text-[11px] tabular-nums text-ink-faint">{fmtDateTime(p?.publication_date)}</span>
+</div>
+<p className="mt-1.5 line-clamp-2 text-[13px] text-ink">{p?.text || 'Scheduled post'}</p>
+<div className="mt-2 flex flex-wrap items-center gap-2">
+{(p?.providers || []).map((n: string) => (
+<span key={n} className="rounded-full bg-subtle px-2 py-0.5 text-[11px] text-ink-muted ring-1 ring-line">{n}</span>
+))}
+{id && rescheduleId !== id && (
+<button type="button" onClick={() => { setRescheduleId(id); setRescheduleAt(''); }} className="ml-auto text-[11px] font-medium text-accent hover:underline">Reschedule</button>
+)}
+</div>
+{id && rescheduleId === id && (
+<div className="mt-2 flex flex-wrap items-center gap-2">
+<input type="datetime-local" value={rescheduleAt} onChange={(e) => setRescheduleAt(e.target.value)} className="rounded-xl bg-subtle px-2.5 py-1.5 text-[12px] text-ink ring-1 ring-line" />
+<button type="button" disabled={!rescheduleAt} onClick={() => saveReschedule(id)} className="rounded-full bg-accent px-3 py-1.5 text-[12px] font-medium text-white disabled:opacity-50">Save</button>
+<button type="button" onClick={() => { setRescheduleId(null); setRescheduleAt(''); }} className="text-[12px] text-ink-muted hover:text-ink">Cancel</button>
+</div>
+)}
+</li>
+);
+})}
+</ul>
+)}
+</div>
+<div className="mt-6 border-t border-line pt-5">
 <label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Coming up next</label>
 {(() => {
 const sched = insights && Array.isArray(insights.scheduled) ? insights.scheduled : [];
@@ -1534,6 +1619,7 @@ return (
                       type="text"
                       value={researchTopicText}
                       onChange={(e) => setResearchTopicText(e.target.value)}
+                      onBlur={(e) => publishTopic(e.target.value, "research")}
                       onKeyDown={(e) => { if (e.key === "Enter") runResearch(); }}
                       placeholder="e.g. stem cell therapy for knee pain"
                       className="flex-1 rounded-xl bg-white px-3.5 py-2.5 text-[13px] text-ink ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-indigo-400"
@@ -1586,7 +1672,12 @@ return (
                             <div className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">Content angles</div>
                             <ul className="mt-2 space-y-1">
                               {research.angles.map((a: string, i: number) => (
-                                <li key={i} className="text-[13px] text-ink">&bull; {a}</li>
+                                <li key={i}>
+                                  <button type="button" onClick={() => applyIdea(a)} title="Draft this angle"
+                                    className="w-full rounded-lg px-1.5 py-1 text-left text-[13px] text-ink transition hover:bg-indigo-50 hover:text-indigo-900">
+                                    &bull; {a}
+                                  </button>
+                                </li>
                               ))}
                             </ul>
                           </div>
@@ -1608,7 +1699,9 @@ return (
                           <div className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">Suggested keywords</div>
                           <div className="mt-2 flex flex-wrap gap-2">
                             {research.keywords.map((k: any, i: number) => (
-                              <span key={i} title={k.why} className="rounded-full bg-indigo-50 px-3 py-1 text-[12px] text-indigo-800 ring-1 ring-indigo-100">{k.term}</span>
+                              <button key={i} type="button" onClick={() => applyIdea(String(k?.term || ''), 'research-keyword')}
+                                title={(k?.why ? k.why + ' — ' : '') + 'Draft with this keyword'}
+                                className="rounded-full bg-indigo-50 px-3 py-1 text-[12px] text-indigo-800 ring-1 ring-indigo-100 transition hover:bg-indigo-100">{k.term}</button>
                             ))}
                           </div>
                         </div>
@@ -1630,7 +1723,12 @@ return (
                           <div className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">Hooks to open with</div>
                           <ul className="mt-2 space-y-1">
                             {research.hooks.map((h: string, i: number) => (
-                              <li key={i} className="text-[13px] text-ink">&bull; {h}</li>
+                              <li key={i}>
+                                <button type="button" onClick={() => applyIdea(h, 'research-hook')} title="Draft from this hook"
+                                  className="w-full rounded-lg px-1.5 py-1 text-left text-[13px] text-ink transition hover:bg-indigo-50 hover:text-indigo-900">
+                                  &bull; {h}
+                                </button>
+                              </li>
                             ))}
                           </ul>
                         </div>

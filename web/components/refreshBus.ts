@@ -10,7 +10,16 @@
 // others exist — no more "generated a pack but the gallery didn't update
 // until reload".
 
-export type RefreshScope = 'drafts' | 'images' | 'posts' | 'stats' | 'autopilot';
+export type RefreshScope =
+  | 'drafts'      // the drafts library (Recent Drafts, Image Studio gallery)
+  | 'images'      // hero images attached to drafts
+  | 'posts'       // the publishing queue and the calendar grid
+  | 'stats'       // the headline stat cards
+  | 'autopilot'   // the Autopilot run queue
+  | 'insights'    // Metricool performance + "coming up next"
+  | 'brand'       // the brand profile that steers every generator
+  | 'templates'   // saved recurring templates
+  | 'semrush';    // Semrush unit balance / cached research
 
 const EVENT = 'chi:refresh';
 
