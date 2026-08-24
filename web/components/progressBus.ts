@@ -375,3 +375,15 @@ export function installFetchProgress() {
     }
   } as typeof window.fetch;
 }
+
+// Install at module-evaluation time. React runs CHILD effects before PARENT
+// effects, so every panel fires its first fetches before ProgressProvider's
+// useEffect ever gets to call installFetchProgress() — which meant the
+// loading screen missed the initial page load entirely (the one moment it
+// exists for). Client bundles are evaluated before hydration effects run, so
+// patching here guarantees the very first fetch is already observed.
+// installFetchProgress() is idempotent, so the later useEffect calls are
+// harmless no-ops.
+if (typeof window !== 'undefined') {
+  try { installFetchProgress(); } catch { /* never break the app over progress */ }
+}

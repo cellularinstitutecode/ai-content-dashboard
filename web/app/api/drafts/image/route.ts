@@ -29,13 +29,6 @@ export async function POST(req: NextRequest) {
     const regenerate = body?.regenerate === true;
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
 
-    if (!imagesEnabled()) {
-      return NextResponse.json(
-        { error: 'image generation disabled (set OPENAI_API_KEY, or remove IMAGE_GEN=off)' },
-        { status: 503 }
-      );
-    }
-
     // Scoped explicitly to the owner as well as by RLS — every sibling route
     // (drafts, posts, templates, brand) does both, and this was the only
     // draft read/write in the codebase relying on RLS alone.
@@ -60,6 +53,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ image: existing, cached: true });
     }
     const advanceVariant = regenerate || existingHasText;
+
+    // Only NOW check whether generation is available: a draft that already
+    // carries a clean verified image must return it even when the OpenAI key
+    // is missing — the old order 503'd on cached images too, so the gallery
+    // showed an error for images that already existed.
+    if (!imagesEnabled()) {
+      return NextResponse.json(
+        { error: 'image generation disabled (set OPENAI_API_KEY, or remove IMAGE_GEN=off)' },
+        { status: 503 }
+      );
+    }
 
     // Rate limit only when we are actually about to spend image credits.
     const rl = await checkRateLimit(user.id, 'image');
