@@ -19,7 +19,7 @@ const GEN_STEPS = [
   { id: 'draft', label: 'AI drafting', detail: 'Writing your multi-channel content pack…' },
   { id: 'save', label: 'Saving to library', detail: 'Storing the draft so nothing is lost…' },
   { id: 'image', label: 'Hero image', detail: 'Generating an on-brand visual with the OpenAI image pipeline…' },
-  { id: 'verify', label: 'Machine verification', detail: 'Checking the image for AI glitches (garbled text, warped anatomy, logos)…' },
+  { id: 'verify', label: 'Machine verification', detail: 'Confirming the image is a text-free content image (no words/letters, no warped anatomy, no logos) — text triggers an automatic regeneration…' },
 ];
 
 type Provider = 'anthropic' | 'openai';
@@ -80,10 +80,11 @@ const DEFAULT_TRENDING: string[] = [
 const TRENDING_KEY = 'chi_trending_topics_v1';
 
 // Where a Metricool brand's planner lives, so we can deep-link a queued post
-// straight to the place it gets approved.
+// straight to the place it gets approved. The DEFAULT brand; the Publishing
+// panel's brand switcher overrides it everywhere via activeBlogId.
 const METRICOOL_BLOG_ID = '4308292';
-function metricoolPlannerUrl(): string {
-return 'https://app.metricool.com/planning/list?blogId=' + METRICOOL_BLOG_ID;
+function metricoolPlannerUrl(blogId: string = METRICOOL_BLOG_ID): string {
+return 'https://app.metricool.com/planning/list?blogId=' + encodeURIComponent(blogId || METRICOOL_BLOG_ID);
 }
 
 // Deep-link into the Semrush Keyword Magic Tool for keyword research, pre-filled
@@ -199,7 +200,7 @@ const [loading, setLoading] = useState(false);
 const [err, setErr] = useState<string | null>(null);
 const [keywordsApplied, setKeywordsApplied] = useState<string[]>([]);
 const [keywordSource, setKeywordSource] = useState<string>('none');
-const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string; verification?: { status?: string; score?: number | null; issues?: string[] } } | null>(null);
+const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string; verification?: { status?: string; score?: number | null; issues?: string[]; textDetected?: boolean } } | null>(null);
 const [genImageLoading, setGenImageLoading] = useState(false);
 const [lastDraftId, setLastDraftId] = useState<string | null>(null);
 const [modalImgBusy, setModalImgBusy] = useState(false);
@@ -926,7 +927,7 @@ mNetworks.map(async (network) => {
 const r = await fetch('/api/metricool/schedule', {
 method: 'POST',
 headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify({ network, text: mText, publishAt: mDate, blogId: METRICOOL_BLOG_ID, autoPublish: AUTO_PUBLISH, mediaUrl: mMedia || undefined }),
+body: JSON.stringify({ network, text: mText, publishAt: mDate, blogId: activeBlogId || METRICOOL_BLOG_ID, autoPublish: AUTO_PUBLISH, mediaUrl: mMedia || undefined }),
 });
 const data = await r.json().catch(() => ({}));
 return { network, ok: r.ok, status: r.status, data };
@@ -1203,8 +1204,10 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
       <img src={genImage.url} alt={genImage.alt || 'AI hero image'} className={"max-h-96 w-full object-cover transition hover:opacity-95 " + (genImageLoading ? 'opacity-50' : '')} />
     </a>
     <div className="flex flex-wrap items-center gap-2 bg-white px-3 py-1.5">
-      {genImage.verification?.status === 'approved' ? (
-        <span className="rounded-full bg-emerald-600/90 px-2 py-0.5 text-[10px] font-semibold text-white" title={'Machine-verified' + (genImage.verification?.score != null ? ' · ' + genImage.verification.score + '/100' : '')}>✓ verified</span>
+      {genImage.verification?.textDetected ? (
+        <span className="rounded-full bg-red-600/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(genImage.verification?.issues || []).join(' · ') || 'Text detected — content images must be text-free'}>✗ text in image — reroll</span>
+      ) : genImage.verification?.status === 'approved' ? (
+        <span className="rounded-full bg-emerald-600/90 px-2 py-0.5 text-[10px] font-semibold text-white" title={'Machine-verified text-free' + (genImage.verification?.score != null ? ' · ' + genImage.verification.score + '/100' : '')}>✓ verified</span>
       ) : genImage.verification?.status === 'flagged' ? (
         <span className="rounded-full bg-amber-500/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(genImage.verification?.issues || []).join(' · ')}>⚠ flagged — reroll recommended</span>
       ) : null}
@@ -1442,7 +1445,7 @@ className={"mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring
 )}
 <label htmlFor="composer-text" className="mt-4 block text-[12px] font-medium text-ink-muted">What should it say?</label>
 <textarea id="composer-text" value={mText} onChange={(e) => setMText(e.target.value)} rows={4} placeholder="Write your post… you can paste anything you generated above." aria-invalid={mTooLong || undefined} className={"mt-1 w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 placeholder:text-ink-faint focus:ring-accent " + (mTooLong ? "ring-danger" : "ring-line")} />
-{mMedia ? (<div className="mt-2 flex items-center justify-between gap-2 rounded-2xl bg-subtle p-2.5 ring-1 ring-line"><div className="flex min-w-0 items-center gap-2"><span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">{'\uD83C\uDFAC'}</span><div className="min-w-0"><div className="truncate text-[13px] font-medium text-ink">{mMediaLabel || "Video attached"}</div><div className="text-[11px] text-ink-faint">This video will be attached to the post.</div></div></div><button type="button" onClick={() => { setMMedia(""); setMMediaLabel(""); }} className="shrink-0 rounded-full px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white">Remove</button></div>) : null}
+{mMedia ? ((() => { const isImage = /image/i.test(mMediaLabel) || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(mMedia); return (<div className="mt-2 flex items-center justify-between gap-2 rounded-2xl bg-subtle p-2.5 ring-1 ring-line"><div className="flex min-w-0 items-center gap-2"><span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">{isImage ? '\uD83D\uDDBC' : '\uD83C\uDFAC'}</span><div className="min-w-0"><div className="truncate text-[13px] font-medium text-ink">{mMediaLabel || (isImage ? "Image attached" : "Video attached")}</div><div className="text-[11px] text-ink-faint">{isImage ? 'This image will be attached to the post.' : 'This video will be attached to the post.'}</div></div></div><button type="button" onClick={() => { setMMedia(""); setMMediaLabel(""); }} className="shrink-0 rounded-full px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white">Remove</button></div>); })()) : null}
 <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px]">
 <span className={mTooLong ? 'font-semibold text-danger' : 'text-ink-muted'}>
 {mLimit
@@ -1459,7 +1462,7 @@ Too long for {networkLabel(mLimit.network)} by {mOverBy.toLocaleString()} charac
 <p className="mt-3 text-[12px] text-ink-muted">Every post lands in Metricool as a draft. You approve it there to publish.</p>
 <div className="mt-4 flex flex-wrap items-center gap-3">
 <button onClick={schedulePost} disabled={!mCanSend} title={mProblem || undefined} className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">{mBusy ? 'Sending…' : 'Send to Metricool for review'}</button>
-<a href={metricoolPlannerUrl()} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:ring-accent">Open in Metricool ↗</a>
+<a href={metricoolPlannerUrl(activeBlogId)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:ring-accent">Open in Metricool ↗</a>
 </div>
 {mStatus && <p className="mt-3 rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink-muted ring-1 ring-line">{mStatus}</p>}
 {mProblem && !mBusy && (
@@ -1582,8 +1585,8 @@ return (
 </div>
 <div className="mt-6 flex flex-wrap gap-3 border-t border-line pt-5 text-[12px]">
 <a href={'https://app.metricool.com/inbox'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">💬 Open Inbox ↗</a>
-<a href={'https://app.metricool.com/smartlink?blogId=4308292&userId=3377431'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">🔗 Smartlinks ↗</a>
-<a href={'https://app.metricool.com/planner/calendar?blogId=4308292&userId=3377431'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">📅 Full planner ↗</a>
+<a href={'https://app.metricool.com/smartlink?blogId=' + encodeURIComponent(activeBlogId) + '&userId=3377431'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">🔗 Smartlinks ↗</a>
+<a href={'https://app.metricool.com/planner/calendar?blogId=' + encodeURIComponent(activeBlogId) + '&userId=3377431'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">📅 Full planner ↗</a>
 </div>
 </div>
 </div>
@@ -1925,8 +1928,10 @@ className="min-w-0 flex-1 rounded-xl bg-subtle px-3 py-2 text-[16px] font-semibo
 <img src={selectedDraft.pack._image.url} alt={selectedDraft.pack._image.alt || 'AI hero image'} className={"w-full object-cover transition hover:opacity-95 " + (modalImgBusy ? 'opacity-50' : '')} />
 </a>
 <div className="flex flex-wrap items-center gap-2 bg-subtle/60 px-3 py-2">
-{selectedDraft.pack._image.verification?.status === 'approved' ? (
-<span className="rounded-full bg-emerald-600/90 px-2 py-0.5 text-[10px] font-semibold text-white" title={'Machine-verified' + (selectedDraft.pack._image.verification?.score != null ? ' · ' + selectedDraft.pack._image.verification.score + '/100' : '')}>✓ verified</span>
+{selectedDraft.pack._image.verification?.textDetected ? (
+<span className="rounded-full bg-red-600/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(selectedDraft.pack._image.verification?.issues || []).join(' · ') || 'Text detected — content images must be text-free'}>✗ text in image — reroll</span>
+) : selectedDraft.pack._image.verification?.status === 'approved' ? (
+<span className="rounded-full bg-emerald-600/90 px-2 py-0.5 text-[10px] font-semibold text-white" title={'Machine-verified text-free' + (selectedDraft.pack._image.verification?.score != null ? ' · ' + selectedDraft.pack._image.verification.score + '/100' : '')}>✓ verified</span>
 ) : selectedDraft.pack._image.verification?.status === 'flagged' ? (
 <span className="rounded-full bg-amber-500/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(selectedDraft.pack._image.verification?.issues || []).join(' · ')}>⚠ flagged: {(selectedDraft.pack._image.verification?.issues || []).slice(0, 2).join('; ')}</span>
 ) : null}

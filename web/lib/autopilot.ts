@@ -41,6 +41,7 @@ import { keywordMovers, primaryDomain, topOrganicKeywords, type KeywordMovers } 
 import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
 import { metricoolSchedulePost, type Provider as McProvider } from '@/lib/metricool';
 import { ensureDraftImage, type PackImage } from '@/lib/images';
+import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -168,7 +169,6 @@ export async function planRuns(scopeUserId?: string): Promise<{ planned: number;
   if (!Array.isArray(templates) || templates.length === 0) return { planned: 0, templates: 0 };
 
   const now = new Date();
-  const horizon = new Date(now.getTime() + HORIZON_DAYS * 24 * 60 * 60 * 1000);
   let planned = 0;
   let dynamicTemplates = 0;
 
@@ -178,19 +178,12 @@ export async function planRuns(scopeUserId?: string): Promise<{ planned: number;
     dynamicTemplates++;
     const weekdays: number[] = Array.isArray(t.weekdays) ? t.weekdays : [];
     if (!weekdays.length) continue;
-    const [hh, mm] = (t.time_of_day || '09:00').split(':').map((n) => parseInt(n, 10));
 
-    const rows: { template_id: string; user_id: string; scheduled_for: string }[] = [];
-    for (let w = 0; w < Math.ceil(HORIZON_DAYS / 7) + 1; w++) {
-      for (const wd of weekdays) {
-        const d = new Date(now);
-        d.setHours(Number.isFinite(hh) ? hh : 9, Number.isFinite(mm) ? mm : 0, 0, 0);
-        const delta = (wd - d.getDay() + 7) % 7;
-        d.setDate(d.getDate() + delta + w * 7);
-        if (d.getTime() <= now.getTime() || d.getTime() > horizon.getTime()) continue;
-        rows.push({ template_id: t.id, user_id: t.user_id, scheduled_for: d.toISOString() });
-      }
-    }
+    // Template times are CLINIC-LOCAL wall-clock times (America/Cancun by
+    // default), not server time — Vercel runs in UTC, so the old setHours()
+    // approach fired a "09:00" template at 4 AM Cancun.
+    const rows = upcomingSlots(weekdays, t.time_of_day || '09:00', HORIZON_DAYS, SCHEDULE_TZ, now)
+      .map((slot) => ({ template_id: t.id, user_id: t.user_id, scheduled_for: slot.toISOString() }));
     if (!rows.length) continue;
     // Idempotent: unique(template_id, scheduled_for) — ignore existing runs.
     const { data: inserted } = await db

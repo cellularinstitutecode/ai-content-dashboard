@@ -56,7 +56,7 @@ type PackImage = {
   alt?: string;
   model?: string;
   variant?: number;
-  verification?: { status?: 'approved' | 'flagged' | 'unchecked'; score?: number | null; issues?: string[] };
+  verification?: { status?: 'approved' | 'flagged' | 'unchecked'; score?: number | null; issues?: string[]; textDetected?: boolean };
 };
 
 type Run = {
@@ -121,8 +121,10 @@ export default function AutopilotQueue() {
   useEffect(() => {
     return onRefresh((scopes) => {
       // 'templates' matters too: applying or deleting a template changes what
-      // the engine will queue next.
-      if (scopes.includes('autopilot') || scopes.includes('templates')) void load({ quiet: true });
+      // the engine will queue next. 'images' too: rerolling a run's hero image
+      // from the Image Studio (or anywhere else) must update the review card
+      // here, live.
+      if (scopes.includes('autopilot') || scopes.includes('templates') || scopes.includes('images')) void load({ quiet: true });
     });
   }, [load]);
   const hasInFlight = runs.some((r) => ['planned', 'researched', 'drafted'].includes(r.state));
@@ -386,7 +388,9 @@ export default function AutopilotQueue() {
                         </span>
                       </button>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
-                        {r.pack._image.verification?.status === 'approved' ? (
+                        {r.pack._image.verification?.textDetected ? (
+                          <span className="rounded-full bg-red-600/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(r.pack._image.verification?.issues || []).join(' · ') || 'Text detected — content images must be text-free'}>✗ text in image — reroll before approving</span>
+                        ) : r.pack._image.verification?.status === 'approved' ? (
                           <span className="rounded-full bg-emerald-600/90 px-2 py-0.5 text-[10px] font-semibold text-white" title={'Machine-verified clean' + (r.pack._image.verification?.score != null ? ' · ' + r.pack._image.verification.score + '/100' : '')}>✓ verified</span>
                         ) : r.pack._image.verification?.status === 'flagged' ? (
                           <span className="rounded-full bg-amber-500/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(r.pack._image.verification?.issues || []).join(' · ')}>⚠ flagged: {(r.pack._image.verification?.issues || []).slice(0, 2).join('; ') || 'check before approving'}</span>

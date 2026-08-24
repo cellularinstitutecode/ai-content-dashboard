@@ -2,6 +2,8 @@
 // Docs: https://app.metricool.com/resources/apidocs/index.html
 // Base: https://app.metricool.com/api  |  Auth header: X-Mc-Auth: <userToken>
 
+import { formatForMetricool, SCHEDULE_TZ } from '@/lib/timezone';
+
 export type Provider =
   | 'instagram' | 'facebook' | 'twitter' | 'linkedin'
   | 'tiktok' | 'youtube' | 'gmb' | 'pinterest' | 'threads'
@@ -10,7 +12,8 @@ export type Provider =
 export interface SchedulePostInput {
   text: string;
   providers: Provider[];
-  // ISO date string in UTC (Metricool will translate)
+  // UTC instant (ISO string); converted to the clinic timezone's wall clock
+  // for the Metricool API automatically.
   publicationDate: string;
   firstCommentText?: string;
   media?: { url: string }[];
@@ -33,13 +36,23 @@ export async function metricoolSchedulePost(input: SchedulePostInput) {
   url.searchParams.set('blogId', blogId);
   url.searchParams.set('userId', userId);
 
+  // Metricool wants a wall-clock "YYYY-MM-DDTHH:MM:SS" plus an IANA timezone —
+  // it rejects/misreads full ISO strings with 'Z' or milliseconds. Convert the
+  // UTC instant we store internally into the clinic timezone's wall clock so
+  // the post shows up in the Metricool planner at the intended local time.
+  const at = new Date(input.publicationDate);
+  const dateTime = isNaN(at.getTime())
+    ? String(input.publicationDate)
+    : formatForMetricool(at, SCHEDULE_TZ);
   const body = {
     text: input.text,
     providers: input.providers,
-    publicationDate: { dateTime: input.publicationDate, timezone: 'UTC' },
+    publicationDate: { dateTime, timezone: SCHEDULE_TZ },
     firstCommentText: input.firstCommentText,
     media: input.media || [],
-    autoPublish: input.autoPublish ?? true
+    // Publishing is a human decision: never auto-publish unless the caller
+    // explicitly opts in (approveRun always passes false).
+    autoPublish: input.autoPublish ?? false
   };
 
   const res = await fetch(url.toString(), {

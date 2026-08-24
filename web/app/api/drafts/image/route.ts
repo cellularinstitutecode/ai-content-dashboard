@@ -52,7 +52,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'clip drafts already have video stills' }, { status: 400 });
     }
     const existing = (pack as { _image?: PackImage })._image;
-    if (existing?.url && !regenerate) return NextResponse.json({ image: existing, cached: true });
+    // A stored image the checker marked as containing text is never good
+    // enough to serve as "done": content images must be text-free, so treat
+    // it like a regenerate request (next composition variant) instead.
+    const existingHasText = existing?.verification?.textDetected === true;
+    if (existing?.url && !regenerate && !existingHasText) {
+      return NextResponse.json({ image: existing, cached: true });
+    }
+    const advanceVariant = regenerate || existingHasText;
 
     // Rate limit only when we are actually about to spend image credits.
     const rl = await checkRateLimit(user.id, 'image');
@@ -78,9 +85,10 @@ export async function POST(req: NextRequest) {
       topic: String((d as { topic?: string }).topic || 'regenerative medicine'),
       pack,
       brand,
-      // Fresh generations start at variant 0; each regenerate advances to the
-      // next composition (hero shot → macro lab → lifestyle → still-life → …).
-      variant: regenerate ? (existing?.variant ?? 0) + 1 : 0,
+      // Fresh generations start at variant 0; each regenerate (explicit, or
+      // forced by a text-flagged stored image) advances to the next
+      // composition (hero shot → macro lab → lifestyle → still-life → …).
+      variant: advanceVariant ? (existing?.variant ?? 0) + 1 : 0,
     });
 
     // Owner update passes RLS via the session client.

@@ -17,7 +17,7 @@ import { useWorkspace } from '@/components/workspace';
 const IMG_STEPS = [
   { id: 'brief', label: 'Creating the image brief', detail: 'Saving an image draft for your idea…' },
   { id: 'image', label: 'Generating with OpenAI', detail: 'gpt-image-1 is painting your visual (~20s)…' },
-  { id: 'verify', label: 'Machine verification', detail: 'A vision model checks for AI glitches — garbled text, warped anatomy, logos…' },
+  { id: 'verify', label: 'Machine verification', detail: 'A vision model confirms it is a text-free content image — any words/letters trigger an automatic regeneration…' },
   { id: 'gallery', label: 'Adding to the gallery', detail: 'Storing the verified image on the draft…' },
 ];
 
@@ -25,6 +25,7 @@ type Verification = {
   status: 'approved' | 'flagged' | 'unchecked';
   score: number | null;
   issues: string[];
+  textDetected?: boolean;
 };
 
 type PackImage = {
@@ -48,6 +49,14 @@ function VerifyBadge({ v, size = 'sm' }: { v?: Verification; size?: 'sm' | 'lg' 
       <span title={'Machine-verified' + (v.score != null ? ' · score ' + v.score + '/100' : '')}
         className={'inline-flex items-center gap-1 rounded-full bg-emerald-600/90 font-semibold text-white ' + cls}>
         ✓ verified
+      </span>
+    );
+  }
+  if (v?.textDetected) {
+    return (
+      <span title={(v.issues || []).join(' · ') || 'Text/letters detected — content images must be text-free. Reroll it.'}
+        className={'inline-flex items-center gap-1 rounded-full bg-red-600/95 font-semibold text-white ' + cls}>
+        ✗ text — reroll
       </span>
     );
   }
@@ -139,7 +148,7 @@ export default function ImageStudio() {
       setProc((p) => (p ? stepActive(p, 'gallery') : p));
       await load();
       setProc((p) => (p ? stepsDone(p) : p));
-      announce('drafts'); // draft now carries an image → refresh the library view
+      announce('drafts', 'images', 'autopilot'); // new visual → library, galleries and Autopilot cards all update
       // Keep the lightbox in sync with the fresh image.
       if (lightbox && lightbox.id === id && j?.image?.url) {
         setLightbox({ ...lightbox, pack: { ...(lightbox.pack || {}), _image: j.image } });
@@ -185,7 +194,7 @@ export default function ImageStudio() {
       setQuickTopic('');
       await load();
       setProc((p) => (p ? stepsDone(p) : p));
-      announce('drafts', 'stats'); // new image draft → update library + counters everywhere
+      announce('drafts', 'stats', 'images'); // new image draft → update library + counters everywhere
     } catch (e) {
       clearProcTimers();
       setProc((p) => (p ? stepError(p) : p));
@@ -208,8 +217,9 @@ export default function ImageStudio() {
             </span>
           </h2>
           <p className="mt-0.5 text-[12px] text-ink-muted">
-            Each image is created by the OpenAI image pipeline and machine-checked for AI glitches
-            (garbled text, warped anatomy, logos) before you ever attach it. ✓ = verified clean, ⚠ = the checker found issues.
+            Every image is a pure content image — no words, letters or logos, ever. Each one is created by the
+            OpenAI image pipeline and machine-verified; anything with text is regenerated automatically.
+            ✓ = verified text-free, ✗ = text slipped through (reroll it), ⚠ = other issues found.
           </p>
         </div>
         <div className="flex w-full min-w-0 items-center gap-2 lg:w-auto">

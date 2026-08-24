@@ -1,6 +1,7 @@
 // web/app/api/templates/apply/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
+import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 
 export const runtime = 'nodejs';
 
@@ -38,29 +39,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'template has no providers selected' }, { status: 400 });
   }
 
-  const [hh, mm] = (tpl.time_of_day || '09:00').split(':').map((n: string) => parseInt(n, 10));
-  const now = new Date();
-
-  const rows: any[] = [];
-  for (let w = 0; w < weeks; w++) {
-    for (const wd of weekdays) {
-      // find the date of this weekday in week offset w, relative to today.
-      const d = new Date(now);
-      // `hh || 9` turned a legitimate midnight slot into 09:00, because 0 is
-      // falsy. cleanTime() explicitly allows 00:00.
-      d.setHours(Number.isFinite(hh) ? hh : 9, Number.isFinite(mm) ? mm : 0, 0, 0);
-      const delta = (wd - d.getDay() + 7) % 7;
-      d.setDate(d.getDate() + delta + w * 7);
-      if (d.getTime() <= now.getTime()) continue; // skip past slots in the current week
-      rows.push({
-        user_id: user.id,
-        providers,
-        text: tpl.text || '',
-        publication_date: d.toISOString(),
-        status: 'scheduled',
-      });
-    }
-  }
+  // Template times are clinic-local wall-clock times (America/Cancun by
+  // default) — build the instants through the shared timezone helper so a
+  // 09:00 template lands at 09:00 in Cancun, not 09:00 UTC.
+  const rows: any[] = upcomingSlots(
+    weekdays,
+    tpl.time_of_day || '09:00',
+    weeks * 7,
+    SCHEDULE_TZ
+  ).map((d) => ({
+    user_id: user.id,
+    providers,
+    text: tpl.text || '',
+    publication_date: d.toISOString(),
+    status: 'scheduled',
+  }));
 
   if (rows.length === 0) {
     return NextResponse.json({ created: 0, posts: [] });

@@ -29,6 +29,11 @@ export type ImageVerification = {
   status: 'approved' | 'flagged' | 'unchecked'; // unchecked = the check itself was unavailable
   score: number | null; // 0-100 quality/safety confidence from the checker
   issues: string[];
+  // HARD RULE: generated visuals must be pure CONTENT images — any words,
+  // letters, numbers or pseudo-typography the checker sees sets this flag,
+  // and the pipeline treats it as the worst possible outcome (always
+  // regenerates; a text-bearing candidate can never beat a text-free one).
+  textDetected?: boolean;
   model: string | null;
   checkedAt: string;
 };
@@ -52,9 +57,13 @@ const PRIMARY_MODEL = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1';
 // API — the fallback is now the cheaper gpt-image tier, overridable by env.
 const FALLBACK_MODEL = process.env.OPENAI_IMAGE_FALLBACK_MODEL || 'gpt-image-1-mini';
 const VISION_MODEL = process.env.OPENAI_VISION_MODEL || 'gpt-4o-mini';
-// A flagged image triggers ONE automatic regeneration with the next
-// composition variant (time-budget permitting) before surfacing to a human.
-const MAX_GEN_ATTEMPTS = 2;
+// A flagged image triggers automatic regeneration with the next composition
+// variant (time-budget permitting) before surfacing to a human. Text in the
+// image is a hard fail, so give the loop enough attempts to shake it off.
+const MAX_GEN_ATTEMPTS = 3;
+// Keep retrying while there is real time left in the serverless budget
+// (route maxDuration is 60s; one generate+verify cycle is ~25s).
+const RETRY_TIME_BUDGET_MS = 34_000;
 
 // Kill switch: set IMAGE_GEN=off to disable image generation everywhere
 // without redeploying callers. Default is ON whenever OPENAI_API_KEY exists.
@@ -82,10 +91,10 @@ function excerptOf(pack: Record<string, unknown> | null | undefined): string {
 // Composition variants: regeneration cycles through these so every "New
 // image" is a genuinely different visual proposition, not a near-duplicate.
 export const STYLE_VARIANTS: string[] = [
-  'Composition: wide editorial hero shot — premium modern clinic interior or a calm physician-patient consultation moment.',
-  'Composition: macro scientific beauty — laboratory glassware, pipettes, cell-culture plates, abstract luminous cellular forms.',
-  'Composition: warm lifestyle — healthy, active adults (40-70) outdoors in bright coastal light, vitality and movement.',
-  'Composition: minimal premium still-life — clean medical/wellness objects on a soft neutral background, generous negative space.',
+  'Composition: wide editorial hero shot — premium modern clinic interior or a calm physician-patient consultation moment; any screens are off, any signage is blank or out of focus.',
+  'Composition: macro scientific beauty — unlabeled laboratory glassware, pipettes, plain cell-culture plates, abstract luminous cellular forms; no printed labels, markings or stickers on anything.',
+  'Composition: warm lifestyle — healthy, active adults (40-70) outdoors in bright coastal light, vitality and movement; plain unbranded clothing, no signage in the scene.',
+  'Composition: minimal premium still-life — clean unlabeled medical/wellness objects on a soft neutral background, generous negative space; no packaging text or printed labels.',
 ];
 
 export function buildImagePrompt(opts: {
@@ -98,13 +107,20 @@ export function buildImagePrompt(opts: {
   const excerpt = excerptOf(opts.pack);
   const variant = STYLE_VARIANTS[Math.abs(Math.round(opts.variant ?? 0)) % STYLE_VARIANTS.length];
   return [
+    // The no-text mandate leads the prompt (image models weight the opening
+    // heavily) and is repeated at the end. Every visual must be a pure
+    // CONTENT image — the message is carried by the scene, never by writing.
+    'A purely visual, text-free photograph. Absolutely NO text of any kind:',
+    'no words, no letters, no numbers, no typography, no captions, no subtitles,',
+    'no signage, no labels, no logos, no watermarks, no charts, no UI elements.',
     `Editorial hero photograph for ${brandName}.`,
     `Subject: ${opts.topic}.`,
     excerpt ? `Context from the article: ${excerpt}` : '',
     variant,
     'Style: bright, clean, modern medical-wellness aesthetic; soft natural light;',
     'calm, hopeful, trustworthy mood; photorealistic; shallow depth of field.',
-    'Strict rules: NO text, NO words, NO letters, NO logos, NO watermarks,',
+    'Strict rules (must all hold): the image contains ZERO written characters in any language or script;',
+    'all packaging, screens, documents and signs in the scene are blank, turned off, or absent;',
     'no needles piercing skin, no blood, no graphic medical procedures, nothing that implies a medical claim.',
   ].filter(Boolean).join(' ');
 }
@@ -193,7 +209,9 @@ async function generateImageBytes(prompt: string): Promise<GeneratedImage> {
     // Same model, minimal parameter set — survives parameter deprecations.
     { model: PRIMARY_MODEL, body: { model: PRIMARY_MODEL, prompt, n: 1, size: '1536x1024' } },
     // Different model, minimal parameter set — survives model-access issues.
-    { model: FALLBACK_MODEL, body: { model: FALLBACK_MODEL, prompt: prompt.slice(0, 3900), n: 1, size: '1792x1024' } },
+    // (1536x1024 is the valid landscape size for the gpt-image family; the
+    // old 1792x1024 was a DALL·E-3-only size and got this rung rejected.)
+    { model: FALLBACK_MODEL, body: { model: FALLBACK_MODEL, prompt: prompt.slice(0, 3900), n: 1, size: '1536x1024' } },
   ];
 
   const errors: string[] = [];
@@ -226,14 +244,14 @@ async function generateImageBytes(prompt: string): Promise<GeneratedImage> {
 // verification must never take down image generation entirely.
 // ---------------------------------------------------------------------------
 
-const VERIFY_SYSTEM = `You are a strict visual QA reviewer for a premium regenerative medicine clinic's marketing images. You will be shown ONE AI-generated image plus its intended topic. Inspect it for generation defects and brand-safety problems:
-1. Any visible text, letters, numbers, or garbled pseudo-typography (AI text artifacts) — automatic fail.
+const VERIFY_SYSTEM = `You are a strict visual QA reviewer for a premium regenerative medicine clinic's marketing images. Every image MUST be a pure CONTENT image — a photographic scene with ZERO written characters. You will be shown ONE AI-generated image plus its intended topic. Inspect it for generation defects and brand-safety problems:
+1. TEXT CHECK (the hard rule): scan the ENTIRE image, including backgrounds, signs, screens, labels, packaging, clothing and edges, for ANY visible text, words, letters, numbers, or garbled pseudo-typography (AI text artifacts) in ANY language or script — even partial, blurry, or decorative lettering counts. Any hit is an automatic fail.
 2. Anatomical errors: wrong number of fingers, warped hands/faces/limbs, merged bodies, impossible poses.
-3. Logos, watermarks, brand marks, or recognizable trademarks.
+3. Logos, watermarks, brand marks, or recognizable trademarks (even without readable letters).
 4. Graphic or inappropriate medical content: needles piercing skin, blood, wounds, distressing imagery.
 5. Uncanny, distorted, or low-quality rendering unfit for a premium medical brand.
 6. Relevance: the scene should plausibly illustrate the given topic for a clinic audience.
-Return STRICT JSON only: {"approved": boolean, "score": number 0-100, "issues": string[]}. approved=false whenever any check 1-5 fails or relevance is clearly wrong; issues lists each problem in a short phrase (empty when approved with no concerns).`;
+Return STRICT JSON only: {"approved": boolean, "textDetected": boolean, "score": number 0-100, "issues": string[]}. textDetected=true whenever check 1 finds ANYTHING (when unsure, say true). approved=false whenever any check 1-5 fails or relevance is clearly wrong; issues lists each problem in a short phrase (empty when approved with no concerns).`;
 
 async function verifyGeneratedImage(img: GeneratedImage, topic: string): Promise<ImageVerification> {
   const base: ImageVerification = {
@@ -274,18 +292,27 @@ async function verifyGeneratedImage(img: GeneratedImage, topic: string): Promise
     if (!res.ok) throw new Error(`vision ${res.status}`);
     const data = await res.json();
     const raw = String(data?.choices?.[0]?.message?.content ?? '{}');
-    const obj = JSON.parse(raw) as { approved?: unknown; score?: unknown; issues?: unknown };
-    const approved = obj.approved === true;
+    const obj = JSON.parse(raw) as { approved?: unknown; textDetected?: unknown; score?: unknown; issues?: unknown };
     const score = typeof obj.score === 'number' && Number.isFinite(obj.score)
       ? Math.max(0, Math.min(100, Math.round(obj.score)))
       : null;
-    const issues = Array.isArray(obj.issues)
+    let issues = Array.isArray(obj.issues)
       ? obj.issues.map((i) => String(i).slice(0, 160)).filter(Boolean).slice(0, 8)
       : [];
+    // Belt and braces: even if the model forgets the dedicated flag, catch a
+    // text mention in its own issue list.
+    const textDetected = obj.textDetected === true
+      || issues.some((i) => /\btext\b|letter|typograph|caption|word|writing|lettering/i.test(i));
+    // Text can never pass, whatever the model said about "approved".
+    const approved = obj.approved === true && !textDetected;
+    if (textDetected && !issues.some((i) => /\btext\b/i.test(i))) {
+      issues = ['visible text/letters detected — content images must be text-free', ...issues].slice(0, 8);
+    }
     return {
       status: approved ? 'approved' : 'flagged',
       score,
       issues,
+      textDetected,
       model: VISION_MODEL,
       checkedAt: new Date().toISOString(),
     };
@@ -355,13 +382,16 @@ export async function generatePackImage(opts: {
     const img = await generateImageBytes(prompt);
     const verification = await verifyGeneratedImage(img, opts.topic);
     const candidate = { img, prompt, variant, verification };
-    // Keep the better candidate: approved > unchecked > flagged, then score.
+    // Keep the better candidate. Ranking encodes the content-image rule:
+    // approved > unchecked > flagged-without-text > ANY candidate with text.
+    // A text-bearing image can never beat a text-free one, whatever its score.
     const rank = (v: ImageVerification) =>
-      (v.status === 'approved' ? 200 : v.status === 'unchecked' ? 100 : 0) + (v.score ?? 0);
+      (v.textDetected ? 0 : v.status === 'approved' ? 600 : v.status === 'unchecked' ? 400 : 200) + (v.score ?? 0);
     if (!best || rank(verification) > rank(best.verification)) best = candidate;
     if (verification.status !== 'flagged') break; // clean (or uncheckable) — done
-    // Flagged: retry only while there is real time left in the serverless budget.
-    if (Date.now() - started > 30_000) break;
+    // Flagged (text or other defects): retry with the next composition while
+    // there is real time left in the serverless budget.
+    if (Date.now() - started > RETRY_TIME_BUDGET_MS) break;
   }
   if (!best) throw new Error('image generation produced no candidate');
 
@@ -389,7 +419,10 @@ export async function ensureDraftImage(draftId: string): Promise<PackImage | nul
   const pack = row.pack && typeof row.pack === 'object' ? row.pack : {};
   if ((pack as { kind?: string }).kind === 'clip') return null; // clips have video stills already
   const existing = (pack as { _image?: PackImage })._image;
-  if (existing?.url) return existing;
+  // Same content-image rule as the route: an image flagged for text is never
+  // reused — regenerate with the next composition variant instead.
+  const existingHasText = existing?.verification?.textDetected === true;
+  if (existing?.url && !existingHasText) return existing;
 
   // Brand voice makes the image on-brand too (best-effort).
   let brand: BrandContext | null = null;
@@ -402,7 +435,12 @@ export async function ensureDraftImage(draftId: string): Promise<PackImage | nul
     if (bp) brand = bp as BrandContext;
   } catch { /* optional */ }
 
-  const image = await generatePackImage({ topic: String(row.topic || 'regenerative medicine'), pack, brand });
+  const image = await generatePackImage({
+    topic: String(row.topic || 'regenerative medicine'),
+    pack,
+    brand,
+    variant: existingHasText ? (existing?.variant ?? 0) + 1 : 0,
+  });
   const { error } = await db.from('drafts').update({ pack: { ...pack, _image: image } }).eq('id', draftId);
   if (error) throw new Error('draft image stamp failed: ' + error.message);
   return image;
