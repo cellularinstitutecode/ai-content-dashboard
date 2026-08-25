@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
+import { ALLOWED_BLOG_IDS, DEFAULT_BLOG_ID } from '@/lib/access';
 
 export const runtime = 'nodejs';
 
@@ -68,14 +69,9 @@ function normalizePublishAt(input: string): { wallClock: string; instant: string
   return { wallClock: s, instant: new Date(guess.getTime() - offsetMs).toISOString() };
 }
 
-// Which Metricool brand profiles this deployment is allowed to post into. The
-// shared org token can reach several, so the id is never taken on trust from
-// the request body.
-const DEFAULT_BLOG_ID = process.env.METRICOOL_BLOG_ID || '4308292';
-const ALLOWED_BLOG_IDS = new Set(
-  (process.env.METRICOOL_BLOG_IDS || DEFAULT_BLOG_ID)
-    .split(',').map((x) => x.trim()).filter(Boolean)
-);
+// Which Metricool brand profiles this deployment may post into is defined once
+// in lib/access.ts (ALLOWED_BLOG_IDS / DEFAULT_BLOG_ID) and shared with the read
+// routes so the allowlist can't drift between endpoints.
 
 // POST /api/metricool/schedule
 // body: { network, text, publishAt (ISO datetime string), blogId?, mediaUrl?, draftId?, autoPublish? }

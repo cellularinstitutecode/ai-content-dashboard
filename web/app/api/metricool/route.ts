@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
+import { DEFAULT_BLOG_ID, isAllowedBlogId } from '@/lib/access';
 
 export const runtime = 'nodejs';
 
@@ -16,16 +17,25 @@ export async function GET(req: NextRequest) {
   if (!token || !userId) {
     return NextResponse.json({ error: 'METRICOOL_USER_TOKEN and METRICOOL_USER_ID must be configured in Vercel env' }, { status: 500 });
   }
-  const blogId = req.nextUrl.searchParams.get('blogId') || '4308292';
+  const blogId = req.nextUrl.searchParams.get('blogId') || DEFAULT_BLOG_ID;
+  // Never take blogId on trust: the shared org token can reach several brand
+  // profiles, so an arbitrary id would let one user read another brand's data.
+  if (!isAllowedBlogId(blogId)) {
+    return NextResponse.json({ error: 'Unknown brand profile' }, { status: 400 });
+  }
   const today = new Date();
   const start = new Date(today.getTime() - 30 * 86400000);
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
   const base = 'https://app.metricool.com/api';
-  const qs = 'blogId=' + blogId + '&userId=' + userId + '&start=' + fmt(start) + '&end=' + fmt(today);
+  // encodeURIComponent so a crafted blogId can't smuggle extra query params
+  // (e.g. &userId=...) into the token-authenticated upstream request.
+  const eBlog = encodeURIComponent(blogId);
+  const eUser = encodeURIComponent(userId);
+  const qs = 'blogId=' + eBlog + '&userId=' + eUser + '&start=' + fmt(start) + '&end=' + fmt(today);
   const candidates = [
     base + '/v2/analytics/posts?' + qs,
     base + '/v2/analytics/web?' + qs,
-    base + '/admin/simpleProfiles?blogId=' + blogId + '&userId=' + userId,
+    base + '/admin/simpleProfiles?blogId=' + eBlog + '&userId=' + eUser,
     base + '/stats/web?' + qs,
   ];
   const attempts: any[] = [];

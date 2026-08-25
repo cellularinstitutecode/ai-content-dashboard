@@ -108,7 +108,13 @@ end $$;
 --    Joins the keywords each draft applied (draft_keywords) with measured
 --    post performance (post_metrics) by fuzzy text containment. Used to bias
 --    future angle choices toward what works for THIS audience.
-create or replace view public.keyword_performance as
+-- security_invoker = on makes the view run with the QUERYING user's privileges,
+-- so the owner-scoped RLS on draft_keywords / post_metrics still applies. Without
+-- it the view runs as its definer and returns EVERY tenant's rows to any caller
+-- (Supabase's default grants make public-schema views selectable by anon too).
+create or replace view public.keyword_performance
+  with (security_invoker = on)
+as
 select
   dk.user_id,
   dk.keyword,
@@ -123,3 +129,8 @@ join public.post_metrics pm
  and pm.text ilike '%' || dk.keyword || '%'
 where dk.role = 'primary'
 group by dk.user_id, dk.keyword;
+
+-- Belt and suspenders: never expose the analytics view to the anonymous role,
+-- and let only authenticated sessions read it (still RLS-filtered per the above).
+revoke all on public.keyword_performance from anon;
+grant select on public.keyword_performance to authenticated;

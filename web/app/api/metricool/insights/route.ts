@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
+import { isAllowedBlogId } from '@/lib/access';
 
 // GET /api/metricool/insights?blogId=123
 // Aggregates several Metricool datasets in one call so the dashboard can show
@@ -49,6 +50,11 @@ export async function GET(request: Request) {
 
   if (!token || !userId || !blogId) {
     return NextResponse.json({ blogId, scheduled: [], posts: [], bestTimes: null, ok: false });
+  }
+  // Only brand profiles this deployment owns — the shared org token can reach
+  // others, so an arbitrary blogId must not be forwarded upstream.
+  if (!isAllowedBlogId(blogId)) {
+    return NextResponse.json({ error: 'Unknown brand profile' }, { status: 400 });
   }
 
   const now = new Date();

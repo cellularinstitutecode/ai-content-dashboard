@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
+import { isAllowedEmail } from '@/lib/access';
 
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
@@ -55,6 +56,23 @@ export async function middleware(req: NextRequest) {
     const url = req.nextUrl.clone();
     url.pathname = '/sign-in';
     url.searchParams.set('next', pathname);
+    return NextResponse.redirect(url);
+  }
+
+  // Enforce the tenant allowlist on EVERY authenticated request — not only in
+  // the OAuth/magic-link callback. Password sign-in sets cookies without ever
+  // touching that callback, so a valid-but-unauthorized session (e.g. from a
+  // self-service signUp against the public anon key) would otherwise pass here.
+  if (!isAllowedEmail(user.email)) {
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json(
+        { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
+        { status: 403, headers: { 'cache-control': 'no-store' } }
+      );
+    }
+    const url = req.nextUrl.clone();
+    url.pathname = '/sign-in';
+    url.search = 'error=not_allowed';
     return NextResponse.redirect(url);
   }
   return res;
