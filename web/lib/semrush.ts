@@ -16,7 +16,7 @@
 // Auth: `key` query parameter (SEMRUSH_API_KEY env). Errors come back as an
 // "ERROR NN :: message" plain-text body, usually with HTTP 200.
 
-import { supabaseAdmin } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 
 // ---------------------------------------------------------------------------
 // Types

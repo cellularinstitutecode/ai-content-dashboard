@@ -1,5 +1,4 @@
 import { createBrowserClient, createServerClient, type CookieOptions } from '@supabase/ssr';
-import { createClient } from '@supabase/supabase-js';
 
 export function supabaseBrowser() {
   return createBrowserClient(
@@ -28,12 +27,7 @@ export function supabaseServer() {
   );
 }
 
-// Service-role client for trusted server-side ops (drafts/posts writes).
-// NEVER expose this to the browser.
-export function supabaseAdmin() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false } }
-  );
-}
+// The service-role client now lives in lib/supabase-admin.ts, which is
+// marked `server-only`. Re-exporting it from here would defeat that guard, so
+// server code imports it from its own module:
+//   import { supabaseAdmin } from '@/lib/supabase-admin';

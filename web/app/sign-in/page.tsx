@@ -50,7 +50,14 @@ export default function SignInPage() {
       return;
     }
 
-    window.location.href = '/';
+    // Honor the ?next= the middleware set when it bounced the user here —
+    // same-origin relative paths only, so it can't be abused as an open redirect.
+    let next = '/';
+    try {
+      const q = new URLSearchParams(window.location.search).get('next') || '/';
+      if (q.startsWith('/') && !q.startsWith('//')) next = q;
+    } catch {}
+    window.location.href = next;
   }
 
   async function handleMagicLink() {

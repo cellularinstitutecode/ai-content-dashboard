@@ -71,13 +71,36 @@ const url =
 // permanent Drive URL, so BOTH the webhook (fast path) and the /api/opus/clip poll
 // (fallback path) store durable links instead of Opus's short-lived signed CDN URLs.
 // On a per-clip failure we keep the original Opus link so a single bad clip never
-// loses the whole batch. Idempotent-ish: clips already carrying a driveFileId are
-// left untouched so repeated polls don't re-upload.
-export async function persistClips(clips: any[], projectId: string): Promise<any[]> {
+// loses the whole batch.
+//
+// Idempotency: clips freshly fetched from Opus never carry a driveFileId (that
+// only lives on the persisted copy stored in the draft), so a driveFileId check
+// on the input alone never fires and every poll re-uploads. `known` is the set
+// of already-persisted clips from the draft; any Opus clip whose stable key
+// matches an already-persisted one reuses that Drive file instead of uploading
+// again. This is what stops the 5s poll + webhook from creating a new public
+// Drive file per clip on every tick.
+function clipKey(clip: any, i: number): string {
+    const id = clip?.id ?? clip?.clipId ?? clip?.exportId ?? clip?.opusExport ?? clip?.export ?? clip?.preview;
+    return id != null && String(id).trim() ? String(id).trim() : 'idx:' + i;
+}
+
+export async function persistClips(clips: any[], projectId: string, known: any[] = []): Promise<any[]> {
+    const persisted = new Map<string, any>();
+    for (let i = 0; i < known.length; i++) {
+          const k = known[i];
+          if (k && k.driveFileId) persisted.set(clipKey(k, i), k);
+    }
     const out: any[] = [];
     for (let i = 0; i < clips.length; i++) {
           const clip = clips[i];
           if (clip && clip.driveFileId) { out.push(clip); continue; }
+          // Reuse an already-uploaded Drive file for this clip if we have one.
+          const prior = clip ? persisted.get(clipKey(clip, i)) : null;
+          if (prior && prior.driveFileId) {
+                  out.push({ ...clip, preview: prior.preview, export: prior.export, driveFileId: prior.driveFileId, opusExport: prior.opusExport ?? clip.export });
+                  continue;
+          }
           const src = clip?.export || clip?.preview;
           if (!src) { out.push(clip); continue; }
           try {

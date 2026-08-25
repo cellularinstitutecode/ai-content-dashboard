@@ -3,7 +3,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateContentPack, type Provider, type ContentType, type BrandContext } from '@/lib/ai';
 import { reviewPack } from '@/lib/safety';
-import { supabaseServer, supabaseAdmin } from '@/lib/supabase';
+import { supabaseServer } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { recordDraftKeywords } from '@/lib/semrush';

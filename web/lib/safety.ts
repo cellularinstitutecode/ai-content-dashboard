@@ -1,4 +1,4 @@
-undefined// web/lib/safety.ts
+// web/lib/safety.ts
 // Content-safety layer for the medical / health domain (Cellular Hope Institute).
 //
 // Two responsibilities:

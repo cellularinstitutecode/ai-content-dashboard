@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { opusGetExportableClips } from '@/lib/opus';
-import { supabaseAdmin } from '@/lib/supabase';
-import { persistToDrive } from '@/lib/drive';
+import { supabaseAdmin } from '@/lib/supabase-admin';
+import { persistClips } from '@/lib/drive';
 
 export const runtime = 'nodejs';
 // Drive uploads take time; give the webhook room so clips finish persisting.
@@ -83,26 +83,8 @@ async function findClipDraft(admin: any, projectId: string) {
   return (byUrl.data && byUrl.data[0]) || null;
 }
 
-// Copy each finished clip's MP4 into Google Drive while Opus's signed link is
-// still valid, and swap in the permanent Drive URL. If a single clip fails to
-// persist we keep the original Opus link for that one clip rather than dropping
-// it, so a partial failure never loses data.
-async function persistClips(clips: any[], projectId: string): Promise<any[]> {
-  const out: any[] = [];
-  for (let i = 0; i < clips.length; i++) {
-    const clip = clips[i];
-    const src = clip.export || clip.preview;
-    if (!src) { out.push(clip); continue; }
-    try {
-      const filename = 'clip-' + projectId + '-' + (i + 1) + '.mp4';
-      const { fileId, url } = await persistToDrive(src, filename);
-      out.push({ ...clip, preview: url, export: url, driveFileId: fileId, opusExport: clip.export });
-    } catch (e) {
-      out.push({ ...clip, driveError: (e as any)?.message || 'persist failed' });
-    }
-  }
-  return out;
-}
+// Clip-to-Drive persistence is shared with the poll route (lib/drive.ts) so both
+// paths dedupe against already-uploaded clips identically.
 
 export async function POST(req: NextRequest) {
   const secret = process.env.OPUS_WEBHOOK_SECRET || process.env.OPUS_API_KEY;
@@ -132,13 +114,17 @@ export async function POST(req: NextRequest) {
     const failed = payload?.type === 'FAILURE' || payload?.status === 'FAILED';
     const status = failed ? 'FAILED' : (rawClips.length > 0 ? 'ready' : 'processing');
 
-    // Persist to Drive while tokens are valid, then store permanent links.
-    const clips = status === 'ready' ? await persistClips(rawClips, projectId) : rawClips;
-
     const admin = supabaseAdmin();
 
-    // Update the gallery draft (pack.kind === 'clip') keyed by projectId.
+    // Resolve the draft FIRST so we can reuse any clips it already persisted —
+    // otherwise a webhook racing an in-flight poll re-uploads every clip.
     const row = await findClipDraft(admin, projectId);
+    const knownClips = Array.isArray(row?.pack?.clips) ? row.pack.clips : [];
+
+    // Persist to Drive while tokens are valid, then store permanent links.
+    const clips = status === 'ready' ? await persistClips(rawClips, projectId, knownClips) : rawClips;
+
+    // Update the gallery draft (pack.kind === 'clip') keyed by projectId.
     if (row) {
       const pack = { ...(row.pack || {}), projectId, clips, status };
       await admin.from('drafts').update({ pack, updated_at: new Date().toISOString() }).eq('id', row.id);

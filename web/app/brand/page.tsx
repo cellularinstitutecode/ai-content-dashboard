@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import PageNav from '@/components/PageNav';
+import { announce, onRefresh } from '@/components/refreshBus';
 
 type Brand = {
   name?: string;
@@ -24,6 +26,10 @@ export default function BrandPage() {
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => { load(); }, []);
+
+  // The brand profile steers every generator on the dashboard, so a change
+  // made in another tab or by the assistant refetches it here too.
+  useEffect(() => onRefresh((scopes) => { if (scopes.includes('brand')) load(); }), []);
 
   async function load() {
     setLoading(true);
@@ -56,6 +62,9 @@ export default function BrandPage() {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error((data && data.error) || ('Save failed (' + r.status + ')'));
       setStatus('Saved');
+      // Generators read the brand profile server-side on every call, so the
+      // panels that show brand-derived output are told to refresh.
+      announce('brand', 'insights');
     } catch (e: any) {
       setStatus('Error: ' + (e && e.message ? e.message : 'failed'));
     } finally {
@@ -70,7 +79,7 @@ export default function BrandPage() {
           <h1 style={{ margin: 0, fontSize: 22 }}>Brand Brain</h1>
           <div style={{ fontSize: 13, opacity: .7 }}>Voice, audience and guidelines that steer every generation</div>
         </div>
-        <a href="/" style={{ color: '#6e6e73', fontSize: 13, textDecoration: 'none', border: '1px solid rgba(0,0,0,0.1)', padding: '6px 12px', borderRadius: 6 }}>Back to dashboard</a>
+        <PageNav current="/brand" />
       </header>
 
       <div style={{ maxWidth: 760, margin: '0 auto', padding: 24 }}>
@@ -82,19 +91,19 @@ export default function BrandPage() {
               <input style={inputStyle} value={brand.name || ''} onChange={(e) => update('name', e.target.value)} placeholder="Cellular Hope Institute" />
             </label>
             <label style={{ fontSize: 13 }}>Mission
-              <textarea style={{ ...inputStyle, minHeight: 70 }} value={brand.mission || ''} onChange={(e) => update('mission', e.target.value)} placeholder="What the brand is here to do" />
+              <textarea style={{ ...inputStyle, minHeight: 150, lineHeight: 1.5 }} value={brand.mission || ''} onChange={(e) => update('mission', e.target.value)} placeholder="What the brand is here to do" />
             </label>
             <label style={{ fontSize: 13 }}>Voice & tone
-              <textarea style={{ ...inputStyle, minHeight: 70 }} value={brand.voice || ''} onChange={(e) => update('voice', e.target.value)} placeholder="Warm, expert, encouraging..." />
+              <textarea style={{ ...inputStyle, minHeight: 150, lineHeight: 1.5 }} value={brand.voice || ''} onChange={(e) => update('voice', e.target.value)} placeholder="Warm, expert, encouraging..." />
             </label>
             <label style={{ fontSize: 13 }}>Target audience
-              <textarea style={{ ...inputStyle, minHeight: 60 }} value={brand.audience || ''} onChange={(e) => update('audience', e.target.value)} placeholder="Who you are speaking to" />
+              <textarea style={{ ...inputStyle, minHeight: 130, lineHeight: 1.5 }} value={brand.audience || ''} onChange={(e) => update('audience', e.target.value)} placeholder="Who you are speaking to" />
             </label>
             <label style={{ fontSize: 13 }}>Keywords (comma separated)
               <input style={inputStyle} value={keywordsText} onChange={(e) => setKeywordsText(e.target.value)} placeholder="wellness, research, community" />
             </label>
             <label style={{ fontSize: 13 }}>Guidelines / do&apos;s and don&apos;ts
-              <textarea style={{ ...inputStyle, minHeight: 90 }} value={brand.guidelines || ''} onChange={(e) => update('guidelines', e.target.value)} placeholder="Avoid medical claims, always include a CTA..." />
+              <textarea style={{ ...inputStyle, minHeight: 200, lineHeight: 1.5 }} value={brand.guidelines || ''} onChange={(e) => update('guidelines', e.target.value)} placeholder="Avoid medical claims, always include a CTA..." />
             </label>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <button onClick={save} disabled={saving} style={{ padding: '10px 18px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', cursor: saving ? 'default' : 'pointer' }}>

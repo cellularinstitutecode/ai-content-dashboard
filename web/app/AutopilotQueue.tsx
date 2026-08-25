@@ -56,7 +56,7 @@ type PackImage = {
   alt?: string;
   model?: string;
   variant?: number;
-  verification?: { status?: 'approved' | 'flagged' | 'unchecked'; score?: number | null; issues?: string[] };
+  verification?: { status?: 'approved' | 'flagged' | 'unchecked'; score?: number | null; issues?: string[]; textDetected?: boolean };
 };
 
 type Run = {
@@ -103,7 +103,8 @@ export default function AutopilotQueue() {
   // on every poll while a generation is in flight or after it failed.
   const imageAsked = useRef<Set<string>>(new Set());
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { quiet?: boolean }) => {
+    if (!opts?.quiet) setLoading(true);
     try {
       const r = await fetch('/api/autopilot/runs');
       const j = await r.json().catch(() => ({}));
@@ -119,13 +120,17 @@ export default function AutopilotQueue() {
   // progress (cron ticks, long engine steps) is visible without a reload.
   useEffect(() => {
     return onRefresh((scopes) => {
-      if (scopes.includes('autopilot')) void load();
+      // 'templates' matters too: applying or deleting a template changes what
+      // the engine will queue next. 'images' too: rerolling a run's hero image
+      // from the Image Studio (or anywhere else) must update the review card
+      // here, live.
+      if (scopes.includes('autopilot') || scopes.includes('templates') || scopes.includes('images')) void load({ quiet: true });
     });
   }, [load]);
   const hasInFlight = runs.some((r) => ['planned', 'researched', 'drafted'].includes(r.state));
   useEffect(() => {
     if (!hasInFlight) return;
-    const t = setInterval(() => { void load(); }, 20000);
+    const t = setInterval(() => { void load({ quiet: true }); }, 20000);
     return () => clearInterval(t);
   }, [hasInFlight, load]);
 
@@ -153,7 +158,7 @@ export default function AutopilotQueue() {
         if (cancelled) return;
         setImagingIds((prev) => { const next = new Set(prev); next.delete(r.id); return next; });
       }
-      if (!cancelled) { await load(); announce('images', 'drafts'); }
+      if (!cancelled) { await load({ quiet: true }); announce('images', 'drafts', 'autopilot'); }
     })();
     return () => { cancelled = true; };
   }, [runs, load]);
@@ -174,8 +179,10 @@ export default function AutopilotQueue() {
       await load();
       // Interconnection: approving queues a Metricool draft (posts row) and
       // every action can touch drafts — update the rest of the dashboard.
-      if (action === 'approve') announce('posts', 'stats', 'drafts');
-      else announce('drafts');
+      // 'autopilot' was declared as a scope but nothing ever announced it, so
+      // the queue's own subscription could never fire. It does now.
+      if (action === 'approve') announce('posts', 'stats', 'drafts', 'autopilot', 'insights');
+      else announce('drafts', 'autopilot');
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Action failed');
     } finally {
@@ -199,7 +206,7 @@ export default function AutopilotQueue() {
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j?.error || 'Image regeneration failed');
       await load();
-      announce('images', 'drafts'); // fresh hero image → Image Studio + library update live
+      announce('images', 'drafts', 'autopilot'); // fresh hero image → Image Studio + library update live
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Image regeneration failed');
     } finally {
@@ -233,7 +240,7 @@ export default function AutopilotQueue() {
         (j.advanced ?? 0) + ' step(s) advanced, ' + (j.ready ?? 0) + ' ready for review.'
       );
       await load();
-      announce('drafts', 'stats', 'images'); // engine creates drafts + images → sync every panel
+      announce('drafts', 'stats', 'images', 'autopilot', 'semrush'); // engine creates drafts + images and spends Semrush units → sync every panel
     } catch (e) {
       clearEngineTimers();
       setEngineProc((p) => (p ? stepError(p) : p));
@@ -381,7 +388,9 @@ export default function AutopilotQueue() {
                         </span>
                       </button>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
-                        {r.pack._image.verification?.status === 'approved' ? (
+                        {r.pack._image.verification?.textDetected ? (
+                          <span className="rounded-full bg-red-600/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(r.pack._image.verification?.issues || []).join(' · ') || 'Text detected — content images must be text-free'}>✗ text in image — reroll before approving</span>
+                        ) : r.pack._image.verification?.status === 'approved' ? (
                           <span className="rounded-full bg-emerald-600/90 px-2 py-0.5 text-[10px] font-semibold text-white" title={'Machine-verified clean' + (r.pack._image.verification?.score != null ? ' · ' + r.pack._image.verification.score + '/100' : '')}>✓ verified</span>
                         ) : r.pack._image.verification?.status === 'flagged' ? (
                           <span className="rounded-full bg-amber-500/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(r.pack._image.verification?.issues || []).join(' · ')}>⚠ flagged: {(r.pack._image.verification?.issues || []).slice(0, 2).join('; ') || 'check before approving'}</span>

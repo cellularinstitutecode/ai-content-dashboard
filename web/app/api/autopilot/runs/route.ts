@@ -5,8 +5,10 @@
 // Approve is the only path toward publishing, and it only ever creates a
 // Metricool DRAFT (autoPublish: false) plus a pending_review posts row.
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseServer, supabaseAdmin } from '@/lib/supabase';
+import { supabaseServer } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 import { advanceRuns, approveRun, regenerateRun, skipRun } from '@/lib/autopilot';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -100,6 +102,17 @@ export async function POST(req: NextRequest) {
     return ok
       ? NextResponse.json({ ok: true })
       : NextResponse.json({ error: 'run not found' }, { status: 404 });
+  }
+  // run_now / regenerate each drive a full LLM generation pipeline. Capped
+  // like every other AI route.
+  if (action === 'run_now' || action === 'regenerate') {
+    const rl = await checkRateLimit(user.id, 'autopilot-action');
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'rate_limited', limit: rl.limit },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } }
+      );
+    }
   }
   if (action === 'run_now') {
     const result = await advanceRuns({ scopeUserId: user.id, runId: id, budgetMs: 45_000, maxRuns: 1 });

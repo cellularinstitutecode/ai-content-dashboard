@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node --experimental-strip-types --test lib/**/*.test.ts && node test/progress-bus.test.cjs && node test/refresh-bus.test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.3",
@@ -23,8 +24,10 @@
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.20",
+    "esbuild": "^0.24.2",
     "eslint": "^8.57.1",
     "eslint-config-next": "14.2.15",
+    "playwright-core": "^1.62.1",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13",
     "typescript": "^5.6.3"

@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { advanceRuns, planRuns } from '@/lib/autopilot';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -22,6 +23,16 @@ async function handle(req: NextRequest) {
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     scopeUserId = user.id;
+    // A tick runs up to 4 research/draft/score pipelines and spends Anthropic,
+    // OpenAI and Semrush credit. Every sibling AI route is capped; this one
+    // was not, so the "Run engine now" button was an uncapped spend loop.
+    const rl = await checkRateLimit(scopeUserId, 'autopilot-tick');
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'rate_limited', limit: rl.limit },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } }
+      );
+    }
   }
 
   const url = req.nextUrl;

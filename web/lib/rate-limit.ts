@@ -11,7 +11,7 @@
 // bootstrap you may set RATE_LIMIT_FAIL_OPEN=true to temporarily allow traffic;
 // leave it unset in production. Apply web/supabase/schema.sql to activate.
 import 'server-only';
-import { supabaseAdmin } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 
 export type RateLimitResult = {
   ok: boolean;
@@ -28,6 +28,11 @@ const POLICIES: Record<string, Policy> = {
   assistant: { limit: 60, windowSec: 3600 },
   'opus-clip': { limit: 10, windowSec: 3600 },
   image: { limit: 20, windowSec: 3600 },
+  // Paid third-party credit spend — these were previously uncapped.
+  'autopilot-tick': { limit: 12, windowSec: 3600 },
+  'autopilot-action': { limit: 40, windowSec: 3600 },
+  semrush: { limit: 120, windowSec: 3600 },
+  keywords: { limit: 60, windowSec: 3600 },
 };
 
 const DEFAULT_POLICY: Policy = { limit: 60, windowSec: 3600 };
@@ -63,8 +68,17 @@ export async function checkRateLimit(userId: string, action: string): Promise<Ra
       return { ok: false, limit: policy.limit, remaining: 0, retryAfterSec: policy.windowSec };
     }
 
-    // Under the cap: record this event. Ignore insert errors (best-effort).
-    await admin.from('usage_events').insert({ user_id: userId, action });
+    // Under the cap: record this event. The insert is what MAKES the limiter
+    // work — if it silently fails, `count` stays flat and the cap never trips.
+    // The module's contract is fail-closed, so a failed insert is treated the
+    // same way a failed count is.
+    const { error: insertError } = await admin.from('usage_events').insert({ user_id: userId, action });
+    if (insertError) {
+      console.error('rate-limit: usage_events insert failed', action, insertError.message);
+      return failOpen
+        ? { ok: true, limit: policy.limit, remaining: policy.limit, retryAfterSec: 0 }
+        : { ok: false, limit: policy.limit, remaining: 0, retryAfterSec: policy.windowSec };
+    }
 
     return {
       ok: true,

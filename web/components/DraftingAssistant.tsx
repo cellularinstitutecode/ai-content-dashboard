@@ -4,13 +4,15 @@ import { useEffect, useRef, useState } from "react";
 import { useVoiceAssistant } from "@/components/useVoiceAssistant";
 import { useLiveContent } from "@/components/LiveContentProvider";
 import { announce } from "@/components/refreshBus";
+import { useWorkspace } from "@/components/workspace";
 
 type Msg = { id: string; role: "assistant" | "user"; text: string; options?: string[] | null };
 let __msgSeq = 0;
 const uid = () => `m_${Date.now().toString(36)}_${(__msgSeq++).toString(36)}`;
 
 export default function DraftingAssistant() {
-  const { applyAssistantResult, setStatus } = useLiveContent();
+  const { applyAssistantResult, setStatus, setOutput } = useLiveContent();
+  const workspace = useWorkspace();
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [session, setSession] = useState<any>(null);
@@ -26,6 +28,12 @@ export default function DraftingAssistant() {
   const [genModel, setGenModel] = useState('claude-sonnet-4-5');
   const [genFormat, setGenFormat] = useState('social');
   const [genIdea, setGenIdea] = useState('');
+  // The assistant works on the same topic as the rest of the dashboard.
+  useEffect(() => {
+    const incoming = (workspace.topic || '').trim();
+    if (incoming && incoming !== genIdea.trim()) setGenIdea(incoming);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.topic]);
   const [genOutput, setGenOutput] = useState('');
   const [genBusy, setGenBusy] = useState(false);
   const [genErr, setGenErr] = useState('');
@@ -72,6 +80,10 @@ export default function DraftingAssistant() {
       const pack = data?.pack || {};
       const out = pack.instagram || pack.facebook || pack.linkedin || pack.blog || '';
       setGenOutput(out || 'No content returned.');
+      // The chat path already routes through the shared Output pane; the
+      // Generate tab used to keep its result trapped inside this widget.
+      if (out) setOutput(out);
+      workspace.setTopic(genIdea, { source: 'assistant' });
       // Surface the automatic Semrush keyword research that shaped this draft.
       const sem = pack._semrush || null;
       setGenKeywords(sem ? { primary: sem.primary ?? null, keywords: Array.isArray(sem.keywords) ? sem.keywords : [], source: String(sem.source || 'none') } : null);

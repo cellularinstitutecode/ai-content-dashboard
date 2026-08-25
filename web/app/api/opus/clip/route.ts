@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { opusCreateClipProject, opusGetExportableClips } from '@/lib/opus';
-import { supabaseServer, supabaseAdmin } from '@/lib/supabase';
+import { supabaseServer } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { persistClips } from '@/lib/drive';
 
 export const runtime = 'nodejs';
+// Multi-clip Drive uploads can take a while; give the poll path the same ceiling
+// as the webhook so a run isn't killed mid-upload and retried from scratch.
+export const maxDuration = 60;
 
 // Pull the Opus project id out of whatever shape the create response uses,
 // then normalize it to a trimmed string so it keys drafts consistently
@@ -61,12 +65,13 @@ export async function POST(req: NextRequest) {
     const admin = supabaseAdmin();
 
     // Bookkeeping row (drives the "Clip jobs" stat) — keyed by projectId + user.
-    await admin.from('clips').insert({
+    const { error: clipErr } = await admin.from('clips').insert({
       user_id: user.id,
       opus_project_id: projectId,
       source_url: videoUrl,
       status: 'processing',
     });
+    if (clipErr) console.error('opus/clip: clips insert failed', clipErr.message);
 
     // Create the gallery draft SERVER-SIDE, in the same request that owns the
     // authoritative projectId. Previously the client created this draft in a
@@ -82,7 +87,7 @@ export async function POST(req: NextRequest) {
       status: 'processing',
       clips: [] as any[],
     };
-    const { data: draft } = await admin
+    const { data: draft, error: draftErr } = await admin
       .from('drafts')
       .insert({
         user_id: user.id,
@@ -92,6 +97,16 @@ export async function POST(req: NextRequest) {
       })
       .select()
       .single();
+    // Without this draft the webhook has nothing to map the finished clips
+    // onto, so the job would silently produce nothing the user can ever see.
+    // Report it instead of returning ok:true with draft:null.
+    if (draftErr || !draft) {
+      console.error('opus/clip: gallery draft insert failed', draftErr?.message);
+      return NextResponse.json(
+        { error: 'Clip job started at OpusClip but could not be saved to your library. Please try again.', projectId },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
       ok: true,
@@ -172,8 +187,11 @@ export async function GET(req: NextRequest) {
     // Persist finished clips to Drive so we store permanent links instead of Opus's
     // short-lived signed CDN URLs. This mirrors the webhook's fast path; without it the
     // poll path would overwrite the draft with URLs that expire (Error: 30 on playback).
+    // Pass the clips already stored on the draft so anything previously uploaded is
+    // reused rather than re-downloaded and re-uploaded on every poll.
     if (ready) {
-        try { clips = await persistClips(clips, projectId); }
+        const knownClips = Array.isArray(draftRow?.pack?.clips) ? draftRow.pack.clips : [];
+        try { clips = await persistClips(clips, projectId, knownClips); }
         catch (e) { /* keep raw Opus clips if Drive persist fails entirely */ }
     }
 

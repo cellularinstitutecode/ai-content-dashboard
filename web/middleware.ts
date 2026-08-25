@@ -1,12 +1,16 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
+import { isAllowedEmail } from '@/lib/access';
 
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
 
-  // Only enforce auth on app routes; let /sign-in and /api/public pass.
+  // Only enforce auth on app routes; let the sign-in/auth flows pass.
+  // Exact-or-segment matching: '/auth/...' yes, '/authanything' no.
   const { pathname } = req.nextUrl;
-  if (pathname.startsWith('/sign-in') || pathname.startsWith('/sign-up') || pathname.startsWith('/auth') || pathname.startsWith('/api/public')) {    return res;
+  const openPrefixes = ['/sign-in', '/sign-up', '/auth'];
+  if (openPrefixes.some((p) => pathname === p || pathname.startsWith(p + '/'))) {
+    return res;
   }
 
   // Machine endpoints authenticate themselves (CRON_SECRET bearer / Opus HMAC
@@ -39,9 +43,36 @@ export async function middleware(req: NextRequest) {
 
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
+    // API callers get a machine-readable 401. Redirecting them to /sign-in
+    // returned the login page with a 200, which fetch() follows silently — so
+    // an expired session looked identical to "you have no data" and the UI
+    // rendered empty panels instead of asking the user to sign in again.
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json(
+        { error: 'unauthenticated', message: 'Your session has expired. Sign in again.' },
+        { status: 401, headers: { 'cache-control': 'no-store' } }
+      );
+    }
     const url = req.nextUrl.clone();
     url.pathname = '/sign-in';
     url.searchParams.set('next', pathname);
+    return NextResponse.redirect(url);
+  }
+
+  // Enforce the tenant allowlist on EVERY authenticated request — not only in
+  // the OAuth/magic-link callback. Password sign-in sets cookies without ever
+  // touching that callback, so a valid-but-unauthorized session (e.g. from a
+  // self-service signUp against the public anon key) would otherwise pass here.
+  if (!isAllowedEmail(user.email)) {
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json(
+        { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
+        { status: 403, headers: { 'cache-control': 'no-store' } }
+      );
+    }
+    const url = req.nextUrl.clone();
+    url.pathname = '/sign-in';
+    url.search = 'error=not_allowed';
     return NextResponse.redirect(url);
   }
   return res;

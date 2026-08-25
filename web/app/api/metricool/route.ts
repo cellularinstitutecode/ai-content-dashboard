@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
+import { DEFAULT_BLOG_ID, isAllowedBlogId } from '@/lib/access';
 
 export const runtime = 'nodejs';
 
@@ -16,16 +17,25 @@ export async function GET(req: NextRequest) {
   if (!token || !userId) {
     return NextResponse.json({ error: 'METRICOOL_USER_TOKEN and METRICOOL_USER_ID must be configured in Vercel env' }, { status: 500 });
   }
-  const blogId = req.nextUrl.searchParams.get('blogId') || '4308292';
+  const blogId = req.nextUrl.searchParams.get('blogId') || DEFAULT_BLOG_ID;
+  // Never take blogId on trust: the shared org token can reach several brand
+  // profiles, so an arbitrary id would let one user read another brand's data.
+  if (!isAllowedBlogId(blogId)) {
+    return NextResponse.json({ error: 'Unknown brand profile' }, { status: 400 });
+  }
   const today = new Date();
   const start = new Date(today.getTime() - 30 * 86400000);
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
   const base = 'https://app.metricool.com/api';
-  const qs = 'blogId=' + blogId + '&userId=' + userId + '&start=' + fmt(start) + '&end=' + fmt(today);
+  // encodeURIComponent so a crafted blogId can't smuggle extra query params
+  // (e.g. &userId=...) into the token-authenticated upstream request.
+  const eBlog = encodeURIComponent(blogId);
+  const eUser = encodeURIComponent(userId);
+  const qs = 'blogId=' + eBlog + '&userId=' + eUser + '&start=' + fmt(start) + '&end=' + fmt(today);
   const candidates = [
     base + '/v2/analytics/posts?' + qs,
     base + '/v2/analytics/web?' + qs,
-    base + '/admin/simpleProfiles?blogId=' + blogId + '&userId=' + userId,
+    base + '/admin/simpleProfiles?blogId=' + eBlog + '&userId=' + eUser,
     base + '/stats/web?' + qs,
   ];
   const attempts: any[] = [];
@@ -35,12 +45,17 @@ export async function GET(req: NextRequest) {
       const text = await r.text();
       let body: any;
       try { body = JSON.parse(text); } catch { body = { raw: text.slice(0, 800) }; }
-      attempts.push({ url, status: r.status, ok: r.ok, body });
+      // Keep the upstream body server-side only: it can carry account
+      // identifiers and internal error detail. The client gets status codes.
+      attempts.push({ url, status: r.status, ok: r.ok });
+      if (!r.ok) console.error('Metricool analytics error', url, r.status, text.slice(0, 500));
       if (r.ok) {
-        return NextResponse.json({ blogId, userId, range: { start: fmt(start), end: fmt(today) }, endpoint: url, data: body });
+        // Note: no userId in the payload — it's server config, not client data.
+        return NextResponse.json({ blogId, range: { start: fmt(start), end: fmt(today) }, endpoint: url, data: body });
       }
     } catch (e: any) {
-      attempts.push({ url, error: e && e.message ? e.message : String(e) });
+      console.error('Metricool analytics exception', url, e && e.message ? e.message : String(e));
+      attempts.push({ url, error: 'request failed' });
     }
   }
   return NextResponse.json({ error: 'All Metricool endpoints rejected the request', attempts }, { status: 502 });

@@ -9,14 +9,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ProcessTracker, { makeSteps, stepActive, stepError, stepsDone, type ProcessStep } from '@/components/ProcessTracker';
-import { announce, onRefresh } from '@/components/refreshBus';
+import { announce, onRefresh, fetchDrafts } from '@/components/refreshBus';
+import { useWorkspace } from '@/components/workspace';
 
 // The visible pipeline a standalone image walks through — each step lights up
 // as the real call behind it starts/finishes.
 const IMG_STEPS = [
   { id: 'brief', label: 'Creating the image brief', detail: 'Saving an image draft for your idea…' },
   { id: 'image', label: 'Generating with OpenAI', detail: 'gpt-image-1 is painting your visual (~20s)…' },
-  { id: 'verify', label: 'Machine verification', detail: 'A vision model checks for AI glitches — garbled text, warped anatomy, logos…' },
+  { id: 'verify', label: 'Machine verification', detail: 'A vision model confirms it is a text-free content image — any words/letters trigger an automatic regeneration…' },
   { id: 'gallery', label: 'Adding to the gallery', detail: 'Storing the verified image on the draft…' },
 ];
 
@@ -24,6 +25,7 @@ type Verification = {
   status: 'approved' | 'flagged' | 'unchecked';
   score: number | null;
   issues: string[];
+  textDetected?: boolean;
 };
 
 type PackImage = {
@@ -50,6 +52,14 @@ function VerifyBadge({ v, size = 'sm' }: { v?: Verification; size?: 'sm' | 'lg' 
       </span>
     );
   }
+  if (v?.textDetected) {
+    return (
+      <span title={(v.issues || []).join(' · ') || 'Text/letters detected — content images must be text-free. Reroll it.'}
+        className={'inline-flex items-center gap-1 rounded-full bg-red-600/95 font-semibold text-white ' + cls}>
+        ✗ text — reroll
+      </span>
+    );
+  }
   if (v?.status === 'flagged') {
     return (
       <span title={(v.issues || []).join(' · ') || 'Flagged by the AI checker'}
@@ -71,6 +81,7 @@ export default function ImageStudio() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [quickTopic, setQuickTopic] = useState('');
+  const workspace = useWorkspace();
   const [quickBusy, setQuickBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<DraftLite | null>(null);
@@ -81,24 +92,34 @@ export default function ImageStudio() {
     procTimers.current.push(setTimeout(() => setProc((p) => (p ? stepActive(p, id) : p)), ms));
   }
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { quiet?: boolean }) => {
+    if (!opts?.quiet) setLoading(true);
     try {
-      const r = await fetch('/api/drafts?limit=50&offset=0');
-      const j = await r.json().catch(() => ({}));
-      const list = Array.isArray(j?.drafts) ? j.drafts : [];
+      // Shared with the clip pre-warmer, which asks for the same page on mount.
+      const j = await fetchDrafts(50, 0).catch(() => ({}));
+      const list = Array.isArray((j as any)?.drafts) ? (j as any).drafts : [];
       setDrafts(list);
     } catch { /* transient */ }
     setLoading(false);
   }, []);
 
+
   useEffect(() => { void load(); }, [load]);
+
+  // The studio follows whatever the rest of the dashboard is working on: pick
+  // a keyword in Semrush or type a topic in the generator and it lands here,
+  // instead of having to be retyped into this box.
+  useEffect(() => {
+    if (workspace.topic && !quickTopic) setQuickTopic(workspace.topic);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.topic]);
 
   // Interconnection: refresh the gallery whenever ANY panel announces new or
   // changed images/drafts (Content Generator packs, Autopilot hero images,
   // assistant drafts, deletions) — the studio shows every visual, live.
   useEffect(() => {
     return onRefresh((scopes) => {
-      if (scopes.includes('images') || scopes.includes('drafts')) void load();
+      if (scopes.includes('images') || scopes.includes('drafts')) void load({ quiet: true });
     });
   }, [load]);
 
@@ -127,7 +148,7 @@ export default function ImageStudio() {
       setProc((p) => (p ? stepActive(p, 'gallery') : p));
       await load();
       setProc((p) => (p ? stepsDone(p) : p));
-      announce('drafts'); // draft now carries an image → refresh the library view
+      announce('drafts', 'images', 'autopilot'); // new visual → library, galleries and Autopilot cards all update
       // Keep the lightbox in sync with the fresh image.
       if (lightbox && lightbox.id === id && j?.image?.url) {
         setLightbox({ ...lightbox, pack: { ...(lightbox.pack || {}), _image: j.image } });
@@ -173,7 +194,7 @@ export default function ImageStudio() {
       setQuickTopic('');
       await load();
       setProc((p) => (p ? stepsDone(p) : p));
-      announce('drafts', 'stats'); // new image draft → update library + counters everywhere
+      announce('drafts', 'stats', 'images'); // new image draft → update library + counters everywhere
     } catch (e) {
       clearProcTimers();
       setProc((p) => (p ? stepError(p) : p));
@@ -196,14 +217,17 @@ export default function ImageStudio() {
             </span>
           </h2>
           <p className="mt-0.5 text-[12px] text-ink-muted">
-            Each image is created by the OpenAI image pipeline and machine-checked for AI glitches
-            (garbled text, warped anatomy, logos) before you ever attach it. ✓ = verified clean, ⚠ = the checker found issues.
+            Every image is a pure content image — no words, letters or logos, ever. Each one is created by the
+            OpenAI image pipeline and machine-verified; anything with text is regenerated automatically.
+            ✓ = verified text-free, ✗ = text slipped through (reroll it), ⚠ = other issues found.
           </p>
         </div>
         <div className="flex w-full min-w-0 items-center gap-2 lg:w-auto">
           <input
+            aria-label="Describe the image to create"
             value={quickTopic}
             onChange={(e) => setQuickTopic(e.target.value)}
+            onBlur={(e) => { const v = e.target.value.trim(); if (v) workspace.setTopic(v, { source: 'images' }); }}
             onKeyDown={(e) => { if (e.key === 'Enter') void quickCreate(); }}
             placeholder="Describe an image… e.g. stem cell therapy for knees"
             className="min-w-0 flex-1 rounded-full bg-subtle px-4 py-2 text-[13px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent lg:w-72 lg:flex-none"

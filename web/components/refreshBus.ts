@@ -10,7 +10,16 @@
 // others exist — no more "generated a pack but the gallery didn't update
 // until reload".
 
-export type RefreshScope = 'drafts' | 'images' | 'posts' | 'stats' | 'autopilot';
+export type RefreshScope =
+  | 'drafts'      // the drafts library (Recent Drafts, Image Studio gallery)
+  | 'images'      // hero images attached to drafts
+  | 'posts'       // the publishing queue and the calendar grid
+  | 'stats'       // the headline stat cards
+  | 'autopilot'   // the Autopilot run queue
+  | 'insights'    // Metricool performance + "coming up next"
+  | 'brand'       // the brand profile that steers every generator
+  | 'templates'   // saved recurring templates
+  | 'semrush';    // Semrush unit balance / cached research
 
 const EVENT = 'chi:refresh';
 
@@ -31,4 +40,32 @@ export function onRefresh(handler: (scopes: RefreshScope[]) => void): () => void
   };
   window.addEventListener(EVENT, fn);
   return () => window.removeEventListener(EVENT, fn);
+}
+
+// ---------------------------------------------------------------------------
+// fetchDrafts: one in-flight request per identical drafts query.
+//
+// Three independent panels ask for the draft list on first paint — the Recent
+// Drafts pager, the Image Studio gallery and the clip pre-warmer — so every
+// dashboard load fired /api/drafts three times, two of them byte-identical.
+// Callers keep their own fetches; this just makes concurrent identical ones
+// share a single response. The entry is dropped as soon as it settles, so a
+// later refresh always hits the network and nothing goes stale.
+const inFlight = new Map<string, Promise<any>>();
+
+export function fetchDrafts(limit: number, offset = 0): Promise<any> {
+  const url = '/api/drafts?limit=' + limit + '&offset=' + offset;
+  const existing = inFlight.get(url);
+  if (existing) return existing;
+
+  const p = fetch(url)
+    .then(async (r) => {
+      if (r.status === 401) throw new Error('Your session has expired. Sign in again.');
+      if (!r.ok) throw new Error('Failed to load drafts (' + r.status + ')');
+      return r.json();
+    })
+    .finally(() => { inFlight.delete(url); });
+
+  inFlight.set(url, p);
+  return p;
 }

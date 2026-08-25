@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseServer, supabaseAdmin } from '@/lib/supabase';
+import { supabaseServer } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
+import { ALLOWED_BLOG_IDS, DEFAULT_BLOG_ID } from '@/lib/access';
 
 export const runtime = 'nodejs';
 
@@ -16,16 +18,60 @@ const NETWORK_MAP: Record<string, string> = {
 
 const TIMEZONE = process.env.METRICOOL_TIMEZONE || 'America/Cancun';
 
-// Metricool requires ISO datetime with seconds: YYYY-MM-DDTHH:MM:SS
-// datetime-local inputs in browsers produce YYYY-MM-DDTHH:MM (no seconds)
-function normalizePublishAt(input: string): string {
-  let s = String(input || '').trim();
-  if (!s) return s;
-  s = s.replace(/Z$/, '').replace(/[+-]\d{2}:?\d{2}$/, '');
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) s = s + ':00';
-  s = s.replace(/\.\d+$/, '');
-  return s;
+// Metricool wants a WALL-CLOCK datetime plus the timezone it belongs to:
+// { dateTime: 'YYYY-MM-DDTHH:MM:SS', timezone: TIMEZONE }.
+//
+// The previous implementation stripped a trailing `Z` (or a `±HH:MM` offset)
+// and passed the remaining digits straight through, which silently
+// reinterpreted a UTC instant as TIMEZONE local time. The calendar sends
+// `Date.toISOString()`, so a post the user asked for at 09:00 local went out
+// at 14:00 Cancun — five hours late — while the dashboard's naive
+// `datetime-local` value happened to be right. Both callers are handled here:
+//
+//   • an absolute instant (ends in Z or an offset) is CONVERTED into
+//     TIMEZONE wall-clock;
+//   • a naive value is taken as already being TIMEZONE wall-clock.
+//
+// Returns null when the input is not a usable datetime at all.
+function toZonedWallClock(instant: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).formatToParts(instant);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value || '00';
+  // en-CA + hour12:false can render midnight as "24"; normalise it.
+  const hour = get('hour') === '24' ? '00' : get('hour');
+  return get('year') + '-' + get('month') + '-' + get('day') + 'T' + hour + ':' + get('minute') + ':' + get('second');
 }
+
+function normalizePublishAt(input: string): { wallClock: string; instant: string } | null {
+  const raw = String(input || '').trim();
+  if (!raw) return null;
+
+  const absolute = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw);
+  if (absolute) {
+    const d = new Date(raw);
+    if (isNaN(d.getTime())) return null;
+    return { wallClock: toZonedWallClock(d, TIMEZONE), instant: d.toISOString() };
+  }
+
+  let s = raw.replace(/\.\d+$/, '');
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) s = s + ':00';
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(s)) return null;
+
+  // Recover the absolute instant for the naive wall-clock by measuring the
+  // zone's offset at that moment (handles DST without a tz database).
+  const guess = new Date(s + 'Z');
+  if (isNaN(guess.getTime())) return null;
+  const offsetMs = new Date(toZonedWallClock(guess, TIMEZONE) + 'Z').getTime() - guess.getTime();
+  return { wallClock: s, instant: new Date(guess.getTime() - offsetMs).toISOString() };
+}
+
+// Which Metricool brand profiles this deployment may post into is defined once
+// in lib/access.ts (ALLOWED_BLOG_IDS / DEFAULT_BLOG_ID) and shared with the read
+// routes so the allowlist can't drift between endpoints.
 
 // POST /api/metricool/schedule
 // body: { network, text, publishAt (ISO datetime string), blogId?, mediaUrl?, draftId?, autoPublish? }
@@ -44,10 +90,14 @@ export async function POST(req: NextRequest) {
   try { payload = await req.json(); } catch { payload = {}; }
   const network = String(payload.network || '').toLowerCase();
   const text = String(payload.text || '').trim();
-  const publishAt = normalizePublishAt(payload.publishAt);
-  const blogId = String(payload.blogId || '4308292');
+  const when = normalizePublishAt(payload.publishAt);
+  const blogId = String(payload.blogId || DEFAULT_BLOG_ID);
   const draftId = payload.draftId ? String(payload.draftId) : null;
-  if (!publishAt) return NextResponse.json({ error: 'publishAt is required (ISO datetime)' }, { status: 400 });
+  if (!when) return NextResponse.json({ error: 'publishAt must be a valid datetime' }, { status: 400 });
+  if (!ALLOWED_BLOG_IDS.has(blogId)) {
+    return NextResponse.json({ error: 'Unknown brand profile' }, { status: 400 });
+  }
+  const publishAt = when.wallClock;
   const provider = NETWORK_MAP[network];
   if (!provider) return NextResponse.json({ error: 'Unsupported network: ' + network }, { status: 400 });
   if (!text) return NextResponse.json({ error: 'text is required' }, { status: 400 });
@@ -103,7 +153,9 @@ export async function POST(req: NextRequest) {
         draft_id: draftId,
         providers: [provider],
         text: text,
-        publication_date: publishAt,
+        // Store the absolute instant, not the wall-clock string: the column is
+        // timestamptz and the calendar reads it back as one.
+        publication_date: when.instant,
         metricool_post_id: id,
         status: status || (autoPublish ? 'scheduled' : 'pending_review'),
       });
@@ -116,6 +168,8 @@ export async function POST(req: NextRequest) {
       autoPublish,
       review: !autoPublish,
       publicationDate: publicationDate,
+      publishAtUtc: when.instant,
+      timezone: TIMEZONE,
       providers: providers,
       post: post,
     });

@@ -1,6 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import PageNav from '@/components/PageNav';
+import { localDateKey } from '@/lib/composer';
+import { announce, onRefresh } from '@/components/refreshBus';
+import { useWorkspace } from '@/components/workspace';
 
 type Post = {
   id?: string;
@@ -27,13 +31,8 @@ const NETWORKS: { id: string; label: string }[] = [
   { id: 'twitter', label: 'X / Twitter' },
 ];
 
-// Local YYYY-MM-DD key for a Date (avoids UTC drift).
-function dateKey(d: Date) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
+// Shared with lib/composer so the rule has one home and one test.
+const dateKey = localDateKey;
 
 function postDayKey(iso?: string) {
   if (!iso) return '';
@@ -78,11 +77,38 @@ export default function CalendarPage() {
   const [pBusy, setPBusy] = useState(false);
   const [pStatus, setPStatus] = useState<string | null>(null);
 
-  const today = new Date();
-  const [cursor, setCursor] = useState(() => ({ year: today.getFullYear(), month: today.getMonth() }));
+  // The "today" marker has to be decided in the browser, never at prerender time.
+  // This is a client component, but Next.js still renders its HTML on the server,
+  // and React does not reconcile mismatched className attributes during
+  // production hydration — so a date captured when the page was built stays
+  // baked into the grid and highlights the wrong cell (it marked Aug 20 on
+  // Aug 21). `mounted` guarantees one real post-hydration render, which is what
+  // actually patches the DOM. Until then no cell claims to be today, which is
+  // honest rather than wrong. The interval keeps a tab left open overnight right.
+  const [mounted, setMounted] = useState(false);
+  const [today, setToday] = useState(() => new Date());
+  const [cursor, setCursor] = useState(() => {
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() };
+  });
+
+  useEffect(() => {
+    setMounted(true);
+    const now = new Date();
+    setToday(now);
+    setCursor({ year: now.getFullYear(), month: now.getMonth() });
+    const id = setInterval(() => {
+      setToday((prev) => {
+        const d = new Date();
+        return dateKey(prev) === dateKey(d) ? prev : d;
+      });
+    }, 60_000);
+    return () => clearInterval(id);
+  }, []);
   const [aiTopic, setAiTopic] = useState('');
   const [aiProvider, setAiProvider] = useState<'anthropic' | 'openai'>('anthropic');
   const [aiBusy, setAiBusy] = useState(false);
+  const workspace = useWorkspace();
 
   async function draftWithAI() {
     if (!aiTopic.trim()) { setErr('Enter a topic for the AI to draft from.'); return; }
@@ -99,6 +125,17 @@ export default function CalendarPage() {
       const pack = data?.pack || {};
       const drafted = pack.instagram || pack.facebook || pack.linkedin || pack.blog || '';
       setPText(drafted);
+      workspace.setTopic(aiTopic, { source: 'calendar' });
+      // Persist it like every other generator does, so a draft written on the
+      // calendar is not lost when the scheduling panel closes.
+      try {
+        const saved = await fetch('/api/drafts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topic: aiTopic, pack }),
+        });
+        if (saved.ok) announce('drafts', 'stats');
+      } catch { /* the draft is still usable in the composer */ }
     } catch (e: any) {
       setErr(e?.message || 'Failed to draft with AI');
     } finally {
@@ -107,6 +144,17 @@ export default function CalendarPage() {
   }
 
   useEffect(() => { refresh(); }, []);
+
+  // The calendar grid is the same `posts` table the dashboard's queue and stat
+  // cards read, so anything that schedules, approves or reschedules a post
+  // anywhere in the app refreshes this grid.
+  useEffect(() => onRefresh((scopes) => { if (scopes.includes('posts')) refresh(); }), []);
+
+  // Carry the current topic in from the generator / Semrush.
+  useEffect(() => {
+    if (workspace.topic && !aiTopic) setAiTopic(workspace.topic);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.topic]);
 
   async function refresh() {
     setLoading(true);
@@ -176,6 +224,7 @@ export default function CalendarPage() {
         body: JSON.stringify({ id, publication_date: iso }),
       });
       if (!r.ok) throw new Error('reschedule failed (' + r.status + ')');
+      announce('posts', 'stats', 'insights');
     } catch (e: any) {
       setErr(e && e.message ? e.message : 'Reschedule failed');
       refresh(); // revert to server truth
@@ -223,6 +272,7 @@ export default function CalendarPage() {
       const ok = results.filter((x) => x.ok).map((x) => x.network);
       const failed = results.filter((x) => !x.ok).map((x) => x.network);
       await refresh();
+      if (ok.length) announce('posts', 'stats', 'insights');
       if (failed.length === 0) {
         setPStatus('Scheduled on ' + ok.join(', ') + '.');
         setScheduleDay(null);
@@ -239,7 +289,8 @@ export default function CalendarPage() {
   }
 
   const monthLabel = `${MONTHS[cursor.month]} ${cursor.year}`;
-  const todayKey = dateKey(today);
+  // Empty until mount, so the server-rendered grid never marks a stale day.
+  const todayKey = mounted ? dateKey(today) : '';
 
   return (
     <main className="min-h-screen bg-canvas text-ink">
@@ -248,12 +299,7 @@ export default function CalendarPage() {
           <h1 className="text-xl font-semibold tracking-tight">Content Calendar</h1>
           <p className="mt-1 text-sm text-ink/50">Click a day to schedule a post, or drag a post to another day to reschedule it.</p>
         </div>
-        <a
-          href="/"
-          className="rounded-full border border-black/10 px-4 py-2 text-sm text-ink/70 transition hover:bg-black/5 hover:text-ink"
-        >
-          Back to dashboard
-        </a>
+        <PageNav current="/calendar" />
       </header>
 
       <div className="mx-auto max-w-[1100px] px-6 py-8">

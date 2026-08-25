@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
       body?.provider && ALLOWED_PROVIDERS.includes(body.provider) ? body.provider : undefined;
     const network: string | undefined =
       body?.network ? String(body.network).slice(0, 40) : undefined;
-    const brand: BrandContext | undefined =
+    let brand: BrandContext | undefined =
       body?.brand && typeof body.brand === 'object' ? body.brand : undefined;
 
     // Require an authenticated user before spending AI credits.
@@ -45,6 +45,21 @@ export async function POST(req: NextRequest) {
         { error: 'rate_limited', limit: rl.limit },
         { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } },
       );
+    }
+
+    // The Brand Brain reaches /api/generate and /api/drafts/image because both
+    // re-read brand_profiles server-side. This route accepted `brand` in its
+    // body but no client ever sent it, so research ran brand-less. Load it the
+    // same way the generator does.
+    if (!brand) {
+      try {
+        const { data: profile } = await sb
+          .from('brand_profiles')
+          .select('name, mission, voice, audience, keywords, guidelines')
+          .eq('user_id', user.id)
+          .maybeSingle();
+        if (profile) brand = profile as BrandContext;
+      } catch { /* research still works without it */ }
     }
 
     // Semrush pre-filter runs automatically inside researchTopic (cache-first,

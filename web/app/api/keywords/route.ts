@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { researchKeywords } from '@/lib/keywords';
 import { supabaseServer } from '@/lib/supabase';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
@@ -14,10 +15,12 @@ export async function GET(req: NextRequest) {
 
   // Require an authenticated user BEFORE doing anything that can spend
   // Semrush units or reveal config state. Fail closed on auth errors.
+  let userId = '';
   try {
     const sb = supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+    userId = user.id;
   } catch {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
@@ -29,9 +32,18 @@ export async function GET(req: NextRequest) {
     const hasKey = Boolean(process.env.SEMRUSH_API_KEY);
     const hasDatabase = Boolean(process.env.SEMRUSH_DATABASE);
     let probe: unknown = null;
-    if (hasKey) {
-      // Live round-trip against Semrush so 'reason' tells you auth vs plan vs ok.
-      const r = await researchKeywords(topic || 'seo', { limit: 1 });
+    // The live probe spends a unit, so it is rate-limited like any other
+    // lookup and requires an explicit topic — `?diag=1` on its own used to
+    // burn a billable Semrush call per request, defaulting to the word 'seo'.
+    if (hasKey && topic) {
+      const rl = await checkRateLimit(userId, 'keywords');
+      if (!rl.ok) {
+        return NextResponse.json(
+          { error: 'rate_limited', limit: rl.limit },
+          { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } }
+        );
+      }
+      const r = await researchKeywords(topic, { limit: 1 });
       probe = { ok: r.ok, source: r.source, reason: r.reason ?? null, upstreamStatus: r.upstreamStatus ?? null, note: r.note ?? null };
     }
     return NextResponse.json({
@@ -43,6 +55,14 @@ export async function GET(req: NextRequest) {
 
   if (!topic) {
     return NextResponse.json({ error: 'topic required' }, { status: 400 });
+  }
+
+  const rl = await checkRateLimit(userId, 'keywords');
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: 'rate_limited', limit: rl.limit },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } }
+    );
   }
 
   const research = await researchKeywords(topic, { limit: 15 });

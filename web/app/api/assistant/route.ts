@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { supabaseServer, supabaseAdmin } from "@/lib/supabase";
+import { createHmac, timingSafeEqual } from "crypto";
+import { supabaseServer } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 import {
   generateContentPack,
   chatAssistant,
@@ -73,6 +75,10 @@ type Session = {
   lastPack?: Record<string, any>;
   lastTopic?: string;
   pendingSchedule?: PendingSchedule | null;
+  // Server-issued HMAC over pendingSchedule. The whole session round-trips
+  // through the client, so anything action-bearing must be tamper-evident:
+  // a forged/edited pendingSchedule + "yes" must not schedule anything.
+  _sig?: string | null;
 };
 
 const NETWORKS = ["instagram", "facebook", "linkedin", "blog"];
@@ -119,7 +125,30 @@ function normalizePublishAt(input: string): string {
   return s;
 }
 
+// Key material for signing the client-round-tripped session. Service-role key
+// is always present in this deployment; CRON_SECRET wins when set.
+function sessionKey(): string {
+  return process.env.CRON_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+}
+function signPending(p: PendingSchedule | null | undefined): string | null {
+  const key = sessionKey();
+  if (!key || !p) return null;
+  return createHmac("sha256", key).update(JSON.stringify([p.network, p.text, p.publishAt])).digest("hex");
+}
+// True only when the pendingSchedule the client sent back carries a valid
+// server-issued signature. On any mismatch we drop the pending action.
+function pendingIsAuthentic(session: Session): boolean {
+  const p = session.pendingSchedule;
+  if (!p) return false;
+  const expect = signPending(p);
+  const got = String(session._sig || "");
+  if (!expect || !got || expect.length !== got.length) return false;
+  try { return timingSafeEqual(Buffer.from(expect), Buffer.from(got)); } catch { return false; }
+}
+
 function reply(session: Session, message: string, options?: string[]) {
+  // Stamp (or clear) the signature so only server-created pending actions survive the round-trip.
+  session._sig = signPending(session.pendingSchedule);
   return NextResponse.json({ session, message, options: options || null });
 }
 
@@ -447,10 +476,14 @@ async function runAgent(session: Session, input: string, userId: string | null) 
   return { message: finalMessage, options: ((session as any).lastPack ? { preview: (session as any).lastPack, draftId: (session as any).draftId ?? null } : undefined) as any };}
 
 export async function POST(req: Request) {
-  const { session: incoming, text } = (await req.json()) as {
-    session?: Session;
-    text?: string;
-  };
+  // Guarded like every other route in the repo: an unparseable body used to
+  // throw above the handler's try block and surface as an opaque 500 that the
+  // assistant widget rendered as "unexpected response (status 500)".
+  const parsed = (await req.json().catch(() => null)) as { session?: Session; text?: string } | null;
+  if (!parsed || typeof parsed !== 'object') {
+    return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 });
+  }
+  const { session: incoming, text } = parsed;
   const session: Session = incoming || {
     step: "greet",
     links: [],
@@ -492,7 +525,19 @@ export async function POST(req: Request) {
     }
 
     // If a schedule is awaiting confirmation, handle yes/no first.
+    // Reject any pendingSchedule the server didn't sign — the session object
+    // is client-supplied, so an unsigned/forged one must never schedule.
+    if (session.pendingSchedule && !pendingIsAuthentic(session)) {
+      session.pendingSchedule = null;
+    }
     if (session.pendingSchedule && input) {
+      // DECLINE is checked before AFFIRM so a reply that opens with an
+      // affirmative word but actually refuses ("ok, cancel that", "sure, but
+      // not yet") cancels instead of scheduling.
+      if (DECLINE.test(input)) {
+        session.pendingSchedule = null;
+        return reply({ ...session, mode: "chat", step: "greet" }, "Okay, I will not schedule it. Anything else?");
+      }
       if (AFFIRM.test(input)) {
         const p = session.pendingSchedule;
         session.pendingSchedule = null;
@@ -513,10 +558,6 @@ export async function POST(req: Request) {
             "I could not schedule that: " + (e?.message || "error") + ". Nothing was posted.",
           );
         }
-      }
-      if (DECLINE.test(input)) {
-        session.pendingSchedule = null;
-        return reply({ ...session, mode: "chat", step: "greet" }, "Okay, I will not schedule it. Anything else?");
       }
       // Ambiguous reply: keep waiting.
       return reply(session, "Just to confirm — should I send that post to Metricool for review? Please reply yes or no.", ["Yes, send for review", "No, cancel"]);
@@ -655,13 +696,38 @@ export async function POST(req: Request) {
       }
       case "scheduling": {
         const publishAt = input || new Date(Date.now() + 86400000).toISOString();
+        session.step = "done";
+        if (!userId) {
+          return reply(
+            { ...session, mode: "chat", step: "greet" },
+            "You need to be signed in to schedule posts. Your draft is saved — sign in and I can send it to Metricool for review.",
+          );
+        }
+        const pack = session.pack || session.lastPack;
         session.schedule = [];
         for (const network of session.channels || []) {
-          session.schedule.push({ network, publishAt });
-          session.confirmations!.push("Scheduled " + network + " for " + publishAt + ".");
+          // Only real Metricool networks are schedulable; blog (and anything
+          // unmapped) is left for manual publishing rather than silently dropped.
+          if (!SCHEDULE_NETWORK_MAP[network.toLowerCase()]) {
+            session.confirmations!.push(network.toUpperCase() + ": publish manually (not a Metricool network).");
+            continue;
+          }
+          const text = textFromPack(pack, network);
+          if (!text) {
+            session.confirmations!.push(network.toUpperCase() + ": skipped — no draft text found.");
+            continue;
+          }
+          try {
+            const res = await doSchedule(userId, { network, text, publishAt });
+            session.schedule.push({ network, publishAt: res.publishAt });
+            session.confirmations!.push(
+              network.toUpperCase() + ": sent to Metricool as a draft for review for " + res.publishAt + " (status: " + res.status + ").",
+            );
+          } catch (e: any) {
+            session.confirmations!.push(network.toUpperCase() + ": could not schedule — " + (e?.message || "error") + ". Nothing was posted.");
+          }
         }
         session.links!.push({ label: "View calendar", url: "/calendar" });
-        session.step = "done";
         return finish(session);
       }
       default: {
@@ -686,6 +752,6 @@ function finish(session: Session) {
       (conf || "\u2713 Draft ready.") +
       "\n\nLinks:\n" +
       (links || "\u2022 Open draft: /") +
-      "\n\nYou are clear to go ahead and post."
+      "\n\nAnything sent to Metricool is held as a draft \u2014 approve it there to publish."
   );
 }

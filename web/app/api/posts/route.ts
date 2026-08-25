@@ -55,6 +55,11 @@ export async function PATCH(req: Request) {
     .eq('user_id', user.id)
     .select('*')
     .single();
+  // PGRST116 = "no (or multiple) rows returned": the post belongs to someone
+  // else or was deleted. The calendar used to report this as a 500.
+  if (error && (error as any).code === 'PGRST116') {
+    return NextResponse.json({ error: 'post not found' }, { status: 404 });
+  }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ post: data });
 }

@@ -40,7 +40,7 @@ h1, h2, h3, .display {
 }
 
 select, input, textarea, button { font-family: inherit; }
-input::placeholder, textarea::placeholder { color: #a1a1a6; }
+input::placeholder, textarea::placeholder { color: #6f6f78; } /* AA on white 4.98:1, canvas 4.57:1 */
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 8px; border: 2px solid var(--canvas); }
