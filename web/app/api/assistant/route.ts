@@ -531,6 +531,13 @@ export async function POST(req: Request) {
       session.pendingSchedule = null;
     }
     if (session.pendingSchedule && input) {
+      // DECLINE is checked before AFFIRM so a reply that opens with an
+      // affirmative word but actually refuses ("ok, cancel that", "sure, but
+      // not yet") cancels instead of scheduling.
+      if (DECLINE.test(input)) {
+        session.pendingSchedule = null;
+        return reply({ ...session, mode: "chat", step: "greet" }, "Okay, I will not schedule it. Anything else?");
+      }
       if (AFFIRM.test(input)) {
         const p = session.pendingSchedule;
         session.pendingSchedule = null;
@@ -551,10 +558,6 @@ export async function POST(req: Request) {
             "I could not schedule that: " + (e?.message || "error") + ". Nothing was posted.",
           );
         }
-      }
-      if (DECLINE.test(input)) {
-        session.pendingSchedule = null;
-        return reply({ ...session, mode: "chat", step: "greet" }, "Okay, I will not schedule it. Anything else?");
       }
       // Ambiguous reply: keep waiting.
       return reply(session, "Just to confirm — should I send that post to Metricool for review? Please reply yes or no.", ["Yes, send for review", "No, cancel"]);
@@ -693,13 +696,38 @@ export async function POST(req: Request) {
       }
       case "scheduling": {
         const publishAt = input || new Date(Date.now() + 86400000).toISOString();
+        session.step = "done";
+        if (!userId) {
+          return reply(
+            { ...session, mode: "chat", step: "greet" },
+            "You need to be signed in to schedule posts. Your draft is saved — sign in and I can send it to Metricool for review.",
+          );
+        }
+        const pack = session.pack || session.lastPack;
         session.schedule = [];
         for (const network of session.channels || []) {
-          session.schedule.push({ network, publishAt });
-          session.confirmations!.push("Scheduled " + network + " for " + publishAt + ".");
+          // Only real Metricool networks are schedulable; blog (and anything
+          // unmapped) is left for manual publishing rather than silently dropped.
+          if (!SCHEDULE_NETWORK_MAP[network.toLowerCase()]) {
+            session.confirmations!.push(network.toUpperCase() + ": publish manually (not a Metricool network).");
+            continue;
+          }
+          const text = textFromPack(pack, network);
+          if (!text) {
+            session.confirmations!.push(network.toUpperCase() + ": skipped — no draft text found.");
+            continue;
+          }
+          try {
+            const res = await doSchedule(userId, { network, text, publishAt });
+            session.schedule.push({ network, publishAt: res.publishAt });
+            session.confirmations!.push(
+              network.toUpperCase() + ": sent to Metricool as a draft for review for " + res.publishAt + " (status: " + res.status + ").",
+            );
+          } catch (e: any) {
+            session.confirmations!.push(network.toUpperCase() + ": could not schedule — " + (e?.message || "error") + ". Nothing was posted.");
+          }
         }
         session.links!.push({ label: "View calendar", url: "/calendar" });
-        session.step = "done";
         return finish(session);
       }
       default: {
@@ -724,6 +752,6 @@ function finish(session: Session) {
       (conf || "\u2713 Draft ready.") +
       "\n\nLinks:\n" +
       (links || "\u2022 Open draft: /") +
-      "\n\nYou are clear to go ahead and post."
+      "\n\nAnything sent to Metricool is held as a draft \u2014 approve it there to publish."
   );
 }

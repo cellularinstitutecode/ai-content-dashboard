@@ -6,6 +6,9 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { persistClips } from '@/lib/drive';
 
 export const runtime = 'nodejs';
+// Multi-clip Drive uploads can take a while; give the poll path the same ceiling
+// as the webhook so a run isn't killed mid-upload and retried from scratch.
+export const maxDuration = 60;
 
 // Pull the Opus project id out of whatever shape the create response uses,
 // then normalize it to a trimmed string so it keys drafts consistently
@@ -184,8 +187,11 @@ export async function GET(req: NextRequest) {
     // Persist finished clips to Drive so we store permanent links instead of Opus's
     // short-lived signed CDN URLs. This mirrors the webhook's fast path; without it the
     // poll path would overwrite the draft with URLs that expire (Error: 30 on playback).
+    // Pass the clips already stored on the draft so anything previously uploaded is
+    // reused rather than re-downloaded and re-uploaded on every poll.
     if (ready) {
-        try { clips = await persistClips(clips, projectId); }
+        const knownClips = Array.isArray(draftRow?.pack?.clips) ? draftRow.pack.clips : [];
+        try { clips = await persistClips(clips, projectId, knownClips); }
         catch (e) { /* keep raw Opus clips if Drive persist fails entirely */ }
     }
 

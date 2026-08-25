@@ -44,15 +44,22 @@ export async function metricoolSchedulePost(input: SchedulePostInput) {
   const dateTime = isNaN(at.getTime())
     ? String(input.publicationDate)
     : formatForMetricool(at, SCHEDULE_TZ);
+  const autoPublish = input.autoPublish ?? false;
   const body = {
     text: input.text,
-    providers: input.providers,
+    // Metricool's scheduler expects provider OBJECTS ({ network }), not bare
+    // strings — this mirrors the interactive /api/metricool/schedule route.
+    // Sending bare strings silently fails / mis-files the post.
+    providers: input.providers.map((network) => ({ network })),
     publicationDate: { dateTime, timezone: SCHEDULE_TZ },
     firstCommentText: input.firstCommentText,
     media: input.media || [],
     // Publishing is a human decision: never auto-publish unless the caller
     // explicitly opts in (approveRun always passes false).
-    autoPublish: input.autoPublish ?? false
+    autoPublish,
+    // draft:true holds the post in Metricool's review queue rather than the live
+    // queue. Without it, an autoPublish:false post can still land as live-pending.
+    draft: !autoPublish
   };
 
   const res = await fetch(url.toString(), {

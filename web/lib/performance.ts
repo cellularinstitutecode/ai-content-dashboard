@@ -10,8 +10,20 @@
 // empty result rather than throwing. The generation path treats a missing hint
 // as "no signal yet".
 import 'server-only';
+import { createHash } from 'crypto';
 
 const METRICOOL_BASE = 'https://app.metricool.com/api';
+
+// Metricool sometimes returns analytics rows with no stable id. The post_metrics
+// upsert conflict key is (user_id, network, external_id), and in Postgres NULLs
+// never conflict — so a null external_id makes every re-sync INSERT the same
+// id-less post again, ballooning the table and skewing the "top performers" hint.
+// Derive a deterministic synthetic id from the row's stable fields so those rows
+// dedupe on re-sync like any other.
+function syntheticId(network: string, publishedAt: string | null, text: string | null): string {
+  const basis = [network, publishedAt ?? '', (text ?? '').slice(0, 200)].join('|');
+  return 'syn:' + createHash('sha1').update(basis).digest('hex').slice(0, 16);
+}
 
 export type NormalizedMetric = {
   network: string;
@@ -60,14 +72,23 @@ export function normalizeMetrics(payload: any): NormalizedMetric[] {
     : [];
 
   return list
-    .map((row: Record<string, any>) => ({
-      network: String(pick(row, ['network', 'provider', 'platform']) ?? 'unknown'),
-      externalId: (pick(row, ['id', 'postId', 'externalId']) ?? null) as string | null,
-      text: (pick(row, ['text', 'content', 'message', 'caption']) ?? null) as string | null,
-      publishedAt: (pick(row, ['publicationDate', 'publishedAt', 'date', 'dateTime']) ?? null) as string | null,
-      impressions: num(pick(row, ['impressions', 'reach', 'views'])),
-      engagement: engagementOf(row),
-    }))
+    .map((row: Record<string, any>) => {
+      const network = String(pick(row, ['network', 'provider', 'platform']) ?? 'unknown');
+      const text = (pick(row, ['text', 'content', 'message', 'caption']) ?? null) as string | null;
+      const publishedAt = (pick(row, ['publicationDate', 'publishedAt', 'date', 'dateTime']) ?? null) as string | null;
+      const rawId = pick(row, ['id', 'postId', 'externalId']);
+      const externalId = rawId != null && String(rawId).trim()
+        ? String(rawId)
+        : syntheticId(network, publishedAt, text);
+      return {
+        network,
+        externalId,
+        text,
+        publishedAt,
+        impressions: num(pick(row, ['impressions', 'reach', 'views'])),
+        engagement: engagementOf(row),
+      };
+    })
     .filter((m) => m.engagement > 0 || m.impressions > 0);
 }
 
