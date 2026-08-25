@@ -5,6 +5,7 @@ import { useVoiceAssistant } from "@/components/useVoiceAssistant";
 import { useLiveContent } from "@/components/LiveContentProvider";
 import { announce } from "@/components/refreshBus";
 import { useWorkspace } from "@/components/workspace";
+import { PanelLoader } from '@/components/LoadingScreen';
 
 type Msg = { id: string; role: "assistant" | "user"; text: string; options?: string[] | null };
 let __msgSeq = 0;
@@ -72,7 +73,7 @@ export default function DraftingAssistant() {
     try {
       const res = await fetch('/api/generate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-chi-progress-scope': 'assistant' },
         body: JSON.stringify({ topic: genIdea, provider: genProvider, model: genModel, type: genFormat }),
       });
       const data = await res.json();
@@ -174,6 +175,7 @@ export default function DraftingAssistant() {
 
       {open && (
         <div className="fixed bottom-6 right-6 z-50 flex h-[560px] w-[380px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-surface shadow-2xl ring-1 ring-black/10">
+          <PanelLoader scope="assistant" rounded="rounded-2xl" />
           <header className="flex items-center justify-between gap-2 border-b border-black/5 px-4 py-3">
             <div className="flex min-w-0 items-center gap-3">
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">

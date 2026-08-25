@@ -5,6 +5,7 @@ import PageNav from '@/components/PageNav';
 import { localDateKey } from '@/lib/composer';
 import { announce, onRefresh } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
+import { PanelLoader } from '@/components/LoadingScreen';
 
 type Post = {
   id?: string;
@@ -117,7 +118,7 @@ export default function CalendarPage() {
     try {
       const res = await fetch('/api/generate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-chi-progress-scope': 'calendar' },
         body: JSON.stringify({ topic: aiTopic, provider: aiProvider, model: aiProvider === 'anthropic' ? 'claude-sonnet-4-5' : 'gpt-4o', type: 'social' }),
       });
       const data = await res.json();
@@ -383,9 +384,10 @@ export default function CalendarPage() {
           onClick={() => { if (!pBusy) setScheduleDay(null); }}
         >
           <div
-            className="w-full max-w-md rounded-2xl bg-surface p-5 shadow-2xl ring-1 ring-black/10"
+            className="relative w-full max-w-md rounded-2xl bg-surface p-5 shadow-2xl ring-1 ring-black/10"
             onClick={(e) => e.stopPropagation()}
           >
+            <PanelLoader scope="calendar" rounded="rounded-2xl" />
             <div className="mb-4 flex items-start justify-between">
               <div>
                 <h3 className="text-base font-semibold text-ink">Schedule a post</h3>

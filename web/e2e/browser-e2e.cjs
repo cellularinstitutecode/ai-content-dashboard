@@ -57,7 +57,13 @@ function check(name, ok, detail) {
       const m = /(\d{1,3})%/.exec(text);
       if (m) window.__pctLog.push(parseInt(m[1], 10));
     };
+    window.__overlayLog = [];
+    const scanOverlay = () => {
+      if (document.querySelector('[data-testid="global-loading-screen"]')) window.__overlayLog.push('full-screen');
+      if (document.querySelector('[data-testid="panel-loading-screen"]')) window.__overlayLog.push('panel');
+    };
     const mo = new MutationObserver((muts) => {
+      scanOverlay();
       for (const mu of muts) {
         scan(mu.target);
         mu.addedNodes && mu.addedNodes.forEach((n) => scan(n));
@@ -79,7 +85,10 @@ function check(name, ok, detail) {
   const percentSamples = await page.evaluate(() => window.__pctLog || []);
 
   check('dashboard renders (signed in, no redirect to /sign-in)', !page.url().includes('sign-in'), page.url());
-  check('loading screen showed a live percentage while panels loaded', percentSamples.length > 0, 'samples: ' + percentSamples.join(','));
+  check('hairline top bar showed a live percentage while panels loaded', percentSamples.length > 0, 'samples: ' + percentSamples.join(','));
+  const bootOverlays = await page.evaluate(() => window.__overlayLog || []);
+  check('sign-in/boot never raised a full-screen loading overlay', !bootOverlays.includes('full-screen'), bootOverlays.join(','));
+  check('sign-in/boot never raised a panel loading overlay either', !bootOverlays.includes('panel'), bootOverlays.join(','));
   check('percentage stayed sane (0-100) and progressed', percentSamples.every((p) => p >= 0 && p <= 100) && (percentSamples.length < 2 || percentSamples[percentSamples.length - 1] >= percentSamples[0]), percentSamples.join(','));
 
   const body = await page.evaluate(() => document.body.innerText);
@@ -116,6 +125,34 @@ function check(name, ok, detail) {
   await page.waitForTimeout(2500);
   const after = apiRequests.filter((u) => u.startsWith('/api/drafts?')).length;
   check('announce(drafts) makes panels refetch /api/drafts live (no reload)', after > before, before + ' → ' + after);
+
+  // ---- 4b: generation covers ONLY its own panel, with a percentage --------
+  await page.evaluate(() => {
+    window.__genDone = false;
+    fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ topic: 'e2e loading probe', provider: 'anthropic', model: 'claude-sonnet-4-5', type: 'social' }),
+    }).catch(() => {}).finally(() => { window.__genDone = true; });
+  });
+  await page.waitForTimeout(600);
+  const genState = await page.evaluate(() => {
+    const panel = document.querySelector('[data-testid="panel-loading-screen"]');
+    return {
+      panelVisible: Boolean(panel),
+      scope: panel ? panel.getAttribute('data-scope') : null,
+      insideCreate: Boolean(document.querySelector('#section-create [data-testid="panel-loading-screen"]')),
+      fullScreen: Boolean(document.querySelector('[data-testid="global-loading-screen"]')),
+      pct: (document.querySelector('[data-testid="panel-loading-percent"]') || {}).textContent || '',
+    };
+  });
+  check('drafting raises the loading screen INSIDE the Content Generator panel', genState.panelVisible && genState.insideCreate, JSON.stringify(genState));
+  check('the drafting loader is scoped to "create" and shows a percentage', genState.scope === 'create' && /[0-9]/.test(genState.pct), JSON.stringify(genState));
+  check('no full-screen overlay during drafting', !genState.fullScreen);
+  await page.waitForFunction(() => window.__genDone, { timeout: 60000 }).catch(() => {});
+  await page.waitForTimeout(1200);
+  const stillCovered = await page.evaluate(() => Boolean(document.querySelector('[data-testid="panel-loading-screen"]')));
+  check('the panel loader clears when generation ends', !stillCovered);
 
   await page.screenshot({ path: '/tmp/e2e-dashboard.png', fullPage: false });
   await page.evaluate(() => window.scrollTo(0, 0));

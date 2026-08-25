@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import ProcessTracker, { makeSteps, stepActive, stepError, stepsDone, type ProcessStep } from '@/components/ProcessTracker';
 import { announce, onRefresh, fetchDrafts } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
+import { PanelLoader } from '@/components/LoadingScreen';
 
 // The visible pipeline a standalone image walks through — each step lights up
 // as the real call behind it starts/finishes.
@@ -207,7 +208,8 @@ export default function ImageStudio() {
   const lbImage = lightbox?.pack?._image;
 
   return (
-    <section id="section-images" className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+    <section id="section-images" className="relative mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+      <PanelLoader scope="image-studio" />
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b border-line px-6 py-5 sm:px-8">
         <div className="min-w-0 flex-1 basis-72">
           <h2 className="flex flex-wrap items-center gap-2 text-[15px] font-semibold text-ink">

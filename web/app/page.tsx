@@ -10,6 +10,7 @@ import ProcessTracker, { makeSteps, stepActive, stepError, stepSkip, stepsDone, 
 import { announce, onRefresh, fetchDrafts } from "@/components/refreshBus";
 import { tightestLimit, networkLabel, parseVideoUrl, localDateTimeValue, draftLabel } from "@/lib/composer";
 import { useWorkspace } from "@/components/workspace";
+import { PanelLoader } from "@/components/LoadingScreen";
 
 // The visible pipeline every manual generation walks through. Steps light up
 // as the real calls behind them start/finish so the viewer can follow the
@@ -834,7 +835,7 @@ setProc((p) => (p ? stepActive(p, 'image') : p));
 procAdvanceLater('verify', 20000); // generation ~20s, then the vision check
 fetch('/api/drafts/image', {
 method: 'POST',
-headers: { 'content-type': 'application/json' },
+headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'create' },
 body: JSON.stringify({ id: draftId }),
 })
 .then(async (ir) => {
@@ -875,7 +876,7 @@ setGenImageLoading(true);
 try {
 const ir = await fetch('/api/drafts/image', {
 method: 'POST',
-headers: { 'content-type': 'application/json' },
+headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'create' },
 body: JSON.stringify({ id: lastDraftId, regenerate: true }),
 });
 const ij = await ir.json().catch(() => ({}));
@@ -891,7 +892,7 @@ setModalImgBusy(true);
 try {
 const r = await fetch('/api/drafts/image', {
 method: 'POST',
-headers: { 'content-type': 'application/json' },
+headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'draft-modal' },
 body: JSON.stringify({ id, regenerate: true }),
 });
 const j = await r.json().catch(() => ({}));
@@ -1087,7 +1088,8 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 
 
 {/* Generator */}
-<section id="section-create" className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<section id="section-create" className="relative mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<PanelLoader scope="create" />
 <div className="border-b border-line px-6 py-5 sm:px-8">
 <div className="flex items-center gap-2">
 <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 1 · Create</span>
@@ -1879,7 +1881,8 @@ className="rounded-full bg-subtle px-5 py-2 text-[13px] font-medium text-ink rin
 {/* Draft detail modal — click a draft to view / play / edit */}
 {selectedDraft && typeof document !== 'undefined' ? createPortal((
 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" onClick={() => { setSelectedDraft(null); setEditingDraft(false); }}>
-<div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7" onClick={(e) => e.stopPropagation()}>
+<div className="relative max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7" onClick={(e) => e.stopPropagation()}>
+<PanelLoader scope="draft-modal" />
 <div className="mb-4 flex items-start justify-between gap-4">
 {editingDraft ? (
 <input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} aria-label="Draft title" placeholder="Draft title"

@@ -1,5 +1,5 @@
-// Behavioural tests for the progress bus — the component behind the global
-// loading screen. Run with `npm test`.
+// Behavioural tests for the progress bus — the engine behind the panel
+// loading screens and the hairline top bar. Run with `npm test`.
 //
 // Behavioural tests for the progress bus: the percentage, the calibration,
 // the foreground/background split, and the fetch interception.
@@ -151,12 +151,64 @@ test('every API endpoint gets a plain-English label', () => {
   pass++; console.log('  ✓ known pollers are classified background automatically');
 
   // 10 — a failing request is reported, not swallowed
+  const trackedFetch = window.fetch;   // the instrumented wrapper installed in test 7
   global.window.fetch = async () => ({ ok: false, status: 500 });
   bus.noteInteraction();
   await window.fetch('/api/generate', { method: 'POST' });
   await sleep(20);
   assert.strictEqual(bus.snapshot().active, false);
   pass++; console.log('  ✓ a 5xx closes its task instead of hanging the screen');
+
+  // 11 — ONLY generation work is foreground: a save, a delete, a schedule or
+  // a boot-time GET must never raise any loading screen (full-screen or panel).
+  global.window.fetch = trackedFetch;   // back on the instrumented wrapper (test 7 stub: ok, ~80ms)
+  const pSave = window.fetch('/api/drafts', { method: 'POST' });
+  const pBoot = window.fetch('/api/stats');
+  const pSched = window.fetch('/api/metricool/schedule', { method: 'POST' });
+  await sleep(25);
+  const s11 = bus.snapshot();
+  assert.strictEqual(s11.active, false, 'saves/lookups must never be foreground (was: ' + s11.running.map((t) => t.key).join(', ') + ')');
+  assert.strictEqual(s11.backgroundActive, true, 'they still show on the hairline top bar');
+  await Promise.all([pSave, pBoot, pSched]);
+  pass++; console.log('  \u2713 saves, schedules and boot fetches stay off the loading screens');
+
+  // 12 — generation tasks land in their owning panel's scope by default
+  await sleep(800);
+  const pGen = window.fetch('/api/generate', { method: 'POST' });
+  const pImg = window.fetch('/api/drafts/image', { method: 'POST' });
+  await sleep(25);
+  const create = bus.scopedSnapshot('create');
+  const studio = bus.scopedSnapshot('image-studio');
+  assert.strictEqual(create.running.length, 1, 'drafting shows in the create panel only');
+  assert.strictEqual(create.label, 'Writing your content pack');
+  assert.strictEqual(studio.running.length, 1, 'image generation shows in the Image Studio only');
+  assert.strictEqual(studio.label, 'Generating and verifying the hero image');
+  assert.strictEqual(bus.scopedSnapshot('autopilot').active, false, 'other panels stay clear');
+  await Promise.all([pGen, pImg]);
+  await sleep(800);
+  pass++; console.log('  \u2713 each generation shows in its own panel scope, nowhere else');
+
+  // 13 — the x-chi-progress-scope header re-homes a shared endpoint
+  const pCal = window.fetch('/api/generate', { method: 'POST', headers: { 'x-chi-progress-scope': 'calendar' } });
+  await sleep(25);
+  assert.strictEqual(bus.scopedSnapshot('calendar').running.length, 1, 'the calendar call shows on the calendar panel');
+  assert.strictEqual(bus.scopedSnapshot('create').active, false, 'and NOT on the create panel');
+  await pCal;
+  await sleep(800);
+  pass++; console.log('  \u2713 a scope header routes shared endpoints to the right panel');
+
+  // 14 — scoped percentages are independent and monotonic
+  const hA = bus.startTask({ key: 'POST /api/generate', scope: 'create', expectedMs: 500 });
+  const hB = bus.startTask({ key: 'POST /api/drafts/image', scope: 'image-studio', expectedMs: 50000 });
+  await sleep(200);
+  const pcA = bus.scopedSnapshot('create').percent;
+  const pcB = bus.scopedSnapshot('image-studio').percent;
+  assert.ok(pcA > pcB, 'a fast task\'s panel runs ahead of a slow one\'s (' + pcA + ' vs ' + pcB + ')');
+  hA.done();
+  assert.strictEqual(bus.scopedSnapshot('create').percent, 100, 'the finished panel snaps to 100');
+  assert.ok(bus.scopedSnapshot('image-studio').percent < 100, 'the busy panel keeps its own number');
+  hB.done();
+  pass++; console.log('  \u2713 panel percentages are independent and each snaps to 100 on its own');
 
   console.log('\n' + pass + ' assertions passed\n');
 })().catch((e) => { console.error('\nFAILED: ' + e.message); process.exit(1); });
