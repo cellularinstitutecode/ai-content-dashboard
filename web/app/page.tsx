@@ -10,6 +10,7 @@ import ProcessTracker, { makeSteps, stepActive, stepError, stepSkip, stepsDone, 
 import { announce, onRefresh, fetchDrafts } from "@/components/refreshBus";
 import { tightestLimit, networkLabel, parseVideoUrl, localDateTimeValue, draftLabel } from "@/lib/composer";
 import { useWorkspace } from "@/components/workspace";
+import { PanelLoader } from "@/components/LoadingScreen";
 
 // The visible pipeline every manual generation walks through. Steps light up
 // as the real calls behind them start/finish so the viewer can follow the
@@ -50,9 +51,10 @@ const CONTENT_TYPES: { id: ContentType; label: string; hint: string }[] = [
 // first-time viewer understands the create -> repurpose -> schedule flow.
 const ONBOARD_STEPS: { title: string; body: string }[] = [
 { title: '1 · Create', body: 'Pick a model and format, describe your idea, and generate a ready-to-post content pack.' },
-{ title: '2 · Repurpose', body: 'Paste a long YouTube or Vimeo URL and OpusClip turns it into short vertical clips.' },
-{ title: '3 · Schedule', body: 'Send posts to Metricool for review — you approve the final publish there.' },
-{ title: '4 · Library', body: 'Everything you make is saved under Recent Drafts so you can edit, play, or reuse it.' },
+{ title: '2 · Images', body: 'Every AI visual is generated and machine-verified text-free in the Image Studio.' },
+{ title: '3 · Repurpose', body: 'Paste a long YouTube or Vimeo URL and OpusClip turns it into short vertical clips.' },
+{ title: '4 · Schedule', body: 'Send posts to Metricool for review — you approve the final publish there.' },
+{ title: '5 · Library', body: 'Everything you make is saved under Recent Drafts so you can edit, play, or reuse it.' },
 ];
 const ONBOARD_KEY = 'chi_onboarding_dismissed_v1';
 
@@ -484,7 +486,7 @@ try { if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'sm
 
   // Smooth-scroll the "How this works" cards to the matching section below,
   // and briefly highlight it so the viewer sees where they landed.
-  const STEP_ANCHORS = ['section-create', 'section-repurpose', 'section-publish', 'section-library'];
+  const STEP_ANCHORS = ['section-create', 'section-images', 'section-repurpose', 'section-publish', 'section-library'];
   function scrollToStep(i: number) {
     try {
       const el = typeof document !== 'undefined' ? document.getElementById(STEP_ANCHORS[i]) : null;
@@ -834,7 +836,7 @@ setProc((p) => (p ? stepActive(p, 'image') : p));
 procAdvanceLater('verify', 20000); // generation ~20s, then the vision check
 fetch('/api/drafts/image', {
 method: 'POST',
-headers: { 'content-type': 'application/json' },
+headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'create' },
 body: JSON.stringify({ id: draftId }),
 })
 .then(async (ir) => {
@@ -875,7 +877,7 @@ setGenImageLoading(true);
 try {
 const ir = await fetch('/api/drafts/image', {
 method: 'POST',
-headers: { 'content-type': 'application/json' },
+headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'create' },
 body: JSON.stringify({ id: lastDraftId, regenerate: true }),
 });
 const ij = await ir.json().catch(() => ({}));
@@ -891,7 +893,7 @@ setModalImgBusy(true);
 try {
 const r = await fetch('/api/drafts/image', {
 method: 'POST',
-headers: { 'content-type': 'application/json' },
+headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'draft-modal' },
 body: JSON.stringify({ id, regenerate: true }),
 });
 const j = await r.json().catch(() => ({}));
@@ -1049,7 +1051,7 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
           <div className="flex items-center justify-between border-b border-line px-6 py-4 sm:px-8">
             <div>
               <h2 className="text-[15px] font-semibold text-ink">How this works</h2>
-              <p className="mt-0.5 text-[12px] text-ink-muted">A quick tour of the create → repurpose → schedule flow.</p>
+              <p className="mt-0.5 text-[12px] text-ink-muted">A quick tour of the create → images → repurpose → schedule flow.</p>
             </div>
             <button type="button" onClick={toggleOnboard} aria-expanded={onboardOpen}
               className="shrink-0 rounded-full px-3 py-1.5 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">
@@ -1057,7 +1059,7 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
             </button>
           </div>
           {onboardOpen && (
-            <div className="grid gap-3 p-6 sm:grid-cols-2 sm:p-8 lg:grid-cols-4">
+            <div className="grid gap-3 p-6 sm:grid-cols-2 sm:p-8 lg:grid-cols-5">
               {ONBOARD_STEPS.map((s, i) => (
                 <button key={s.title} type="button" onClick={() => scrollToStep(i)} className="cursor-pointer rounded-2xl bg-subtle/60 p-4 text-left ring-1 ring-line transition hover:bg-white hover:ring-accent">
                   <div className="text-[13px] font-semibold text-ink">{s.title}</div>
@@ -1068,12 +1070,6 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
           )}
         </section>
       )}
-
-{/* Autopilot: dynamic-template runs waiting for review — everything but publish */}
-{/* AI Image Studio — every generated + verified visual, front and center */}
-<ImageStudio />
-
-<AutopilotQueue />
 
 {/* Stat cards */}
 <section className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -1087,7 +1083,8 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 
 
 {/* Generator */}
-<section id="section-create" className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<section id="section-create" className="relative mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<PanelLoader scope="create" />
 <div className="border-b border-line px-6 py-5 sm:px-8">
 <div className="flex items-center gap-2">
 <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 1 · Create</span>
@@ -1237,12 +1234,15 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
 </section>
 
 
+{/* Step 2 · Images — every generated + verified visual, right after Create */}
+<ImageStudio />
+
 {/* OpusClip — long-form to Shorts (video repurposing workspace) */}
 <section id="section-repurpose" className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
 <div className="border-b border-line px-6 py-5 sm:px-8">
 <div className="flex flex-wrap items-center justify-between gap-3">
 <div className="flex items-center gap-2">
-<span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 2 · Repurpose</span>
+<span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 3 · Repurpose</span>
 <h2 className="text-[18px] font-semibold text-ink">Long-form to Shorts</h2>
 </div>
 <span className="rounded-full bg-subtle px-2.5 py-1 text-[11px] font-medium text-ink-muted ring-1 ring-line">Powered by OpusClip</span>
@@ -1368,13 +1368,14 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 tex
 </section>
 
 {/* Publishing (Metricool) — compose, review flow, and live queue */}
-<section id="section-publish" className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<section id="section-publish" className="relative mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<PanelLoader scope="publish" />
 <div className="border-b border-line px-6 py-5 sm:px-8">
 <div className="flex flex-wrap items-center justify-between gap-3">
 <div className="flex items-center gap-3">
 <span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-2xl bg-accent/10 text-accent text-[18px]">📣</span>
 <div>
-<span className="mb-1 inline-block rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 3 · Schedule</span><h2 className="text-[18px] font-semibold text-ink">Publishing</h2>
+<span className="mb-1 inline-block rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 4 · Schedule</span><h2 className="text-[18px] font-semibold text-ink">Publishing</h2>
 <p className="text-[13px] text-ink-muted">Plan, schedule, and track your posts across every channel.</p>
 </div>
 </div>
@@ -1765,6 +1766,9 @@ return (
 </section>
 
 
+{/* Autopilot: dynamic-template runs waiting for review — everything but publish */}
+<AutopilotQueue />
+
 {/* Recent Drafts */}
 <section id="section-library" className="rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7">
 <h2 className="mb-4 text-headline font-semibold">Recent Drafts</h2>
@@ -1879,7 +1883,8 @@ className="rounded-full bg-subtle px-5 py-2 text-[13px] font-medium text-ink rin
 {/* Draft detail modal — click a draft to view / play / edit */}
 {selectedDraft && typeof document !== 'undefined' ? createPortal((
 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" onClick={() => { setSelectedDraft(null); setEditingDraft(false); }}>
-<div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7" onClick={(e) => e.stopPropagation()}>
+<div className="relative max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7" onClick={(e) => e.stopPropagation()}>
+<PanelLoader scope="draft-modal" />
 <div className="mb-4 flex items-start justify-between gap-4">
 {editingDraft ? (
 <input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} aria-label="Draft title" placeholder="Draft title"

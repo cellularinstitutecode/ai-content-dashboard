@@ -26,6 +26,7 @@ export type Task = {
   label: string;        // human sentence, e.g. "Writing your content pack"
   detail?: string;
   kind: TaskKind;
+  scope: string;        // which panel owns this work, e.g. "create", "image-studio"
   startedAt: number;
   endedAt?: number;
   expectedMs: number;
@@ -107,6 +108,28 @@ function record(key: string, actualMs: number) {
   writePerf(map);
 }
 
+// --------------------------------------------------------------- generation
+
+// The ONLY work that earns a visible loading screen: drafting content and
+// generating/verifying images. Each entry maps to the panel that owns it, so
+// the loader covers that panel and nothing else. Everything not on this list
+// runs silently (at most the hairline top bar) — saves, deletes, refreshes,
+// lookups and the sign-in boot are not "generation" and never block the UI.
+const GENERATION: Array<[RegExp, string]> = [
+  [/^POST \/api\/generate(?:[/?]|$)/, 'create'],
+  [/^POST \/api\/transform(?:[/?]|$)/, 'create'],
+  [/^POST \/api\/metricool\/ai-research(?:[/?]|$)/, 'publish'],   // the research box lives in the Publishing panel
+  [/^POST \/api\/assistant(?:[/?]|$)/, 'assistant'],
+  [/^POST \/api\/drafts\/image(?:[/?]|$)/, 'image-studio'],
+  [/^POST \/api\/autopilot\/tick(?:[/?]|$)/, 'autopilot'],
+  [/^POST \/api\/autopilot\/runs(?:[/?]|$)/, 'autopilot'],
+];
+
+export function generationScopeFor(key: string): string | null {
+  for (const [re, scope] of GENERATION) if (re.test(key)) return scope;
+  return null;
+}
+
 // ------------------------------------------------------------------- labels
 
 // Endpoint → plain-English sentence. Anything unmatched falls back to a
@@ -155,6 +178,8 @@ export function labelFor(key: string): string {
 let tasks: Task[] = [];
 let batchStart = 0;
 let batchFloor = 0;               // monotonic guard: percent never goes backwards
+const scopeStarts = new Map<string, number>();   // per-panel batch start
+const scopeFloors = new Map<string, number>();   // per-panel monotonic guard
 const listeners = new Set<() => void>();
 let seq = 0;
 
@@ -177,13 +202,8 @@ function curve(task: Task, now: number): number {
 
 const DONE_LINGER_MS = 700;       // finished tasks stay visible briefly
 
-export function snapshot(now: number = Date.now()): Snapshot {
-  const live = tasks.filter((t) => t.state === 'running' || (t.endedAt || 0) + DONE_LINGER_MS > now);
-  const running = live.filter((t) => t.state === 'running');
-  const fg = live.filter((t) => t.kind === 'foreground');
-  const fgRunning = fg.filter((t) => t.state === 'running');
-
-  const pool = fg.length ? fg : live;
+// Cost-weighted aggregate of a pool of tasks into one 0..100 number.
+function aggregate(pool: Task[], now: number): number {
   let weight = 0;
   let sum = 0;
   for (const t of pool) {
@@ -191,11 +211,56 @@ export function snapshot(now: number = Date.now()): Snapshot {
     weight += w;
     sum += w * curve(t, now);
   }
-  let percent = weight > 0 ? (sum / weight) * 100 : 0;
+  return weight > 0 ? (sum / weight) * 100 : 0;
+}
+
+// The view a single panel's loader reads: only the foreground (generation)
+// tasks belonging to that panel's scope, with its own monotonic percentage.
+export function scopedSnapshot(scope: string, now: number = Date.now()): Snapshot {
+  const live = tasks.filter(
+    (t) => t.kind === 'foreground' && t.scope === scope &&
+      (t.state === 'running' || (t.endedAt || 0) + DONE_LINGER_MS > now),
+  );
+  const running = live.filter((t) => t.state === 'running');
+  const active = running.length > 0;
+
+  let percent = aggregate(live, now);
+  if (!active && live.length > 0) percent = 100;
+  if (!active && live.length === 0) {
+    scopeFloors.delete(scope);
+    scopeStarts.delete(scope);
+    percent = 0;
+  } else {
+    const floor = scopeFloors.get(scope) || 0;
+    percent = Math.max(percent, floor);
+    scopeFloors.set(scope, percent);
+    if (!scopeStarts.has(scope)) scopeStarts.set(scope, running[0]?.startedAt || now);
+  }
+
+  const headline = running[0] || live[0];
+  return {
+    tasks: live,
+    running,
+    percent: Math.max(0, Math.min(100, Math.round(percent))),
+    active,
+    backgroundActive: false,
+    label: headline ? headline.label : 'Finishing up',
+    since: scopeStarts.get(scope) || now,
+  };
+}
+
+export function snapshot(now: number = Date.now()): Snapshot {
+  const live = tasks.filter((t) => t.state === 'running' || (t.endedAt || 0) + DONE_LINGER_MS > now);
+  const running = live.filter((t) => t.state === 'running');
+  const fg = live.filter((t) => t.kind === 'foreground');
+  const fgRunning = fg.filter((t) => t.state === 'running');
+
+  const pool = fg.length ? fg : live;
+  let percent = aggregate(pool, now);
 
   const active = fgRunning.length > 0;
   if (!active && fg.length > 0) percent = 100;
-  if (!active && fg.length === 0) { batchFloor = 0; percent = weight > 0 ? percent : 0; }
+  if (!active && fg.length === 0) { batchFloor = 0; percent = pool.length > 0 ? percent : 0; }
   else { percent = Math.max(percent, batchFloor); batchFloor = percent; }
 
   const headline = fgRunning[0] || running[0];
@@ -223,6 +288,7 @@ export function startTask(opts: {
   label?: string;
   detail?: string;
   kind?: TaskKind;
+  scope?: string;
   expectedMs?: number;
 }): TaskHandle {
   const key = opts.key || 'TASK ' + (opts.label || 'work');
@@ -233,12 +299,22 @@ export function startTask(opts: {
     label: opts.label || labelFor(key),
     detail: opts.detail,
     kind: opts.kind || 'foreground',
+    scope: opts.scope || generationScopeFor(key) || 'app',
     startedAt: now,
     expectedMs: opts.expectedMs || expectedFor(key),
     state: 'running',
   };
   const anyForeground = tasks.some((t) => t.state === 'running' && t.kind === 'foreground');
   if (task.kind === 'foreground' && !anyForeground) { batchStart = now; batchFloor = 0; }
+  // A scope going idle → active starts a fresh batch for that panel. Without
+  // this, a panel whose loader was unmounted when its last batch finished
+  // (closed modal, route change) would inherit a stale high floor and its next
+  // generation would start at ~90% instead of 0.
+  if (task.kind === 'foreground' &&
+      !tasks.some((t) => t.state === 'running' && t.kind === 'foreground' && t.scope === task.scope)) {
+    scopeFloors.delete(task.scope);
+    scopeStarts.set(task.scope, now);
+  }
   tasks = [...tasks, task];
   emit();
 
@@ -281,7 +357,7 @@ export function startTask(opts: {
 // screen — used by multi-step flows that want one honest bar for the whole
 // sequence instead of a flicker per request.
 export async function runTask<T>(
-  opts: { key?: string; label: string; detail?: string; kind?: TaskKind; expectedMs?: number },
+  opts: { key?: string; label: string; detail?: string; kind?: TaskKind; scope?: string; expectedMs?: number },
   fn: (handle: TaskHandle) => Promise<T>,
 ): Promise<T> {
   const handle = startTask(opts);
@@ -304,34 +380,30 @@ const QUIET = [
   /^\/api\/semrush\?action=balance/,
 ];
 
-const INTERACTION_WINDOW_MS = 1500;   // a request this soon after a click is "the user waiting"
-const BOOT_WINDOW_MS = 4000;          // first paint: the boot screen is welcome
-
-let lastInteraction = 0;
-let installedAt = 0;
 let installed = false;
 
-export function noteInteraction() { lastInteraction = Date.now(); }
+// Kept for API compatibility (call sites and tests reference it); the
+// classifier no longer promotes requests just because a click happened.
+export function noteInteraction() { /* interaction no longer changes classification */ }
 
-function classify(path: string, method: string, headerHint: string | null): TaskKind | null {
+// Foreground = a panel loading screen. ONLY generation work (drafting content,
+// generating/verifying images, Autopilot runs) qualifies — everything else,
+// including the sign-in boot fetches, saves, deletes, schedules and lookups,
+// stays background: silent, or at most the hairline top bar.
+function classify(key: string, path: string, headerHint: string | null): TaskKind {
   if (headerHint === 'quiet') return 'background';
   if (headerHint === 'loud') return 'foreground';
+  // Generation outranks the QUIET path list: the same /api/autopilot/runs path
+  // is a quiet GET poller but a foreground POST action (approve/regenerate) —
+  // the key carries the method, so the whitelist can tell them apart.
+  if (generationScopeFor(key)) return 'foreground';
   if (QUIET.some((re) => re.test(path))) return 'background';
-  const now = Date.now();
-  if (method !== 'GET') return 'foreground';
-  if (now - lastInteraction < INTERACTION_WINDOW_MS) return 'foreground';
-  if (now - installedAt < BOOT_WINDOW_MS) return 'foreground';
   return 'background';
 }
 
 export function installFetchProgress() {
   if (installed || typeof window === 'undefined' || typeof window.fetch !== 'function') return;
   installed = true;
-  installedAt = Date.now();
-
-  for (const evt of ['pointerdown', 'keydown', 'submit'] as const) {
-    window.addEventListener(evt, noteInteraction, { capture: true, passive: true });
-  }
 
   const original = window.fetch.bind(window);
 
@@ -339,6 +411,7 @@ export function installFetchProgress() {
     let path = '';
     let method = 'GET';
     let hint: string | null = null;
+    let scopeHint: string | null = null;
     try {
       const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url;
       const url = new URL(raw, window.location.origin);
@@ -351,12 +424,10 @@ export function installFetchProgress() {
       method = String(init?.method || (input as Request)?.method || 'GET').toUpperCase();
       const h = new Headers(init?.headers || (input as Request)?.headers || undefined);
       hint = h.get('x-chi-progress');
+      scopeHint = h.get('x-chi-progress-scope');
     } catch {
       return original(input as any, init);
     }
-
-    const kind = classify(path, method, hint);
-    if (!kind) return original(input as any, init);
 
     // Key ignores volatile query values but keeps `action`, which is what
     // actually changes how long a Semrush call takes.
@@ -364,7 +435,14 @@ export function installFetchProgress() {
     const action = /[?&]action=([a-z-]+)/i.exec(path)?.[1];
     const key = method + ' ' + base + (action ? '?action=' + action : '');
 
-    const handle = startTask({ key, kind, label: labelFor(key) });
+    const kind = classify(key, path, hint);
+
+    const handle = startTask({
+      key,
+      kind,
+      scope: scopeHint || generationScopeFor(key) || 'app',
+      label: labelFor(key),
+    });
     try {
       const res = await original(input as any, init);
       if (res.ok) handle.done(); else handle.fail('Server returned ' + res.status);
@@ -378,10 +456,10 @@ export function installFetchProgress() {
 
 // Install at module-evaluation time. React runs CHILD effects before PARENT
 // effects, so every panel fires its first fetches before ProgressProvider's
-// useEffect ever gets to call installFetchProgress() — which meant the
-// loading screen missed the initial page load entirely (the one moment it
-// exists for). Client bundles are evaluated before hydration effects run, so
-// patching here guarantees the very first fetch is already observed.
+// useEffect ever gets to call installFetchProgress() — which would make the
+// hairline top bar miss the initial page load. Client bundles are evaluated
+// before hydration effects run, so patching here guarantees the very first
+// fetch is already observed.
 // installFetchProgress() is idempotent, so the later useEffect calls are
 // harmless no-ops.
 if (typeof window !== 'undefined') {

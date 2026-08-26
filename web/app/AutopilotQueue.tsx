@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ProcessTracker, { makeSteps, stepActive, stepError, stepsDone, type ProcessStep } from '@/components/ProcessTracker';
 import { announce, onRefresh } from '@/components/refreshBus';
+import { PanelLoader } from '@/components/LoadingScreen';
 
 // The visible pipeline an engine run walks through. The tick call does all of
 // this server-side in one request; the tracker paces the display so the viewer
@@ -149,9 +150,11 @@ export default function AutopilotQueue() {
         imageAsked.current.add(draftId);
         setImagingIds((prev) => new Set(prev).add(r.id));
         try {
+          // Machine-initiated (poll) image request: the run's own progress
+          // strip shows it — keep it off the panel overlay.
           await fetch('/api/drafts/image', {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            headers: { 'content-type': 'application/json', 'x-chi-progress': 'quiet' },
             body: JSON.stringify({ id: draftId }),
           });
         } catch { /* best-effort */ }
@@ -200,7 +203,7 @@ export default function AutopilotQueue() {
     try {
       const res = await fetch('/api/drafts/image', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'autopilot' },
         body: JSON.stringify({ id: r.draft_id, regenerate: true }),
       });
       const j = await res.json().catch(() => ({}));
@@ -255,7 +258,8 @@ export default function AutopilotQueue() {
   const failed = runs.filter((r) => r.state === 'failed');
 
   return (
-    <section id="section-autopilot" className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+    <section id="section-autopilot" className="relative mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+      <PanelLoader scope="autopilot" />
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-6 py-5 sm:px-8">
         <div>
           <h2 className="flex items-center gap-2 text-[15px] font-semibold text-ink">
