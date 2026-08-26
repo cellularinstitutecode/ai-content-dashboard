@@ -31,6 +31,7 @@ import {
   type SemReportResult,
   type SemSource,
 } from '@/lib/semrush';
+import { reasonForCode, reasonForHttpStatus } from '@/lib/semrush-reason';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 
 // ---------------------------------------------------------------------------
@@ -196,13 +197,6 @@ type RawResult = {
   unitsSpent: number;
 };
 
-function reasonForCode(code: number): SemReportResult['reason'] {
-  if (code === 110 || code === 120) return 'auth';
-  if (code >= 130 && code <= 135) return 'plan';
-  if (code === 50) return 'empty';
-  return 'http';
-}
-
 async function rawCsvReport(
   report: string,
   cachePhrase: string,
@@ -244,9 +238,7 @@ async function rawCsvReport(
       return { ok: false, source: 'none', reason, note: text.slice(0, 120), unitsSpent: 0 };
     }
     if (!res.ok) {
-      let reason: SemReportResult['reason'] = 'http';
-      if (res.status === 401 || res.status === 403) reason = 'auth';
-      else if (res.status === 402 || res.status === 429) reason = 'plan';
+      const reason = reasonForHttpStatus(res.status);
       return { ok: false, source: 'none', reason, note: 'HTTP ' + res.status, unitsSpent: 0 };
     }
     return { ok: true, body: text, source: 'live', reason: 'ok', unitsSpent: estUnits };
@@ -567,9 +559,9 @@ async function projectJson(
     const res = await fetch(url.toString(), { method: 'GET', headers: { accept: 'application/json' }, signal: ctl.signal });
     const text = await res.text().catch(() => '');
     if (!res.ok) {
-      let reason: SemReportResult['reason'] = 'http';
-      if (res.status === 401 || res.status === 403) reason = 'auth';
-      else if (res.status === 402 || res.status === 429 || res.status === 404) reason = 'plan';
+      // 404 on a project report means "not enabled for this project", which
+      // belongs with the other plan/entitlement states rather than 'http'.
+      const reason = res.status === 404 ? 'plan' : reasonForHttpStatus(res.status);
       return { json: null, meta: { ok: false, source: 'none', reason, note: 'HTTP ' + res.status, unitsSpent: 0 } };
     }
     let json: any = null;

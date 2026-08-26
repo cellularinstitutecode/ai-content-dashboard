@@ -6,6 +6,7 @@
 // path in the app spends units at most once per topic per cache window.
 
 import { relatedKeywords, type SemKeyword } from '@/lib/semrush';
+import type { SemrushReason } from '@/lib/semrush-reason';
 
 export type KeywordMetric = {
   keyword: string;
@@ -20,7 +21,7 @@ export type KeywordResearch = {
   topic: string;
   keywords: KeywordMetric[];
   note?: string;
-  reason?: 'ok' | 'no_token' | 'auth' | 'plan' | 'http' | 'network' | 'empty' | 'budget';
+  reason?: SemrushReason;
   upstreamStatus?: number | null;
 };
 

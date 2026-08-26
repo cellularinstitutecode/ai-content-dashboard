@@ -1,0 +1,60 @@
+// Why a Semrush call failed decides what the dashboard SHOWS: a quiet
+// "serving stored data" note, or an amber warning telling a human to go fix a
+// credential. Getting that wrong is what made a permanent, unfixable-by-retry
+// account state ("your key is a v4 key") render as "Semrush rejected the API
+// key — verify SEMRUSH_API_KEY", sending the user to re-paste a key that could
+// never work. These tests pin the mapping.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { reasonForCode, reasonForHttpStatus, isInformationalReason } from './semrush-reason.ts';
+
+test('ERROR 122 (a v4 key on a v3 endpoint) is v3_key, never a credential fault', () => {
+  // The exact code the live account returned: "ERROR 122 :: WRONG FORMAT OR
+  // EMPTY KEY". Before this mapping existed it fell through to 'http' and the
+  // UI reported an unexplained failure.
+  assert.equal(reasonForCode(122), 'v3_key');
+  assert.equal(reasonForCode(121), 'v3_key');
+  assert.notEqual(reasonForCode(122), 'auth');
+});
+
+test('a genuinely bad or unknown key is still auth — the one a human must fix', () => {
+  assert.equal(reasonForCode(110), 'auth'); // INVALID IMPORT KEY
+  assert.equal(reasonForCode(120), 'auth'); // WRONG KEY - ID PAIR
+  assert.equal(isInformationalReason('auth'), false, 'auth must stay loud');
+});
+
+test('plan/units restrictions map to plan, and "nothing found" is not an error', () => {
+  for (const code of [130, 131, 132, 133, 134, 135]) {
+    assert.equal(reasonForCode(code), 'plan', 'code ' + code);
+  }
+  assert.equal(reasonForCode(50), 'empty');
+});
+
+test('an unrecognised error code degrades to http rather than guessing', () => {
+  assert.equal(reasonForCode(999), 'http');
+  assert.equal(reasonForCode(0), 'http');
+});
+
+test('403 is an entitlement answer (v3_key); 401 is a credential answer (auth)', () => {
+  // The Projects API (Site Audit, Position Tracking) answered 403 on the live
+  // account. Treating that as 'auth' is what produced "verify SEMRUSH_API_KEY".
+  assert.equal(reasonForHttpStatus(403), 'v3_key');
+  assert.equal(reasonForHttpStatus(401), 'auth');
+});
+
+test('402/429 are plan states, and anything else is plain http', () => {
+  assert.equal(reasonForHttpStatus(402), 'plan');
+  assert.equal(reasonForHttpStatus(429), 'plan');
+  assert.equal(reasonForHttpStatus(500), 'http');
+  assert.equal(reasonForHttpStatus(502), 'http');
+});
+
+test('informational states are exactly the ones no user action can clear', () => {
+  for (const r of ['no_token', 'v3_key', 'budget', 'empty'] as const) {
+    assert.equal(isInformationalReason(r), true, r + ' should read as quiet info');
+  }
+  for (const r of ['auth', 'plan', 'http', 'network'] as const) {
+    assert.equal(isInformationalReason(r), false, r + ' should stay actionable/amber');
+  }
+  assert.equal(isInformationalReason(undefined), false);
+});

@@ -18,12 +18,16 @@ import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } 
 import KeywordIntelligence from './KeywordIntelligence';
 import { announce, onRefresh } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
+import { isInformationalReason, type SemrushReason } from '@/lib/semrush-reason';
 
 // ---------------------------------------------------------------------------
 // Types (mirror lib/semrush-domain.ts)
 // ---------------------------------------------------------------------------
 
-type SectionMeta = { ok: boolean; source: 'live' | 'cache' | 'none'; reason: string; note?: string; unitsSpent: number };
+// `reason` is the server's SemrushReason, not a loose string — so a typo in
+// a comparison below is a compile error rather than a branch that silently
+// never matches and quietly falls through to the wrong message.
+type SectionMeta = { ok: boolean; source: 'live' | 'cache' | 'none'; reason: SemrushReason; note?: string; unitsSpent: number };
 
 type DomainOverview = {
   domain: string;
@@ -454,9 +458,11 @@ function SectionNotice({ meta, what }: { meta: SectionMeta; what: string }) {
   if (meta.ok) return null;
   const msg =
     meta.reason === 'no_token'
-      ? what + ' needs the Semrush API connection (set SEMRUSH_API_KEY in Vercel).'
+      ? 'Live ' + what.toLowerCase() + ' needs a Semrush v3 Standard API key (SEMRUSH_API_KEY in Vercel) — showing stored data.'
       : meta.reason === 'budget'
       ? 'Unit balance is at the protection floor — ' + what.toLowerCase() + ' will refresh when the budget recovers.'
+      : meta.reason === 'v3_key'
+      ? 'Live ' + what.toLowerCase() + ' comes from Semrush’s Standard API (v3), which is a Business-plan entitlement — a v4 key cannot call it. Showing stored data instead.'
       : meta.reason === 'plan'
       ? 'Your Semrush plan does not include API access to ' + what.toLowerCase() + ' (or the project/report is unavailable).'
       : meta.reason === 'auth'
@@ -464,7 +470,13 @@ function SectionNotice({ meta, what }: { meta: SectionMeta; what: string }) {
       : meta.reason === 'empty'
       ? 'Semrush has no data for this yet.'
       : 'Could not load ' + what.toLowerCase() + (meta.note ? ' (' + meta.note + ')' : '') + '.';
-  return <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">{msg}</p>;
+  // Expected, non-actionable states (no key, no entitlement, budget floor, no
+  // data yet) read as quiet information — the panel is working as designed on
+  // stored data. Amber is reserved for states a human should actually chase.
+  const cls = isInformationalReason(meta.reason)
+    ? 'bg-subtle text-ink-muted ring-line'
+    : 'bg-amber-50 text-amber-800 ring-amber-200';
+  return <p className={'mt-3 rounded-xl px-3 py-2 text-[12px] ring-1 ' + cls}>{msg}</p>;
 }
 
 // Card shell shared by the dashboard blocks (Semrush-dashboard look).
@@ -886,6 +898,11 @@ export default function SemrushPanel({
                             // While the project request is still in flight this
                             // used to claim the integration was unconfigured.
                             ? 'Loading tracked positions…'
+                            // The project IS connected but the account cannot
+                            // call the v3 Projects API — say that, rather than
+                            // implying the campaign simply has no history yet.
+                            : project?.trackingMeta?.reason === 'v3_key'
+                            ? 'Tracked positions need Semrush’s Standard API (v3, Business plan).'
                             : tracking?.configured
                             ? 'No tracking history yet — data appears after the campaign collects positions.'
                             : 'Connect your Semrush project (SEMRUSH_PROJECT_ID in Vercel) to chart tracked visibility.'
@@ -983,7 +1000,11 @@ export default function SemrushPanel({
                   <div className="flex h-full min-h-[180px] flex-col items-center justify-center gap-2 text-center">
                     <Gauge value={null} label="Site Health" />
                     <p className="max-w-[260px] text-[12px] text-ink-muted">
-                      {audit?.configured
+                      {project?.auditMeta?.reason === 'v3_key'
+                        // Plain English beats a raw "(HTTP 403)" leaking into
+                        // the UI for a state no retry can clear.
+                        ? 'Site Audit scores come from Semrush’s Standard API (v3), a Business-plan entitlement — open the full report in Semrush instead.'
+                        : audit?.configured
                         ? 'Site Audit data is unavailable right now' + (project?.auditMeta.note ? ' (' + project.auditMeta.note + ')' : '') + '.'
                         : 'Set SEMRUSH_PROJECT_ID in Vercel to pull your Site Audit score, errors and warnings here.'}
                     </p>
