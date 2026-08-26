@@ -104,6 +104,14 @@ function check(name, ok, detail) {
     ['drafts from the API render in the library', 'Exosome therapy for joint recovery'],
   ]) check(name, body.includes(needle));
 
+  // Panels must follow the workflow order, top to bottom.
+  const order = await page.evaluate(() => {
+    const ids = ['section-create', 'section-images', 'section-repurpose', 'section-publish', 'section-autopilot', 'section-library'];
+    const tops = ids.map((id) => { const el = document.getElementById(id); return el ? el.getBoundingClientRect().top + window.scrollY : -1; });
+    return { tops, sorted: tops.every((t, i) => t >= 0 && (i === 0 || t > tops[i - 1])) };
+  });
+  check('panels appear in workflow order: Create → Images → Repurpose → Schedule → Autopilot → Library', order.sorted, order.tops.join(','));
+
   const statOk = await page.evaluate(() => {
     const t = document.body.innerText;
     return /Drafts/.test(t) && /Scheduled posts/.test(t);

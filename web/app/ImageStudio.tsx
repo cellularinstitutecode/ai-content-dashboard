@@ -213,6 +213,7 @@ export default function ImageStudio() {
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b border-line px-6 py-5 sm:px-8">
         <div className="min-w-0 flex-1 basis-72">
           <h2 className="flex flex-wrap items-center gap-2 text-[15px] font-semibold text-ink">
+            <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 2 · Images</span>
             🎨 AI Image Studio
             <span className="rounded-full bg-subtle px-2 py-0.5 text-[11px] font-medium text-ink-muted">
               every visual · generated + verified · one place
