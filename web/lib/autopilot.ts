@@ -894,9 +894,19 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
   // Image enrichment: make sure the draft carries its AI hero image before
   // the handoff, so the Metricool draft ships with a visual. Best-effort —
   // an image failure never blocks approval.
-  let packImage: PackImage | null = (pack as ContentPack & { _image?: PackImage })._image || null;
+  //
+  // HARD RULE at the ship-point: an image the checker flagged for text can
+  // NEVER be attached to the Metricool handoff. A text-flagged stored image
+  // is treated as missing (ensureDraftImage regenerates it with the next
+  // composition variant), and if the regeneration still carries text, the
+  // post ships with no image rather than a text-bearing one.
+  const shippable = (img: PackImage | null): PackImage | null =>
+    img?.verification?.textDetected === true ? null : img;
+  let packImage: PackImage | null = shippable(
+    (pack as ContentPack & { _image?: PackImage })._image || null
+  );
   if (!packImage) {
-    try { packImage = await ensureDraftImage(run.draft_id); } catch { packImage = null; }
+    try { packImage = shippable(await ensureDraftImage(run.draft_id)); } catch { packImage = null; }
   }
 
   let note = 'Staged for publishing review.';
