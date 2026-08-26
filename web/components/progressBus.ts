@@ -118,7 +118,7 @@ function record(key: string, actualMs: number) {
 const GENERATION: Array<[RegExp, string]> = [
   [/^POST \/api\/generate(?:[/?]|$)/, 'create'],
   [/^POST \/api\/transform(?:[/?]|$)/, 'create'],
-  [/^POST \/api\/metricool\/ai-research(?:[/?]|$)/, 'create'],
+  [/^POST \/api\/metricool\/ai-research(?:[/?]|$)/, 'publish'],   // the research box lives in the Publishing panel
   [/^POST \/api\/assistant(?:[/?]|$)/, 'assistant'],
   [/^POST \/api\/drafts\/image(?:[/?]|$)/, 'image-studio'],
   [/^POST \/api\/autopilot\/tick(?:[/?]|$)/, 'autopilot'],
@@ -306,6 +306,15 @@ export function startTask(opts: {
   };
   const anyForeground = tasks.some((t) => t.state === 'running' && t.kind === 'foreground');
   if (task.kind === 'foreground' && !anyForeground) { batchStart = now; batchFloor = 0; }
+  // A scope going idle → active starts a fresh batch for that panel. Without
+  // this, a panel whose loader was unmounted when its last batch finished
+  // (closed modal, route change) would inherit a stale high floor and its next
+  // generation would start at ~90% instead of 0.
+  if (task.kind === 'foreground' &&
+      !tasks.some((t) => t.state === 'running' && t.kind === 'foreground' && t.scope === task.scope)) {
+    scopeFloors.delete(task.scope);
+    scopeStarts.set(task.scope, now);
+  }
   tasks = [...tasks, task];
   emit();
 
@@ -384,8 +393,12 @@ export function noteInteraction() { /* interaction no longer changes classificat
 function classify(key: string, path: string, headerHint: string | null): TaskKind {
   if (headerHint === 'quiet') return 'background';
   if (headerHint === 'loud') return 'foreground';
+  // Generation outranks the QUIET path list: the same /api/autopilot/runs path
+  // is a quiet GET poller but a foreground POST action (approve/regenerate) —
+  // the key carries the method, so the whitelist can tell them apart.
+  if (generationScopeFor(key)) return 'foreground';
   if (QUIET.some((re) => re.test(path))) return 'background';
-  return generationScopeFor(key) ? 'foreground' : 'background';
+  return 'background';
 }
 
 export function installFetchProgress() {
@@ -443,10 +456,10 @@ export function installFetchProgress() {
 
 // Install at module-evaluation time. React runs CHILD effects before PARENT
 // effects, so every panel fires its first fetches before ProgressProvider's
-// useEffect ever gets to call installFetchProgress() — which meant the
-// loading screen missed the initial page load entirely (the one moment it
-// exists for). Client bundles are evaluated before hydration effects run, so
-// patching here guarantees the very first fetch is already observed.
+// useEffect ever gets to call installFetchProgress() — which would make the
+// hairline top bar miss the initial page load. Client bundles are evaluated
+// before hydration effects run, so patching here guarantees the very first
+// fetch is already observed.
 // installFetchProgress() is idempotent, so the later useEffect calls are
 // harmless no-ops.
 if (typeof window !== 'undefined') {

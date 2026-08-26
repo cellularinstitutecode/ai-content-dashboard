@@ -1368,7 +1368,8 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 tex
 </section>
 
 {/* Publishing (Metricool) — compose, review flow, and live queue */}
-<section id="section-publish" className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<section id="section-publish" className="relative mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<PanelLoader scope="publish" />
 <div className="border-b border-line px-6 py-5 sm:px-8">
 <div className="flex flex-wrap items-center justify-between gap-3">
 <div className="flex items-center gap-3">

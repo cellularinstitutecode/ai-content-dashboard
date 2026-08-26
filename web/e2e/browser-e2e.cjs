@@ -6,8 +6,9 @@
 //
 // What it proves, in a real Chromium:
 //   1. A signed-in dashboard renders every panel from live API data.
-//   2. The global loading screen appears WITH a percentage number while the
-//      panels load, and goes away when they finish.
+//   2. Boot shows only the hairline top bar (with a percentage) — never an
+//      overlay; drafting raises a panel-scoped percentage loader that covers
+//      exactly the Content Generator and clears when the work ends.
 //   3. The content-image rule is visible: ✓ verified badges on clean images,
 //      the red ✗ text badge on a text-flagged image (Image Studio + Autopilot).
 //   4. Interconnection: an announce('drafts') from ANY panel makes the others

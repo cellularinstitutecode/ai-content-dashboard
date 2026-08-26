@@ -188,6 +188,20 @@ test('every API endpoint gets a plain-English label', () => {
   await sleep(800);
   pass++; console.log('  \u2713 each generation shows in its own panel scope, nowhere else');
 
+  // 12b — the same /api/autopilot/runs path splits by method: the GET poller
+  // is quiet, the POST action (approve/regenerate) is foreground autopilot work.
+  const pPoll = window.fetch('/api/autopilot/runs');
+  const pAct = window.fetch('/api/autopilot/runs', { method: 'POST' });
+  const pRes = window.fetch('/api/metricool/ai-research', { method: 'POST' });
+  await sleep(25);
+  const ap = bus.scopedSnapshot('autopilot');
+  assert.strictEqual(ap.running.length, 1, 'the POST action is foreground in the autopilot scope');
+  assert.strictEqual(bus.snapshot().backgroundActive, true, 'the GET poller stays background');
+  assert.strictEqual(bus.scopedSnapshot('publish').running.length, 1, 'AI research shows in the Publishing panel');
+  await Promise.all([pPoll, pAct, pRes]);
+  await sleep(800);
+  pass++; console.log('  \u2713 autopilot POST actions and AI research land in the right panels; pollers stay quiet');
+
   // 13 — the x-chi-progress-scope header re-homes a shared endpoint
   const pCal = window.fetch('/api/generate', { method: 'POST', headers: { 'x-chi-progress-scope': 'calendar' } });
   await sleep(25);

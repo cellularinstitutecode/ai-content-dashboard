@@ -16,8 +16,11 @@ panel. No external services, no secrets, fully deterministic.
   (list/reschedule), autopilot runs, templates, brand, semrush (degraded),
   drafts/image (cached image served even without an OpenAI key; a
   text-flagged image is never served as done).
-- Browser: every panel renders from live data, the global loading screen shows
-  a **percentage** during first load, ✓/✗ verification badges appear, an
+- Browser: every panel renders from live data, boot shows only the hairline
+  top bar (never an overlay), drafting raises the **panel-scoped** percentage
+  loader inside the Content Generator, panels sit in workflow order
+  (Create → Images → Repurpose → Schedule → Autopilot → Library),
+  ✓/✗ verification badges appear, an
   `announce()` from one panel makes the others refetch with no reload, the
   calendar/templates/brand pages render, and there are zero unexpected
   console errors or page crashes.
