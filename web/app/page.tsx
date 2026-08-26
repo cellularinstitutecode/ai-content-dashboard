@@ -320,7 +320,12 @@ const [mBusy, setMBusy] = useState(false);
       const secs = formatSections(d && d.pack);
       const body = secs.length ? secs.map((s: any) => s.text).join("\n\n") : (typeof (d && d.pack) === "string" ? d.pack : "");
       if (body) setMText(body);
-      const heroUrl = d && d.pack && d.pack._image && d.pack._image.url ? String(d.pack._image.url) : "";
+      // HARD RULE at the ship-point: never prefill the scheduler with an
+      // image the checker flagged for text — reroll it in the Image Studio
+      // first. Content images must be text-free wherever they publish.
+      const heroImg = d && d.pack && d.pack._image;
+      const heroHasText = Boolean(heroImg && heroImg.verification && heroImg.verification.textDetected === true);
+      const heroUrl = heroImg && heroImg.url && !heroHasText ? String(heroImg.url) : "";
       if (heroUrl) { setMMedia(heroUrl); setMMediaLabel("AI hero image"); }
       else { setMMedia(""); setMMediaLabel(""); }
       setMNetworks(platformsForFormat(fmt).filter((n) => PUBLISH_NETWORKS.some((p) => p.id === n)));

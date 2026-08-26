@@ -126,6 +126,38 @@ function check(name, ok, detail) {
   const galleryImgs = await page.evaluate(() => Array.from(document.querySelectorAll('img')).filter((i) => i.src.includes('content-images')).length);
   check('Image Studio gallery renders stored images', galleryImgs >= 2, galleryImgs + ' imgs');
 
+  // ---- 3b: text-flagged images never reach the scheduler ------------------
+  // Prefilling the Publishing composer from a draft must attach a clean,
+  // machine-verified hero image — and must NEVER attach one the checker
+  // flagged for text (the reviewer rerolls it in the Image Studio first).
+  async function prefillFromLibrary(topicNeedle) {
+    return page.evaluate((needle) => {
+      const lib = document.getElementById('section-library');
+      if (!lib) return 'no library';
+      // The tightest wrapper holding both the topic text and an Edit button
+      // is the card itself (outer containers match too, but are longer).
+      const card = Array.from(lib.querySelectorAll('li, div'))
+        .filter((el) => el.querySelector && el.querySelector('button[aria-label="Edit draft"]') && el.textContent.includes(needle))
+        .sort((a, b) => a.textContent.length - b.textContent.length)[0];
+      if (!card) return 'no card for ' + needle;
+      card.querySelector('button[aria-label="Edit draft"]').click();
+      return 'clicked';
+    }, topicNeedle);
+  }
+  const composerMedia = () =>
+    page.evaluate(() => {
+      const pub = document.getElementById('section-publish');
+      return pub ? pub.innerText.includes('AI hero image') : false;
+    });
+  const r1 = await prefillFromLibrary('Exosome therapy for joint recovery');
+  await page.waitForTimeout(400);
+  const cleanAttached = await composerMedia();
+  check('prefilling from a clean draft attaches its verified hero image', r1 === 'clicked' && cleanAttached, r1);
+  const r2 = await prefillFromLibrary('stem cell therapy for knees');
+  await page.waitForTimeout(400);
+  const flaggedAttached = await composerMedia();
+  check('a TEXT-FLAGGED image is never prefilled into the scheduler (hard rule at the ship-point)', r2 === 'clicked' && !flaggedAttached, r2 + (flaggedAttached ? ' — flagged image leaked into composer' : ''));
+
   // ---- 4: interconnection — announce() → cross-panel refetch --------------
   const before = apiRequests.filter((u) => u.startsWith('/api/drafts?')).length;
   await page.evaluate(() => {
