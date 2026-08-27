@@ -276,7 +276,6 @@ const [mBusy, setMBusy] = useState(false);
   // Metricool, and a "Publish now" button in this composer contradicted that
   // promise three lines below where the promise is made. Everything now goes
   // out as a Metricool draft; approval happens there.
-  const AUTO_PUBLISH = false as const;
 
   // --- Composer validation -------------------------------------------------
   // Everything the Send button depends on is derived here so the button state,
@@ -934,7 +933,7 @@ mNetworks.map(async (network) => {
 const r = await fetch('/api/metricool/schedule', {
 method: 'POST',
 headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify({ network, text: mText, publishAt: mDate, blogId: activeBlogId || METRICOOL_BLOG_ID, autoPublish: AUTO_PUBLISH, mediaUrl: mMedia || undefined }),
+body: JSON.stringify({ network, text: mText, publishAt: mDate, blogId: activeBlogId || METRICOOL_BLOG_ID, mediaUrl: mMedia || undefined }),
 });
 const data = await r.json().catch(() => ({}));
 return { network, ok: r.ok, status: r.status, data };

@@ -52,7 +52,12 @@ export async function resolve(specifier, context, next) {
     return { url: 'stub:' + specifier, shortCircuit: true };
   }
   if (specifier.startsWith('@/')) {
-    return next(new URL(specifier.slice(2), WEB_ROOT).href, context);
+    // tsconfig's '@/x' alias points at the repo root. TypeScript resolves the
+    // extension for you; Node's ESM resolver does not, so add it here - without
+    // this, any aliased import of a real (unstubbed) module fails to resolve.
+    const bare = specifier.slice(2);
+    const withExt = /\.[cm]?[jt]sx?$/.test(bare) ? bare : bare + '.ts';
+    return next(new URL(withExt, WEB_ROOT).href, context);
   }
   return next(specifier, context);
 }

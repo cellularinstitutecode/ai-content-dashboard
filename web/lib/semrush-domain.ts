@@ -565,7 +565,7 @@ async function projectJson(
       return { json: null, meta: { ok: false, source: 'none', reason, note: 'HTTP ' + res.status, unitsSpent: 0 } };
     }
     let json: any = null;
-    try { json = JSON.parse(text); } catch { /* not JSON */ }
+    try { json = JSON.parse(text); } catch { /* not JSON - an expected branch, not a fault */ }
     if (json == null) return { json: null, meta: { ok: false, source: 'none', reason: 'http', note: 'unexpected response', unitsSpent: 0 } };
     void cachePut(cacheReport, 'proj', cachePhrase, [json], est);
     void logUsage(cacheReport, cachePhrase, est, 'live');

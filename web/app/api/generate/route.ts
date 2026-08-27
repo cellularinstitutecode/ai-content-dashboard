@@ -23,11 +23,16 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     // Accept both { topic } and the dashboard's { prompt } naming.
-    const topic = body?.topic ?? body?.prompt;
+    const rawTopic = body?.topic ?? body?.prompt;
     const { audience, tone, channels, provider, model, type } = body || {};
-    if (!topic) {
+    // `topic` used to be checked for truthiness only, then interpolated straight
+    // into the prompt. A non-string arrived as "[object Object]" instead of a
+    // 400, and an arbitrarily long one went to a paid model unbounded. Sibling
+    // paths already clamp (researchTopic 2000, transform 8000); match them.
+    if (typeof rawTopic !== 'string' || !rawTopic.trim()) {
       return NextResponse.json({ error: 'topic required' }, { status: 400 });
     }
+    const topic = rawTopic.trim().slice(0, 2000);
     const allowed: Provider[] = ['anthropic', 'openai'];
     const p: Provider | undefined =
       provider && allowed.includes(provider) ? provider : undefined;
@@ -129,8 +134,12 @@ export async function POST(req: NextRequest) {
         : { provider: used, pack, keywordsApplied, keywordSource, keywordBrief }
     );
   } catch (e: any) {
+    // The provider helpers throw with the upstream response body attached
+    // (`anthropic 429: {...}`), which carries account and quota detail. Log it,
+    // return a generic message - /api/metricool/schedule already does this.
+    console.error('generate: failed', e?.message || e);
     return NextResponse.json(
-      { error: e?.message || 'generate failed' },
+      { error: 'Generation failed. Please try again.' },
       { status: 500 }
     );
   }

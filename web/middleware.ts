@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { isAllowedEmail } from '@/lib/access';
+import { isMachineRequest } from '@/lib/machine-auth';
 
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
@@ -18,24 +19,20 @@ export async function middleware(req: NextRequest) {
   // would 307 them to /sign-in before their own checks ever run, silently
   // killing the daily crons and the Opus completion webhook.
   //
-  // Only requests that ACTUALLY carry machine credentials skip session auth.
-  // The exemption used to be unconditional, so it also skipped the tenant
-  // allowlist below — and both cron routes fall back to plain session auth
-  // when the bearer is absent. A self-registered, non-allowlisted account
-  // could therefore POST /api/metricool/sync and drive the clinic's Metricool
-  // credentials, or POST /api/autopilot/tick and spend AI credit, even though
-  // every other route answered it 403. Requests with no machine credential
-  // now fall through to the normal session + allowlist checks; the routes'
-  // own bearer/HMAC verification is still the real gate for cron traffic.
-  const machinePaths = ['/api/opus/webhook', '/api/metricool/sync', '/api/autopilot/tick'];
-  if (machinePaths.includes(pathname)) {
-    const hasMachineCredential =
-      req.headers.has('authorization') ||
-      // Opus signs its webhook rather than sending a bearer.
-      req.headers.has('x-opus-signature') ||
-      req.headers.has('x-opus-timestamp');
-    if (hasMachineCredential) return res;
-  }
+  // The exemption is VALUE-based and per-path. It used to fire on the mere
+  // PRESENCE of an `authorization` / `x-opus-*` header, on any of the three
+  // paths - so `Authorization: Bearer anything` skipped the session check AND
+  // the tenant allowlist below. An authenticated but non-allowlisted account
+  // (self-registered against the public anon key, or an ex-employee removed
+  // from ALLOWED_EMAILS) could then POST /api/metricool/sync, which falls back
+  // to plain session auth and re-checks nothing: that copies the clinic's
+  // org-wide Metricool analytics into rows owned by the caller, who reads them
+  // straight back out through owner-scoped RLS. Every other route answered that
+  // same caller 403.
+  //
+  // A request that does NOT carry a valid machine credential now falls through
+  // to the normal session + allowlist checks, whatever headers it is waving.
+  if (isMachineRequest(pathname, req.headers, process.env.CRON_SECRET)) return res;
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

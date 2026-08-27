@@ -17,7 +17,6 @@ export interface SchedulePostInput {
   publicationDate: string;
   firstCommentText?: string;
   media?: { url: string }[];
-  autoPublish?: boolean;
 }
 
 function env() {
@@ -44,7 +43,6 @@ export async function metricoolSchedulePost(input: SchedulePostInput) {
   const dateTime = isNaN(at.getTime())
     ? String(input.publicationDate)
     : formatForMetricool(at, SCHEDULE_TZ);
-  const autoPublish = input.autoPublish ?? false;
   const body = {
     text: input.text,
     // Metricool's scheduler expects provider OBJECTS ({ network }), not bare
@@ -54,12 +52,14 @@ export async function metricoolSchedulePost(input: SchedulePostInput) {
     publicationDate: { dateTime, timezone: SCHEDULE_TZ },
     firstCommentText: input.firstCommentText,
     media: input.media || [],
-    // Publishing is a human decision: never auto-publish unless the caller
-    // explicitly opts in (approveRun always passes false).
-    autoPublish,
+    // Publishing is a human decision made in Metricool, so this client cannot
+    // express any other outcome. It used to accept an `autoPublish` option that
+    // every caller set to false - an option nobody uses is just a way for a
+    // future caller to get it wrong.
+    autoPublish: false,
     // draft:true holds the post in Metricool's review queue rather than the live
     // queue. Without it, an autoPublish:false post can still land as live-pending.
-    draft: !autoPublish
+    draft: true
   };
 
   const res = await fetch(url.toString(), {

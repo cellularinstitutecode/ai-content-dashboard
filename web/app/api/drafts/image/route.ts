@@ -6,6 +6,7 @@
 // instantly and the image fills in when ready) and by the Autopilot queue for
 // ready-for-review runs that don't have an image yet. Idempotent: a draft
 // that already carries `_image` returns it without spending anything.
+import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { generatePackImage, imagesEnabled, type PackImage } from '@/lib/images';
@@ -83,7 +84,7 @@ export async function POST(req: NextRequest) {
         .eq('user_id', user.id)
         .maybeSingle();
       if (bp) brand = bp as BrandContext;
-    } catch { /* optional */ }
+    } catch (err) { /* optional */ reportError('drafts-image:brand-load', err); }
 
     const image = await generatePackImage({
       topic: String((d as { topic?: string }).topic || 'regenerative medicine'),

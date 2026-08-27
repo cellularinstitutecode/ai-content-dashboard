@@ -1,3 +1,4 @@
+import { reportError } from '@/lib/report';
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
 import { supabaseServer } from '@/lib/supabase';
@@ -12,6 +13,8 @@ import {
 import { opusCreateClipProject } from "@/lib/opus";
 import { researchBundle, briefPromptFrom, getUnitsBalance, recordDraftKeywords, type SemKeyword } from "@/lib/semrush";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { parseVideoUrl } from "@/lib/composer";
+import { boundToolMessages } from "@/lib/tool-transcript";
 
 // Compact, chat-friendly rendering of Semrush keyword rows.
 function fmtKw(k: SemKeyword): string {
@@ -51,6 +54,11 @@ type PendingSchedule = {
   network: string;
   text: string;
   publishAt: string;
+  // Who the action belongs to, and when the offer stops being valid. Without
+  // these the signed token was a bearer credential with no audience and no
+  // expiry: capture one and it stayed replayable forever, in anyone's session.
+  userId?: string;
+  expiresAt?: number;
 };
 
 type Session = {
@@ -79,6 +87,14 @@ type Session = {
   // through the client, so anything action-bearing must be tamper-evident:
   // a forged/edited pendingSchedule + "yes" must not schedule anything.
   _sig?: string | null;
+  // Server-issued HMAC over the ENTIRE session. `_sig` above only ever covered
+  // pendingSchedule, and it was checked only when pendingSchedule was present -
+  // so it guarded one route into scheduling and not the other. A client could
+  // post `{ mode: "guided", step: "scheduling", channels: [...], pack: {...} }`
+  // with no pendingSchedule at all, and the guided branch would call doSchedule()
+  // on the first request with attacker-chosen text. Signing the whole object
+  // means the server only ever acts on state it produced.
+  _ssig?: string | null;
 };
 
 const NETWORKS = ["instagram", "facebook", "linkedin", "blog"];
@@ -125,23 +141,101 @@ function normalizePublishAt(input: string): string {
   return s;
 }
 
-// Key material for signing the client-round-tripped session. Service-role key
-// is always present in this deployment; CRON_SECRET wins when set.
+// Key material for signing the client-round-tripped session.
+//
+// Prefer a dedicated secret. The chain below keeps existing deployments working,
+// but borrowing SUPABASE_SERVICE_ROLE_KEY as application signing material couples
+// the most privileged credential in the system to an unrelated purpose - rotating
+// one then forces the other, and the key ends up in more code paths than it needs
+// to be in. Set ASSISTANT_SESSION_SECRET (openssl rand -hex 32) to break that tie.
+let warnedAboutBorrowedKey = false;
 function sessionKey(): string {
-  return process.env.CRON_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  const dedicated = process.env.ASSISTANT_SESSION_SECRET || process.env.CRON_SECRET;
+  if (dedicated) return dedicated;
+  const borrowed = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  if (!warnedAboutBorrowedKey) {
+    warnedAboutBorrowedKey = true;
+    if (borrowed) {
+      console.error(
+        "assistant: signing sessions with SUPABASE_SERVICE_ROLE_KEY because neither " +
+        "ASSISTANT_SESSION_SECRET nor CRON_SECRET is set. Set ASSISTANT_SESSION_SECRET.",
+      );
+    } else {
+      // With no key at all, every session fails verification and resets. The
+      // assistant still answers, but statelessly: guided mode cannot advance and
+      // "yes" never confirms anything. That is safe, and invisible - so say it.
+      console.error(
+        "assistant: NO signing key configured (ASSISTANT_SESSION_SECRET / CRON_SECRET / " +
+        "SUPABASE_SERVICE_ROLE_KEY all unset). Session state cannot survive a round-trip: " +
+        "guided mode and yes/no confirmation will not work until one is set.",
+      );
+    }
+  }
+  return borrowed;
 }
+const PENDING_TTL_MS = 15 * 60 * 1000;
+
 function signPending(p: PendingSchedule | null | undefined): string | null {
   const key = sessionKey();
   if (!key || !p) return null;
-  return createHmac("sha256", key).update(JSON.stringify([p.network, p.text, p.publishAt])).digest("hex");
+  return createHmac("sha256", key)
+    .update(JSON.stringify([p.network, p.text, p.publishAt, p.userId ?? "", p.expiresAt ?? 0]))
+    .digest("hex");
 }
 // True only when the pendingSchedule the client sent back carries a valid
 // server-issued signature. On any mismatch we drop the pending action.
-function pendingIsAuthentic(session: Session): boolean {
+function pendingIsAuthentic(session: Session, userId: string): boolean {
   const p = session.pendingSchedule;
   if (!p) return false;
+  // Right audience, still in date.
+  if (p.userId !== userId) return false;
+  if (!p.expiresAt || Date.now() > p.expiresAt) return false;
   const expect = signPending(p);
   const got = String(session._sig || "");
+  if (!expect || !got || expect.length !== got.length) return false;
+  try { return timingSafeEqual(Buffer.from(expect), Buffer.from(got)); } catch { return false; }
+}
+
+// Canonical bytes for the whole-session signature: everything except the two
+// signature fields themselves, with object keys sorted so that a round-trip
+// through JSON.parse/stringify on the client cannot change the digest.
+function canonicalSession(session: Session): string {
+  const clone: Record<string, unknown> = Object.create(null);
+  for (const [k, v] of Object.entries(session)) {
+    if (k === "_sig" || k === "_ssig") continue;
+    clone[k] = v;
+  }
+  return JSON.stringify(clone, (_key, value) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return Object.keys(value as Record<string, unknown>)
+        .sort()
+        .reduce<Record<string, unknown>>((acc, k) => {
+          // defineProperty rather than assignment: a "__proto__" key would
+          // otherwise hit Object.prototype's setter, create no own property,
+          // and so stay invisible to the digest.
+          Object.defineProperty(acc, k, {
+            value: (value as Record<string, unknown>)[k],
+            enumerable: true,
+            writable: true,
+            configurable: true,
+          });
+          return acc;
+        }, Object.create(null));
+    }
+    return value;
+  });
+}
+
+function signSession(session: Session): string | null {
+  const key = sessionKey();
+  if (!key) return null;
+  return createHmac("sha256", key).update(canonicalSession(session)).digest("hex");
+}
+
+// True only for a session this server produced and the client returned intact.
+function sessionIsAuthentic(session: Session): boolean {
+  const expect = signSession(session);
+  const got = String(session._ssig || "");
   if (!expect || !got || expect.length !== got.length) return false;
   try { return timingSafeEqual(Buffer.from(expect), Buffer.from(got)); } catch { return false; }
 }
@@ -149,6 +243,8 @@ function pendingIsAuthentic(session: Session): boolean {
 function reply(session: Session, message: string, options?: string[]) {
   // Stamp (or clear) the signature so only server-created pending actions survive the round-trip.
   session._sig = signPending(session.pendingSchedule);
+  // Stamp the whole-session signature LAST, so it covers every mutation above.
+  session._ssig = signSession(session);
   return NextResponse.json({ session, message, options: options || null });
 }
 
@@ -224,14 +320,14 @@ async function doSchedule(userId: string, p: PendingSchedule) {
       metricool_post_id: id,
       status: status && status !== "scheduled" ? status : "pending_review",
     });
-  } catch { /* logging-only */ }
+  } catch (err) { /* logging-only */ reportError('assistant:posts-insert', err); }
   return { id, status, publishAt };
 }
 
 // Run the agentic tool loop. Executes generate/save immediately; gates schedule
 // behind confirmation by stashing a pendingSchedule and returning to the user.
 async function runAgent(session: Session, input: string, userId: string | null) {
-  const tm: ToolMessage[] = Array.isArray(session.toolMessages) ? session.toolMessages : [];
+  const tm: ToolMessage[] = boundToolMessages(session.toolMessages);
   tm.push({ role: "user", content: input });
 
   // Reliable auto-save: remember any pre-existing draft so we can tell if THIS turn saved one.
@@ -313,7 +409,13 @@ async function runAgent(session: Session, input: string, userId: string | null) 
       const network = String(call.input.network || "").toLowerCase();
       const text = String(call.input.text || textFromPack(session.lastPack, network) || "").trim();
       const publishAt = String(call.input.publishAt || "").trim();
-      session.pendingSchedule = { network, text, publishAt };
+      session.pendingSchedule = {
+        network,
+        text,
+        publishAt,
+        userId: userId ?? undefined,
+        expiresAt: Date.now() + PENDING_TTL_MS,
+      };
       const pretty = network.charAt(0).toUpperCase() + network.slice(1);
       session.toolMessages = tm;
       return {
@@ -331,8 +433,19 @@ async function runAgent(session: Session, input: string, userId: string | null) 
           const videoUrl = String(call.input.videoUrl || "").trim();
           const title = call.input.title ? String(call.input.title) : undefined;
           const language = call.input.language ? String(call.input.language) : undefined;
+          // The host allowlist used to live only in the browser (app/page.tsx),
+          // so this path would hand OpusClip any string the model produced.
+          const parsedVideo = videoUrl ? parseVideoUrl(videoUrl) : { ok: false as const, reason: "" };
+          // Clip jobs are paid. /api/opus/clip caps them at 10/hr; this path ran
+          // under the assistant's 60/hr policy and looped up to 4 tool calls per
+          // request, which put the real ceiling ~24x above the intended one.
+          const clipRl = videoUrl && parsedVideo.ok ? await checkRateLimit(userId, "opus-clip") : null;
           if (!videoUrl) {
             toolResult = "No video URL provided. Ask the user for a YouTube or Vimeo link.";
+          } else if (!parsedVideo.ok) {
+            toolResult = "That link is not a YouTube or Vimeo video, and OpusClip cannot ingest it. Ask the user for a YouTube or Vimeo link.";
+          } else if (clipRl && !clipRl.ok) {
+            toolResult = "The hourly clip-job limit (" + clipRl.limit + ") has been reached. Tell the user to try again later.";
           } else {
             const project: any = await opusCreateClipProject({ videoUrl, language, title });
             const projectId = String((project && (project.projectId || project.id || (project.project && (project.project.id || project.project.projectId)))) || "").trim();
@@ -484,11 +597,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 });
   }
   const { session: incoming, text } = parsed;
-  const session: Session = incoming || {
-    step: "greet",
-    links: [],
-    confirmations: [],
-  };
+  const fresh = (): Session => ({ step: "greet", links: [], confirmations: [] });
+  // A session the server did not sign is not a session - it is caller input
+  // shaped like one. Start over rather than acting on it. (A first request
+  // legitimately arrives with no session at all.)
+  const session: Session = incoming && sessionIsAuthentic(incoming) ? incoming : fresh();
   session.links = session.links || [];
   session.confirmations = session.confirmations || [];
   const input = (text || "").trim();
@@ -527,8 +640,20 @@ export async function POST(req: Request) {
     // If a schedule is awaiting confirmation, handle yes/no first.
     // Reject any pendingSchedule the server didn't sign — the session object
     // is client-supplied, so an unsigned/forged one must never schedule.
-    if (session.pendingSchedule && !pendingIsAuthentic(session)) {
+    if (session.pendingSchedule && !pendingIsAuthentic(session, userId)) {
+      const expired =
+        session.pendingSchedule.userId === userId &&
+        typeof session.pendingSchedule.expiresAt === "number" &&
+        Date.now() > session.pendingSchedule.expiresAt;
       session.pendingSchedule = null;
+      // An expired offer is an ordinary thing that happens to an honest user;
+      // dropping it in silence leaves them saying "yes" into the void.
+      if (expired && input) {
+        return reply(
+          { ...session, mode: "chat", step: "greet" },
+          "That scheduling offer expired, so I did not send anything. Tell me the post and the time again and I will re-queue it.",
+        );
+      }
     }
     if (session.pendingSchedule && input) {
       // DECLINE is checked before AFFIRM so a reply that opens with an
@@ -559,7 +684,9 @@ export async function POST(req: Request) {
           );
         }
       }
-      // Ambiguous reply: keep waiting.
+      // Ambiguous reply: keep waiting, and push the expiry out - otherwise the
+      // prompt keeps asking after the offer it refers to has already lapsed.
+      session.pendingSchedule = { ...session.pendingSchedule, expiresAt: Date.now() + PENDING_TTL_MS };
       return reply(session, "Just to confirm — should I send that post to Metricool for review? Please reply yes or no.", ["Yes, send for review", "No, cancel"]);
     }
 
@@ -736,10 +863,12 @@ export async function POST(req: Request) {
       }
     }
   } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message || "Assistant error", session },
-      { status: 500 }
-    );
+    // Deliberately NOT returning `session` here. It has been mutated since the
+    // last stamp, so its signature no longer matches - and the voice client
+    // stores any session it receives, which would silently reset the user's
+    // wizard progress and pending confirmation on the next turn.
+    reportError("assistant:unhandled", e);
+    return NextResponse.json({ error: "Assistant error" }, { status: 500 });
   }
 }
 

@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
-
-const ALLOWED = (process.env.ALLOWED_EMAILS || process.env.NEXT_PUBLIC_ALLOWED_EMAILS || 'cellularhopeinstitute@gmail.com')
-  .split(',')
-  .map((s) => s.trim().toLowerCase())
-  .filter(Boolean);
+import { safeNextPath } from '@/lib/safe-redirect';
+import { isAllowedEmail } from '@/lib/access';
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -41,16 +38,15 @@ export async function GET(request: Request) {
     return NextResponse.redirect(new URL('/sign-in?error=exchange_failed', url.origin));
   }
 
-  const email = (data.user.email || '').toLowerCase();
-  if (!ALLOWED.includes(email)) {
+  // Same allowlist the middleware uses - lib/access.ts is the single source.
+  // This used to be a second, separately-parsed copy of the same env vars.
+  if (!isAllowedEmail(data.user.email)) {
     // Defense in depth: even if a stranger got a magic link, kick them out.
     await supabase.auth.signOut();
     return NextResponse.redirect(new URL('/sign-in?error=not_allowed', url.origin));
   }
 
-  // `next` is attacker-controllable. An absolute URL passed to the URL
-  // constructor overrides the base entirely, so `url.origin` alone is not
-  // containment: only same-site, path-relative destinations are honoured.
-  const safeNext = typeof next === 'string' && next.startsWith('/') && !next.startsWith('//') ? next : '/';
-  return NextResponse.redirect(new URL(safeNext, url.origin));
+  // `next` is attacker-controllable. Containment is an origin comparison, not a
+  // string prefix test - see lib/safe-redirect.ts for why the prefix test failed.
+  return NextResponse.redirect(new URL(safeNextPath(next, url.origin), url.origin));
 }

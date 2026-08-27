@@ -36,7 +36,16 @@ valid, idempotent) migrations after any schema change:
 
 ## 3. Verify after deploy
 
+**Start here: `GET /api/health`** (signed in as an allowlisted user). It reports
+every check in section 1 as configuration state — `status: "degraded"` and a 503
+when anything required is missing, with the consequence spelled out per item. It
+never prints a secret and makes no upstream calls. The manual probes below stay
+useful for the auth behaviour it cannot check for itself.
+
+
 - `GET /api/metricool/sync` **without** auth → must answer `401 {"error":"unauthorized"}` (NOT a redirect to /sign-in). Redirect = middleware regression, crons dead.
+- `GET /api/metricool/sync` with a WRONG bearer (`Authorization: Bearer nope`) → must answer `401`. The machine-path exemption is value-based; if a junk bearer gets any further, it has regressed to the header-presence check that let a non-allowlisted account reach this route (see `lib/machine-auth.test.ts`).
+- `POST /api/metricool/schedule` with `{"autoPublish": true}` in the body → the parameter must be ignored and the post must still land in Metricool as a **draft**. Publishing is a property of the server, never of the request.
 - `POST /api/opus/webhook` unsigned → `401` (signature check reachable) — `503` means the webhook secret is unset.
 - Generate a pack in the dashboard → the process tracker must walk research → draft → save → image → verify, and the Image Studio gallery + stat cards must update without a reload.
 - Vercel production deploy: confirm each merge to `main` actually produced a **Production** deployment (on 2026-08-19 Vercel silently skipped one and the preview had to be promoted by hand).

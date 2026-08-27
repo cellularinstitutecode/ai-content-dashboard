@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # Dependency drift should arrive as a pull request you can read, not as a
+  # finding in the next security audit. The repo currently carries ten open
+  # advisories, and nobody was told about any of them.
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the routine patch churn, so the queue stays readable and a
+      # genuinely interesting major (Next 14 -> 15) arrives on its own.
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

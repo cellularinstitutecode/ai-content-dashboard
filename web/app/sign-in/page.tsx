@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { createBrowserClient } from '@supabase/ssr';
+import { safeNextPath } from '@/lib/safe-redirect';
 
 const ALLOWED = (process.env.NEXT_PUBLIC_ALLOWED_EMAILS || 'cellularhopeinstitute@gmail.com')
   .split(',')
@@ -54,8 +55,8 @@ export default function SignInPage() {
     // same-origin relative paths only, so it can't be abused as an open redirect.
     let next = '/';
     try {
-      const q = new URLSearchParams(window.location.search).get('next') || '/';
-      if (q.startsWith('/') && !q.startsWith('//')) next = q;
+      const q = new URLSearchParams(window.location.search).get('next');
+      next = safeNextPath(q, window.location.origin);
     } catch {}
     window.location.href = next;
   }

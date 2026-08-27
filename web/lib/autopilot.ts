@@ -17,6 +17,7 @@
 //   scheduled_for) makes planning re-entrant.
 // - Fail-soft: a missing key or empty report degrades the angle choice, it
 //   never throws the whole tick.
+import { reportError } from '@/lib/report';
 import 'server-only';
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -216,13 +217,13 @@ async function autoSeedPool(pillars: string[], brandKeywords: string[]): Promise
     for (const m of [...movers.lostKeywords, ...movers.declined].slice(0, 3)) {
       if (m.keyword) pool.push(m.keyword);
     }
-  } catch { /* cache/link-out mode */ }
+  } catch (err) { /* cache/link-out mode */ reportError('autopilot:keyword-brief', err); }
   try {
     const top = await topOrganicKeywords(primaryDomain(), 30);
     for (const k of top.rows.slice(0, 5)) {
       if (k.keyword && (k.position ?? 99) > 3) pool.push(k.keyword); // consolidate non-#1 winners
     }
-  } catch { /* cache/link-out mode */ }
+  } catch (err) { /* cache/link-out mode */ reportError('autopilot:keyword-questions', err); }
   for (const b of brandKeywords) pool.push(b);
   // Dedupe, keep order.
   const seen = new Set<string>();
@@ -399,7 +400,7 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
     if (bp && Array.isArray((bp as { keywords?: string[] }).keywords)) {
       brandKeywords = ((bp as { keywords?: string[] }).keywords || []).filter(Boolean);
     }
-  } catch { /* optional */ }
+  } catch (err) { /* optional */ reportError('autopilot:brand-load', err); }
 
   // Seed pool: pillars for 'pillars' mode; pillars + live domain data
   // (lost/declining keywords, consolidatable winners) for full 'auto'.
@@ -421,7 +422,7 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
       .gte('created_at', since)
       .limit(200);
     for (const r of used || []) recent.add(String((r as { keyword: string }).keyword || '').toLowerCase());
-  } catch { /* table optional */ }
+  } catch (err) { /* table optional */ reportError('autopilot:draft-keywords', err); }
 
   // Learning loop: measured engagement per primary keyword (view joins
   // draft_keywords × post_metrics). Empty until posts get measured — fail-soft.
@@ -438,7 +439,7 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
       const eng = Number((r as { total_engagement: number }).total_engagement) || 0;
       if (kw && eng > 0) learned.set(kw, eng);
     }
-  } catch { /* view optional */ }
+  } catch (err) { /* view optional */ reportError('autopilot:keyword-performance', err); }
 
   // Live data (all cache-first + unit-floor guarded).
   const bundle = await researchBundle(seedTopic, { relatedLimit: 12, questionLimit: 6 });
@@ -463,7 +464,7 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
       },
     ]);
     if (note && note.trim()) angle.strategistNote = note.trim().slice(0, 500);
-  } catch { /* optional */ }
+  } catch (err) { /* optional */ reportError('autopilot:recent-angles', err); }
 
   return {
     state: 'researched',
@@ -560,7 +561,7 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
       .eq('user_id', run.user_id)
       .maybeSingle();
     if (bp) brand = bp as BrandContext;
-  } catch { /* optional */ }
+  } catch (err) { /* optional */ reportError('autopilot:media-match', err); }
 
   // Performance hint from measured posts.
   let performanceHint: string | undefined;
@@ -582,7 +583,7 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
       }));
       performanceHint = summarizeTopPerformers(metrics) || undefined;
     }
-  } catch { /* optional */ }
+  } catch (err) { /* optional */ reportError('autopilot:clip-lookup', err); }
 
   const { provider, pack } = await generateContentPack({
     topic: topicPromptFor(angle, strategy),
@@ -663,7 +664,7 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
         intent: angle.intent,
         role: 'primary',
       });
-    } catch { /* learnings are best-effort */ }
+    } catch (err) { /* learnings are best-effort */ reportError('autopilot:record-learnings', err); }
   }
 
   return {
@@ -761,7 +762,7 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
         pack = retry;
         score = retryScore;
       }
-    } catch { /* keep the original pack+score */ }
+    } catch (err) { /* keep the original pack+score */ reportError('autopilot:regen-rescore', err); }
   }
 
   return {
@@ -972,7 +973,6 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
         providers: mcProviders,
         publicationDate: run.scheduled_for,
         media,
-        autoPublish: false,
       });
       note =
         'Sent to Metricool as a DRAFT for ' + mcProviders.join(', ') +
