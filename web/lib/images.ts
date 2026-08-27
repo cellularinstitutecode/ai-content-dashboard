@@ -376,10 +376,30 @@ export async function generatePackImage(opts: {
   const started = Date.now();
 
   let best: { img: GeneratedImage; prompt: string; variant: number; verification: ImageVerification } | null = null;
+  let lastError: unknown = null;
   for (let attempt = 0; attempt < MAX_GEN_ATTEMPTS; attempt++) {
     const variant = (baseVariant + attempt) % STYLE_VARIANTS.length;
     const prompt = buildImagePrompt({ ...opts, variant });
-    const img = await generateImageBytes(prompt);
+    // A retry that fails must not destroy an already-paid-for candidate. This
+    // call sat outside any try/catch, so an OpenAI 5xx or a timeout on the
+    // SECOND attempt threw straight out of this function and discarded a
+    // perfectly usable first image — exactly the "silent discard that burns
+    // credits with nothing to show" the retry loop exists to avoid. Under
+    // approveRun that surfaced as a post shipping with no image at all.
+    let img: GeneratedImage;
+    try {
+      img = await generateImageBytes(prompt);
+    } catch (e) {
+      lastError = e;
+      // With a usable candidate in hand, stop and store it. With nothing in
+      // hand, fail immediately rather than retrying: generateImageBytes has
+      // ALREADY walked its own 3-rung model/parameter ladder, so a throw here
+      // means every rung failed. Retrying the whole loop would triple the
+      // failed-call volume against an API that is out of credit or rejecting
+      // our key — the exact case the fail-fast error message is for.
+      if (best) break;
+      throw e;
+    }
     const verification = await verifyGeneratedImage(img, opts.topic);
     const candidate = { img, prompt, variant, verification };
     // Keep the better candidate. Ranking encodes the content-image rule:
@@ -393,7 +413,11 @@ export async function generatePackImage(opts: {
     // there is real time left in the serverless budget.
     if (Date.now() - started > RETRY_TIME_BUDGET_MS) break;
   }
-  if (!best) throw new Error('image generation produced no candidate');
+  if (!best) {
+    throw lastError instanceof Error
+      ? lastError
+      : new Error('image generation produced no candidate');
+  }
 
   const url = await storeImage(best.img, opts.topic);
   return {

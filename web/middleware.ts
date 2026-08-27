@@ -17,12 +17,24 @@ export async function middleware(req: NextRequest) {
   // signature) and are called without a browser session. Session auth here
   // would 307 them to /sign-in before their own checks ever run, silently
   // killing the daily crons and the Opus completion webhook.
-  if (
-    pathname === '/api/opus/webhook' ||
-    pathname === '/api/metricool/sync' ||
-    pathname === '/api/autopilot/tick'
-  ) {
-    return res;
+  //
+  // Only requests that ACTUALLY carry machine credentials skip session auth.
+  // The exemption used to be unconditional, so it also skipped the tenant
+  // allowlist below — and both cron routes fall back to plain session auth
+  // when the bearer is absent. A self-registered, non-allowlisted account
+  // could therefore POST /api/metricool/sync and drive the clinic's Metricool
+  // credentials, or POST /api/autopilot/tick and spend AI credit, even though
+  // every other route answered it 403. Requests with no machine credential
+  // now fall through to the normal session + allowlist checks; the routes'
+  // own bearer/HMAC verification is still the real gate for cron traffic.
+  const machinePaths = ['/api/opus/webhook', '/api/metricool/sync', '/api/autopilot/tick'];
+  if (machinePaths.includes(pathname)) {
+    const hasMachineCredential =
+      req.headers.has('authorization') ||
+      // Opus signs its webhook rather than sending a bearer.
+      req.headers.has('x-opus-signature') ||
+      req.headers.has('x-opus-timestamp');
+    if (hasMachineCredential) return res;
   }
 
   const supabase = createServerClient(
