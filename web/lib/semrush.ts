@@ -16,6 +16,7 @@
 // Auth: `key` query parameter (SEMRUSH_API_KEY env). Errors come back as an
 // "ERROR NN :: message" plain-text body, usually with HTTP 200.
 
+import { reasonForCode, reasonForHttpStatus, type SemrushReason } from '@/lib/semrush-reason';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 
 // ---------------------------------------------------------------------------
@@ -40,7 +41,9 @@ export type SemReportResult = {
   ok: boolean;
   rows: SemKeyword[];
   source: SemSource;
-  reason: 'ok' | 'no_token' | 'auth' | 'plan' | 'http' | 'network' | 'empty' | 'budget';
+  // See lib/semrush-reason.ts for what each state means and which ones are
+  // "serve the cache" rather than "a human should chase this".
+  reason: SemrushReason;
   note?: string;
   unitsSpent: number;
 };
@@ -157,13 +160,6 @@ export function parseSerpCsv(body: string): SerpEntry[] {
       return { domain: String(c[0] ?? '').trim(), url: String(c[1] ?? '').trim() };
     })
     .filter((r) => r.domain.length > 0);
-}
-
-function reasonForSemrushError(code: number): SemReportResult['reason'] {
-  if (code === 110 || code === 120) return 'auth';
-  if (code === 130 || code === 131 || code === 132 || code === 133 || code === 134 || code === 135) return 'plan';
-  if (code === 50) return 'empty';
-  return 'http';
 }
 
 // ---------------------------------------------------------------------------
@@ -297,14 +293,12 @@ async function runReport(
     const text = (await res.text().catch(() => '')).trim();
     if (/^ERROR\s+\d+/i.test(text)) {
       const code = parseInt(text.replace(/^ERROR\s+/i, ''), 10);
-      const reason = reasonForSemrushError(code);
+      const reason = reasonForCode(code);
       if (reason === 'empty') return { ok: true, body: '', source: 'live', reason: 'ok', unitsSpent: 0 };
       return { ok: false, source: 'none', reason, note: text.slice(0, 100), unitsSpent: 0 };
     }
     if (!res.ok) {
-      let reason: SemReportResult['reason'] = 'http';
-      if (res.status === 401 || res.status === 403) reason = 'auth';
-      else if (res.status === 402 || res.status === 429) reason = 'plan';
+      const reason = reasonForHttpStatus(res.status);
       return { ok: false, source: 'none', reason, note: 'HTTP ' + res.status, unitsSpent: 0 };
     }
     return { ok: true, body: text, source: 'live', reason: 'ok', unitsSpent: estUnits };
