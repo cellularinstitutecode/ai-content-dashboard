@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
       body?.brand && typeof body.brand === 'object' ? body.brand : undefined;
 
     // Require an authenticated user before spending AI credits.
-    const sb = supabaseServer();
+    const sb = await supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
     if (!user) {
       return NextResponse.json({ error: 'unauthorized' }, { status: 401 });

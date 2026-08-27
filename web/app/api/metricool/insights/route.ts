@@ -36,7 +36,7 @@ export async function GET(request: Request) {
   // Explicit session guard, matching every sibling Metricool route (defense in
   // depth — middleware covers this path today, but don't rely on it alone).
   try {
-    const sb = supabaseServer();
+    const sb = await supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   } catch {

@@ -7,7 +7,7 @@ export const runtime = 'nodejs';
 // GET /api/posts
 // Returns the current user's scheduled posts, most recent publication first.
 export async function GET() {
-  const sb = supabaseServer();
+  const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
@@ -25,7 +25,7 @@ export async function GET() {
 // Reschedules a single post by updating its publication_date.
 // Body: { id: string, publication_date: string (ISO) }
 export async function PATCH(req: Request) {
-  const sb = supabaseServer();
+  const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 

@@ -381,7 +381,7 @@ async function runAgent(session: Session, input: string, userId: string | null) 
         toolResult = "Cannot save: user is not signed in.";
       } else {
         try {
-          const sb = supabaseServer();
+          const sb = await supabaseServer();
           const { data: draft } = await sb
             .from("drafts")
             .insert({
@@ -560,7 +560,7 @@ async function runAgent(session: Session, input: string, userId: string | null) 
           session.provider = session.provider === "openai" ? "openai" : "anthropic";
         }
       }
-      const _sb = supabaseServer();
+      const _sb = await supabaseServer();
       const { data: _draft } = await _sb
         .from("drafts")
         .insert({
@@ -609,7 +609,7 @@ export async function POST(req: Request) {
   // Resolve the signed-in user once (used for save/schedule).
   let userId: string | null = null;
   try {
-    const sb = supabaseServer();
+    const sb = await supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
     userId = user?.id || null;
   } catch { userId = null; }
@@ -779,7 +779,7 @@ export async function POST(req: Request) {
           );
         }
         if (userId) {
-          const sb = supabaseServer();
+          const sb = await supabaseServer();
           const { data: draft } = await sb
             .from("drafts")
             .insert({

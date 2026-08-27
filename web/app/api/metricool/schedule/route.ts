@@ -87,7 +87,7 @@ function normalizePublishAt(input: string): { wallClock: string; instant: string
 // belongs in its own route that reads an approval record from the database.
 export async function POST(req: NextRequest) {
   // --- Auth guard (defense in depth; matches drafts/opus routes) ---
-  const sb = supabaseServer();
+  const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 

@@ -1,5 +1,6 @@
 import './globals.css';
-import type { Metadata } from 'next';
+// Next 16 no longer re-exports Metadata from the package root.
+import type { Metadata } from 'next/types';
 import DraftingAssistant from '@/components/DraftingAssistant';
 import { LiveContentProvider } from "@/components/LiveContentProvider";
 import { WorkspaceProvider } from "@/components/workspace";

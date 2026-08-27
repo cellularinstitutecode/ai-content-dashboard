@@ -35,7 +35,7 @@ function cleanTime(x: any): string {
 
 // GET /api/templates â list the user's templates.
 export async function GET() {
-  const sb = supabaseServer();
+  const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
@@ -58,7 +58,7 @@ export async function GET() {
 
 // POST /api/templates â create or update a template (upsert when id is present).
 export async function POST(req: NextRequest) {
-  const sb = supabaseServer();
+  const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
 
 // DELETE /api/templates?id=... â remove a template the user owns.
 export async function DELETE(req: NextRequest) {
-  const sb = supabaseServer();
+  const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 

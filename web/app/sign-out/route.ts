@@ -4,7 +4,7 @@ import { cookies } from 'next/headers';
 
 async function signOut(request: Request) {
   const url = new URL(request.url);
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

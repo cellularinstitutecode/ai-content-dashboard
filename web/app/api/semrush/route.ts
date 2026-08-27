@@ -26,7 +26,7 @@ export const maxDuration = 60;
 
 async function requireUser(): Promise<string | null> {
   try {
-    const sb = supabaseServer();
+    const sb = await supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
     return user?.id || null;
   } catch {
@@ -75,7 +75,7 @@ export async function GET(req: NextRequest) {
     // Recent AI drafts that passed through the Semrush keyword filter.
     let rows: Awaited<ReturnType<typeof keywordResearchActivity>> = [];
     try {
-      const sb = supabaseServer();
+      const sb = await supabaseServer();
       const { data: { user } } = await sb.auth.getUser();
       if (user) rows = await keywordResearchActivity(user.id, 12);
     } catch {

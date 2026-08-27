@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
   // Semrush units or reveal config state. Fail closed on auth errors.
   let userId = '';
   try {
-    const sb = supabaseServer();
+    const sb = await supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     userId = user.id;

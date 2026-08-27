@@ -8,7 +8,7 @@ export const runtime = 'nodejs';
 // Probes multiple Metricool endpoints; returns the full upstream body so we can see exactly what's rejected.
 export async function GET(req: NextRequest) {
   // --- Auth guard (defense in depth; matches drafts/opus routes) ---
-  const sb = supabaseServer();
+  const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
