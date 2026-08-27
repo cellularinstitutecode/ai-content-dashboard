@@ -10,8 +10,8 @@
     "test": "node --experimental-strip-types --test lib/**/*.test.ts && node test/progress-bus.test.cjs && node test/refresh-bus.test.cjs && node --experimental-strip-types --import ./test/image-register.mjs --test test/image-pipeline.test.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.27.3",
-    "@supabase/ssr": "^0.5.2",
+    "@anthropic-ai/sdk": "^0.120.0",
+    "@supabase/ssr": "^0.12.5",
     "@supabase/supabase-js": "^2.45.4",
     "googleapis": "^140.0.1",
     "next": "^14.2.35",
@@ -24,7 +24,7 @@
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.20",
-    "esbuild": "^0.24.2",
+    "esbuild": "^0.28.2",
     "eslint": "^8.57.1",
     "eslint-config-next": "^14.2.35",
     "playwright-core": "^1.62.1",
