@@ -613,7 +613,18 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   // accumulate orphans; insert on first pass.
   let draftId = run.draft_id;
   if (draftId) {
-    const { error } = await db.from('drafts').update({ pack, provider }).eq('id', draftId);
+    // Carry the verified hero image across a redraft. This wrote the fresh
+    // pack with no spread, so "Ask for changes" silently destroyed `_image`:
+    // the review card lost its picture, the stored file was orphaned, and
+    // approval regenerated from variant 0 (burning a second image credit and
+    // breaking the "every reroll is a visibly different take" guarantee).
+    // The angle is unchanged by a redraft, so the image stays on-topic.
+    const { data: prior } = await db.from('drafts').select('pack').eq('id', draftId).maybeSingle();
+    const priorImage = (prior as { pack?: { _image?: unknown } } | null)?.pack?._image;
+    const nextPack = priorImage && !(pack as { _image?: unknown })._image
+      ? { ...(pack as Record<string, unknown>), _image: priorImage }
+      : pack;
+    const { error } = await db.from('drafts').update({ pack: nextPack, provider }).eq('id', draftId);
     if (error) throw new Error('draft update failed: ' + error.message);
   } else {
     const { data: draft, error } = await db
@@ -637,7 +648,10 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   // primary from the angle's data — anti-repetition and the learning view
   // both depend on this row existing.
   if (brief) {
-    void recordDraftKeywords(run.user_id, angle.query, brief);
+    // Was fire-and-forget: on Vercel the lambda can freeze once the response
+    // is returned, so this insert was lost non-deterministically — and it is
+    // the row anti-repetition reads. The else-branch already awaited.
+    await recordDraftKeywords(run.user_id, angle.query, brief);
   } else {
     try {
       await db.from('draft_keywords').insert({
@@ -833,13 +847,20 @@ export async function advanceRuns(opts: {
         else if (run.state === 'researched') patch = await stepDraft(run, template, strategy);
         else patch = await stepScore(run, template, strategy);
 
+        // Conditional on the state we started this step from. Without it, a
+        // cron tick and a "Run engine now" click running concurrently both
+        // advanced the same run and the second write clobbered the first,
+        // leaving log/draft_id inconsistent. Now the loser's write matches
+        // no row and it stops instead of corrupting the run.
         const { data: updated, error } = await db
           .from('template_runs')
           .update({ ...patch, attempts: 0 })
           .eq('id', run.id)
+          .eq('state', run.state)
           .select('*')
-          .single();
+          .maybeSingle();
         if (error) throw new Error(error.message);
+        if (!updated) break; // another worker advanced this run — leave it alone
         run = updated as RunRow;
         advanced++;
         if (run.state === 'ready_for_review') { ready++; break; }
@@ -879,6 +900,26 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
   if (run.state !== 'ready_for_review') return { ok: false, note: 'run is not ready for review' };
   if (!run.draft_id) return { ok: false, note: 'run has no draft' };
 
+  // CLAIM FIRST. The read above and the transition at the end used to be
+  // separated by up to 60s of image generation and the Metricool POST, with
+  // nothing in between guarding the state — so two tabs (or a retry after an
+  // edge timeout) both passed the check and both created a Metricool draft
+  // and a posts row for the same slot. `posts` has no unique constraint to
+  // catch it. This conditional update is the atomic claim: exactly one caller
+  // can move ready_for_review -> approved, and the loser stops here having
+  // spent nothing. State is set before the handoff rather than after, which
+  // matches the existing semantics — a failed Metricool call already left the
+  // run approved with an explanatory note.
+  const { data: claimed } = await db
+    .from('template_runs')
+    .update({ state: 'approved' })
+    .eq('id', run.id)
+    .eq('state', 'ready_for_review')
+    .select('id');
+  if (!Array.isArray(claimed) || claimed.length === 0) {
+    return { ok: false, note: 'this run was already actioned' };
+  }
+
   const { data: t } = await db
     .from('schedule_templates').select('providers, name').eq('id', run.template_id).maybeSingle();
   const providers: string[] = (t && Array.isArray((t as { providers?: string[] }).providers))
@@ -888,8 +929,14 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
   const pack = (d as { pack?: ContentPack } | null)?.pack;
   if (!pack) return { ok: false, note: 'draft pack missing' };
 
-  const text = channelText(pack, providers[0] || 'instagram');
   const mcProviders = providers.filter((p): p is McProvider => (MC_PROVIDERS as string[]).includes(p));
+  // Pick the copy for a network we are actually posting to. This used
+  // providers[0], which is whatever the user clicked FIRST in the template
+  // editor — including 'blog', which is not a Metricool network. A template
+  // with providers ['blog','instagram'] shipped the full long-form article as
+  // the Instagram caption (far past the 2,200-char limit) while the
+  // purpose-written pack.instagram copy went unused.
+  const text = channelText(pack, mcProviders[0] || providers[0] || 'instagram');
 
   // Image enrichment: make sure the draft carries its AI hero image before
   // the handoff, so the Metricool draft ships with a visual. Best-effort —
@@ -950,7 +997,8 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
   });
   await db
     .from('template_runs')
-    .update({ state: 'approved', log: logLine(run, 'approve', note) })
+    // State was already set by the claim above; this records the outcome.
+    .update({ log: logLine(run, 'approve', note) })
     .eq('id', run.id);
   return { ok: true, note };
 }
@@ -988,9 +1036,19 @@ export async function skipRun(runId: string, userId: string): Promise<boolean> {
   const { data: r } = await db
     .from('template_runs').select('id, log, state').eq('id', runId).eq('user_id', userId).maybeSingle();
   if (!r) return false;
+  // `state` was selected and then never checked, so a stale second tab could
+  // skip a run that had ALREADY been approved — the dashboard then reported
+  // the post as cancelled while the Metricool draft and the posts row still
+  // existed and still shipped. Nothing in the app compensates for that, so
+  // refuse instead: a terminal run cannot be skipped.
+  const priorState = (r as RunRow).state;
+  if (priorState === 'approved' || priorState === 'skipped') return false;
   await db
     .from('template_runs')
     .update({ state: 'skipped', log: logLine(r as RunRow, 'skip', 'Skipped by reviewer.') })
-    .eq('id', runId);
+    .eq('id', runId)
+    // Conditional write: if another tab approved it between the read and
+    // here, this matches nothing rather than clobbering the approval.
+    .eq('state', priorState);
   return true;
 }
