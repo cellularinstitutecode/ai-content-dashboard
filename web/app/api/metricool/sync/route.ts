@@ -9,7 +9,7 @@
 //           Metricool credentials are a single org-wide account, so the same
 //           metrics are stored for every user that has a brand profile.
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseServer } from '@/lib/supabase';
+import { requireAllowlistedUser } from '@/lib/auth';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { fetchPostMetrics, type NormalizedMetric } from '@/lib/performance';
 
@@ -46,13 +46,17 @@ async function store(userId: string, metrics: NormalizedMetric[]): Promise<numbe
 // POST /api/metricool/sync
 // Fetches the last 30 days of post metrics and stores them for the caller.
 export async function POST() {
-  const sb = supabaseServer();
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  // This route reads the ORG-WIDE Metricool account and writes the result into
+  // rows owned by the caller, so "a valid session" is the wrong question - it
+  // has to be one of our people. Middleware enforces the allowlist too; this is
+  // the copy that stays correct if middleware's machine-path exemption ever
+  // widens again.
+  const auth = await requireAllowlistedUser();
+  if (!auth.ok) return auth.response;
 
   const metrics = await fetchPostMetrics(30);
   try {
-    const synced = await store(user.id, metrics);
+    const synced = await store(auth.userId, metrics);
     return NextResponse.json({ ok: true, synced });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? 'sync_failed' }, { status: 500 });

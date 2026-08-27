@@ -16,6 +16,8 @@
 // - Idempotent: ensureDraftImage() skips drafts that already carry an
 //   image, so retries and concurrent callers don't double-spend.
 // - No new secrets: reuses OPENAI_API_KEY + the Supabase service role.
+import { reportError } from '@/lib/report';
+import { randomUUID } from 'crypto';
 import 'server-only';
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -334,7 +336,13 @@ function slugify(s: string): string {
 
 async function storeImage(img: GeneratedImage, nameHint: string): Promise<string> {
   const db = supabaseAdmin();
-  const path = `packs/${Date.now()}-${slugify(nameHint)}.${img.ext}`;
+  // The bucket is public, so the object name is the only thing separating one
+  // draft's image from anyone with a browser. `packs/<Date.now()>-<slug>` was
+  // guessable: the slug comes from the post title and the timestamp is bounded
+  // by the draft's created_at, which /api/drafts returns - about a thousand
+  // unauthenticated GETs to recover someone else's image. A random component
+  // makes the name unguessable; the slug stays for human legibility.
+  const path = `packs/${Date.now()}-${randomUUID()}-${slugify(nameHint)}.${img.ext}`;
   const doUpload = () =>
     db.storage.from(BUCKET).upload(path, img.bytes, { contentType: img.contentType, upsert: true });
 
@@ -343,7 +351,7 @@ async function storeImage(img: GeneratedImage, nameHint: string): Promise<string
     // First run: create the public bucket, then retry once.
     try {
       await db.storage.createBucket(BUCKET, { public: true });
-    } catch { /* raced another request — retry the upload regardless */ }
+    } catch (err) { /* raced another request — retry the upload regardless */ reportError('images:bucket-create', err); }
     ({ error } = await doUpload());
   }
   if (error) throw new Error('image upload failed: ' + error.message);
@@ -457,7 +465,7 @@ export async function ensureDraftImage(draftId: string): Promise<PackImage | nul
       .eq('user_id', row.user_id)
       .maybeSingle();
     if (bp) brand = bp as BrandContext;
-  } catch { /* optional */ }
+  } catch (err) { /* optional */ reportError('images:draft-stamp', err); }
 
   const image = await generatePackImage({
     topic: String(row.topic || 'regenerative medicine'),

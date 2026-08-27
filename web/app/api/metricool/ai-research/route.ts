@@ -4,6 +4,7 @@
 // plus a ready-to-edit draft. Delegates to researchTopic() in lib/ai.ts, which
 // reuses the same Anthropic/OpenAI providers as the content generator.
 // Auth + rate limiting mirror /api/generate since this spends AI credits.
+import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { researchTopic, type Provider, type BrandContext } from '@/lib/ai';
 import { supabaseServer } from '@/lib/supabase';
@@ -59,7 +60,7 @@ export async function POST(req: NextRequest) {
           .eq('user_id', user.id)
           .maybeSingle();
         if (profile) brand = profile as BrandContext;
-      } catch { /* research still works without it */ }
+      } catch (err) { /* research still works without it */ reportError('ai-research:context-load', err); }
     }
 
     // Semrush pre-filter runs automatically inside researchTopic (cache-first,

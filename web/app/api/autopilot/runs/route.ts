@@ -4,6 +4,7 @@
 //   POST → { id, action: 'approve' | 'skip' | 'run_now' }
 // Approve is the only path toward publishing, and it only ever creates a
 // Metricool DRAFT (autoPublish: false) plus a pending_review posts row.
+import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -68,7 +69,7 @@ export async function GET(req: NextRequest) {
       if (!history[tid]) history[tid] = [];
       if (history[tid].length < 4) history[tid].push({ query: a.query, type: String(a.type || '') });
     }
-  } catch { /* optional */ }
+  } catch (err) { /* optional */ reportError('autopilot-runs:angle-history', err); }
 
   return NextResponse.json({
     runs: rows.map((r: Record<string, unknown>) => ({

@@ -5,7 +5,7 @@
 //   2. A signed-in user ("Run engine now" button) → same, scoped to that user.
 // Steps are idempotent and resumable, so overlapping or repeated ticks are safe.
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseServer } from '@/lib/supabase';
+import { requireAllowlistedUser } from '@/lib/auth';
 import { advanceRuns, planRuns } from '@/lib/autopilot';
 import { checkRateLimit } from '@/lib/rate-limit';
 
@@ -19,10 +19,11 @@ async function handle(req: NextRequest) {
 
   let scopeUserId: string | undefined;
   if (!isCron) {
-    const sb = supabaseServer();
-    const { data: { user } } = await sb.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-    scopeUserId = user.id;
+    // Not the cron: a human pressed "Run engine now". Allowlist, not merely a
+    // session - this spends Anthropic, OpenAI and Semrush credit.
+    const session = await requireAllowlistedUser();
+    if (!session.ok) return session.response;
+    scopeUserId = session.userId;
     // A tick runs up to 4 research/draft/score pipelines and spends Anthropic,
     // OpenAI and Semrush credit. Every sibling AI route is capped; this one
     // was not, so the "Run engine now" button was an uncapped spend loop.

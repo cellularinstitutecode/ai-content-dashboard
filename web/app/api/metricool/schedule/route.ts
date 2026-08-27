@@ -1,7 +1,9 @@
+import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { ALLOWED_BLOG_IDS, DEFAULT_BLOG_ID } from '@/lib/access';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 
@@ -74,12 +76,30 @@ function normalizePublishAt(input: string): { wallClock: string; instant: string
 // routes so the allowlist can't drift between endpoints.
 
 // POST /api/metricool/schedule
-// body: { network, text, publishAt (ISO datetime string), blogId?, mediaUrl?, draftId?, autoPublish? }
+// body: { network, text, publishAt (ISO datetime string), blogId?, mediaUrl?, draftId? }
+//
+// This route NEVER publishes. Everything it sends to Metricool is held as a
+// draft for a human to approve there. That used to be a request parameter
+// (`autoPublish`), which meant any signed-in caller could switch the review step
+// off for themselves - the one control standing between generated copy and a
+// medical clinic's live social accounts. Whether a post publishes is a property
+// of this function, not of the request; a future "approve and publish" action
+// belongs in its own route that reads an approval record from the database.
 export async function POST(req: NextRequest) {
   // --- Auth guard (defense in depth; matches drafts/opus routes) ---
   const sb = supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
+  // Scheduling reaches a paid third party and a live brand account. Capped like
+  // every other route that leaves the building.
+  const rl = await checkRateLimit(user.id, 'schedule');
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: 'rate_limited', limit: rl.limit },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } },
+    );
+  }
 
   const token = process.env.METRICOOL_USER_TOKEN;
   const userId = process.env.METRICOOL_USER_ID;
@@ -102,18 +122,14 @@ export async function POST(req: NextRequest) {
   if (!provider) return NextResponse.json({ error: 'Unsupported network: ' + network }, { status: 400 });
   if (!text) return NextResponse.json({ error: 'text is required' }, { status: 400 });
 
-  // Review step: never auto-publish by default. Posts land in Metricool as
-  // drafts/pending so a human approves them there before they go live. Callers
-  // may opt in with { autoPublish: true } once a reviewer has approved.
-  const autoPublish = payload.autoPublish === true;
-
   const body: any = {
     text: text,
     publicationDate: { dateTime: publishAt, timezone: TIMEZONE },
     providers: [{ network: provider }],
-    // draft:true tells Metricool to hold the post for review rather than queue it live.
-    autoPublish,
-    draft: !autoPublish,
+    // draft:true tells Metricool to hold the post for review rather than queue
+    // it live. Both values are constants: see the note on POST above.
+    autoPublish: false,
+    draft: true,
   };
   if (payload.mediaUrl) {
     body.media = [{ url: String(payload.mediaUrl) }];
@@ -146,32 +162,49 @@ export async function POST(req: NextRequest) {
     const providers = post && post.providers ? post.providers : [];
 
     // --- Persist to posts table (best-effort; scheduling already succeeded) ---
+    // `draft_id` is written with the service-role client, which bypasses RLS, so
+    // an unowned id would happily attach this post to someone else's draft and
+    // corrupt the drafts-to-posts join. Verify ownership first; an id that isn't
+    // the caller's is dropped rather than rejected, because the post is already
+    // scheduled and the link is bookkeeping.
+    let ownedDraftId: string | null = null;
+    if (draftId) {
+      const { data: ownDraft } = await sb
+        .from('drafts')
+        .select('id')
+        .eq('id', draftId)
+        .eq('user_id', user.id)
+        .maybeSingle();
+      ownedDraftId = ownDraft ? draftId : null;
+      if (!ownedDraftId) {
+        console.warn('metricool/schedule: ignoring draftId not owned by caller');
+      }
+    }
     try {
       const admin = supabaseAdmin();
       await admin.from('posts').insert({
         user_id: user.id,
-        draft_id: draftId,
+        draft_id: ownedDraftId,
         providers: [provider],
         text: text,
         // Store the absolute instant, not the wall-clock string: the column is
         // timestamptz and the calendar reads it back as one.
         publication_date: when.instant,
         metricool_post_id: id,
-        status: status || (autoPublish ? 'scheduled' : 'pending_review'),
+        status: status || 'pending_review',
       });
-    } catch { /* logging-only */ }
+    } catch (err) { /* logging-only */ reportError('schedule:posts-insert', err); }
 
     return NextResponse.json({
       ok: true,
       id: id,
-      status: status || (autoPublish ? 'scheduled' : 'pending_review'),
-      autoPublish,
-      review: !autoPublish,
+      status: status || 'pending_review',
+      autoPublish: false,
+      review: true,
       publicationDate: publicationDate,
       publishAtUtc: when.instant,
       timezone: TIMEZONE,
       providers: providers,
-      post: post,
     });
   } catch (err: any) {
     const lastErr = err && err.message ? err.message : String(err);

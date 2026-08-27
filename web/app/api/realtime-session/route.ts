@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { getUnitsBalance } from "@/lib/semrush";
 import {
   domainOverview,
@@ -106,6 +107,17 @@ export async function POST() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
+  // Every POST here mints an OpenAI Realtime client secret - a spendable
+  // credential for live audio - and builds a Semrush snapshot on the way.
+  // Every sibling AI route is capped; this one was the exception.
+  const rl = await checkRateLimit(user.id, "realtime");
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: "rate_limited", limit: rl.limit },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } },
+    );
+  }
+
   if (!process.env.OPENAI_API_KEY) {
     return NextResponse.json({ error: "OPENAI_API_KEY is not configured on the server" }, { status: 500 });
   }
@@ -133,7 +145,10 @@ export async function POST() {
   });
 
   if (!r.ok) {
-    return NextResponse.json({ error: "session_failed", detail: await r.text() }, { status: 500 });
+    // Log the upstream body, do not return it: it carries account and quota
+    // detail the browser has no use for.
+    console.error("realtime-session: OpenAI rejected the request", r.status, (await r.text()).slice(0, 500));
+    return NextResponse.json({ error: "session_failed" }, { status: 502 });
   }
   return NextResponse.json(await r.json());
 }

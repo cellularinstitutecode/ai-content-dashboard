@@ -3,6 +3,13 @@ on:
   pull_request:
   push:
     branches: [main]
+
+# The workflow only ever reads the repo. Without this block it inherits the
+# repository default, which in many configurations is read-write - and it runs
+# npm install (and every transitive postinstall script) on pull-request code.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,8 +24,30 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # npm ci installs exactly what package-lock.json pins, and fails if the
+      # lockfile and manifest disagree. npm install silently resolves new
+      # versions, so CI could pass against dependencies production never saw.
+      - run: npm ci
       - run: npm run lint
       - run: npx tsc --noEmit
       - run: npm test
       - run: npm run build
+
+  audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Advisories should arrive as a visible check rather than as a finding in
+      # the next manual audit. Reported separately from the build, and
+      # non-blocking, so an unrelated new CVE never wedges an urgent merge -
+      # the point is that somebody sees it the day it lands.
+      - run: npm audit --audit-level=high
+        continue-on-error: true

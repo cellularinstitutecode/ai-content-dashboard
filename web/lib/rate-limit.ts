@@ -33,6 +33,10 @@ const POLICIES: Record<string, Policy> = {
   'autopilot-action': { limit: 40, windowSec: 3600 },
   semrush: { limit: 120, windowSec: 3600 },
   keywords: { limit: 60, windowSec: 3600 },
+  // Reaches a live brand account through a paid third party.
+  schedule: { limit: 60, windowSec: 3600 },
+  // Each call mints a spendable OpenAI Realtime credential.
+  realtime: { limit: 20, windowSec: 3600 },
 };
 
 const DEFAULT_POLICY: Policy = { limit: 60, windowSec: 3600 };

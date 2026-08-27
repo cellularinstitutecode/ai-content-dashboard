@@ -1,3 +1,4 @@
+import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { opusCreateClipProject, opusGetExportableClips } from '@/lib/opus';
 import { supabaseServer } from '@/lib/supabase';
@@ -56,8 +57,11 @@ export async function POST(req: NextRequest) {
     const projectId = projectIdOf(project);
     if (!projectId) {
       // Without a project id we could never map finished clips back to a draft,
-      // so fail loudly instead of creating an orphan job.
-      return NextResponse.json({ error: 'opus returned no project id', project }, { status: 502 });
+      // so fail loudly instead of creating an orphan job. The raw `project`
+      // object used to ride along in this response - it carries the org id and
+      // internal job fields, which the browser has no use for.
+      console.error('opus/clip: create returned no project id', JSON.stringify(project).slice(0, 500));
+      return NextResponse.json({ error: 'opus returned no project id' }, { status: 502 });
     }
     const thumbnailUrl = thumbnailOf(project);
     const projectTitle = title || project?.sourceInfo?.title || null;
@@ -192,7 +196,7 @@ export async function GET(req: NextRequest) {
     if (ready) {
         const knownClips = Array.isArray(draftRow?.pack?.clips) ? draftRow.pack.clips : [];
         try { clips = await persistClips(clips, projectId, knownClips); }
-        catch (e) { /* keep raw Opus clips if Drive persist fails entirely */ }
+        catch (err) { /* keep raw Opus clips if Drive persist fails entirely */ reportError('opus-clip:drive-persist', err); }
     }
 
     // Best-effort, idempotent persist onto this user's clip draft.
@@ -210,7 +214,7 @@ export async function GET(req: NextRequest) {
       if (ready) {
         await admin.from('clips').update({ status: 'ready', result: clips }).eq('opus_project_id', projectId).eq('user_id', user.id);
       }
-    } catch {}
+    } catch (err) { reportError('opus-clip:draft-update', err); }
 
     return NextResponse.json({ ok: true, status, clips });
   } catch (e: any) {
