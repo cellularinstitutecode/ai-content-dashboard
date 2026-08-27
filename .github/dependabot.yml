@@ -10,9 +10,23 @@ updates:
     open-pull-requests-limit: 5
     groups:
       # One PR for the routine patch churn, so the queue stays readable and a
-      # genuinely interesting major (Next 14 -> 15) arrives on its own.
+      # genuinely interesting major arrives on its own.
       minor-and-patch:
         update-types:
+          - minor
+          - patch
+      # React and react-dom must move together, majors included. The first run of
+      # this config grouped only minor+patch, so react-dom@19 was proposed on its
+      # own against react@18 and npm refused the tree (ERESOLVE, peer react@^19).
+      # That PR could never go green no matter how many times it was rebuilt.
+      react:
+        patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
+        update-types:
+          - major
           - minor
           - patch
 
