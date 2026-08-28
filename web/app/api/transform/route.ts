@@ -7,6 +7,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { chatAssistant, type Provider } from '@/lib/ai';
 import { supabaseServer } from '@/lib/supabase';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { isAllowedEmail } from '@/lib/access';
+import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -39,6 +41,13 @@ export async function POST(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     }
+    // Every other route that spends the clinic's AI budget checks the allowlist
+    // itself rather than trusting middleware to have done it. This one did not,
+    // which made it the single exception to a rule the codebase otherwise keeps
+    // deliberately - see lib/machine-auth.ts for why that rule exists.
+    if (!isAllowedEmail(user.email)) {
+      return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+    }
     const rl = await checkRateLimit(user.id, 'generate');
     if (!rl.ok) {
       return NextResponse.json(
@@ -58,10 +67,13 @@ export async function POST(req: NextRequest) {
     ];
     const out = await chatAssistant(messages, provider as Provider);
     return NextResponse.json({ text: (out || '').trim() });
-  } catch (e: any) {
+  } catch (e) {
+    // The upstream message carries account, org and quota detail - log it, do
+    // not hand it to the browser. /api/generate has done this for a while.
+    reportError('transform', e);
     return NextResponse.json(
-      { error: (e && e.message) || 'transform failed' },
-      { status: 500 },
+      { error: 'transform_failed', message: 'We could not rewrite that just now. Try again in a moment.' },
+      { status: 502 },
     );
   }
 }

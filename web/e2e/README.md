@@ -25,12 +25,44 @@ panel. No external services, no secrets, fully deterministic.
   calendar/templates/brand pages render, and there are zero unexpected
   console errors or page crashes.
 
+## The API suite (`e2e/api-e2e.cjs`)
+
+A second, faster suite that drives the routes directly and checks the things
+that reach a real social account. It runs against a **mock Metricool scheduler**
+(`e2e/mock-metricool.cjs`) so the whole path can be proven without touching the
+clinic's account:
+
+- Applying a template really does send each slot to Metricool, as a **draft**,
+  on the clinic clock (09:00 template → `09:00:00` + `America/Cancun` upstream,
+  `14:00Z` stored), with the returned post id kept on the local row.
+- Applying the same template twice creates nothing new and sends nothing new.
+- An AI/pillars template (no fixed text) is refused instead of materialising a
+  run of blank posts.
+- Rescheduling moves the post **in Metricool**, and when Metricool refuses the
+  move the local row is left exactly where it was — the two can never disagree.
+- Deleting removes it from Metricool and from here; a refused upstream delete
+  leaves the local row alone.
+- A run that failed weeks ago is still listed, so "Needs attention" cannot be
+  falsely empty.
+- The cron guards still hold, and the tick reports what it expired.
+
+The mock can be told to reject a call (`/__fail?method=PUT`) so the fail-closed
+behaviour is exercised rather than assumed, and both mocks reset to their seed
+(`/__reseed`, `/__reset`) so the suite is repeatable.
+
 ## How to run locally
 
 ```bash
 cd web
 # 1. env for the mock backend (do NOT deploy these values)
 cat > .env.local <<'ENV'
+# METRICOOL_API_BASE points the scheduler client at the local mock; production
+# never sets it, and without it these tests would reach the real account.
+METRICOOL_API_BASE=http://127.0.0.1:54322
+METRICOOL_USER_TOKEN=e2e-metricool-token
+METRICOOL_BLOG_ID=4308292
+METRICOOL_USER_ID=3377431
+ALLOWED_EMAILS=cellularhopeinstitute@gmail.com
 NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImV4cCI6MjAwMDAwMDAwMH0.mock
 SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiZXhwIjoyMDAwMDAwMDAwfQ.mock
@@ -39,10 +71,12 @@ RATE_LIMIT_FAIL_OPEN=true
 ENV
 # 2. backend + app
 node e2e/mock-supabase.cjs &        # :54321
+node e2e/mock-metricool.cjs &      # :54322
 npm run build && npx next start -p 3100 &
 # 3. session cookie (writes /tmp/cookie.txt) — see browser-e2e.cjs header
-# 4. the suite
-node e2e/browser-e2e.cjs
+# 4. the suites
+npm run e2e:api
+npm run e2e:browser
 ```
 
 The mock's seed data includes one of everything the dashboard renders,

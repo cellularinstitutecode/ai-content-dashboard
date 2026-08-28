@@ -21,6 +21,7 @@ import { chatAssistant } from '@/lib/ai';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { supabaseServer } from '@/lib/supabase';
 import { isAllowedEmail } from '@/lib/access';
+import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -46,7 +47,11 @@ async function requireUser(): Promise<{ userId: string | null; allowed: boolean 
 // Every action below `balance` can miss the cache and spend paid Semrush
 // units. Only `advise` was capped before, so a signed-in client looping over
 // `action=hub` with fresh topics could drain the unit pot on its own.
-const UNIT_SPENDING = new Set(['domain', 'movers', 'project', 'serp', 'hub']);
+// 'advise' belongs here: it runs domainBundle + keywordMovers + siteAudit, which
+// is up to ~1,000 units on a cold cache. It was left out because the comment at
+// the call site says the composition is "cache-first, so ~free" - true only
+// AFTER the cache is warm, which is exactly not the case on the first call.
+const UNIT_SPENDING = new Set(['domain', 'movers', 'project', 'serp', 'hub', 'advise']);
 
 export async function GET(req: NextRequest) {
   const action = (req.nextUrl.searchParams.get('action') || 'hub').trim();
@@ -165,8 +170,9 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ ok: true, plan, generatedAt: new Date().toISOString() }, { headers: { 'Cache-Control': 'no-store' } });
       }
       return NextResponse.json({ ok: true, plan: { summary: raw.slice(0, 2000), priorities: [] }, generatedAt: new Date().toISOString() }, { headers: { 'Cache-Control': 'no-store' } });
-    } catch (e: any) {
-      return NextResponse.json({ ok: false, error: e?.message || 'advisor failed' }, { status: 500 });
+    } catch (e) {
+      reportError('semrush:advise', e);
+      return NextResponse.json({ ok: false, error: 'advisor_failed', message: 'We could not build the recommendations just now. Try again in a moment.' }, { status: 502 });
     }
   }
 

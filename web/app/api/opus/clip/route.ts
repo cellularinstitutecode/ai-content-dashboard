@@ -144,8 +144,11 @@ export async function POST(req: NextRequest) {
       title: projectTitle,
       draft: draft || null,
     });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || 'opus failed' }, { status: 500 });
+  } catch (e) {
+    // Opus error bodies name the organization and its plan limits - keep them
+    // server-side and hand the browser a sentence instead.
+    reportError('opus-clip', e);
+    return NextResponse.json({ error: 'opus_failed', message: 'We could not reach the video service just now. Try again in a moment.' }, { status: 502 });
   }
 }
 
@@ -252,7 +255,10 @@ export async function GET(req: NextRequest) {
     } catch (err) { reportError('opus-clip:draft-update', err); }
 
     return NextResponse.json({ ok: true, status, clips });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || 'opus failed' }, { status: 500 });
+  } catch (e) {
+    // Opus error bodies name the organization and its plan limits - keep them
+    // server-side and hand the browser a sentence instead.
+    reportError('opus-clip', e);
+    return NextResponse.json({ error: 'opus_failed', message: 'We could not reach the video service just now. Try again in a moment.' }, { status: 502 });
   }
 }

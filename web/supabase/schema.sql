@@ -83,6 +83,15 @@ do $$ begin
     create policy "posts: owner update" on public.posts for update using (auth.uid() = user_id);
   end if;
 end $$;
+-- Deleting a post is a first-class action: "Apply template" can put weeks of
+-- posts on the calendar, and without this policy the delete silently removed
+-- zero rows (RLS refuses, PostgREST reports success) and the posts were stuck
+-- there forever.
+do $$ begin
+  if not exists (select 1 from pg_policies where policyname = 'posts: owner delete') then
+    create policy "posts: owner delete" on public.posts for delete using (auth.uid() = user_id);
+  end if;
+end $$;
 
 do $$ begin
   if not exists (select 1 from pg_policies where policyname = 'clips: owner read') then

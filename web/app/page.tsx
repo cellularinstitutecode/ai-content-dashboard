@@ -11,6 +11,7 @@ import { announce, onRefresh, fetchDrafts } from "@/components/refreshBus";
 import { tightestLimit, networkLabel, parseVideoUrl, localDateTimeValue, draftLabel } from "@/lib/composer";
 import { useWorkspace } from "@/components/workspace";
 import { PanelLoader } from "@/components/LoadingScreen";
+import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 
 // The visible pipeline every manual generation walks through. Steps light up
 // as the real calls behind them start/finish so the viewer can follow the
@@ -152,12 +153,12 @@ return m ? m[1] : '';
 // A finished Opus clip (mirrors OpusClip in lib/opus.ts).
 type Clip = { id: string; title: string; text: string; description: string; hashtags: string; durationMs: number; preview: string; export: string };
 
-const OPUS_ASPECTS: { value: string; label: string }[] = [
-{ value: '9:16', label: '9:16 · Reels / Shorts / TikTok' },
-{ value: '1:1', label: '1:1 · Square' },
-{ value: '4:5', label: '4:5 · Feed' },
-{ value: '16:9', label: '16:9 · Landscape' },
-];
+// The format picker that used to live here was removed. It set local state,
+// echoed the chosen ratio back under "This run" as if it had been applied, and
+// was never sent to Opus - clipVideo() posts { videoUrl, title, language } and
+// nothing in lib/opus.ts or the clip route has ever read an aspect ratio. A
+// control that reports a setting it does not apply is worse than no control.
+// Opus uses the ratio configured on the project in its own dashboard.
 
 function clipsOf(d: any): Clip[] {
 const c = d && d.pack && d.pack.clips;
@@ -200,6 +201,12 @@ const [prompt, setPrompt] = useState('');
 const [copied, setCopied] = useState(false);
 const [loading, setLoading] = useState(false);
 const [err, setErr] = useState<string | null>(null);
+// A failed load used to leave every panel in its EMPTY state, so a 401, a 429
+// or a dropped connection all read as "you have no drafts / nothing queued".
+// These two carry the difference: loadError is "we could not read your data",
+// actionMsg is "the thing you just clicked did not happen".
+const [loadError, setLoadError] = useState<string | null>(null);
+const [actionMsg, setActionMsg] = useState<string | null>(null);
 const [keywordsApplied, setKeywordsApplied] = useState<string[]>([]);
 const [keywordSource, setKeywordSource] = useState<string>('none');
 const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string; verification?: { status?: string; score?: number | null; issues?: string[]; textDetected?: boolean } } | null>(null);
@@ -355,10 +362,18 @@ const [mBusy, setMBusy] = useState(false);
     try {
       setInsightsLoading(true);
       const r = await fetch('/api/metricool/insights?blogId=' + encodeURIComponent(blogId));
+      // Without this check the error BODY was stored as the insights object, so
+      // a rate-limited or expired request rendered as "No recent post data yet".
+      if (!r.ok) {
+        setInsights(null);
+        setLoadError(await friendlyErrorFromResponse(r, 'We could not load your channel numbers.'));
+        return;
+      }
       const j = await r.json().catch(() => null);
       setInsights(j);
-    } catch {
+    } catch (e) {
       setInsights(null);
+      setLoadError(friendlyError(e, 'We could not reach Metricool just now.'));
     } finally {
       setInsightsLoading(false);
     }
@@ -436,7 +451,6 @@ const opValid = opParsed.ok;
 const opError = !opParsed.ok && opUrl.trim() ? opParsed.reason : '';
 const [opTitle, setOpTitle] = useState('');
 const [opLang, setOpLang] = useState('en');
-const [opAspect, setOpAspect] = useState('9:16');
 
 const [selectedDraft, setSelectedDraft] = useState<any>(null);
 const [editingDraft, setEditingDraft] = useState(false);
@@ -626,10 +640,10 @@ return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.cu
 async function refreshStats() {
 try {
 const r = await fetch('/api/stats');
-if (!r.ok) return;
+if (!r.ok) { setLoadError(await friendlyErrorFromResponse(r, 'We could not load your numbers just now.')); return; }
 const j = await r.json().catch(() => null);
-if (j) setStats(j);
-} catch {}
+if (j) { setStats(j); setLoadError(null); }
+} catch (e) { setLoadError(friendlyError(e, 'We could not reach the server. Check your connection.')); }
 }
 
 async function refreshDrafts(offset = 0, append = false) {
@@ -638,16 +652,16 @@ if (append) setLoadingMore(true);
 const r = await fetch('/api/drafts?limit=' + PAGE_SIZE + '&offset=' + offset);
 // A lapsed session now answers 401 instead of quietly handing back the
 // sign-in page, so say so rather than rendering an empty list.
-if (r.status === 401) { setErr('Your session has expired. Sign in again to load your drafts.'); return; }
-if (!r.ok) return;
+if (!r.ok) { setLoadError(await friendlyErrorFromResponse(r, 'We could not load your drafts.')); return; }
 const ct = r.headers.get('content-type') || '';
-if (!ct.includes('application/json')) return;
+if (!ct.includes('application/json')) { setLoadError('We got an unexpected answer from the server. Try reloading the page.'); return; }
+setLoadError(null);
 const j = await r.json().catch(() => null);
 const rows = toArray(j);
 if (j && typeof j.total === 'number') setDraftsTotal(j.total);
 setDraftsOffset(offset);
 setDrafts((prev: any) => append ? [...(Array.isArray(prev) ? prev : []), ...rows] : rows);
-} catch {} finally { setLoadingMore(false); }
+} catch (e) { setLoadError(friendlyError(e, 'We could not reach the server. Check your connection.')); } finally { setLoadingMore(false); }
 }
 
 // Pull the current user's scheduled posts (GET /api/posts). Ordered soonest
@@ -656,11 +670,12 @@ async function refreshPosts() {
 setPostsLoading(true);
 try {
 const r = await fetch('/api/posts');
-if (!r.ok) return;
+if (!r.ok) { setLoadError(await friendlyErrorFromResponse(r, 'We could not load your publishing queue.')); return; }
 const j = await r.json().catch(() => null);
 const rows = (j && Array.isArray(j.posts)) ? j.posts : toArray(j);
 setPosts(Array.isArray(rows) ? rows : []);
-} catch {} finally { setPostsLoading(false); }
+setLoadError(null);
+} catch (e) { setLoadError(friendlyError(e, 'We could not reach the server. Check your connection.')); } finally { setPostsLoading(false); }
 }
 
 // Reschedule a queued post via PATCH /api/posts (updates publication_date).
@@ -674,8 +689,27 @@ method: 'PATCH',
 headers: { 'Content-Type': 'application/json' },
 body: JSON.stringify({ id, publication_date: iso }),
 });
-if (r.ok) { setRescheduleId(null); setRescheduleAt(''); refreshPosts(); announce('posts', 'stats', 'insights'); }
-} catch {}
+if (!r.ok) {
+// The server refuses the local move when it could not move the post in
+// Metricool, so the two can never drift apart. Say which it was.
+setActionMsg(await friendlyErrorFromResponse(r, 'We could not move that post.'));
+return;
+}
+setActionMsg(null);
+setRescheduleId(null); setRescheduleAt(''); refreshPosts(); announce('posts', 'stats', 'insights');
+} catch (e) { setActionMsg(friendlyError(e, 'We could not move that post.')); }
+}
+
+// Remove a queued post — from Metricool first, then from here.
+async function deletePost(id: string) {
+if (!id) return;
+if (typeof window !== 'undefined' && !window.confirm('Delete this scheduled post? It will be removed from Metricool too. This cannot be undone.')) return;
+try {
+const r = await fetch('/api/posts?id=' + encodeURIComponent(id), { method: 'DELETE' });
+if (!r.ok) { setActionMsg(await friendlyErrorFromResponse(r, 'We could not delete that post.')); return; }
+setActionMsg(null);
+refreshPosts(); announce('posts', 'stats', 'insights');
+} catch (e) { setActionMsg(friendlyError(e, 'We could not delete that post.')); }
 }
 
 async function deleteDraft(id: string) {
@@ -683,19 +717,21 @@ if (!id) return;
 if (typeof window !== 'undefined' && !window.confirm('Delete this draft? This cannot be undone.')) return;
 try {
 const r = await fetch('/api/drafts?id=' + encodeURIComponent(id), { method: 'DELETE' });
-if (r.ok) announce('drafts', 'stats', 'images');
-} catch {}
+if (!r.ok) { setActionMsg(await friendlyErrorFromResponse(r, 'We could not delete that draft.')); return; }
+setActionMsg(null);
+announce('drafts', 'stats', 'images');
+} catch (e) { setActionMsg(friendlyError(e, 'We could not delete that draft.')); }
 }
 
 function cleanCaption(s: string): string {
     return String(s || "").replace(/__\w+/g, " ").replace(/\s+/g, " ").trim();
   }
+  // Delegates to the shared mapper so every panel says the same thing about the
+  // same failure. The old local copy tested /unauthor/, which does NOT match
+  // the "unauthenticated" the middleware returns - so an expired session was
+  // reported to the user as a rejected AI API key.
   function friendlyGenError(msg: string): string {
-    const m = String(msg || "");
-    if (/credit_balance_exhausted|insufficient_quota|billing/i.test(m)) return "OpenAI is out of API credits. Add credits to your OpenAI account, or switch the model to Claude (Anthropic) to keep generating.";
-    if (/\b429\b|rate.?limit/i.test(m)) return "The AI provider is rate-limited right now. Wait a moment and try again, or switch to Claude (Anthropic).";
-    if (/401|invalid.?api.?key|unauthor/i.test(m)) return "The AI provider rejected the API key. Check the provider configuration, or switch to Claude (Anthropic).";
-    return m.length > 200 ? m.slice(0, 200) + "…" : m;
+    return friendlyError(msg, "We could not finish that. Try again in a moment.");
   }
 
   async function editDraft(d: any) {
@@ -801,14 +837,19 @@ method: 'PATCH',
 headers: { 'Content-Type': 'application/json' },
 body: JSON.stringify({ id, topic: topic || (d.topic || 'Untitled'), pack: basePack }),
 });
-if (r.ok) {
+if (!r.ok) {
+// Staying in edit mode with no message looked exactly like "nothing
+// happened", so the edits appeared to save and had not.
+setActionMsg(await friendlyErrorFromResponse(r, 'We could not save those changes.'));
+return;
+}
 const j = await r.json().catch(() => null);
 const updated = (j && j.draft) ? j.draft : { ...d, topic: topic || d.topic, pack: basePack };
 setSelectedDraft(updated);
 setEditingDraft(false);
+setActionMsg(null);
 announce('drafts', 'images');
-}
-} catch {} finally { setSavingEdit(false); }
+} catch (e) { setActionMsg(friendlyError(e, 'We could not save those changes.')); } finally { setSavingEdit(false); }
 }
 
 async function generate() {
@@ -896,8 +937,9 @@ headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'create' 
 body: JSON.stringify({ id: lastDraftId, regenerate: true }),
 });
 const ij = await ir.json().catch(() => ({}));
-if (ir.ok && ij?.image?.url) setGenImage(ij.image);
-} catch {} finally { setGenImageLoading(false); announce('drafts', 'images'); }
+if (!ir.ok || !ij?.image?.url) { setActionMsg(friendlyError(ij, 'We could not make a new image. The previous one is still here.')); }
+else { setGenImage(ij.image); setActionMsg(null); }
+} catch (e) { setActionMsg(friendlyError(e, 'We could not make a new image. The previous one is still here.')); } finally { setGenImageLoading(false); announce('drafts', 'images'); }
 }
 
 // Same, from the draft detail modal (works for any saved draft).
@@ -912,12 +954,14 @@ headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'draft-mo
 body: JSON.stringify({ id, regenerate: true }),
 });
 const j = await r.json().catch(() => ({}));
-if (r.ok && j?.image?.url) {
+if (!r.ok || !j?.image?.url) { setActionMsg(friendlyError(j, 'We could not make a new image. The previous one is still here.')); }
+else {
 const updated = { ...d, pack: { ...((d && d.pack) || {}), _image: j.image } };
 setSelectedDraft(updated);
+setActionMsg(null);
 announce('drafts', 'images');
 }
-} catch {} finally { setModalImgBusy(false); }
+} catch (e) { setActionMsg(friendlyError(e, 'We could not make a new image. The previous one is still here.')); } finally { setModalImgBusy(false); }
 }
 
 // Load analytics from GET /api/metricool. When silent (mount auto-load), we do
@@ -1059,6 +1103,23 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 ))}
 </div>
 </header>
+
+{/* One place that says a load failed, and one that says an action failed.
+    Both used to be silence: a 401 or a dropped connection left every panel in
+    its empty state, which reads as "you have nothing" rather than "we could
+    not check". */}
+{loadError && (
+<div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-amber-50 px-5 py-4 text-[14px] text-amber-900 ring-1 ring-amber-200" role="status">
+<span>{loadError}</span>
+<button type="button" onClick={() => { setLoadError(null); refreshStats(); refreshDrafts(0, false); refreshPosts(); }} className="rounded-full bg-amber-900 px-3.5 py-1.5 text-[13px] font-medium text-white">Try again</button>
+</div>
+)}
+{actionMsg && (
+<div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-red-50 px-5 py-4 text-[14px] text-red-900 ring-1 ring-red-200" role="alert">
+<span>{actionMsg}</span>
+<button type="button" onClick={() => setActionMsg(null)} className="rounded-full px-3.5 py-1.5 text-[13px] font-medium text-red-900 underline">Dismiss</button>
+</div>
+)}
 
 {/* Onboarding "How this works" strip — dismissible, remembered per browser */}
       {(
@@ -1329,19 +1390,6 @@ className="w-full rounded-xl bg-white px-3 py-2.5 text-[13px] text-ink shadow-so
 </select>
 </div>
 </div>
-<p className="mb-2 mt-4 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Format preset</p>
-<div className="flex flex-wrap gap-2">
-{OPUS_ASPECTS.map(a => (
-<button
-key={a.value}
-type="button"
-onClick={() => setOpAspect(a.value)}
-className={`rounded-full px-3 py-1.5 text-[12px] font-medium ring-1 transition ${opAspect === a.value ? 'bg-accent text-white ring-accent' : 'bg-white text-ink-muted ring-line hover:ring-accent'}`}
->
-{a.label}
-</button>
-))}
-</div>
 <div className="mt-5 flex flex-wrap items-center gap-3">
 <button
 type="button"
@@ -1369,7 +1417,6 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 tex
 <div className="mt-6 rounded-2xl bg-subtle p-4 ring-1 ring-line">
 <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">This run</p>
 <dl className="mt-2 space-y-1.5 text-[12px]">
-<div className="flex items-center justify-between"><dt className="text-ink-muted">Format</dt><dd className="font-medium text-ink">{OPUS_ASPECTS.find(a => a.value === opAspect)?.label || opAspect}</dd></div>
 <div className="flex items-center justify-between"><dt className="text-ink-muted">Captions</dt><dd className="font-medium text-ink">{({en:'English',es:'Spanish',pt:'Portuguese',fr:'French',de:'German',it:'Italian'})[opLang] || opLang}</dd></div>
 <div className="flex items-center justify-between"><dt className="text-ink-muted">Project</dt><dd className="max-w-[150px] truncate font-medium text-ink">{opTitle.trim() || 'Auto from video'}</dd></div>
 </dl>
@@ -1545,7 +1592,10 @@ return (
 <label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Your publishing queue</label>
 {postsLoading && <span className="text-[11px] text-ink-faint">Refreshing…</span>}
 </div>
-{safePosts.length === 0 && !postsLoading && (
+{loadError && (
+<div className="mt-2 rounded-2xl bg-amber-50 p-4 text-[12px] text-amber-800 ring-1 ring-amber-200" role="status">{loadError}</div>
+)}
+{safePosts.length === 0 && !postsLoading && !loadError && (
 <div className="mt-2 rounded-2xl bg-subtle p-4 text-center text-[12px] text-ink-faint ring-1 ring-line">Nothing in the queue yet. Anything you schedule here, on the calendar or from a template lands in this list.</div>
 )}
 {safePosts.length > 0 && (
@@ -1566,7 +1616,10 @@ return (
 <span key={n} className="rounded-full bg-subtle px-2 py-0.5 text-[11px] text-ink-muted ring-1 ring-line">{n}</span>
 ))}
 {id && rescheduleId !== id && (
-<button type="button" onClick={() => { setRescheduleId(id); setRescheduleAt(''); }} className="ml-auto text-[11px] font-medium text-accent hover:underline">Reschedule</button>
+<span className="ml-auto flex items-center gap-3">
+<button type="button" onClick={() => { setRescheduleId(id); setRescheduleAt(''); }} className="text-[11px] font-medium text-accent hover:underline">Reschedule</button>
+<button type="button" onClick={() => deletePost(id)} className="text-[11px] font-medium text-danger hover:underline">Delete</button>
+</span>
 )}
 </div>
 {id && rescheduleId === id && (
@@ -1840,8 +1893,17 @@ className="group overflow-hidden rounded-2xl text-left ring-1 ring-line/60 trans
 })()}
 {safeDrafts.length === 0 ? (
 <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-line py-12 text-center">
+{loadError ? (
+<>
+<div className="text-[14px] font-medium text-ink-muted">We could not load your drafts</div>
+<div className="mt-1 max-w-sm text-[12px] text-ink-faint">{loadError}</div>
+</>
+) : (
+<>
 <div className="text-[14px] font-medium text-ink-muted">No drafts yet</div>
 <div className="mt-1 text-[12px] text-ink-faint">Generate something above to get started.</div>
+</>
+)}
 </div>
 ) : (
 <>

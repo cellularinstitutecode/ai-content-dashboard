@@ -6,6 +6,7 @@ import { localDateKey } from '@/lib/composer';
 import { announce, onRefresh } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
 import { PanelLoader } from '@/components/LoadingScreen';
+import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 
 type Post = {
   id?: string;
@@ -224,10 +225,14 @@ export default function CalendarPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, publication_date: iso }),
       });
-      if (!r.ok) throw new Error('reschedule failed (' + r.status + ')');
+      // The server refuses the local move when it cannot move the post in
+      // Metricool, so a failure here means nothing changed anywhere - put the
+      // chip back and say why, instead of leaving the calendar disagreeing
+      // with the account it is supposed to mirror.
+      if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'We could not move that post.'));
       announce('posts', 'stats', 'insights');
     } catch (e: any) {
-      setErr(e && e.message ? e.message : 'Reschedule failed');
+      setErr(friendlyError(e, 'We could not move that post.'));
       refresh(); // revert to server truth
     } finally {
       setSaving(null);
@@ -312,7 +317,7 @@ export default function CalendarPage() {
           </div>
           <h2 className="text-lg font-semibold">{monthLabel}</h2>
           <div className="min-w-[90px] text-right text-xs text-ink/40">
-            {saving ? 'Savingâ¦' : loading ? 'Loadingâ¦' : ''}
+            {saving ? 'Saving…' : loading ? 'Loading…' : ''}
           </div>
         </div>
 
@@ -480,7 +485,7 @@ export default function CalendarPage() {
             <div className="flex items-center justify-end gap-2">
               <button onClick={() => setScheduleDay(null)} disabled={pBusy} className="rounded-full border border-black/10 px-4 py-2 text-sm text-ink/70 transition hover:bg-black/5 disabled:opacity-50">Cancel</button>
               <button onClick={submitSchedule} disabled={pBusy} className="rounded-full bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50">
-                {pBusy ? 'Schedulingâ¦' : 'Schedule'}
+                {pBusy ? 'Scheduling…' : 'Schedule'}
               </button>
             </div>
           </div>

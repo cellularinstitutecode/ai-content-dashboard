@@ -12,6 +12,7 @@ import ProcessTracker, { makeSteps, stepActive, stepError, stepsDone, type Proce
 import { announce, onRefresh, fetchDrafts } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
 import { PanelLoader } from '@/components/LoadingScreen';
+import { friendlyError } from '@/lib/friendly-error';
 
 // The visible pipeline a standalone image walks through — each step lights up
 // as the real call behind it starts/finishes.
@@ -85,6 +86,7 @@ export default function ImageStudio() {
   const workspace = useWorkspace();
   const [quickBusy, setQuickBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<DraftLite | null>(null);
   const [proc, setProc] = useState<ProcessStep[] | null>(null);
   const procTimers = useRef<any[]>([]);
@@ -97,10 +99,13 @@ export default function ImageStudio() {
     if (!opts?.quiet) setLoading(true);
     try {
       // Shared with the clip pre-warmer, which asks for the same page on mount.
-      const j = await fetchDrafts(50, 0).catch(() => ({}));
+      // The .catch(() => ({})) here used to swallow the loader's own 401 message
+      // and render the gallery's "No AI images yet" instead.
+      const j = await fetchDrafts(50, 0);
       const list = Array.isArray((j as any)?.drafts) ? (j as any).drafts : [];
       setDrafts(list);
-    } catch { /* transient */ }
+      setLoadError(null);
+    } catch (e) { setLoadError(friendlyError(e, 'We could not load your images.')); }
     setLoading(false);
   }, []);
 
@@ -258,9 +263,9 @@ export default function ImageStudio() {
 
         {!loading && withImage.length === 0 && !quickBusy && !proc && (
           <div className="rounded-2xl border border-dashed border-line p-8 text-center">
-            <div className="text-[14px] font-medium text-ink-muted">No AI images yet</div>
+            <div className="text-[14px] font-medium text-ink-muted">{loadError ? 'We could not load your images' : 'No AI images yet'}</div>
             <div className="mt-1 text-[12px] text-ink-faint">
-              Type an idea above, or generate content below — every new pack gets a verified hero image automatically.
+              {loadError || 'Type an idea above, or generate content below — every new pack gets a verified hero image automatically.'}
             </div>
           </div>
         )}

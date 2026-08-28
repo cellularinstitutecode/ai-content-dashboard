@@ -109,7 +109,7 @@ test('routes that reach the shared org accounts require the tenant allowlist', (
   const SHARED = [
     { name: 'the org-wide Metricool account', re: /METRICOOL_USER_TOKEN|metricoolSchedulePost|fetchPostMetrics|doSchedule|approveRun/ },
     { name: 'the shared Semrush unit pot', re: /SEMRUSH_API_KEY|researchBundle|domainBundle|getUnitsBalance|researchKeywords/ },
-    { name: 'the shared AI budget', re: /generateContentPack|chatWithTools|researchTopic|generatePackImage/ },
+    { name: 'the shared AI budget', re: /generateContentPack|chatWithTools|chatAssistant|researchTopic|generatePackImage/ },
     { name: 'the paid OpusClip account', re: /opusCreateClipProject/ },
   ];
   const netMisses: string[] = [];

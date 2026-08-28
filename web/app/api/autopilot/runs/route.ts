@@ -33,17 +33,39 @@ export async function GET(req: NextRequest) {
   const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 50);
 
   const db = supabaseAdmin();
-  const { data: runs, error } = await db
-    .from('template_runs')
-    .select('id, template_id, scheduled_for, state, brief, angle, score, draft_id, log, updated_at')
-    .eq('user_id', user.id)
-    .in('state', ['planned', 'researched', 'drafted', 'ready_for_review', 'failed'])
-    .gte('scheduled_for', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
-    .order('scheduled_for', { ascending: true })
-    .limit(limit);
+  const COLUMNS = 'id, template_id, scheduled_for, state, brief, angle, score, draft_id, log, updated_at';
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  // Two reads, then merge: everything in the recent window, PLUS every failed
+  // run whatever its age.
+  //
+  // The single query used to end at `.gte('scheduled_for', since)`, which hid
+  // exactly the runs a human needs to see - a run that stalled and was later
+  // expired sits in the past by definition, so "Needs attention" was always
+  // empty no matter how badly the engine was doing. Kept as two plain queries
+  // rather than one `.or(...)`: the filter value is a timestamp, and a broken
+  // filter here would take the whole panel down.
+  const [recent, failed] = await Promise.all([
+    db.from('template_runs').select(COLUMNS)
+      .eq('user_id', user.id)
+      .in('state', ['planned', 'researched', 'drafted', 'ready_for_review', 'failed'])
+      .gte('scheduled_for', since)
+      .order('scheduled_for', { ascending: true })
+      .limit(limit),
+    db.from('template_runs').select(COLUMNS)
+      .eq('user_id', user.id)
+      .eq('state', 'failed')
+      .order('scheduled_for', { ascending: false })
+      .limit(limit),
+  ]);
+  const error = recent.error || failed.error;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const rows = Array.isArray(runs) ? runs : [];
+  const byId = new Map<string, any>();
+  for (const r of [...(recent.data || []), ...(failed.data || [])]) byId.set((r as any).id, r);
+  const rows = Array.from(byId.values())
+    .sort((a: any, b: any) => String(a.scheduled_for).localeCompare(String(b.scheduled_for)))
+    .slice(0, limit);
   const templateIds = Array.from(new Set(rows.map((r: { template_id: string }) => r.template_id)));
   const draftIds = rows.map((r: { draft_id: string | null }) => r.draft_id).filter(Boolean) as string[];
 
