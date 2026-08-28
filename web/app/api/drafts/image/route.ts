@@ -6,6 +6,7 @@
 // instantly and the image fills in when ready) and by the Autopilot queue for
 // ready-for-review runs that don't have an image yet. Idempotent: a draft
 // that already carries `_image` returns it without spending anything.
+import { isAllowedEmail } from '@/lib/access';
 import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
@@ -21,6 +22,13 @@ export async function POST(req: NextRequest) {
     const sb = await supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+    // Spends the clinic's OpenAI image credits, so the allowlist applies.
+    if (!isAllowedEmail(user.email)) {
+      return NextResponse.json(
+        { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
+        { status: 403 },
+      );
+    }
 
     const body = await req.json().catch(() => ({}));
     const id = typeof body?.id === 'string' ? body.id : '';

@@ -2,7 +2,7 @@ import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { ALLOWED_BLOG_IDS, DEFAULT_BLOG_ID } from '@/lib/access';
+import { isAllowedEmail, ALLOWED_BLOG_IDS, DEFAULT_BLOG_ID } from '@/lib/access';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -90,6 +90,15 @@ export async function POST(req: NextRequest) {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  // Reaches a resource that belongs to the clinic, not to a user, so a valid
+  // session is the weaker question. Middleware enforces this too; this is the
+  // copy that stays correct if the middleware exemption ever widens again.
+  if (!isAllowedEmail(user.email)) {
+    return NextResponse.json(
+      { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
+      { status: 403 },
+    );
+  }
 
   // Scheduling reaches a paid third party and a live brand account. Capped like
   // every other route that leaves the building.

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
-import { DEFAULT_BLOG_ID, isAllowedBlogId } from '@/lib/access';
+import { isAllowedEmail, DEFAULT_BLOG_ID, isAllowedBlogId } from '@/lib/access';
 
 export const runtime = 'nodejs';
 
@@ -11,6 +11,15 @@ export async function GET(req: NextRequest) {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  // Reaches a resource that belongs to the clinic, not to a user, so a valid
+  // session is the weaker question. Middleware enforces this too; this is the
+  // copy that stays correct if the middleware exemption ever widens again.
+  if (!isAllowedEmail(user.email)) {
+    return NextResponse.json(
+      { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
+      { status: 403 },
+    );
+  }
 
   const token = process.env.METRICOOL_USER_TOKEN;
   const userId = process.env.METRICOOL_USER_ID;

@@ -1,5 +1,6 @@
 // web/app/api/generate/route.ts
 // Thin route — delegates to lib/ai.ts so we can swap providers.
+import { isAllowedEmail } from '@/lib/access';
 import { NextRequest, NextResponse } from 'next/server';
 import { generateContentPack, type Provider, type ContentType, type BrandContext } from '@/lib/ai';
 import { reviewPack } from '@/lib/safety';
@@ -54,6 +55,14 @@ export async function POST(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     }
+    // Spends the clinic's shared AI and Semrush budget, so the allowlist applies.
+    if (!isAllowedEmail(user.email)) {
+      return NextResponse.json(
+        { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
+        { status: 403 },
+      );
+    }
+
 
     // Rate limit before spending AI credits (fails open if usage_events is absent).
     const rl = await checkRateLimit(user.id, 'generate');

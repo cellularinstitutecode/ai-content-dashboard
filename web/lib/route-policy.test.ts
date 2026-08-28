@@ -62,26 +62,72 @@ test('every API route authenticates its caller', () => {
 });
 
 test('routes that reach the shared org accounts require the tenant allowlist', () => {
-  // These touch resources that belong to the clinic rather than to a user: the
-  // org-wide Metricool token, the shared Semrush unit pot, the AI budget. A
-  // valid session is the weaker question; being one of our people is the right
-  // one. Middleware enforces this too - these are the copies that stay correct
-  // if the middleware exemption ever widens again, which is exactly what
-  // happened once already.
-  const mustBeAllowlisted = [
-    'app/api/metricool/sync/route.ts',
-    'app/api/autopilot/tick/route.ts',
+  // Two mechanisms, because each alone was wrong.
+  //
+  // v1 asserted a hard-coded list of three paths: it passed forever and read as
+  // though the invariant were enforced everywhere.
+  //
+  // v2 derived the list from regexes over each route's own source. That is a
+  // better net for NEW routes, but it silently dropped the two routes where the
+  // gate matters most - /api/metricool/sync and /api/autopilot/tick reach
+  // Metricool and Semrush through imported helpers, so neither name appears in
+  // their own source, and they are exactly the paths middleware exempts, where
+  // the route-level check is the only protection left.
+  //
+  // So: a FLOOR that can never shrink, plus the derived net on top.
+
+  // Routes that must always be allowlisted, whatever a regex thinks. Removing a
+  // line here is a deliberate act.
+  const FLOOR = [
+    'app/api/metricool/sync/route.ts',   // org-wide Metricool via fetchPostMetrics
+    'app/api/autopilot/tick/route.ts',   // Metricool + Semrush + AI via lib/autopilot
+    'app/api/metricool/schedule/route.ts',
+    'app/api/autopilot/runs/route.ts',
+    'app/api/assistant/route.ts',
+    'app/api/semrush/route.ts',
+    'app/api/keywords/route.ts',
+    'app/api/generate/route.ts',
+    'app/api/metricool/ai-research/route.ts',
+    'app/api/metricool/route.ts',
+    'app/api/metricool/insights/route.ts',
+    'app/api/realtime-session/route.ts',
     'app/api/health/route.ts',
   ];
-  for (const path of mustBeAllowlisted) {
+
+  const gated = (src: string) => /requireAllowlistedUser\s*\(|isAllowedEmail\s*\(/.test(src);
+
+  const floorMisses: string[] = [];
+  for (const path of FLOOR) {
     const route = ROUTES.find((r) => r.path === path);
-    assert.ok(route, 'expected route to exist: ' + path);
-    assert.match(
-      route!.source,
-      /requireAllowlistedUser\s*\(/,
-      path + ' must call requireAllowlistedUser()',
-    );
+    assert.ok(route, 'FLOOR names a route that does not exist: ' + path);
+    if (!gated(route!.source)) floorMisses.push(path);
   }
+  assert.deepEqual(floorMisses, [], 'these routes lost their allowlist gate:\n  ' + floorMisses.join('\n  '));
+
+  // The net: any route naming a shared resource directly must also be gated.
+  // Catches new routes the FLOOR has not been told about yet.
+  const SHARED = [
+    { name: 'the org-wide Metricool account', re: /METRICOOL_USER_TOKEN|metricoolSchedulePost|fetchPostMetrics|doSchedule|approveRun/ },
+    { name: 'the shared Semrush unit pot', re: /SEMRUSH_API_KEY|researchBundle|domainBundle|getUnitsBalance|researchKeywords/ },
+    { name: 'the shared AI budget', re: /generateContentPack|chatWithTools|researchTopic|generatePackImage/ },
+    { name: 'the paid OpusClip account', re: /opusCreateClipProject/ },
+  ];
+  const netMisses: string[] = [];
+  for (const r of ROUTES) {
+    if (NON_SESSION_ROUTES[r.path]) continue;
+    if (FLOOR.includes(r.path)) continue;
+    const touches = SHARED.filter((x) => x.re.test(r.source));
+    if (touches.length && !gated(r.source)) {
+      netMisses.push(r.path + ' (reaches ' + touches.map((t) => t.name).join(' + ') + ')');
+    }
+  }
+  assert.deepEqual(
+    netMisses,
+    [],
+    'these routes reach a shared clinic resource on nothing but a session:\n  ' +
+      netMisses.join('\n  ') +
+      '\nAdd requireAllowlistedUser()/isAllowedEmail(), or add the path to FLOOR with a reason.',
+  );
 });
 
 test('no route lets the caller decide whether a post publishes', () => {

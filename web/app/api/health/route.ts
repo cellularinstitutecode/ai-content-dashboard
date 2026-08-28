@@ -55,10 +55,19 @@ export async function GET() {
     },
     {
       name: 'assistant_session_secret',
-      ok: has('ASSISTANT_SESSION_SECRET') || has('CRON_SECRET'),
+      // Only a DEDICATED secret is ok. Falling back to CRON_SECRET used to
+      // report "Dedicated signing secret configured", which hid exactly the
+      // coupling this check exists to surface: CRON_SECRET is a plaintext
+      // bearer that travels in an Authorization header on every cron run, so
+      // reusing it as the assistant's HMAC key means one leaked header lets an
+      // attacker mint signed sessions.
+      ok: has('ASSISTANT_SESSION_SECRET'),
       severity: 'optional',
-      detail: has('ASSISTANT_SESSION_SECRET') || has('CRON_SECRET')
+      detail: has('ASSISTANT_SESSION_SECRET')
         ? 'Dedicated signing secret configured.'
+        : has('CRON_SECRET')
+          ? 'Borrowing CRON_SECRET - a bearer token sent on every cron invocation. ' +
+            'Set ASSISTANT_SESSION_SECRET so a leaked cron header cannot forge sessions.'
         : has('SUPABASE_SERVICE_ROLE_KEY')
           ? 'Falling back to SUPABASE_SERVICE_ROLE_KEY. It works, but couples the most ' +
             'privileged credential in the system to an unrelated purpose.'
@@ -67,12 +76,20 @@ export async function GET() {
     },
     {
       name: 'allowed_emails',
-      ok: has('ALLOWED_EMAILS'),
+      // An allowlist configured under either name works; only the hard-coded
+      // fallback is a real problem. Checking ALLOWED_EMAILS alone reported 503
+      // degraded for a deployment that was configured, just under the other name.
+      ok: has('ALLOWED_EMAILS') || has('NEXT_PUBLIC_ALLOWED_EMAILS'),
       severity: 'required',
-      detail:
-        ALLOWED_EMAILS.length +
-        ' address(es) currently allowed. Unset means the allowlist resolves to a hard-coded ' +
-        'default in lib/access.ts, so changing who can sign in needs a deploy.',
+      detail: has('ALLOWED_EMAILS')
+        ? ALLOWED_EMAILS.length + ' address(es) allowed, set server-side.'
+        : has('NEXT_PUBLIC_ALLOWED_EMAILS')
+          ? ALLOWED_EMAILS.length + ' address(es) allowed, but only via ' +
+            'NEXT_PUBLIC_ALLOWED_EMAILS - that value is inlined into the browser bundle, ' +
+            'so the privileged account list is public and cannot rotate without a deploy. ' +
+            'Set ALLOWED_EMAILS as well.'
+          : 'No allowlist configured: it resolves to a hard-coded default in lib/access.ts, ' +
+            'so changing who can sign in needs a code change and a deploy.',
     },
     {
       name: 'ai_provider',

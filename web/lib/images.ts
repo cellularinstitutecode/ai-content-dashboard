@@ -442,10 +442,16 @@ export async function generatePackImage(opts: {
 // Idempotent: give a draft an image if it doesn't have one yet. Uses the
 // service-role client so Autopilot (no user session) can call it too.
 // Returns the image (existing or new) or null when skipped/disabled.
-export async function ensureDraftImage(draftId: string): Promise<PackImage | null> {
+// `ownerId` is REQUIRED, not optional. This runs on the service-role client,
+// which bypasses RLS, and its only caller passes a draft id read off a
+// template_runs row - a column a user can point at somebody else's draft.
+// Without the owner check this function both reads and WRITES that draft.
+export async function ensureDraftImage(draftId: string, ownerId: string): Promise<PackImage | null> {
   if (!imagesEnabled()) return null;
   const db = supabaseAdmin();
-  const { data: d } = await db.from('drafts').select('id, user_id, topic, pack').eq('id', draftId).maybeSingle();
+  const { data: d } = await db
+    .from('drafts').select('id, user_id, topic, pack')
+    .eq('id', draftId).eq('user_id', ownerId).maybeSingle();
   if (!d) return null;
   const row = d as { user_id: string; topic: string | null; pack: Record<string, unknown> | null };
   const pack = row.pack && typeof row.pack === 'object' ? row.pack : {};
@@ -473,7 +479,9 @@ export async function ensureDraftImage(draftId: string): Promise<PackImage | nul
     brand,
     variant: existingHasText ? (existing?.variant ?? 0) + 1 : 0,
   });
-  const { error } = await db.from('drafts').update({ pack: { ...pack, _image: image } }).eq('id', draftId);
+  const { error } = await db
+    .from('drafts').update({ pack: { ...pack, _image: image } })
+    .eq('id', draftId).eq('user_id', ownerId);
   if (error) throw new Error('draft image stamp failed: ' + error.message);
   return image;
 }
