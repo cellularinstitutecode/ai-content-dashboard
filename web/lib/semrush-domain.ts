@@ -679,25 +679,44 @@ export async function trackingSummary(domain: string): Promise<{ data: TrackingS
 
 async function recordSnapshot(domain: string, ov: DomainOverview | null, bl: BacklinksOverview | null): Promise<void> {
   if (!ov && !bl) return;
+  // Write ONLY the columns whose source actually reported.
+  //
+  // The upsert used to send every column on either leg succeeding, so when the
+  // overview call failed but backlinks succeeded - two 24h caches expiring at
+  // different times, a 10s timeout, an ERROR nn, the budget floor - it replaced
+  // the day's row and nulled organic_traffic, organic_keywords, semrush_rank and
+  // the rest. This table is the app's only source of trend history, so a day of
+  // real measurements disappeared and every delta shifted with it.
+  const row: Record<string, unknown> = {
+    domain,
+    captured_on: new Date().toISOString().slice(0, 10),
+  };
+  if (ov) {
+    row.semrush_rank = ov.rank ?? null;
+    row.organic_traffic = ov.organicTraffic ?? null;
+    row.organic_keywords = ov.organicKeywords ?? null;
+    row.organic_cost = ov.organicCost ?? null;
+    row.paid_keywords = ov.paidKeywords ?? null;
+    row.paid_traffic = ov.paidTraffic ?? null;
+  }
+  if (bl) {
+    row.authority_score = bl.authorityScore ?? null;
+    row.backlinks_total = bl.backlinksTotal ?? null;
+    row.ref_domains = bl.refDomains ?? null;
+  }
   try {
-    await supabaseAdmin()
+    // A partial upsert still replaces the whole row on conflict, so merge with
+    // whatever today already holds before writing.
+    const db = supabaseAdmin();
+    const { data: existing } = await db
       .from('semrush_domain_snapshots')
-      .upsert(
-        {
-          domain,
-          captured_on: new Date().toISOString().slice(0, 10),
-          authority_score: bl?.authorityScore ?? null,
-          semrush_rank: ov?.rank ?? null,
-          organic_traffic: ov?.organicTraffic ?? null,
-          organic_keywords: ov?.organicKeywords ?? null,
-          organic_cost: ov?.organicCost ?? null,
-          paid_keywords: ov?.paidKeywords ?? null,
-          paid_traffic: ov?.paidTraffic ?? null,
-          backlinks_total: bl?.backlinksTotal ?? null,
-          ref_domains: bl?.refDomains ?? null,
-        },
-        { onConflict: 'domain,captured_on' }
-      );
+      .select('*')
+      .eq('domain', domain)
+      .eq('captured_on', row.captured_on as string)
+      .maybeSingle();
+    await db
+      .from('semrush_domain_snapshots')
+      .upsert({ ...(existing || {}), ...row }, { onConflict: 'domain,captured_on' });
   } catch {
     // ignore — history is best-effort
   }

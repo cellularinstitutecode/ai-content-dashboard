@@ -536,7 +536,17 @@ const pending = (Array.isArray(drafts) ? drafts : []).filter(
 );
 if (pending.length === 0) { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } return; }
 if (pollRef.current) return; // already polling
+// setInterval does NOT await its callback. Each tick fetches every pending
+// clip job, and the server side of that downloads multi-MB MP4s and uploads
+// them to Drive - routinely more than 5s. Ticks therefore overlapped, and
+// each concurrent request saw an un-updated draft row (knownClips empty), so
+// every one of them re-uploaded the whole set as fresh public Drive files.
+// A re-entrancy guard makes a tick that is still running skip the next slot.
+let tickInFlight = false;
 pollRef.current = setInterval(async () => {
+if (tickInFlight) return;
+tickInFlight = true;
+try {
 const current = (Array.isArray(drafts) ? drafts : []).filter(
 (d: any) => d && d.pack && d.pack.kind === 'clip' && d.pack.projectId && d.pack.status !== 'ready' && d.pack.status !== 'failed'
 );
@@ -550,6 +560,7 @@ if (j && j.status === 'ready' && Array.isArray(j.clips) && j.clips.length > 0) c
 } catch {}
 }
 if (changed) refreshDrafts(0, false);
+} finally { tickInFlight = false; }
 }, 5000);
 return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
 }, [drafts]);

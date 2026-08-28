@@ -479,8 +479,14 @@ export async function ensureDraftImage(draftId: string, ownerId: string): Promis
     brand,
     variant: existingHasText ? (existing?.variant ?? 0) + 1 : 0,
   });
+  // Same re-read as /api/drafts/image: the pack read before generation is
+  // 30-60s stale, and a redraft in that window would otherwise be silently
+  // reverted by this write. Merge `_image` into whatever is there NOW.
+  const { data: fresh } = await db
+    .from('drafts').select('pack').eq('id', draftId).eq('user_id', ownerId).maybeSingle();
+  const currentPack = (fresh as { pack?: Record<string, unknown> } | null)?.pack ?? pack;
   const { error } = await db
-    .from('drafts').update({ pack: { ...pack, _image: image } })
+    .from('drafts').update({ pack: { ...currentPack, _image: image } })
     .eq('id', draftId).eq('user_id', ownerId);
   if (error) throw new Error('draft image stamp failed: ' + error.message);
   return image;

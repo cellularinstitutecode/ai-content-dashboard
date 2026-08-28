@@ -501,6 +501,21 @@ function Card({ tag, title, right, children, className = '' }: { tag?: string; t
 // The panel
 // ---------------------------------------------------------------------------
 
+// Parse a /api/semrush response into data, or null when the server said no.
+//
+// The panel used to do `setBundle(await r.json())` with no status check, so a
+// 401 (session lapsed in an open tab), a 403 (account removed from the
+// allowlist) or a 429 (rate limited) was stored as if it were a DomainBundle.
+// The very next render read `bundle.overviewMeta.ok` on that error object and
+// threw - and with no error boundary in app/, the TypeError replaced the whole
+// dashboard with Next's client-exception screen. app/page.tsx already handled
+// 401 explicitly; the fix simply never reached this file.
+async function okJson<T>(r: Response): Promise<T | null> {
+  if (!r.ok) return null;
+  const j = await r.json().catch(() => null);
+  return (j ?? null) as T | null;
+}
+
 export default function SemrushPanel({
   initialTopic = '',
   onUseTopic,
@@ -528,7 +543,7 @@ export default function SemrushPanel({
     try {
       const q = domain ? '&domain=' + encodeURIComponent(domain) : '';
       const r = await fetch('/api/semrush?action=domain' + q);
-      const j = (await r.json().catch(() => null)) as DomainBundle | null;
+      const j = await okJson<DomainBundle>(r);
       setBundle(j);
       if (j && !domainInput) setDomainInput(j.domain);
       // Reset per-domain sections when switching domains.
@@ -551,7 +566,7 @@ export default function SemrushPanel({
     setMoversLoading(true);
     try {
       const r = await fetch('/api/semrush?action=movers&domain=' + encodeURIComponent(d));
-      setMovers((await r.json().catch(() => null)) as KeywordMovers | null);
+      setMovers(await okJson<KeywordMovers>(r));
     } catch {
       setMovers(null);
     } finally {
@@ -582,15 +597,15 @@ export default function SemrushPanel({
     (async () => {
       try {
         const r = await fetch('/api/semrush?action=project');
-        setProject((await r.json().catch(() => null)) as ProjectData | null);
+        setProject(await okJson<ProjectData>(r));
       } catch { setProject(null); }
       finally { setProjectLoading(false); }
     })();
     (async () => {
       try {
         const r = await fetch('/api/semrush?action=activity');
-        const j = await r.json().catch(() => null);
-        setActivity(j && Array.isArray(j.rows) ? j.rows : []);
+        const j = await okJson<{ rows?: unknown[] }>(r);
+        setActivity(j && Array.isArray(j.rows) ? (j.rows as typeof activity) : []);
       } catch { setActivity([]); }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -612,8 +627,9 @@ export default function SemrushPanel({
   }, [bundle?.domain]);
 
   const domain = bundle?.domain || domainInput || 'cellularhopeinstitute.com';
-  const anyLive = bundle != null && (bundle.overviewMeta.ok || bundle.backlinksMeta.ok || bundle.topKeywordsMeta.ok);
-  const fromCache = bundle != null && [bundle.overviewMeta, bundle.backlinksMeta, bundle.topKeywordsMeta].some((m) => m.source === 'cache');
+  // Defensive even after okJson(): a shape change upstream must degrade, not crash.
+  const anyLive = !!(bundle?.overviewMeta?.ok || bundle?.backlinksMeta?.ok || bundle?.topKeywordsMeta?.ok);
+  const fromCache = !!bundle && [bundle.overviewMeta, bundle.backlinksMeta, bundle.topKeywordsMeta].some((m) => m?.source === 'cache');
 
   const statusChip = loading
     ? { cls: 'bg-subtle text-ink-muted', label: 'Loading…' }

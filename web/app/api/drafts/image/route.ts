@@ -104,10 +104,26 @@ export async function POST(req: NextRequest) {
       variant: advanceVariant ? (existing?.variant ?? 0) + 1 : 0,
     });
 
+    // Re-read the pack immediately before writing, and merge `_image` into the
+    // FRESH copy. Generation + vision verification takes 30-60s, and the pack
+    // read at the top of this handler is stale by then: if a reviewer clicked
+    // "Ask for changes" in that window, stepDraft has already written a new pack
+    // to this same draft, and writing back the old one silently discards the
+    // rewrite they asked for - while the run log still says they asked for it.
+    // Only `_image` is ours to set here; everything else belongs to whoever
+    // wrote last.
+    const { data: fresh } = await sb
+      .from('drafts')
+      .select('pack')
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .maybeSingle();
+    const currentPack = (fresh as { pack?: Record<string, unknown> } | null)?.pack ?? pack;
+
     // Owner update passes RLS via the session client.
     const { error } = await sb
       .from('drafts')
-      .update({ pack: { ...pack, _image: image } })
+      .update({ pack: { ...currentPack, _image: image } })
       .eq('id', id)
       .eq('user_id', user.id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });

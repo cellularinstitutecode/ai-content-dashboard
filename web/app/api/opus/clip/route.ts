@@ -190,6 +190,17 @@ export async function GET(req: NextRequest) {
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
+    // This GET is not a cheap read: on the ready path it downloads every clip
+    // from Opus and uploads it to Drive. The POST was capped and this was not,
+    // even though the dashboard polls it every 5 seconds per pending job.
+    const rl = await checkRateLimit(user.id, 'opus-poll');
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'rate_limited', limit: rl.limit },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } },
+      );
+    }
+
     const projectId = (req.nextUrl.searchParams.get('projectId') || '').trim();
     if (!projectId) return NextResponse.json({ error: 'projectId required' }, { status: 400 });
 
