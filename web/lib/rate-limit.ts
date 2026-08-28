@@ -37,6 +37,10 @@ const POLICIES: Record<string, Policy> = {
   schedule: { limit: 60, windowSec: 3600 },
   // Each call mints a spendable OpenAI Realtime credential.
   realtime: { limit: 20, windowSec: 3600 },
+  // The clip POLL. Generous, because the dashboard polls every 5s per pending
+  // job, but not unbounded: on the ready path each call can download clips from
+  // Opus and upload them to Drive.
+  'opus-poll': { limit: 900, windowSec: 3600 },
 };
 
 const DEFAULT_POLICY: Policy = { limit: 60, windowSec: 3600 };

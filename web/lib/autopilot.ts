@@ -934,7 +934,22 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
     : [];
   const { data: d } = await db.from('drafts').select('pack').eq('id', run.draft_id).eq('user_id', run.user_id).maybeSingle();
   const pack = (d as { pack?: ContentPack } | null)?.pack;
-  if (!pack) return { ok: false, note: 'draft pack missing' };
+  if (!pack) {
+    // The claim above already moved this run to `approved`. Leaving it there
+    // with nothing published is a dead end: approveRun needs ready_for_review,
+    // regenerateRun accepts only ready_for_review|drafted|failed, and skipRun
+    // refuses terminal states - the run becomes unreachable without SQL. Put it
+    // back so a human can act on it.
+    await db
+      .from('template_runs')
+      .update({
+        state: 'ready_for_review',
+        log: logLine(run, 'approve-failed', 'Approval could not proceed: the draft has no content. Returned for review.'),
+      })
+      .eq('id', run.id)
+      .eq('state', 'approved');
+    return { ok: false, note: 'The draft has no content, so nothing was sent. The run is back in your queue.' };
+  }
 
   const mcProviders = providers.filter((p): p is McProvider => (MC_PROVIDERS as string[]).includes(p));
   // Pick the copy for a network we are actually posting to. This used
@@ -1024,7 +1039,14 @@ export async function regenerateRun(runId: string, userId: string, note?: string
   if (!run || !run.angle) return false;
   if (!['ready_for_review', 'drafted', 'failed'].includes(run.state)) return false;
   const angle: Angle = { ...run.angle, reviewerNote: (note || '').trim().slice(0, 500) || run.angle.reviewerNote };
-  await db
+  // Claim the state we READ, exactly as approveRun does. Without the predicate
+  // this was a read-then-blind-write: two open tabs, one approving and one
+  // regenerating, and the regenerate could rewrite `approved` back to
+  // `researched` while approveRun was still inside its ~60s Drive + Metricool
+  // handoff. The run then came back for review and got approved a second time -
+  // two Metricool drafts and two `posts` rows for one slot, with no unique
+  // constraint and no compensating path (skipRun refuses terminal runs).
+  const { data: claimed } = await db
     .from('template_runs')
     .update({
       state: 'researched',
@@ -1033,8 +1055,12 @@ export async function regenerateRun(runId: string, userId: string, note?: string
       angle,
       log: logLine(run, 'regenerate', note ? 'Reviewer asked for changes: ' + note : 'Reviewer asked for a fresh take.'),
     })
-    .eq('id', runId);
-  return true;
+    .eq('id', runId)
+    .eq('user_id', userId)
+    .eq('state', run.state)
+    .select('id');
+  // Lost the race: something else moved this run between our read and write.
+  return Array.isArray(claimed) && claimed.length > 0;
 }
 
 export async function skipRun(runId: string, userId: string): Promise<boolean> {

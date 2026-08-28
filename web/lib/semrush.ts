@@ -16,6 +16,8 @@
 // Auth: `key` query parameter (SEMRUSH_API_KEY env). Errors come back as an
 // "ERROR NN :: message" plain-text body, usually with HTTP 200.
 
+import { reportError } from '@/lib/report';
+import { decideSpend, applyCharge } from '@/lib/semrush-budget';
 import { reasonForCode, reasonForHttpStatus, type SemrushReason } from '@/lib/semrush-reason';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 
@@ -168,28 +170,76 @@ export function parseSerpCsv(body: string): SerpEntry[] {
 
 let balanceCache: { value: number | null; at: number } = { value: null, at: 0 };
 const BALANCE_TTL_MS = 10 * 60 * 1000;
+// A balance we could NOT read is cached far more briefly than a good one. It
+// used to share the 10-minute TTL, which meant one bad response disabled the
+// spend floor for ten minutes (see budgetAllows).
+const BALANCE_ERROR_TTL_MS = 30 * 1000;
 
 export async function getUnitsBalance(force = false): Promise<number | null> {
   const key = process.env.SEMRUSH_API_KEY;
   if (!key) return null;
   const now = Date.now();
-  if (!force && balanceCache.at && now - balanceCache.at < BALANCE_TTL_MS) return balanceCache.value;
+  const ttl = balanceCache.value == null ? BALANCE_ERROR_TTL_MS : BALANCE_TTL_MS;
+  if (!force && balanceCache.at && now - balanceCache.at < ttl) return balanceCache.value;
   try {
     const res = await fetch(BALANCE_URL + '?key=' + encodeURIComponent(key), { method: 'GET' });
     const text = (await res.text()).trim();
     const n = parseInt(text, 10);
+    if (!Number.isFinite(n)) {
+      // Semrush answered with something that is not a number - an HTML error,
+      // a maintenance page, a login redirect. Say so: this switches the spend
+      // floor to fail-closed until we can read a real number again, and that
+      // is worth knowing about rather than discovering on an invoice.
+      reportError('semrush:balance-unreadable', new Error('non-numeric balance response'), {
+        status: res.status,
+        sample: text.slice(0, 120),
+      });
+    }
     balanceCache = { value: Number.isFinite(n) ? n : null, at: now };
     return balanceCache.value;
-  } catch {
+  } catch (err) {
+    reportError('semrush:balance-fetch-failed', err);
     return balanceCache.value; // stale-if-error
   }
 }
 
-// May we spend an estimated number of units on a live call right now?
+/**
+ * Charge the cached balance for units we just spent.
+ *
+ * Without this the cached number stayed at its pre-spend value for the whole
+ * TTL, so concurrent callers each measured the same headroom: `domainBundle`
+ * fires four reports in a Promise.all and all four saw the balance as it was
+ * before any of them ran. The floor could be overshot by the size of a burst.
+ * This is a local estimate, not a source of truth - the next live read
+ * replaces it - but it makes the guard directional between reads.
+ */
+export function chargeUnits(units: number): void {
+  balanceCache = { value: applyCharge(balanceCache.value, units), at: balanceCache.at };
+}
+
+/**
+ * May we spend an estimated number of units on a live call right now?
+ *
+ * FAILS CLOSED when the balance cannot be read. It used to return true, on the
+ * reasoning that the API could decide for itself - but the API's decision is to
+ * spend the units. A guard whose entire job is "never silently drain the unit
+ * pot" must not open itself the moment it loses sight of the pot; every other
+ * guard in this codebase (the rate limiter especially) fails closed for the
+ * same reason. Cached lookups and the link-out path still work while it is shut,
+ * and the error TTL above means it reopens within 30s of the balance endpoint
+ * recovering.
+ */
 export async function budgetAllows(estUnits: number): Promise<boolean> {
-  const bal = await getUnitsBalance();
-  if (bal == null) return true; // can't read balance → let the API itself decide
-  return bal - estUnits >= unitFloor();
+  const hasKey = Boolean(process.env.SEMRUSH_API_KEY);
+  const bal = hasKey ? await getUnitsBalance() : null;
+  const decision = decideSpend(bal, estUnits, unitFloor(), hasKey);
+  if (!decision.allow && decision.reason === 'balance-unknown') {
+    reportError('semrush:budget-closed', new Error('spend refused: balance unreadable'), {
+      estUnits,
+      floor: unitFloor(),
+    });
+  }
+  return decision.allow;
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +290,9 @@ export async function cachePut(report: string, database: string, phrase: string,
 }
 
 export async function logUsage(report: string, phrase: string, units: number, source: SemSource): Promise<void> {
+  // Every live spend flows through here, so this is the one place that can keep
+  // the cached balance moving in the right direction between reads.
+  if (source === 'live') chargeUnits(units);
   try {
     await supabaseAdmin().from('semrush_usage').insert({ report, phrase, units, source });
   } catch {

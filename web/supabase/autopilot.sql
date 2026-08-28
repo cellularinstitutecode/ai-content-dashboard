@@ -126,7 +126,12 @@ from public.draft_keywords dk
 join public.post_metrics pm
   on pm.user_id = dk.user_id
  and pm.text is not null
- and pm.text ilike '%' || dk.keyword || '%'
+ -- The keyword is DATA, not a pattern. It comes from Semrush rows and, on the
+ -- cache-only path, straight from angle.query - so a keyword containing % or _
+ -- silently matched far more posts than it should, inflating total_engagement
+ -- and therefore the learn-boost that biases every future angle choice.
+ -- position() does a plain substring search with no pattern semantics at all.
+ and position(lower(dk.keyword) in lower(pm.text)) > 0
 where dk.role = 'primary'
 group by dk.user_id, dk.keyword;
 
