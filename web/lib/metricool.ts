@@ -132,12 +132,39 @@ export function readPostId(data: any): string | null {
  * original time — the post then published on the old date while every screen in
  * the app showed the new one. Callers must treat a throw here as "the move did
  * not happen" and leave their local row alone.
+ *
+ * Metricool's PUT is a REPLACE, not a patch. Sending only the new
+ * publicationDate is rejected:
+ *
+ *   400 ValidationError { text: "must not be null",
+ *                         providers: "must not be empty" }
+ *
+ * so the post's existing text and networks have to be sent back with it. They
+ * come from our own `posts` row, which is written at schedule time and is the
+ * same content Metricool already holds. `draft` and `autoPublish` are repeated
+ * here for the same reason they are constants everywhere else: a replace that
+ * omitted them would drop the post out of the review queue.
  */
-export async function metricoolUpdatePostDate(postId: string, publicationDate: string): Promise<void> {
+export async function metricoolUpdatePostDate(
+  postId: string,
+  publicationDate: string,
+  post: { text: string; providers: Provider[] },
+): Promise<void> {
+  const text = String(post.text || '').trim();
+  const providers = Array.isArray(post.providers) ? post.providers.filter(Boolean) : [];
+  if (!text || providers.length === 0) {
+    // Fail here rather than let Metricool reject it: an empty replace would be
+    // a destructive edit if it ever succeeded.
+    throw new Error('Metricool update needs the post text and at least one network');
+  }
   const res = await metricoolFetch('/v2/scheduler/posts/' + encodeURIComponent(postId), {
     method: 'PUT',
     body: JSON.stringify({
+      text,
+      providers: providers.map((network) => ({ network })),
       publicationDate: { dateTime: wallClock(publicationDate), timezone: SCHEDULE_TZ },
+      autoPublish: false,
+      draft: true,
     }),
   });
   if (!res.ok) {

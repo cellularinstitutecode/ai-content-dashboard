@@ -126,6 +126,14 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   const puts = (await mc('/__requests')).filter((q) => q.method === 'PUT');
   check('rescheduling actually moves the post in Metricool', puts.length === 1, puts.length + ' PUTs');
   check('the new time is sent on the clinic clock', /T09:00:00$/.test(puts[0]?.body?.publicationDate?.dateTime || ''), JSON.stringify(puts[0]?.body));
+  // Metricool's PUT is a replace: a body with only the new date is rejected
+  // with 400 ValidationError { text, providers }. Shipping that once is why
+  // this assertion exists.
+  check('the update carries the whole post, not just the new date',
+    Boolean(puts[0]?.body?.text) && Array.isArray(puts[0]?.body?.providers) && puts[0].body.providers.length > 0,
+    JSON.stringify(puts[0]?.body));
+  check('and it stays a review draft through the update',
+    puts[0]?.body?.draft === true && puts[0]?.body?.autoPublish === false, JSON.stringify(puts[0]?.body));
   const moved = ((await jsonOf(await app('/api/posts')))?.posts || []).find((p) => p.id === target.id);
   check('and the local row moved too', new Date(moved.publication_date).toISOString() === newDate, moved && moved.publication_date);
 
