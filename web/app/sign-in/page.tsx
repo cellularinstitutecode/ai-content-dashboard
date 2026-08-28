@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createBrowserClient } from '@supabase/ssr';
 import { safeNextPath } from '@/lib/safe-redirect';
 
@@ -16,11 +16,37 @@ function getSupabase() {
   );
 }
 
+// The server bounces people back here with ?error=... . Until this existed the
+// page ignored it entirely, so the most likely real-world failure - signing in
+// with the wrong Google account, which browsers make easy when several are
+// logged in - dumped the user on a blank form with no explanation. They try
+// again, Google silently reuses the same account, and it looks broken.
+const SIGN_IN_ERRORS: Record<string, string> = {
+  not_allowed:
+    'That account is not authorized for this dashboard. If you have more than one Google account, choose the Cellular Hope Institute one.',
+  exchange_failed:
+    'That sign-in link could not be completed. It may have expired or already been used — please try again.',
+  missing_code:
+    'The sign-in link was incomplete. Please start again from this page.',
+};
+
 export default function SignInPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [message, setMessage] = useState('');
+
+  // Surface whatever the auth callback or middleware sent us back with.
+  useEffect(() => {
+    try {
+      const code = new URLSearchParams(window.location.search).get('error');
+      if (!code) return;
+      setStatus('error');
+      setMessage(SIGN_IN_ERRORS[code] || 'Sign-in did not complete. Please try again.');
+    } catch {
+      /* no query string to read */
+    }
+  }, []);
 
   function checkAllowed(normalized: string) {
     if (!ALLOWED.includes(normalized)) {
@@ -91,7 +117,14 @@ export default function SignInPage() {
     const supabase = getSupabase();
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: `${location.origin}/auth/callback` },
+      options: {
+        redirectTo: `${location.origin}/auth/callback`,
+        // Force the account chooser. Without it, a browser already signed into
+        // a personal Google account silently reuses it on every attempt - so a
+        // user rejected by the allowlist has no way to reach the right account
+        // and just sees the same bounce over and over.
+        queryParams: { prompt: 'select_account' },
+      },
     });
 
     if (error) {
