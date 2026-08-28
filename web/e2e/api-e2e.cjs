@@ -126,6 +126,14 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   const puts = (await mc('/__requests')).filter((q) => q.method === 'PUT');
   check('rescheduling actually moves the post in Metricool', puts.length === 1, puts.length + ' PUTs');
   check('the new time is sent on the clinic clock', /T09:00:00$/.test(puts[0]?.body?.publicationDate?.dateTime || ''), JSON.stringify(puts[0]?.body));
+  // Metricool's PUT is a replace: a body with only the new date is rejected
+  // with 400 ValidationError { text, providers }. Shipping that once is why
+  // this assertion exists.
+  check('the update carries the whole post, not just the new date',
+    Boolean(puts[0]?.body?.text) && Array.isArray(puts[0]?.body?.providers) && puts[0].body.providers.length > 0,
+    JSON.stringify(puts[0]?.body));
+  check('and it stays a review draft through the update',
+    puts[0]?.body?.draft === true && puts[0]?.body?.autoPublish === false, JSON.stringify(puts[0]?.body));
   const moved = ((await jsonOf(await app('/api/posts')))?.posts || []).find((p) => p.id === target.id);
   check('and the local row moved too', new Date(moved.publication_date).toISOString() === newDate, moved && moved.publication_date);
 
@@ -184,6 +192,40 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   check('a run that failed weeks ago is still shown, so "Needs attention" can never be falsely empty',
     Array.isArray(runsBody?.runs) && runsBody.runs.some((r) => r.id === 'run-old-failed'),
     JSON.stringify((runsBody?.runs || []).map((r) => r.id)));
+
+  // ------------------------------------- a failed step is COUNTED, not free ---
+  //
+  // `attempts` used to be incremented only inside the catch block, so a step
+  // killed by the function timeout never counted and the run stayed eligible
+  // forever - the same research + draft (a dozen Semrush reports and a full
+  // model call) re-ran every day at full cost, and MAX_ATTEMPTS never tripped
+  // so nothing ever surfaced as "Needs attention". The attempt is now claimed
+  // BEFORE the step runs. This test pins the observable half of that: after a
+  // tick in which a step fails, the run must carry the attempt.
+  const dueAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  await fetch(SB + '/rest/v1/template_runs', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', prefer: 'return=representation' },
+    body: JSON.stringify([{
+      id: 'run-due-for-attempt',
+      template_id: 'tpl-1',
+      user_id: USER_ID,
+      scheduled_for: dueAt,          // inside the template's lead window
+      state: 'planned',
+      attempts: 0,
+      regens: 0,
+      log: [],
+    }]),
+  });
+  await fetch(BASE + '/api/autopilot/tick', { headers: { authorization: 'Bearer e2e-cron-secret' } });
+  const afterTick = await jsonOf(await fetch(SB + '/rest/v1/template_runs?id=eq.run-due-for-attempt'));
+  const dueRun = Array.isArray(afterTick) ? afterTick[0] : null;
+  check('a step that fails leaves the attempt counted on the run',
+    Boolean(dueRun) && (dueRun.attempts || 0) >= 1,
+    dueRun ? 'attempts=' + dueRun.attempts + ' state=' + dueRun.state : 'run not found');
+  check('and the reason is written into the run log a human can read',
+    Boolean(dueRun) && Array.isArray(dueRun.log) && dueRun.log.some((l) => l && l.step === 'error'),
+    dueRun && JSON.stringify((dueRun.log || []).map((l) => l && l.step)));
 
   // ------------------------------------------------------- cron still guarded -
   const noAuth = await fetch(BASE + '/api/autopilot/tick');

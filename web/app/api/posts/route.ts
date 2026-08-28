@@ -1,7 +1,7 @@
 // web/app/api/posts/route.ts
 import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
-import { metricoolDeletePost, metricoolUpdatePostDate } from '@/lib/metricool';
+import { metricoolDeletePost, metricoolUpdatePostDate, type Provider } from '@/lib/metricool';
 import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
@@ -59,9 +59,11 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: 'publication_date must be a valid ISO date' }, { status: 400 });
   }
 
+  // text and providers come along because Metricool's update is a REPLACE and
+  // rejects a body without them — see metricoolUpdatePostDate.
   const { data: existing, error: findErr } = await sb
     .from('posts')
-    .select('id, metricool_post_id')
+    .select('id, metricool_post_id, text, providers')
     .eq('id', id)
     .eq('user_id', user.id)
     .maybeSingle();
@@ -70,7 +72,10 @@ export async function PATCH(req: Request) {
 
   if (existing.metricool_post_id) {
     try {
-      await metricoolUpdatePostDate(String(existing.metricool_post_id), publicationDate);
+      await metricoolUpdatePostDate(String(existing.metricool_post_id), publicationDate, {
+        text: String(existing.text || ''),
+        providers: (existing.providers || []) as Provider[],
+      });
     } catch (e) {
       reportError('posts:metricool-reschedule', e);
       return NextResponse.json(

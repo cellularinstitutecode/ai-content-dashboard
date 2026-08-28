@@ -67,6 +67,18 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'PUT' && id) {
     if (failNext.PUT) return json(res, 500, { error: 'mock: forced PUT failure' });
     if (!posts.has(id)) return json(res, 404, { error: 'not found' });
+    // Metricool's update is a REPLACE, and it validates the whole object. A
+    // body carrying only the new publicationDate is refused with exactly this
+    // shape — reproduced here because the app shipped that bug once and the
+    // mock accepted it happily:
+    //   400 ValidationError { text: "must not be null",
+    //                         providers: "must not be empty" }
+    const detail = {};
+    if (payload == null || payload.text == null || String(payload.text).trim() === '') detail.text = 'must not be null';
+    if (!Array.isArray(payload && payload.providers) || payload.providers.length === 0) detail.providers = 'must not be empty';
+    if (Object.keys(detail).length) {
+      return json(res, 400, { status: 'BAD_REQUEST', code: '400', title: 'ValidationError', detail });
+    }
     posts.set(id, { ...posts.get(id), ...payload });
     return json(res, 200, { data: posts.get(id) });
   }
