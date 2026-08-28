@@ -7,7 +7,7 @@ export const runtime = 'nodejs';
 // GET /api/brand
 // Returns the signed-in user's Brand Brain profile (voice, audience, guidelines).
 export async function GET() {
-  const sb = supabaseServer();
+  const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
@@ -23,7 +23,7 @@ export async function GET() {
 // POST /api/brand
 // Creates or updates the user's Brand Brain profile (one row per user).
 export async function POST(req: NextRequest) {
-  const sb = supabaseServer();
+  const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 

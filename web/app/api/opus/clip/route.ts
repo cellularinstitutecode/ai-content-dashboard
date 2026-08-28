@@ -1,3 +1,4 @@
+import { isAllowedEmail } from '@/lib/access';
 import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { opusCreateClipProject, opusGetExportableClips } from '@/lib/opus';
@@ -5,6 +6,7 @@ import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { persistClips } from '@/lib/drive';
+import { parseVideoUrl } from '@/lib/composer';
 
 export const runtime = 'nodejs';
 // Multi-clip Drive uploads can take a while; give the poll path the same ceiling
@@ -37,9 +39,16 @@ function thumbnailOf(project: any): string | null {
 
 export async function POST(req: NextRequest) {
   try {
-    const sb = supabaseServer();
+    const sb = await supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+    // Starts a paid OpusClip job on the clinic's account, so the allowlist applies.
+    if (!isAllowedEmail(user.email)) {
+      return NextResponse.json(
+        { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
+        { status: 403 },
+      );
+    }
 
     // Rate limit before kicking off an Opus clip job.
     const rl = await checkRateLimit(user.id, 'opus-clip');
@@ -53,7 +62,23 @@ export async function POST(req: NextRequest) {
     const { videoUrl, brandTemplateId, language, title } = await req.json();
     if (!videoUrl) return NextResponse.json({ error: 'videoUrl required' }, { status: 400 });
 
-    const project = await opusCreateClipProject({ videoUrl, brandTemplateId, language, title });
+    // Only hosts OpusClip can actually ingest. The allowlist lived in the
+    // browser (app/page.tsx) and was moved server-side for the assistant's
+    // clip tool - but not for THIS route, which is the one the dashboard
+    // actually calls. Same operation, two implementations, fix applied to one:
+    // exactly the pattern that produced the autoPublish and redirect findings.
+    const parsed = parseVideoUrl(String(videoUrl));
+    if (!parsed.ok) {
+      return NextResponse.json(
+        { error: parsed.reason || 'Only YouTube and Vimeo links can be clipped.' },
+        { status: 400 },
+      );
+    }
+
+    // Forward the string that was validated, not the raw request value:
+    // parseVideoUrl accepts a scheme-less host and String()-coerces, so raw
+    // and validated could differ.
+    const project = await opusCreateClipProject({ videoUrl: String(videoUrl), brandTemplateId, language, title });
     const projectId = projectIdOf(project);
     if (!projectId) {
       // Without a project id we could never map finished clips back to a draft,
@@ -118,7 +143,6 @@ export async function POST(req: NextRequest) {
       thumbnailUrl: thumbnailUrl || null,
       title: projectTitle,
       draft: draft || null,
-      project,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'opus failed' }, { status: 500 });
@@ -162,7 +186,7 @@ async function findClipDraft(admin: any, userId: string, projectId: string) {
 // having to fire the webhook (webhook is the fast path; this is the fallback).
 export async function GET(req: NextRequest) {
   try {
-    const sb = supabaseServer();
+    const sb = await supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 

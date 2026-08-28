@@ -4,6 +4,7 @@
 //   POST → { id, action: 'approve' | 'skip' | 'run_now' }
 // Approve is the only path toward publishing, and it only ever creates a
 // Metricool DRAFT (autoPublish: false) plus a pending_review posts row.
+import { isAllowedEmail } from '@/lib/access';
 import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
@@ -15,9 +16,18 @@ export const runtime = 'nodejs';
 export const maxDuration = 60;
 
 export async function GET(req: NextRequest) {
-  const sb = supabaseServer();
+  const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  // Reaches a resource that belongs to the clinic, not to a user, so a valid
+  // session is the weaker question. Middleware enforces this too; this is the
+  // copy that stays correct if the middleware exemption ever widens again.
+  if (!isAllowedEmail(user.email)) {
+    return NextResponse.json(
+      { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
+      { status: 403 },
+    );
+  }
 
   const url = req.nextUrl;
   const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 50);
@@ -40,14 +50,18 @@ export async function GET(req: NextRequest) {
   const names: Record<string, string> = {};
   if (templateIds.length) {
     const { data: ts } = await db
-      .from('schedule_templates').select('id, name, providers').in('id', templateIds);
+      .from('schedule_templates').select('id, name, providers').in('id', templateIds).eq('user_id', user.id);
     for (const t of ts || []) {
       names[(t as { id: string }).id] = (t as { name?: string }).name || 'Untitled template';
     }
   }
   const packs: Record<string, unknown> = {};
   if (draftIds.length) {
-    const { data: ds } = await db.from('drafts').select('id, pack').in('id', draftIds);
+    // Scoped to the caller. `draft_id` lives on template_runs, which the RLS
+    // policy let a user UPDATE on their own row - so pointing it at someone
+    // else's draft made this service-role read hand back their pack.
+    const { data: ds } = await db
+      .from('drafts').select('id, pack').in('id', draftIds).eq('user_id', user.id);
     for (const d of ds || []) packs[(d as { id: string }).id] = (d as { pack: unknown }).pack;
   }
 
@@ -84,9 +98,18 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const sb = supabaseServer();
+  const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  // Reaches a resource that belongs to the clinic, not to a user, so a valid
+  // session is the weaker question. Middleware enforces this too; this is the
+  // copy that stays correct if the middleware exemption ever widens again.
+  if (!isAllowedEmail(user.email)) {
+    return NextResponse.json(
+      { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
+      { status: 403 },
+    );
+  }
 
   const body = await req.json().catch(() => ({} as Record<string, unknown>));
   const id = typeof body.id === 'string' ? body.id : '';

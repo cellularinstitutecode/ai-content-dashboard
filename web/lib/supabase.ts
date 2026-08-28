@@ -7,9 +7,19 @@ export function supabaseBrowser() {
   );
 }
 
-export function supabaseServer() {
+// ASYNC since Next 15: cookies() returns a promise, so this factory does too.
+// Every caller needs `await supabaseServer()`.
+//
+// Note for whoever upgrades next: the `require()` below hides this call from
+// the type checker. `tsc` flagged the six direct `cookies()` uses in
+// app/auth/callback and app/sign-out and said nothing about this one - fix only
+// what tsc reports and you get a green typecheck with a runtime that hands
+// every route a Promise where it expects a client. The require() is kept
+// because a top-level `import` of next/headers pulls server-only code into any
+// module that touches this file.
+export async function supabaseServer() {
   const { cookies } = require("next/headers");
-  const store = cookies();
+  const store = await cookies();
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,

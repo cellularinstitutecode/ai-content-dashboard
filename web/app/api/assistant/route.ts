@@ -13,6 +13,7 @@ import {
 import { opusCreateClipProject } from "@/lib/opus";
 import { researchBundle, briefPromptFrom, getUnitsBalance, recordDraftKeywords, type SemKeyword } from "@/lib/semrush";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { isAllowedEmail } from "@/lib/access";
 import { parseVideoUrl } from "@/lib/composer";
 import { boundToolMessages } from "@/lib/tool-transcript";
 
@@ -381,7 +382,7 @@ async function runAgent(session: Session, input: string, userId: string | null) 
         toolResult = "Cannot save: user is not signed in.";
       } else {
         try {
-          const sb = supabaseServer();
+          const sb = await supabaseServer();
           const { data: draft } = await sb
             .from("drafts")
             .insert({
@@ -560,7 +561,7 @@ async function runAgent(session: Session, input: string, userId: string | null) 
           session.provider = session.provider === "openai" ? "openai" : "anthropic";
         }
       }
-      const _sb = supabaseServer();
+      const _sb = await supabaseServer();
       const { data: _draft } = await _sb
         .from("drafts")
         .insert({
@@ -608,15 +609,25 @@ export async function POST(req: Request) {
 
   // Resolve the signed-in user once (used for save/schedule).
   let userId: string | null = null;
+  let userEmail: string | null = null;
   try {
-    const sb = supabaseServer();
+    const sb = await supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
     userId = user?.id || null;
-  } catch { userId = null; }
+    userEmail = user?.email || null;
+  } catch { userId = null; userEmail = null; }
 
   // Require an authenticated user before running the assistant (which spends AI credits).
   if (!userId) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+  // The assistant can schedule into the clinic's Metricool account and spends
+  // the shared AI and Semrush budget, so a session alone is not the question.
+  if (!isAllowedEmail(userEmail)) {
+    return NextResponse.json(
+      { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
+      { status: 403 },
+    );
   }
 
   // Rate limit before spending AI credits.
@@ -779,7 +790,7 @@ export async function POST(req: Request) {
           );
         }
         if (userId) {
-          const sb = supabaseServer();
+          const sb = await supabaseServer();
           const { data: draft } = await sb
             .from("drafts")
             .insert({

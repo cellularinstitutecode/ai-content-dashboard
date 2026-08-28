@@ -4,6 +4,7 @@
 // plus a ready-to-edit draft. Delegates to researchTopic() in lib/ai.ts, which
 // reuses the same Anthropic/OpenAI providers as the content generator.
 // Auth + rate limiting mirror /api/generate since this spends AI credits.
+import { isAllowedEmail } from '@/lib/access';
 import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { researchTopic, type Provider, type BrandContext } from '@/lib/ai';
@@ -33,10 +34,17 @@ export async function POST(req: NextRequest) {
       body?.brand && typeof body.brand === 'object' ? body.brand : undefined;
 
     // Require an authenticated user before spending AI credits.
-    const sb = supabaseServer();
+    const sb = await supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
     if (!user) {
       return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+    }
+    // Spends the clinic's shared AI and Semrush budget, so the allowlist applies.
+    if (!isAllowedEmail(user.email)) {
+      return NextResponse.json(
+        { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
+        { status: 403 },
+      );
     }
 
     // Rate limit before spending AI credits (fails open if usage_events is absent).

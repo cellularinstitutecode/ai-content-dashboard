@@ -66,7 +66,8 @@ const securityHeaders = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
-  experimental: { typedRoutes: true },
+  // Next 16 promoted this out of `experimental`.
+  typedRoutes: true,
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];
   },

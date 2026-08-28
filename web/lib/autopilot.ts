@@ -620,12 +620,15 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
     // approval regenerated from variant 0 (burning a second image credit and
     // breaking the "every reroll is a visibly different take" guarantee).
     // The angle is unchanged by a redraft, so the image stays on-topic.
-    const { data: prior } = await db.from('drafts').select('pack').eq('id', draftId).maybeSingle();
+    const { data: prior } = await db
+      .from('drafts').select('pack').eq('id', draftId).eq('user_id', run.user_id).maybeSingle();
     const priorImage = (prior as { pack?: { _image?: unknown } } | null)?.pack?._image;
     const nextPack = priorImage && !(pack as { _image?: unknown })._image
       ? { ...(pack as Record<string, unknown>), _image: priorImage }
       : pack;
-    const { error } = await db.from('drafts').update({ pack: nextPack, provider }).eq('id', draftId);
+    const { error } = await db
+      .from('drafts').update({ pack: nextPack, provider })
+      .eq('id', draftId).eq('user_id', run.user_id);
     if (error) throw new Error('draft update failed: ' + error.message);
   } else {
     const { data: draft, error } = await db
@@ -734,7 +737,9 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
   if (!run.draft_id || !angle) throw new Error('run has no draft to score');
 
   const { data: draftRow, error } = await db
-    .from('drafts').select('id, pack, provider').eq('id', run.draft_id).single();
+    // .eq('user_id') as well as the id: draft_id is a client-writable column on
+    // template_runs, so it is not on its own proof of ownership.
+    .from('drafts').select('id, pack, provider').eq('id', run.draft_id).eq('user_id', run.user_id).single();
   if (error || !draftRow) throw new Error('draft not found for scoring');
   let pack = (draftRow as { pack: ContentPack }).pack;
   let score = scorePack(pack, template.providers || [], angle);
@@ -758,7 +763,8 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
       if (retryScore.total > score.total) {
         (retry as ContentPack & { _autopilot?: unknown })._autopilot =
           (pack as ContentPack & { _autopilot?: unknown })._autopilot;
-        await db.from('drafts').update({ pack: retry }).eq('id', run.draft_id);
+        await db.from('drafts').update({ pack: retry })
+          .eq('id', run.draft_id).eq('user_id', run.user_id);
         pack = retry;
         score = retryScore;
       }
@@ -926,7 +932,7 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
   const providers: string[] = (t && Array.isArray((t as { providers?: string[] }).providers))
     ? ((t as { providers?: string[] }).providers as string[])
     : [];
-  const { data: d } = await db.from('drafts').select('pack').eq('id', run.draft_id).maybeSingle();
+  const { data: d } = await db.from('drafts').select('pack').eq('id', run.draft_id).eq('user_id', run.user_id).maybeSingle();
   const pack = (d as { pack?: ContentPack } | null)?.pack;
   if (!pack) return { ok: false, note: 'draft pack missing' };
 
@@ -954,7 +960,7 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
     (pack as ContentPack & { _image?: PackImage })._image || null
   );
   if (!packImage) {
-    try { packImage = shippable(await ensureDraftImage(run.draft_id)); } catch { packImage = null; }
+    try { packImage = shippable(await ensureDraftImage(run.draft_id, run.user_id)); } catch { packImage = null; }
   }
 
   let note = 'Staged for publishing review.';

@@ -2,6 +2,7 @@
 // Server-side Semrush keyword lookup for the Keyword Intelligence panel.
 // The Semrush API key stays on the server (read from env), never exposed to the
 // browser. Returns normalized keyword metrics for a topic.
+import { isAllowedEmail } from '@/lib/access';
 import { NextRequest, NextResponse } from 'next/server';
 import { researchKeywords } from '@/lib/keywords';
 import { supabaseServer } from '@/lib/supabase';
@@ -17,9 +18,18 @@ export async function GET(req: NextRequest) {
   // Semrush units or reveal config state. Fail closed on auth errors.
   let userId = '';
   try {
-    const sb = supabaseServer();
+    const sb = await supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+    // Reaches a resource that belongs to the clinic, not to a user, so a valid
+    // session is the weaker question. Middleware enforces this too; this is the
+    // copy that stays correct if the middleware exemption ever widens again.
+    if (!isAllowedEmail(user.email)) {
+      return NextResponse.json(
+        { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
+        { status: 403 },
+      );
+    }
     userId = user.id;
   } catch {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });

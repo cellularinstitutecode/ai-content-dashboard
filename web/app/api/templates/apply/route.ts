@@ -11,7 +11,7 @@ export const runtime = 'nodejs';
 // (default 4). For each active weekday in the template, creates one post per
 // week at the template's time-of-day, starting from the next matching day.
 export async function POST(req: NextRequest) {
-  const sb = supabaseServer();
+  const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 

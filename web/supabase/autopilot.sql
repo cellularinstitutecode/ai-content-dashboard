@@ -94,14 +94,14 @@ begin
     create policy "template_runs: owner read" on public.template_runs
       for select using (auth.uid() = user_id);
   end if;
-  if not exists (
-    select 1 from pg_policies
-    where schemaname = 'public' and tablename = 'template_runs'
-      and policyname = 'template_runs: owner update'
-  ) then
-    create policy "template_runs: owner update" on public.template_runs
-      for update using (auth.uid() = user_id);
-  end if;
+  -- NO owner-update policy. RLS cannot say "you may edit these columns but not
+  -- those", and `draft_id` / `template_id` are ordinary columns here: a policy
+  -- of `using (auth.uid() = user_id)` let a signed-in user PATCH their OWN run
+  -- straight against PostgREST and repoint draft_id at another tenant's draft,
+  -- which service-role reads downstream then followed - and wrote to.
+  -- Every mutation goes through /api/autopilot/runs on the service-role client,
+  -- which bypasses RLS, so no client needs this privilege. See the REVOKE at the
+  -- foot of this file, which also cleans up deployments that ran the old version.
 end $$;
 
 -- 3) Learning loop: which primary keywords actually earned engagement.
@@ -134,3 +134,38 @@ group by dk.user_id, dk.keyword;
 -- and let only authenticated sessions read it (still RLS-filtered per the above).
 revoke all on public.keyword_performance from anon;
 grant select on public.keyword_performance to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Hardening: template_runs must not be writable by a browser session.
+--
+-- The "owner update" policy above is `using (auth.uid() = user_id)` with no
+-- column restriction, and RLS cannot express "you may edit these columns but
+-- not those". `draft_id` and `template_id` are ordinary columns on that row,
+-- and the anon key ships in the client bundle - so a signed-in user could PATCH
+-- their OWN run straight against PostgREST and repoint `draft_id` at another
+-- tenant's draft. Three service-role reads follow that column (the runs API,
+-- approveRun, ensureDraftImage), and the last of them WRITES the draft it
+-- finds. Every route looked correctly scoped; the writable foreign key was the
+-- gap.
+--
+-- Nothing in the app updates this table from the browser: every mutation goes
+-- through /api/autopilot/runs on the service-role client, which bypasses RLS.
+-- So the privilege is simply removed. The SELECT policy stays: it costs nothing
+-- and keeps direct reads owner-scoped if anything ever needs them. (Nothing
+-- client-side reads template_runs today - the realtime subscription in
+-- LiveContentProvider is on drafts and posts only.)
+--
+-- Safe to re-run.
+revoke update on public.template_runs from authenticated;
+revoke insert, delete on public.template_runs from authenticated;
+
+do $$
+begin
+  if exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'template_runs'
+      and policyname = 'template_runs: owner update'
+  ) then
+    drop policy "template_runs: owner update" on public.template_runs;
+  end if;
+end $$;

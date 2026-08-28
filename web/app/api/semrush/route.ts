@@ -20,19 +20,26 @@ import { domainBundle, primaryDomain, siteAudit, trackingSummary, normalizeDomai
 import { chatAssistant } from '@/lib/ai';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { supabaseServer } from '@/lib/supabase';
+import { isAllowedEmail } from '@/lib/access';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
-async function requireUser(): Promise<string | null> {
+async function requireUser(): Promise<{ userId: string | null; allowed: boolean }> {
   try {
-    const sb = supabaseServer();
+    const sb = await supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
-    return user?.id || null;
+    if (!user) return { userId: null, allowed: false };
+    // The Semrush unit pot belongs to the clinic, not to whoever holds a
+    // session, so the allowlist is part of the question here. Reported
+    // separately from "no session" so a removed employee gets 403 "not
+    // authorized" rather than 401, which the client renders as "your session
+    // expired - sign in again" and loops them through a sign-in that works.
+    return { userId: user.id, allowed: isAllowedEmail(user.email) };
   } catch {
     // Fail CLOSED: if the auth check itself breaks, do not open an endpoint
     // that can spend Semrush API units to anonymous callers.
-    return null;
+    return { userId: null, allowed: false };
   }
 }
 
@@ -45,10 +52,17 @@ export async function GET(req: NextRequest) {
   const action = (req.nextUrl.searchParams.get('action') || 'hub').trim();
   const topic = (req.nextUrl.searchParams.get('topic') || '').trim();
 
-  const userId = await requireUser();
-  if (!userId) {
+  const auth = await requireUser();
+  if (!auth.userId) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
+  if (!auth.allowed) {
+    return NextResponse.json(
+      { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
+      { status: 403 },
+    );
+  }
+  const userId = auth.userId;
 
   if (UNIT_SPENDING.has(action) || (!action && topic)) {
     const rl = await checkRateLimit(userId, 'semrush');
@@ -75,7 +89,7 @@ export async function GET(req: NextRequest) {
     // Recent AI drafts that passed through the Semrush keyword filter.
     let rows: Awaited<ReturnType<typeof keywordResearchActivity>> = [];
     try {
-      const sb = supabaseServer();
+      const sb = await supabaseServer();
       const { data: { user } } = await sb.auth.getUser();
       if (user) rows = await keywordResearchActivity(user.id, 12);
     } catch {

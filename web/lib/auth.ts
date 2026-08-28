@@ -6,7 +6,7 @@ import { isAllowedEmail } from '@/lib/access';
 // One place that answers "may this caller do anything here at all".
 //
 // Authorization used to be re-derived in roughly twenty route handlers, each
-// spelling out `supabaseServer()` -> `getUser()` -> `if (!user) 401`. None of
+// spelling out `await supabaseServer()` -> `getUser()` -> `if (!user) 401`. None of
 // them re-checked the tenant allowlist, because middleware was assumed to have
 // done it. When middleware grew a machine-path exemption, that assumption
 // quietly became false for three routes and nothing downstream noticed - which
@@ -47,7 +47,7 @@ function forbidden(): AuthFail {
  */
 export async function requireUser(): Promise<AuthResult> {
   try {
-    const sb = supabaseServer();
+    const sb = await supabaseServer();
     const { data: { user } } = await sb.auth.getUser();
     if (!user) return unauthorized();
     return { ok: true, userId: user.id, email: user.email ?? null };

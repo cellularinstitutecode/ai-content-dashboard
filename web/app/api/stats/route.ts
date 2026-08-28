@@ -10,7 +10,7 @@ export const runtime = 'nodejs';
 // Keys match the client-side LiveContent stats shape (drafts/scheduled/upcoming/clips);
 // descriptive aliases are also included for other consumers.
 export async function GET() {
-  const sb = supabaseServer();
+  const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
