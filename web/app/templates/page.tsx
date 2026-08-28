@@ -237,17 +237,24 @@ export default function TemplatesPage() {
   async function apply(id?: string) {
     if (!id) return;
     if (applyingId) return;                       // one apply at a time: a double click used to double-book the calendar
-    if (!window.confirm('Schedule posts for the next ' + APPLY_WEEKS + ' weeks from this template?')) return;
+    if (!window.confirm(
+      'Send this template\'s posts for the next ' + APPLY_WEEKS + ' weeks to Metricool?\n\n' +
+      'They are created as drafts for review — nothing publishes until you approve it in Metricool. ' +
+      'You can delete any of them from the publishing queue.'
+    )) return;
     setStatus(null);
     setErr(null);
     setApplyingId(id);
     try {
-      const j = await api<{ created?: number }>('/api/templates/apply', {
+      const j = await api<{ created?: number; skipped?: number; failed?: number; message?: string }>('/api/templates/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, weeks: APPLY_WEEKS }),
       });
-      setStatus('Scheduled ' + (j.created || 0) + ' posts for the next ' + APPLY_WEEKS + ' weeks.');
+      // The route now says exactly what happened - how many reached Metricool,
+      // how many were already there, how many failed. It used to report
+      // "Scheduled N posts" for rows that were never sent anywhere at all.
+      setStatus(j.message || ('Sent ' + (j.created || 0) + ' posts to Metricool for review.'));
       // The biggest mutation in the app: it creates weeks of posts. Every
       // panel that shows posts, counts or the Autopilot queue hears about it.
       announce('posts', 'stats', 'autopilot', 'insights');

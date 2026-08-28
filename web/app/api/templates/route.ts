@@ -33,7 +33,7 @@ function cleanTime(x: any): string {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(s) ? s : '09:00';
 }
 
-// GET /api/templates â list the user's templates.
+// GET /api/templates — list the user's templates.
 export async function GET() {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
@@ -56,7 +56,7 @@ export async function GET() {
   return NextResponse.json({ templates: data ?? [] });
 }
 
-// POST /api/templates â create or update a template (upsert when id is present).
+// POST /api/templates — create or update a template (upsert when id is present).
 export async function POST(req: NextRequest) {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ template: data });
 }
 
-// DELETE /api/templates?id=... â remove a template the user owns.
+// DELETE /api/templates?id=... — remove a template the user owns.
 export async function DELETE(req: NextRequest) {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();

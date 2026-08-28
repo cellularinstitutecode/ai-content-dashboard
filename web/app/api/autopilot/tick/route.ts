@@ -6,7 +6,8 @@
 // Steps are idempotent and resumable, so overlapping or repeated ticks are safe.
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
-import { advanceRuns, planRuns } from '@/lib/autopilot';
+import { advanceRuns, expireStaleRuns, planRuns } from '@/lib/autopilot';
+import { reportError } from '@/lib/report';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -39,15 +40,27 @@ async function handle(req: NextRequest) {
   const url = req.nextUrl;
   const runId = url.searchParams.get('runId') || undefined;
 
-  const planned = await planRuns(scopeUserId);
-  const advancedResult = await advanceRuns({
-    scopeUserId,
-    runId,
-    budgetMs: 40_000,
-    maxRuns: runId ? 1 : 4,
-  });
-
-  return NextResponse.json({ ok: true, ...planned, ...advancedResult });
+  // A failure in any of these used to be swallowed and reported as
+  // {ok:true, planned:0, advanced:0} - indistinguishable from a quiet day, and
+  // green on the Vercel cron dashboard. Answer with a real status code so a
+  // broken engine looks broken.
+  try {
+    const planned = await planRuns(scopeUserId);
+    const expired = await expireStaleRuns(scopeUserId);
+    const advancedResult = await advanceRuns({
+      scopeUserId,
+      runId,
+      budgetMs: 40_000,
+      maxRuns: runId ? 1 : 4,
+    });
+    return NextResponse.json({ ok: true, expired, ...planned, ...advancedResult });
+  } catch (e) {
+    reportError('autopilot:tick', e);
+    return NextResponse.json(
+      { ok: false, error: 'tick_failed', message: e instanceof Error ? e.message : 'Autopilot tick failed' },
+      { status: 500 },
+    );
+  }
 }
 
 export async function GET(req: NextRequest) {

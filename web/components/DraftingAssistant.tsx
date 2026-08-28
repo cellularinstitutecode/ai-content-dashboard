@@ -318,10 +318,10 @@ export default function DraftingAssistant() {
                 )}
               </div>
             ))}
-            {voice.active && (<div className="flex items-center gap-2 text-xs text-red-500"><span className="h-2 w-2 animate-pulse rounded-full bg-red-500" /><span>Listening\u2026 speak your request.</span></div>)}
-            {voice.connecting && (<div className="flex items-center gap-2 text-xs text-amber-600"><span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" /><span>Connecting\u2026 allow microphone access if your browser prompts you.</span></div>)}
+            {voice.active && (<div className="flex items-center gap-2 text-xs text-red-500"><span className="h-2 w-2 animate-pulse rounded-full bg-red-500" /><span>Listening… speak your request.</span></div>)}
+            {voice.connecting && (<div className="flex items-center gap-2 text-xs text-amber-600"><span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" /><span>Connecting… allow microphone access if your browser prompts you.</span></div>)}
             {voice.error && (<div className="rounded-md bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-700 ring-1 ring-red-200">{voice.error}</div>)}
-            {busy && (<div className="flex items-center gap-2 text-xs text-ink/50"><span className="flex gap-1"><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent" /></span><span>Working on it\u2026 longer formats like a full blog can take up to a minute.</span></div>)}
+            {busy && (<div className="flex items-center gap-2 text-xs text-ink/50"><span className="flex gap-1"><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent" /></span><span>Working on it… longer formats like a full blog can take up to a minute.</span></div>)}
             <div ref={endRef} />
           </div>
 

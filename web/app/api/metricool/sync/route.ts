@@ -11,7 +11,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { fetchPostMetrics, type NormalizedMetric } from '@/lib/performance';
+import { fetchPostMetrics, fetchPostMetricsResult, type NormalizedMetric } from '@/lib/performance';
+import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
 // Metricool + upsert can exceed the default; give the cron room.
@@ -73,9 +74,20 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
-  const metrics = await fetchPostMetrics(30);
+  // Tell a broken integration apart from a quiet one. A 200 {ok:true} for both
+  // is why a revoked Metricool token could switch the learning loop off for
+  // weeks without a single red mark anywhere.
+  const fetched = await fetchPostMetricsResult(30);
+  if (!fetched.ok) {
+    reportError('metricool:sync', new Error(fetched.reason || 'metrics fetch failed'));
+    return NextResponse.json(
+      { ok: false, error: 'metrics_unavailable', message: fetched.reason || 'Could not read Metricool analytics.' },
+      { status: 502 },
+    );
+  }
+  const metrics = fetched.metrics;
   if (metrics.length === 0) {
-    return NextResponse.json({ ok: true, users: 0, synced: 0 });
+    return NextResponse.json({ ok: true, users: 0, synced: 0, note: 'Metricool returned no posts in the last 30 days.' });
   }
 
   const admin = supabaseAdmin();

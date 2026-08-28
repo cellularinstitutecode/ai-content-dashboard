@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import ProcessTracker, { makeSteps, stepActive, stepError, stepsDone, type ProcessStep } from '@/components/ProcessTracker';
 import { announce, onRefresh } from '@/components/refreshBus';
 import { PanelLoader } from '@/components/LoadingScreen';
+import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 
 // The visible pipeline an engine run walks through. The tick call does all of
 // this server-side in one request; the tracker paces the display so the viewer
@@ -100,6 +101,7 @@ export default function AutopilotQueue() {
   const [imagingIds, setImagingIds] = useState<Set<string>>(new Set());
   const [regenId, setRegenId] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<{ url: string; alt: string } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   // Draft ids we already asked an image for this session — avoids re-requesting
   // on every poll while a generation is in flight or after it failed.
   const imageAsked = useRef<Set<string>>(new Set());
@@ -108,9 +110,13 @@ export default function AutopilotQueue() {
     if (!opts?.quiet) setLoading(true);
     try {
       const r = await fetch('/api/autopilot/runs');
+      // A failure here used to fall through to the first-run onboarding empty
+      // state, so a dead engine and a brand-new install looked identical - and
+      // the empty state sent the user off to fix a template that was fine.
+      if (!r.ok) { setLoadError(await friendlyErrorFromResponse(r, 'We could not load the Autopilot queue.')); setLoading(false); return; }
       const j = await r.json().catch(() => ({}));
-      if (r.ok && Array.isArray(j.runs)) setRuns(j.runs);
-    } catch { /* transient */ }
+      if (Array.isArray(j.runs)) { setRuns(j.runs); setLoadError(null); }
+    } catch (e) { setLoadError(friendlyError(e, 'We could not reach the server to load the Autopilot queue.')); }
     setLoading(false);
   }, []);
 
@@ -294,7 +300,13 @@ export default function AutopilotQueue() {
 
         {loading && <div className="text-[13px] text-ink-muted">Loading queue…</div>}
 
-        {!loading && runs.length === 0 && (
+        {!loading && loadError && (
+          <div role="status" className="rounded-2xl bg-amber-50 p-5 text-[13px] leading-relaxed text-amber-900 ring-1 ring-amber-200">
+            {loadError}{' '}
+            <button type="button" onClick={() => { setLoadError(null); void load(); }} className="font-medium underline">Try again</button>
+          </div>
+        )}
+        {!loading && !loadError && runs.length === 0 && (
           <div className="rounded-2xl bg-subtle/60 p-5 text-[13px] leading-relaxed text-ink-muted ring-1 ring-line">
             No Autopilot runs yet. Open <a href="/templates" className="font-medium text-accent hover:underline">Templates</a>,
             switch a template&apos;s Autopilot mode to <span className="font-medium text-ink">Pillars</span> or{' '}

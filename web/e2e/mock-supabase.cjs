@@ -38,7 +38,7 @@ const TEXTFLAG = {
   issues: ['visible text/letters detected — content images must be text-free'],
 };
 
-const tables = {
+let tables = {
   drafts: [
     {
       id: 'draft-1', user_id: USER_ID, topic: 'Exosome therapy for joint recovery',
@@ -174,6 +174,11 @@ function readBody(req) {
 }
 
 let reqLog = [];
+// A pristine copy of the seed, so a test run can put the backend back exactly
+// as it found it (POST /__reseed). Without it, a second run of the API suite
+// sees the first run's rows and every "did this create something?" assertion
+// becomes meaningless.
+const SEED = JSON.parse(JSON.stringify(tables));
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1:54321');
   reqLog.push(req.method + ' ' + url.pathname);
@@ -188,6 +193,12 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify(reqLog));
   }
   if (url.pathname === '/__reset') { reqLog = []; res.writeHead(204); return res.end(); }
+  if (url.pathname === '/__reseed') {
+    tables = JSON.parse(JSON.stringify(SEED));
+    reqLog = [];
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ ok: true }));
+  }
 
   // --- GoTrue ---
   if (url.pathname === '/auth/v1/user') {

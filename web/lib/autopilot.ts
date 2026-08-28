@@ -112,7 +112,11 @@ export type RunRow = {
 };
 
 const ACTIVE_STATES = ['planned', 'researched', 'drafted'] as const;
-const MAX_ATTEMPTS = 3;
+// Two, not three. The cron fires once a day and `advanceRuns` takes at most one
+// attempt per run per tick, inside an eligibility window that is only ever a
+// couple of ticks wide - so with a limit of 3 a broken run could never reach
+// `failed`, never showed up under "Needs attention", and simply went quiet.
+const MAX_ATTEMPTS = 2;
 const SCORE_THRESHOLD = 70;
 const ANTI_REPEAT_DAYS = 30;
 const HORIZON_DAYS = 10;
@@ -166,7 +170,11 @@ export async function planRuns(scopeUserId?: string): Promise<{ planned: number;
     .select('id, user_id, name, providers, text, weekdays, time_of_day, active, strategy')
     .eq('active', true);
   if (scopeUserId) q = q.eq('user_id', scopeUserId);
-  const { data: templates } = await q;
+  // Surface the query error instead of discarding it. A dropped error here read
+  // as "no templates", so a missing table or a rotated service-role key made the
+  // daily cron answer {ok:true, planned:0} - green in Vercel, dead in reality.
+  const { data: templates, error: tplErr } = await q;
+  if (tplErr) throw new Error('planRuns: could not read templates - ' + tplErr.message);
   if (!Array.isArray(templates) || templates.length === 0) return { planned: 0, templates: 0 };
 
   const now = new Date();
@@ -187,10 +195,11 @@ export async function planRuns(scopeUserId?: string): Promise<{ planned: number;
       .map((slot) => ({ template_id: t.id, user_id: t.user_id, scheduled_for: slot.toISOString() }));
     if (!rows.length) continue;
     // Idempotent: unique(template_id, scheduled_for) — ignore existing runs.
-    const { data: inserted } = await db
+    const { data: inserted, error: insErr } = await db
       .from('template_runs')
       .upsert(rows, { onConflict: 'template_id,scheduled_for', ignoreDuplicates: true })
       .select('id');
+    if (insErr) throw new Error('planRuns: could not plan runs - ' + insErr.message);
     planned += Array.isArray(inserted) ? inserted.length : 0;
   }
   return { planned, templates: dynamicTemplates };
@@ -786,6 +795,51 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
 }
 
 // ---------------------------------------------------------------------------
+// Sweeper: close out runs whose moment has passed.
+// ---------------------------------------------------------------------------
+
+/**
+ * Mark still-active runs whose scheduled time has gone by as failed.
+ *
+ * Without this a run that stalled - a step that kept timing out, a template
+ * that stopped being eligible - sat in `planned`/`researched` forever: past its
+ * slot, excluded from the advancer, and filtered out of the queue's own listing,
+ * so the post never happened and nothing told anyone. `failed` is the state the
+ * UI already surfaces as "Needs attention", and `regenerateRun` accepts it, so
+ * the reviewer can retry it by hand.
+ */
+export async function expireStaleRuns(scopeUserId?: string): Promise<number> {
+  const db = supabaseAdmin();
+  // A couple of hours of grace: a slot that just passed may still be mid-tick.
+  const cutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  let q = db
+    .from('template_runs')
+    .select('id, state, log, scheduled_for')
+    .in('state', ACTIVE_STATES as unknown as string[])
+    .lt('scheduled_for', cutoff)
+    .limit(50);
+  if (scopeUserId) q = q.eq('user_id', scopeUserId);
+  const { data, error } = await q;
+  if (error) throw new Error('expireStaleRuns: ' + error.message);
+
+  let expired = 0;
+  for (const row of (data || []) as RunRow[]) {
+    const { data: updated } = await db
+      .from('template_runs')
+      .update({
+        state: 'failed',
+        log: logLine(row, 'expired', 'Its scheduled time passed before this post was ready, so nothing was sent.'),
+      })
+      .eq('id', row.id)
+      .eq('state', row.state)
+      .select('id')
+      .maybeSingle();
+    if (updated) expired++;
+  }
+  return expired;
+}
+
+// ---------------------------------------------------------------------------
 // The advancer: move due runs forward, one resumable step at a time.
 // ---------------------------------------------------------------------------
 
@@ -815,7 +869,8 @@ export async function advanceRuns(opts: {
       .gte('scheduled_for', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
   }
   if (opts.scopeUserId) q = q.eq('user_id', opts.scopeUserId);
-  const { data: runs } = await q;
+  const { data: runs, error: runsErr } = await q;
+  if (runsErr) throw new Error('advanceRuns: could not read runs - ' + runsErr.message);
 
   let advanced = 0, ready = 0, errors = 0;
   for (const raw of (runs || []) as RunRow[]) {
@@ -848,6 +903,31 @@ export async function advanceRuns(opts: {
     // Step until ready (or budget/attempt limits hit) so a single tick can
     // take one run all the way to review.
     while (ACTIVE_STATES.includes(run.state as (typeof ACTIVE_STATES)[number]) && Date.now() < deadline) {
+      // Count the attempt BEFORE the step runs.
+      //
+      // `attempts` used to be incremented only in the catch below. A step that
+      // exceeds the function budget is not an exception - the platform kills
+      // the process - so the catch never ran, `attempts` never moved, and the
+      // run stayed eligible forever. Every following tick then re-ran the same
+      // step (roughly a dozen Semrush reports plus a full model call) at full
+      // cost, every day, with nothing ever reaching MAX_ATTEMPTS. Claiming the
+      // attempt up front makes a timeout cost exactly what a thrown error
+      // costs; a successful step resets the counter to 0 in the same write
+      // that advances the state.
+      const startedFrom = run.state;
+      const claimedAttempts = (run.attempts ?? 0) + 1;
+      const { data: claimed, error: claimErr } = await db
+        .from('template_runs')
+        .update({ attempts: claimedAttempts })
+        .eq('id', run.id)
+        .eq('state', startedFrom)
+        .eq('attempts', run.attempts ?? 0)
+        .select('*')
+        .maybeSingle();
+      if (claimErr) throw new Error('advanceRuns: could not claim run - ' + claimErr.message);
+      if (!claimed) break; // another worker holds this run
+      run = claimed as RunRow;
+
       try {
         let patch: Partial<RunRow>;
         if (run.state === 'planned') patch = await stepResearch(run, template, strategy);
@@ -873,12 +953,12 @@ export async function advanceRuns(opts: {
         if (run.state === 'ready_for_review') { ready++; break; }
       } catch (e) {
         errors++;
-        const attempts = (run.attempts ?? 0) + 1;
+        // The attempt was already recorded by the claim above.
+        const attempts = run.attempts ?? claimedAttempts;
         await db
           .from('template_runs')
           .update({
-            attempts,
-            state: attempts >= MAX_ATTEMPTS ? 'failed' : run.state,
+            state: attempts >= MAX_ATTEMPTS ? 'failed' : startedFrom,
             log: logLine(run, 'error', e instanceof Error ? e.message : 'step failed'),
           })
           .eq('id', run.id);

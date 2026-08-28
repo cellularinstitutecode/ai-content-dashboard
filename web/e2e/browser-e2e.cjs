@@ -211,6 +211,39 @@ function check(name, ok, detail) {
   }
   await page.screenshot({ path: '/tmp/e2e-brand.png', fullPage: false });
 
+  // ---- 5b: a failed load must not look like an empty account ---------------
+  //
+  // Every panel used to do `if (!r.ok) return;`, so a 401, a 429 or a dropped
+  // connection left the dashboard in its EMPTY state: "Nothing in the queue
+  // yet", "No drafts yet", "No Autopilot runs yet". A coordinator whose session
+  // had lapsed was told, in effect, that her work had vanished. Prove that a
+  // broken backend now SAYS it is broken.
+  const failPage = await ctx.newPage();
+  await failPage.route('**/api/**', (route) => {
+    const p = new URL(route.request().url()).pathname;
+    if (p === '/api/posts' || p === '/api/stats' || p === '/api/drafts' || p === '/api/autopilot/runs') {
+      return route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'unauthenticated', message: 'Your session has expired. Sign in again.' }),
+      });
+    }
+    return route.continue();
+  });
+  await failPage.goto(BASE + '/', { waitUntil: 'networkidle', timeout: 90000 });
+  await failPage.waitForTimeout(1500);
+  const failText = await failPage.evaluate(() => document.body.innerText);
+  check('a failed load says the session expired instead of showing an empty dashboard',
+    /session has expired/i.test(failText), failText.slice(0, 160).replace(/\s+/g, ' '));
+  check('and it does NOT claim the publishing queue is empty',
+    !/Nothing in the queue yet/i.test(failText));
+  check('and it does NOT claim there are no drafts',
+    !/No drafts yet/i.test(failText));
+  check('and it does NOT send the user off to fix a healthy Autopilot template',
+    !/No Autopilot runs yet/i.test(failText));
+  await failPage.screenshot({ path: '/tmp/e2e-failed-load.png', fullPage: false });
+  await failPage.close();
+
   // ---- 6: console hygiene --------------------------------------------------
   // Failures from EXTERNAL hosts (Google Fonts etc.) are sandbox-proxy
   // artifacts, not app bugs; anything failing against 127.0.0.1 is real.
@@ -220,7 +253,13 @@ function check(name, ok, detail) {
     !/realtime|websocket|wss?:\/\//i.test(e) && // no realtime server in the mock env
     !/favicon/i.test(e) &&
     !/net::ERR_ABORTED|net::ERR_TUNNEL_CONNECTION_FAILED|net::ERR_CONNECTION_RESET|net::ERR_NAME_NOT_RESOLVED/i.test(e) && // external hosts blocked by the sandbox proxy
-    !/Failed to load resource.*(404|500|503)/i.test(e) // degraded integrations answer with handled errors
+    // Degraded integrations answer with handled errors. 502 is in this list
+    // because an unreachable upstream (Metricool/Opus/Semrush/the model APIs,
+    // none of which exist in the mock env) is now reported as a gateway error
+    // rather than as a 500 — a failure OUTSIDE the app is not the app's fault,
+    // and the distinction is what lets the UI say "the service is unavailable"
+    // instead of "something went wrong".
+    !/Failed to load resource.*(404|500|502|503)/i.test(e)
   );
   check('zero unexpected console errors across all pages', realErrors.length === 0, realErrors.slice(0, 3).join(' | '));
   if (failedRequests.length) console.log('  (external request failures, sandbox-only: ' + failedRequests.filter((u) => !u.includes('127.0.0.1')).length + ')');
