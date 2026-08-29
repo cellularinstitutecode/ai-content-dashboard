@@ -405,8 +405,8 @@ const [mBusy, setMBusy] = useState(false);
     });
     try {
       let res = await doFetch();
-      if (res.status >= 500) {
-        await new Promise((r) => setTimeout(r, 1500));
+      for (let attempt = 0; res.status >= 500 && attempt < 2; attempt++) {
+        await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
         res = await doFetch();
       }
       const j = await res.json().catch(() => ({}));
@@ -860,10 +860,15 @@ clearProcTimers();
 setProc(stepActive(makeSteps(GEN_STEPS), 'research'));
 procAdvanceLater('draft', 4000); // research + drafting happen inside one call; pace the display
 try {
-const r = await fetch('/api/generate', {
+const genFetch = () => fetch('/api/generate', {
 method: 'POST', headers: { 'content-type': 'application/json' },
 body: JSON.stringify({ topic: prompt, provider, model, type }),
 });
+let r = await genFetch();
+for (let attempt = 0; r.status >= 500 && attempt < 2; attempt++) {
+await new Promise((res) => setTimeout(res, 1200 * (attempt + 1)));
+r = await genFetch();
+}
 const data = await r.json().catch(() => ({}));
 if (!r.ok) throw new Error(data?.error || ('Generation failed ('+r.status+')'));
 const pack = data.pack || {};
