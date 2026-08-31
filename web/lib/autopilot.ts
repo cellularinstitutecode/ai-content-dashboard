@@ -1059,6 +1059,13 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
   }
 
   let note = 'Staged for publishing review.';
+  // Did the Metricool handoff actually happen? The local `posts` row exists to
+  // mirror Metricool; writing one after a FAILED handoff put a post in the
+  // queue and on the calendar marked "waiting for your approval" that had been
+  // sent nowhere and would never publish. Every other route in this app
+  // ("the two sides can never disagree") refuses to record that state — so
+  // does this one now.
+  let handoffFailed = false;
   // Push a Metricool DRAFT (autoPublish: false) so it lands in the approval
   // queue there too. Fail-soft: missing env just means dashboard-only staging.
   if (mcProviders.length) {
@@ -1084,8 +1091,22 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
             : '') +
         ' — publish happens only there.';
     } catch (e) {
-      note = 'Approved locally; Metricool handoff unavailable (' + (e instanceof Error ? e.message : 'error') + ').';
+      handoffFailed = true;
+      note = 'Could not send this to Metricool (' + (e instanceof Error ? e.message : 'error') + '). Nothing was scheduled and the run is back in your queue — press Approve again to retry.';
     }
+  }
+
+  if (handoffFailed) {
+    // Same treatment the empty-draft path above gets: the claim already moved
+    // this run to `approved`, and no other transition accepts that state, so
+    // leaving it there strands the run with nothing scheduled. Release it so
+    // the reviewer can press Approve again once Metricool answers.
+    await db
+      .from('template_runs')
+      .update({ state: 'ready_for_review', log: logLine(run, 'approve-failed', note) })
+      .eq('id', run.id)
+      .eq('state', 'approved');
+    return { ok: false, note };
   }
 
   await db.from('posts').insert({

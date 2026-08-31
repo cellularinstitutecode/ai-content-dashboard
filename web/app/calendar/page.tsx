@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import PageNav from '@/components/PageNav';
-import { localDateKey } from '@/lib/composer';
+import { localDateKey, tightestLimit, networkLabel } from '@/lib/composer';
 import { announce, onRefresh } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
 import { PanelLoader } from '@/components/LoadingScreen';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
+import { fmtScheduleTime, scheduleDateKey, scheduleWallClock, isoAtScheduleWallClock, scheduleTzLabel } from '@/lib/schedule-clock';
 
 type Post = {
   id?: string;
@@ -36,18 +37,18 @@ const NETWORKS: { id: string; label: string }[] = [
 // Shared with lib/composer so the rule has one home and one test.
 const dateKey = localDateKey;
 
+// Which calendar square a post belongs in, and the time printed on it — both
+// on the SCHEDULE clock. Bucketing by the viewer's clock put a late-evening
+// Cancun post on the following day for anyone east of it, and printed a time
+// that disagreed with the composer that created it.
 function postDayKey(iso?: string) {
   if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return '';
-  return dateKey(d);
+  return scheduleDateKey(iso);
 }
 
 function timeLabel(iso?: string) {
   if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return fmtScheduleTime(iso);
 }
 
 // Build a 6-row x 7-col grid of Dates covering the visible month.
@@ -206,16 +207,16 @@ export default function CalendarPage() {
   async function reschedule(id: string, targetDay: Date) {
     const post = posts.find((p) => p.id === id);
     if (!post) return;
-    const orig = new Date(post.publication_date ?? '');
-    const next = new Date(targetDay);
-    if (!isNaN(orig.getTime())) {
-      next.setHours(orig.getHours(), orig.getMinutes(), 0, 0);
-    } else {
-      next.setHours(9, 0, 0, 0);
-    }
-    if (postDayKey(post.publication_date) === dateKey(next)) return; // no-op
+    // Keep the post's time of day AS THE CLINIC READS IT, and land it on the
+    // dropped square. Reading getHours() off the viewer's clock moved the post
+    // by the offset between the two zones every time it was dragged.
+    const w = post.publication_date ? scheduleWallClock(post.publication_date) : null;
+    const iso = isoAtScheduleWallClock(
+      targetDay.getFullYear(), targetDay.getMonth() + 1, targetDay.getDate(),
+      w ? w.hh : 9, w ? w.mm : 0
+    );
+    if (postDayKey(post.publication_date) === dateKey(targetDay)) return; // no-op
 
-    const iso = next.toISOString();
     // optimistic update
     setPosts((prev) => prev.map((p) => (p.id === id ? { ...p, publication_date: iso } : p)));
     setSaving(id);
@@ -257,10 +258,17 @@ export default function CalendarPage() {
     if (!scheduleDay) return;
     if (!pNetworks.length) { setPStatus('Pick at least one network.'); return; }
     if (!pText.trim()) { setPStatus('Add some post text.'); return; }
+    const overBy = pOverBy;
+    if (overBy > 0) {
+      setPStatus('Too long for ' + networkLabel(pLimit!.network) + ' by ' + overBy.toLocaleString() + ' character' + (overBy === 1 ? '' : 's') + '. Trim it, or unselect that channel.');
+      return;
+    }
     const [hh, mm] = pTime.split(':').map((x) => parseInt(x, 10));
-    const when = new Date(scheduleDay);
-    when.setHours(isNaN(hh) ? 9 : hh, isNaN(mm) ? 0 : mm, 0, 0);
-    const publishAt = when.toISOString();
+    // "09:00" means 9 AM at the clinic, not 9 AM wherever the browser is.
+    const publishAt = isoAtScheduleWallClock(
+      scheduleDay.getFullYear(), scheduleDay.getMonth() + 1, scheduleDay.getDate(),
+      isNaN(hh) ? 9 : hh, isNaN(mm) ? 0 : mm
+    );
 
     setPBusy(true);
     setPStatus(null);
@@ -294,6 +302,12 @@ export default function CalendarPage() {
     }
   }
 
+  // The dashboard composer has enforced network character limits for months;
+  // this panel did not, so an over-limit post got as far as Metricool before
+  // anything said no. Same helper, same rule, both places.
+  const pLimit = tightestLimit(pNetworks);
+  const pOverBy = pLimit ? Math.max(0, pText.length - pLimit.limit) : 0;
+
   const monthLabel = `${MONTHS[cursor.month]} ${cursor.year}`;
   // Empty until mount, so the server-rendered grid never marks a stale day.
   const todayKey = mounted ? dateKey(today) : '';
@@ -303,7 +317,7 @@ export default function CalendarPage() {
       <header className="flex items-center justify-between border-b border-black/5 bg-surface px-8 py-5">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Content Calendar</h1>
-          <p className="mt-1 text-sm text-ink/50">Click a day to schedule a post, or drag a post to another day to reschedule it.</p>
+          <p className="mt-1 text-sm text-ink/50">Click a day to schedule a post, or drag a post to another day to reschedule it. All times {scheduleTzLabel()} time.</p>
         </div>
         <PageNav current="/calendar" />
       </header>
@@ -475,8 +489,15 @@ export default function CalendarPage() {
               onChange={(e) => setPText(e.target.value)}
               rows={4}
               placeholder="What should this post say?"
-              className="mb-4 w-full resize-none rounded-xl bg-canvas px-3 py-2 text-sm text-ink outline-none ring-1 ring-black/10 focus:ring-accent/40"
+              className="mb-1 w-full resize-none rounded-xl bg-canvas px-3 py-2 text-sm text-ink outline-none ring-1 ring-black/10 focus:ring-accent/40"
             />
+            <p className={'mb-4 text-xs ' + (pOverBy > 0 ? 'text-red-600' : 'text-ink/40')}>
+              {pOverBy > 0
+                ? 'Too long for ' + networkLabel(pLimit!.network) + ' by ' + pOverBy.toLocaleString() + ' character' + (pOverBy === 1 ? '' : 's') + '. Trim it, or unselect that channel.'
+                : pLimit
+                  ? pText.length.toLocaleString() + ' / ' + pLimit.limit.toLocaleString() + ' characters · ' + networkLabel(pLimit.network) + ' is the tightest limit'
+                  : pText.length.toLocaleString() + ' characters'}
+            </p>
 
             {pStatus && (
               <div className={'mb-3 text-sm ' + (pStatus.startsWith('Error') ? 'text-red-600' : 'text-ink/60')}>{pStatus}</div>
@@ -484,7 +505,7 @@ export default function CalendarPage() {
 
             <div className="flex items-center justify-end gap-2">
               <button onClick={() => setScheduleDay(null)} disabled={pBusy} className="rounded-full border border-black/10 px-4 py-2 text-sm text-ink/70 transition hover:bg-black/5 disabled:opacity-50">Cancel</button>
-              <button onClick={submitSchedule} disabled={pBusy} className="rounded-full bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50">
+              <button onClick={submitSchedule} disabled={pBusy || pOverBy > 0} className="rounded-full bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50">
                 {pBusy ? 'Scheduling…' : 'Schedule'}
               </button>
             </div>

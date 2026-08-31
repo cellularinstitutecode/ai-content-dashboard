@@ -6,12 +6,16 @@ import { useLiveContent } from "@/components/LiveContentProvider";
 import SemrushPanel from "./SemrushPanel";
 import AutopilotQueue from "./AutopilotQueue";
 import ImageStudio from "./ImageStudio";
+import CollapsibleSection from "@/components/CollapsibleSection";
+import SystemStatus from "@/components/SystemStatus";
 import ProcessTracker, { makeSteps, stepActive, stepError, stepSkip, stepsDone, type ProcessStep } from "@/components/ProcessTracker";
 import { announce, onRefresh, fetchDrafts } from "@/components/refreshBus";
 import { tightestLimit, networkLabel, parseVideoUrl, localDateTimeValue, draftLabel } from "@/lib/composer";
 import { useWorkspace } from "@/components/workspace";
 import { PanelLoader } from "@/components/LoadingScreen";
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
+import { semrushDraftNote } from '@/lib/semrush-reason';
+import { fmtScheduleDateTime, scheduleTzLabel, schedulePresetValue } from '@/lib/schedule-clock';
 
 // The visible pipeline every manual generation walks through. Steps light up
 // as the real calls behind them start/finish so the viewer can follow the
@@ -51,7 +55,7 @@ const CONTENT_TYPES: { id: ContentType; label: string; hint: string }[] = [
 // Onboarding steps shown in the dismissible "How this works" strip so a
 // first-time viewer understands the create -> repurpose -> schedule flow.
 const ONBOARD_STEPS: { title: string; body: string }[] = [
-{ title: '1 · Create', body: 'Pick a model and format, describe your idea, and generate a ready-to-post content pack.' },
+{ title: '1 · Create', body: 'Describe your idea and generate a ready-to-post content pack for every channel.' },
 { title: '2 · Images', body: 'Every AI visual is generated and machine-verified text-free in the Image Studio.' },
 { title: '3 · Repurpose', body: 'Paste a long YouTube or Vimeo URL and OpusClip turns it into short vertical clips.' },
 { title: '4 · Schedule', body: 'Send posts to Metricool for review — you approve the final publish there.' },
@@ -136,20 +140,6 @@ walk(a, 0);
 return found.slice(0, 4);
 }
 
-function ytThumb(url: string): string {
-try {
-const m = String(url).match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([A-Za-z0-9_-]{11})/);
-return m ? 'https://img.youtube.com/vi/' + m[1] + '/hqdefault.jpg' : '';
-} catch { return ''; }
-}
-
-function ytId(url: string): string {
-try {
-const m = String(url).match(/(?:v=|be\/|shorts\/|embed\/)([\w-]{11})/);
-return m ? m[1] : '';
-} catch { return ''; }
-}
-
 // A finished Opus clip (mirrors OpusClip in lib/opus.ts).
 type Clip = { id: string; title: string; text: string; description: string; hashtags: string; durationMs: number; preview: string; export: string };
 
@@ -172,14 +162,13 @@ const r = s % 60;
 return m + ':' + String(r).padStart(2, '0');
 }
 
-// Friendly date/time for a scheduled post, e.g. "Aug 3, 9:00 AM".
-function fmtDateTime(input: any): string {
-try {
-const d = new Date(input);
-if (isNaN(d.getTime())) return String(input || '');
-return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-} catch { return String(input || ''); }
-}
+// Friendly date/time for a scheduled post, e.g. "Sep 1, 9:00 AM".
+//
+// Always rendered on the SCHEDULE clock, never the browser's. The composer
+// promises "times are in Cancun" and the server schedules that way; when this
+// used to render in the viewer's zone, a coordinator in Tijuana was shown
+// 9:00 AM in the composer and 7:00 AM in the queue for the very same post.
+const fmtDateTime = fmtScheduleDateTime;
 
 function toArray(x: any): any[] {
 if (Array.isArray(x)) return x;
@@ -209,6 +198,9 @@ const [loadError, setLoadError] = useState<string | null>(null);
 const [actionMsg, setActionMsg] = useState<string | null>(null);
 const [keywordsApplied, setKeywordsApplied] = useState<string[]>([]);
 const [keywordSource, setKeywordSource] = useState<string>('none');
+// WHY there was no live keyword data, straight from /api/generate. Held so the
+// note under the output can state the true reason instead of assuming one.
+const [keywordReason, setKeywordReason] = useState<string | undefined>(undefined);
 const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string; verification?: { status?: string; score?: number | null; issues?: string[]; textDetected?: boolean } } | null>(null);
 const [genImageLoading, setGenImageLoading] = useState(false);
 const [lastDraftId, setLastDraftId] = useState<string | null>(null);
@@ -235,8 +227,7 @@ useEffect(() => {
     if (scopes.includes('stats')) refreshStats();
     if (scopes.includes('posts')) refreshPosts();
     // The Metricool panels sit directly under the Schedule button and used to
-    // stay stale after it was pressed — "Coming up next" reads insights, not
-    // posts, so it needs its own scope.
+    // stay stale after it was pressed, so they refresh on a posts change too.
     if (scopes.includes('insights') || scopes.includes('posts')) loadInsights(activeBlogId);
     if (scopes.includes('insights')) loadAnalytics(true);
   });
@@ -507,6 +498,9 @@ try { if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'sm
   const STEP_ANCHORS = ['section-create', 'section-images', 'section-repurpose', 'section-publish', 'section-library'];
   function scrollToStep(i: number) {
     try {
+      // Sections that arrive folded must unfold before we scroll to them —
+      // otherwise the card lands the viewer on a closed header.
+      window.dispatchEvent(new CustomEvent('section:open', { detail: STEP_ANCHORS[i] }));
       const el = typeof document !== 'undefined' ? document.getElementById(STEP_ANCHORS[i]) : null;
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -869,6 +863,7 @@ if (!r.ok) throw new Error(data?.error || ('Generation failed ('+r.status+')'));
 const pack = data.pack || {};
 setKeywordsApplied(Array.isArray(data.keywordsApplied) ? data.keywordsApplied : []);
 setKeywordSource(typeof data.keywordSource === 'string' ? data.keywordSource : 'none');
+setKeywordReason(typeof data.keywordReason === 'string' ? data.keywordReason : undefined);
 setOutput(formatOutputString({ ...pack, format: type }));
 clearProcTimers();
 setProc((p) => (p ? stepActive(p, 'save') : p));
@@ -1043,14 +1038,17 @@ const currentModels = PROVIDERS.find(p => p.id === provider)!.models;
 const safeDrafts = Array.isArray(drafts) ? drafts : [];
 const safePosts = Array.isArray(posts) ? posts : [];
 const pendingReviewCount = safePosts.filter((p: any) => postStatusMeta(p?.status).label === 'Waiting for your approval').length;
-const metrics = metricoolMetrics(mAnalytics);
 const activeType = CONTENT_TYPES.find(t => t.id === type)!;
 
+// metricoolMetrics() was computed and thrown away for months while the README
+// advertised these as extra counter cards. They are appended, not substituted,
+// so the four counts above never move position when analytics arrive.
 const statCards = [
 { label: 'Drafts', value: (stats && (stats.drafts ?? stats.draftsCount)) ?? safeDrafts.length ?? 0 },
 { label: 'Scheduled posts', value: (stats && (stats.scheduled ?? stats.scheduledCount)) ?? safePosts.length ?? 0 },
 { label: 'Awaiting approval', value: pendingReviewCount },
 { label: 'Clip jobs', value: (stats && (stats.clips ?? stats.clipJobs)) ?? 0 },
+...metricoolMetrics(mAnalytics).map((m) => ({ label: m.label, value: m.value })),
 ];
 
 const nav = [
@@ -1121,6 +1119,11 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 </div>
 )}
 
+{/* One plain-English line when the app is running degraded, so a blank
+    Site Audit dial or a missing keyword note has a stated cause instead of
+    looking like three unrelated glitches. Silent when all is well. */}
+<SystemStatus />
+
 {/* Onboarding "How this works" strip — dismissible, remembered per browser */}
       {(
         <section className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
@@ -1166,12 +1169,21 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 1 · Create</span>
 <h2 className="text-headline font-semibold">Content Generator</h2>
 </div>
-<p className="mt-1 text-[13px] text-ink-muted">Turn an idea into a ready-to-post pack — pick a model and format, describe your idea, then Generate.</p>
+<p className="mt-1 text-[13px] text-ink-muted">Describe your idea, pick what you want it to be, then Generate.</p>
 </div>
 <div className="grid gap-0 lg:grid-cols-2">
 {/* Controls */}
 <div id="content-generator" className="space-y-5 p-6 sm:p-8">
-<div>
+{/* Which AI wrote it is a preference, not a decision most people need to
+    make — and a dropdown of raw model identifiers ("gpt-4o-mini") is not
+    something a coordinator can choose between. The good default stays
+    selected; anyone who does care opens this. */}
+<details className="group">
+<summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-[12px] font-medium text-ink-muted transition hover:text-ink">
+<span aria-hidden className="transition-transform group-open:rotate-90">›</span>
+Writing with {PROVIDERS.find(p => p.id === provider)?.label.replace(/\s*\(.*\)$/, '')} · change
+</summary>
+<div className="mt-3">
 <label htmlFor="gen-model" className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Model</label>
 <div className="flex flex-wrap items-center gap-2">
 {PROVIDERS.map(p => (
@@ -1186,6 +1198,7 @@ className="rounded-full bg-subtle px-4 py-2 text-[13px] font-medium text-ink rin
 </select>
 </div>
 </div>
+</details>
 
 <div>
 <p id="gen-format-label" className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Format</p>
@@ -1268,7 +1281,7 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
   </div>
 )}
 {keywordSource === 'none' && output && (
-  <p className="mb-3 text-[11px] text-ink-faint">Keyword research skipped (Semrush API key not set) — draft generated without live keyword data.</p>
+  <p className="mb-3 text-[11px] text-ink-faint">{semrushDraftNote(keywordReason as any)}</p>
 )}
 {output && genImage?.url ? (
   <div className="mb-3 overflow-hidden rounded-2xl ring-1 ring-line">
@@ -1310,11 +1323,26 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
 </section>
 
 
-{/* Step 2 · Images — every generated + verified visual, right after Create */}
+{/* Step 2 · Images — every generated + verified visual, right after Create.
+    Folded by default: a hero image is already generated and attached with
+    every content pack, so opening this is for making EXTRA visuals. */}
+<CollapsibleSection
+  id="section-images"
+  eyebrow="Step 2 · Images"
+  title="AI Image Studio"
+  summary="Every pack already comes with a verified hero image. Open this to make more, or to look through the ones you have."
+>
 <ImageStudio />
+</CollapsibleSection>
 
 {/* OpusClip — long-form to Shorts (video repurposing workspace) */}
-<section id="section-repurpose" className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<CollapsibleSection
+  id="section-repurpose"
+  eyebrow="Step 3 · Repurpose"
+  title="Long-form to Shorts"
+  summary="Turn one long YouTube or Vimeo video into a set of captioned vertical clips."
+>
+<div>
 <div className="border-b border-line px-6 py-5 sm:px-8">
 <div className="flex flex-wrap items-center justify-between gap-3">
 <div className="flex items-center gap-2">
@@ -1427,7 +1455,8 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 tex
 </div>
 </div>
 </div>
-</section>
+</div>
+</CollapsibleSection>
 
 {/* Publishing (Metricool) — compose, review flow, and live queue */}
 <section id="section-publish" className="relative mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
@@ -1486,11 +1515,14 @@ className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px
 <p className="mt-1.5 text-[11px] text-ink-faint">{mNetworks.length ? 'Posting to ' + mNetworks.length + ' channel' + (mNetworks.length > 1 ? 's' : '') + '.' : 'Pick at least one channel.'}</p>
 <div className="mt-4 flex items-center justify-between gap-2">
 <label htmlFor="composer-datetime" className="text-[12px] font-medium text-ink-muted">When should it go out?</label>
-<span className="text-[11px] text-ink-faint">Times in America/Cancun</span>
+<span className="text-[11px] text-ink-faint">All times {scheduleTzLabel()} time</span>
 </div>
 <div className="mt-1 flex flex-wrap gap-2">
+{/* Computed on the schedule clock: setHours() on a browser Date made
+    "Tomorrow" mean tomorrow *there*, so an evening press west of Cancun
+    picked the wrong day. */}
 {[{ label: 'Tomorrow 9 AM', h: 9, d: 1 }, { label: 'Tomorrow 6 PM', h: 18, d: 1 }, { label: 'In 2 days, 12 PM', h: 12, d: 2 }].map((preset) => (
-<button type="button" key={preset.label} onClick={() => { const dt = new Date(); dt.setDate(dt.getDate() + preset.d); dt.setHours(preset.h, 0, 0, 0); const pad = (x: number) => String(x).padStart(2, '0'); setMDate(dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate()) + 'T' + pad(dt.getHours()) + ':' + pad(dt.getMinutes())); }}
+<button type="button" key={preset.label} onClick={() => setMDate(schedulePresetValue(preset.d, preset.h))}
 className="rounded-full bg-subtle px-3 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:ring-accent">{preset.label}</button>
 ))}
 </div>
@@ -1635,23 +1667,6 @@ return (
 </ul>
 )}
 </div>
-<div className="mt-6 border-t border-line pt-5">
-<label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Coming up next</label>
-{(() => {
-const sched = insights && Array.isArray(insights.scheduled) ? insights.scheduled : [];
-if (sched.length === 0) return <div className="mt-2 rounded-2xl bg-subtle p-4 text-center ring-1 ring-line"><div className="text-[13px] font-medium text-ink-muted">Nothing scheduled yet</div><div className="mt-1 text-[12px] text-ink-faint">Posts you send for review will appear here, and your upcoming Metricool posts show once you refresh.</div></div>;
-return (
-<ul className="mt-2 space-y-2">
-{sched.slice(0, 5).map((p: any, i: number) => (
-<li key={(p && (p.id || p.uuid)) || i} className="rounded-2xl bg-white p-3 ring-1 ring-line">
-<div className="flex items-center justify-between gap-2"><span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 ring-1 ring-blue-100">Scheduled</span><span className="text-[11px] text-ink-faint">{fmtDateTime((p && (p.publicationDate || p.publishAt || p.date || (p.data && p.data.date))) || '')}</span></div>
-<p className="mt-1.5 line-clamp-2 text-[13px] text-ink">{(p && (p.text || p.content || (p.data && p.data.text))) || 'Scheduled post'}</p>
-</li>
-))}
-</ul>
-);
-})()}
-</div>
 <div className="mt-6 flex flex-wrap gap-3 border-t border-line pt-5 text-[12px]">
 <a href={'https://app.metricool.com/inbox'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">💬 Open Inbox ↗</a>
 <a href={'https://app.metricool.com/smartlink?blogId=' + encodeURIComponent(activeBlogId) + '&userId=3377431'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">🔗 Smartlinks ↗</a>
@@ -1662,6 +1677,11 @@ return (
               {/* Semrush Intelligence — the full SEO command center (domain
                   overview, rankings, competitors, backlinks, site health) plus
                   the keyword brain that pre-filters every draft */}
+<CollapsibleSection
+  id="section-semrush"
+  title="SEO intelligence"
+  summary="Rankings, competitors, backlinks and site health for cellularhopeinstitute.com. Keyword research already runs on every draft — this is for looking deeper."
+>
               <div className="border-t border-line p-6 sm:p-8">
                 <SemrushPanel
                   initialTopic={researchTopicText || prompt}
@@ -1671,7 +1691,14 @@ return (
                   }}
                 />
               </div>
+</CollapsibleSection>
+
               {/* AI Research & Draft Copilot — full-width band below the two columns */}
+<CollapsibleSection
+  id="section-research"
+  title="Research a topic first"
+  summary="Angles, keywords, hashtags and hooks for a topic before you write. Open when you want the legwork done for you."
+>
               <div className="border-t border-line p-6 sm:p-8">
               <div className="overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-50 to-white ring-1 ring-indigo-100">
                 <div className="border-b border-indigo-100 px-5 py-4">
@@ -1831,6 +1858,8 @@ return (
                 </div>
               </div>
               </div>
+</CollapsibleSection>
+
 </section>
 
 
@@ -2001,7 +2030,7 @@ className="min-w-0 flex-1 rounded-xl bg-subtle px-3 py-2 text-[16px] font-semibo
 </div>
 ) : null}
 {selectedDraft?.pack && selectedDraft.pack.kind !== 'clip' && selectedDraft.pack._semrush && selectedDraft.pack._semrush.source !== 'semrush' && !editingDraft ? (
-<p className="mb-4 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">⚠️ Generated without live Semrush data ({String(selectedDraft.pack._semrush.reason || 'unavailable')}) — connect SEMRUSH_API_KEY for keyword-checked drafts.</p>
+<p className="mb-4 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">{semrushDraftNote(selectedDraft.pack._semrush.reason)}</p>
 ) : null}
 {selectedDraft?.pack?._image?.url && selectedDraft?.pack?.kind !== 'clip' && !editingDraft ? (
 <div className="mb-4 overflow-hidden rounded-2xl ring-1 ring-line/60">

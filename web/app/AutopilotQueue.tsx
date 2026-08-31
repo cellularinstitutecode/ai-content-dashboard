@@ -10,6 +10,7 @@ import ProcessTracker, { makeSteps, stepActive, stepError, stepsDone, type Proce
 import { announce, onRefresh } from '@/components/refreshBus';
 import { PanelLoader } from '@/components/LoadingScreen';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
+import { fmtScheduleSlot } from '@/lib/schedule-clock';
 
 // The visible pipeline an engine run walks through. The tick call does all of
 // this server-side in one request; the tracker paces the display so the viewer
@@ -82,13 +83,9 @@ const ANGLE_META: Record<Angle['type'], { label: string; cls: string }> = {
 
 const CHANNEL_KEYS = ['instagram', 'facebook', 'linkedin', 'blog'] as const;
 
-function fmtSlot(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-    });
-  } catch { return iso; }
-}
+// On the schedule clock, like every other time in the app — an Autopilot slot
+// planned for 09:00 Cancun must not read as 07:00 to a viewer in Tijuana.
+const fmtSlot = fmtScheduleSlot;
 
 export default function AutopilotQueue() {
   const [runs, setRuns] = useState<Run[]>([]);

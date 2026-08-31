@@ -244,7 +244,7 @@ export default function KeywordIntelligence({
 
         {connected === 'no' && (
           <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">
-            Semrush is not connected yet. Create an API key in your Semrush account and set it as SEMRUSH_API_KEY in Vercel.
+            Keyword research is not connected yet — ask whoever set this up to add the Semrush key.
             Seeded topics still work from cache; everything else uses the link-out above until then.
           </p>
         )}

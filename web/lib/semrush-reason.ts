@@ -60,3 +60,45 @@ export function reasonForHttpStatus(status: number): SemrushReason {
 export function isInformationalReason(reason: SemrushReason | undefined): boolean {
   return reason === 'no_token' || reason === 'v3_key' || reason === 'budget' || reason === 'empty';
 }
+
+// ---------------------------------------------------------------------------
+// What a person should be told.
+//
+// Every panel used to write its own sentence for this, and every one of them
+// guessed "the API key is not set" — which was wrong in the most common case.
+// A budget floor, an unentitled key and an exhausted plan all read as "no live
+// data", but only one of them is a missing key, and only some of them are
+// anyone's job to fix. One mapping, so the app never blames the wrong thing.
+//
+// House rules: no environment-variable names (a coordinator cannot act on
+// SEMRUSH_API_KEY), no machine codes, and a clear "who fixes this" for the
+// states a human can act on.
+const MESSAGES: Record<SemrushReason, string> = {
+  ok: '',
+  empty: 'Semrush has no data for this topic yet.',
+  no_token: 'Keyword research is not connected yet — ask whoever set this up to add the Semrush key.',
+  auth: 'Semrush rejected its credentials — ask whoever set this up to refresh the key.',
+  v3_key: 'This Semrush plan does not include the keyword reports, so stored data is being shown.',
+  plan: 'Semrush has no report credit left on this plan right now.',
+  budget: 'Keyword research is paused to protect the Semrush credit balance — it resumes when the balance recovers.',
+  http: 'Semrush did not answer just now — showing stored data instead.',
+  network: 'Semrush could not be reached just now — showing stored data instead.',
+};
+
+/** One plain sentence for why a Semrush lookup produced no live data. */
+export function semrushMessage(reason: SemrushReason | undefined): string {
+  if (!reason || reason === 'ok') return '';
+  return MESSAGES[reason] ?? MESSAGES.http;
+}
+
+/**
+ * The sentence to show beside a draft that was written without live keyword
+ * data. Always says what still happened (the draft is fine) before why the
+ * data is missing, so the note reads as information and not as a failure.
+ */
+export function semrushDraftNote(reason: SemrushReason | undefined): string {
+  const why = semrushMessage(reason);
+  return why
+    ? 'Written without live keyword data. ' + why
+    : 'Written without live keyword data.';
+}

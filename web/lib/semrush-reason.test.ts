@@ -6,7 +6,7 @@
 // never work. These tests pin the mapping.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { reasonForCode, reasonForHttpStatus, isInformationalReason } from './semrush-reason.ts';
+import { reasonForCode, reasonForHttpStatus, isInformationalReason, semrushMessage, semrushDraftNote } from './semrush-reason.ts';
 
 test('ERROR 122 (a v4 key on a v3 endpoint) is v3_key, never a credential fault', () => {
   // The exact code the live account returned: "ERROR 122 :: WRONG FORMAT OR
@@ -57,4 +57,40 @@ test('informational states are exactly the ones no user action can clear', () =>
     assert.equal(isInformationalReason(r), false, r + ' should stay actionable/amber');
   }
   assert.equal(isInformationalReason(undefined), false);
+});
+
+// --- What the person is told ---------------------------------------------
+// The dashboard used to hard-code "Semrush API key not set" for every one of
+// these. On the live account the key WAS set and the real reason was the unit
+// floor, so the message sent people hunting for a key that was not missing.
+
+test('a budget pause never blames the key', () => {
+  const msg = semrushMessage('budget');
+  assert.match(msg, /paused/i);
+  // \b so "Keyword research" does not read as the word "key".
+  assert.doesNotMatch(msg, /\bkeys?\b/i);
+});
+
+test('only a genuinely absent credential mentions a key', () => {
+  assert.match(semrushMessage('no_token'), /\bkey\b/i);
+  assert.match(semrushMessage('auth'), /\bkey\b/i);
+  for (const r of ['budget', 'plan', 'v3_key', 'http', 'network', 'empty'] as const) {
+    assert.doesNotMatch(semrushMessage(r), /add the Semrush key/i, r + ' should not ask for a key');
+  }
+});
+
+test('no message leaks an environment variable name or a machine code', () => {
+  for (const r of ['no_token', 'auth', 'plan', 'v3_key', 'http', 'network', 'empty', 'budget'] as const) {
+    assert.doesNotMatch(semrushMessage(r), /SEMRUSH_|_API_KEY|ERROR \d|HTTP \d/, r + ' leaked internals');
+  }
+});
+
+test('a healthy lookup says nothing at all', () => {
+  assert.equal(semrushMessage('ok'), '');
+  assert.equal(semrushMessage(undefined), '');
+});
+
+test('the draft note leads with the draft being fine', () => {
+  assert.match(semrushDraftNote('budget'), /^Written without live keyword data\./);
+  assert.match(semrushDraftNote(undefined), /^Written without live keyword data\.$/);
 });

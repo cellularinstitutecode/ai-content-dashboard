@@ -126,6 +126,11 @@ export async function POST(req: NextRequest) {
     });
     const keywordSource: 'semrush' | 'none' = semrush?.source === 'semrush' ? 'semrush' : 'none';
     const keywordsApplied: string[] = semrush?.keywords ?? [];
+    // WHY the lookup produced nothing, so the dashboard can say the true
+    // reason instead of guessing "the API key is not set" — which was wrong
+    // every time the real cause was the unit floor, an unentitled key or an
+    // empty result. The mapping lives in lib/semrush-reason.ts.
+    const keywordReason: string = semrush?.reason ?? 'ok';
     // Advisory content-safety review (medical domain). Never blocks generation.
     let safetyAdvisory: { code: string; message: string }[] = [];
     try {
@@ -139,8 +144,8 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json(
       safetyAdvisory.length
-        ? { provider: used, pack, safetyAdvisory, keywordsApplied, keywordSource, keywordBrief }
-        : { provider: used, pack, keywordsApplied, keywordSource, keywordBrief }
+        ? { provider: used, pack, safetyAdvisory, keywordsApplied, keywordSource, keywordReason, keywordBrief }
+        : { provider: used, pack, keywordsApplied, keywordSource, keywordReason, keywordBrief }
     );
   } catch (e: any) {
     // The provider helpers throw with the upstream response body attached
