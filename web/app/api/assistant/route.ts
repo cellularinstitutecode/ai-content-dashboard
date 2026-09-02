@@ -16,6 +16,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { isAllowedEmail } from "@/lib/access";
 import { parseVideoUrl } from "@/lib/composer";
 import { boundToolMessages } from "@/lib/tool-transcript";
+import { normalizePublishAt, METRICOOL_TIMEZONE } from "@/lib/metricool-time";
 
 // Compact, chat-friendly rendering of Semrush keyword rows.
 function fmtKw(k: SemKeyword): string {
@@ -131,16 +132,12 @@ const SCHEDULE_NETWORK_MAP: Record<string, string> = {
   threads: "threads",
 };
 
-const TIMEZONE = process.env.METRICOOL_TIMEZONE || "America/Cancun";
-
-function normalizePublishAt(input: string): string {
-  let s = String(input || "").trim();
-  if (!s) return s;
-  s = s.replace(/Z$/, "").replace(/[+-]\d{2}:?\d{2}$/, "");
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) s = s + ":00";
-  s = s.replace(/\.\d+$/, "");
-  return s;
-}
+// This file used to reimplement the Metricool datetime conversion, and the
+// copy still contained the bug the shared one was written to fix: it dropped a
+// trailing Z and called the remaining digits clinic-local, so any absolute
+// timestamp reaching a schedule_post tool call went out five hours late.
+// One implementation now, in lib/metricool-time.ts, unit-tested.
+const TIMEZONE = METRICOOL_TIMEZONE;
 
 // Key material for signing the client-round-tripped session.
 //
@@ -278,8 +275,12 @@ async function doSchedule(userId: string, p: PendingSchedule) {
   if (!token || !mcUserId) throw new Error("METRICOOL_USER_TOKEN and METRICOOL_USER_ID must be configured");
   const provider = SCHEDULE_NETWORK_MAP[p.network.toLowerCase()];
   if (!provider) throw new Error("Unsupported network: " + p.network);
-  const publishAt = normalizePublishAt(p.publishAt);
-  if (!publishAt) throw new Error("publishAt is required");
+  // Returns the Metricool wall-clock plus the absolute instant, or null when
+  // the value is not a usable datetime — which is a rejected request, never
+  // something to guess a time for.
+  const when = normalizePublishAt(p.publishAt);
+  if (!when) throw new Error("publishAt must be a date and time, e.g. 2026-09-01T09:00");
+  const publishAt = when.wallClock;
   if (!p.text) throw new Error("text is required");
   const blogId = process.env.METRICOOL_BLOG_ID;
   if (!blogId) throw new Error("METRICOOL_BLOG_ID must be configured");

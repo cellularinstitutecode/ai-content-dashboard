@@ -18,7 +18,7 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
     const s = await sessionRes.json().catch(() => ({}));
     if (!sessionRes.ok) {
       const detail = typeof s?.detail === "string" ? s.detail.slice(0, 300) : "";
-      fail("Could not start a voice session (" + sessionRes.status + "). " + (detail || "Check that OPENAI_API_KEY is set in Vercel."));
+      fail(detail || "Voice is not available right now — ask whoever set this up to check the OpenAI connection.");
       setConnecting(false);
       return;
     }

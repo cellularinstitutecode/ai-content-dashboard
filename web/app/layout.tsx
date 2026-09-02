@@ -5,6 +5,7 @@ import DraftingAssistant from '@/components/DraftingAssistant';
 import { LiveContentProvider } from "@/components/LiveContentProvider";
 import { WorkspaceProvider } from "@/components/workspace";
 import ProgressProvider from "@/components/LoadingScreen";
+import { SCHEDULE_TZ } from '@/lib/timezone';
 
 
 export const metadata: Metadata = {
@@ -15,7 +16,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    // Every scheduled time a person reads is rendered in this zone (see
+    // lib/schedule-clock.ts). Stamping it here is what keeps the clock the app
+    // WRITES with and the clock it DISPLAYS with from drifting apart — client
+    // components cannot read SCHEDULE_TIMEZONE for themselves.
+    <html lang="en" data-schedule-tz={SCHEDULE_TZ}>
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />

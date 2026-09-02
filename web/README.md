@@ -90,5 +90,32 @@ npm run dev
 - Schedule Templates (`/templates`) — save a reusable weekly posting cadence (providers, weekdays, time, text) via `/api/templates`.
 - Apply a template with `POST /api/templates/apply` to materialize the next N weeks of scheduled posts into the `posts` table.
 
+## One clock, everywhere
+
+Times a person READS come from `lib/schedule-clock.ts`; times the app WRITES
+come from `lib/timezone.ts`; the Metricool handoff conversion is
+`lib/metricool-time.ts`. The root layout stamps the resolved zone on
+`<html data-schedule-tz>` so client components display the same clock the
+server schedules with — no `NEXT_PUBLIC_` copy to drift.
+
+Do not format a scheduled time with `toLocaleString(undefined, …)`. That renders
+in the *viewer's* zone, which is how the composer came to say 9:00 AM and the
+queue 7:00 AM for the same post.
+
+## Progressive disclosure
+
+Image Studio, Long-form to Shorts, SEO intelligence and the Research Copilot
+are wrapped in `components/CollapsibleSection` and arrive folded. Their bodies
+are unmounted while closed, which also stops the SEO panel spending Semrush
+units on a section nobody opened. The daily job — Create, Publish, Autopilot,
+Recent Drafts — stays open.
+
 ## Known gaps to wire next
-- Nothing outstanding from the original scope — all planned features are shipped. Future idea: multi-account team roles.
+- Multi-account team roles.
+- The floating Drafting Assistant still duplicates the dashboard's Content
+  Generator. One of the two should become the front door and the other should
+  go, but that is a product decision, not a cleanup.
+- `/api/templates` (list/create/delete) has no allowlist or rate-limit check of
+  its own; it relies on middleware + RLS, unlike its siblings.
+- The Opus webhook replay guard (`seenSalts`) is per-instance, so it is
+  best-effort on multi-instance serverless.

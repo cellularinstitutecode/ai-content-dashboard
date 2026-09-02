@@ -458,15 +458,15 @@ function SectionNotice({ meta, what }: { meta: SectionMeta; what: string }) {
   if (meta.ok) return null;
   const msg =
     meta.reason === 'no_token'
-      ? 'Live ' + what.toLowerCase() + ' needs a Semrush v3 Standard API key (SEMRUSH_API_KEY in Vercel) — showing stored data.'
+      ? 'Live ' + what.toLowerCase() + ' needs Semrush connected — ask whoever set this up to add the key. Showing stored data.'
       : meta.reason === 'budget'
       ? 'Unit balance is at the protection floor — ' + what.toLowerCase() + ' will refresh when the budget recovers.'
       : meta.reason === 'v3_key'
-      ? 'Live ' + what.toLowerCase() + ' comes from Semrush’s Standard API (v3), which is a Business-plan entitlement — a v4 key cannot call it. Showing stored data instead.'
+      ? 'This Semrush plan does not include live ' + what.toLowerCase() + ' — showing stored data instead.'
       : meta.reason === 'plan'
       ? 'Your Semrush plan does not include API access to ' + what.toLowerCase() + ' (or the project/report is unavailable).'
       : meta.reason === 'auth'
-      ? 'Semrush rejected the API key — verify SEMRUSH_API_KEY.'
+      ? 'Semrush rejected its credentials — ask whoever set this up to refresh the key.'
       : meta.reason === 'empty'
       ? 'Semrush has no data for this yet.'
       : 'Could not load ' + what.toLowerCase() + (meta.note ? ' (' + meta.note + ')' : '') + '.';
@@ -921,7 +921,7 @@ export default function SemrushPanel({
                             ? 'Tracked positions need Semrush’s Standard API (v3, Business plan).'
                             : tracking?.configured
                             ? 'No tracking history yet — data appears after the campaign collects positions.'
-                            : 'Connect your Semrush project (SEMRUSH_PROJECT_ID in Vercel) to chart tracked visibility.'
+                            : 'Link a Semrush project to chart tracked visibility — ask whoever set this up.'
                         }
                       />
                     </div>
@@ -1022,7 +1022,7 @@ export default function SemrushPanel({
                         ? 'Site Audit scores come from Semrush’s Standard API (v3), a Business-plan entitlement — open the full report in Semrush instead.'
                         : audit?.configured
                         ? 'Site Audit data is unavailable right now' + (project?.auditMeta.note ? ' (' + project.auditMeta.note + ')' : '') + '.'
-                        : 'Set SEMRUSH_PROJECT_ID in Vercel to pull your Site Audit score, errors and warnings here.'}
+                        : 'Link a Semrush project to pull your Site Audit score, errors and warnings here — ask whoever set this up.'}
                     </p>
                   </div>
                 )}
