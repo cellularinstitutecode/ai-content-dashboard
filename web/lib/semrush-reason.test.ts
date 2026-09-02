@@ -94,3 +94,16 @@ test('the draft note leads with the draft being fine', () => {
   assert.match(semrushDraftNote('budget'), /^Written without live keyword data\./);
   assert.match(semrushDraftNote(undefined), /^Written without live keyword data\.$/);
 });
+
+// --- The one that hid for weeks ------------------------------------------
+test('an unreadable balance is its own reason, never "at the floor"', () => {
+  const msg = semrushMessage('balance_unknown');
+  assert.match(msg, /cannot read/i);
+  assert.match(msg, /units will not/i);
+  assert.doesNotMatch(msg, /protection floor/i);
+});
+
+test('an unreadable balance is actionable, so it is not informational', () => {
+  assert.equal(isInformationalReason('balance_unknown'), false);
+  assert.equal(isInformationalReason('budget'), true);
+});

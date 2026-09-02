@@ -69,6 +69,9 @@ export default function SystemStatus() {
     if (c.name === 'semrush' && c.code === 'budget') {
       return { down: 'Keyword research is paused — the Semrush credit balance is at its protection floor.', stillWorks: 'Drafts are still written, just without live search data.' };
     }
+    if (c.name === 'semrush' && c.code === 'balance_unknown') {
+      return { down: 'Keyword research is paused — the Semrush key cannot read the account balance, which usually means it is a v4 key and the app needs a Standard API key.', stillWorks: 'Drafts are still written, just without live search data. Adding units will not change this.' };
+    }
     if (c.name === 'semrush' && c.code === 'no_token') {
       return { down: 'Keyword research is not connected.', stillWorks: 'Drafts are still written, just without live search data.' };
     }

@@ -17,7 +17,7 @@
 // "ERROR NN :: message" plain-text body, usually with HTTP 200.
 
 import { reportError } from '@/lib/report';
-import { decideSpend, applyCharge } from '@/lib/semrush-budget';
+import { decideSpend, applyCharge, type SpendDecision } from '@/lib/semrush-budget';
 import { reasonForCode, reasonForHttpStatus, type SemrushReason } from '@/lib/semrush-reason';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 
@@ -229,7 +229,7 @@ export function chargeUnits(units: number): void {
  * and the error TTL above means it reopens within 30s of the balance endpoint
  * recovering.
  */
-export async function budgetAllows(estUnits: number): Promise<boolean> {
+export async function budgetDecision(estUnits: number): Promise<SpendDecision> {
   const hasKey = Boolean(process.env.SEMRUSH_API_KEY);
   const bal = hasKey ? await getUnitsBalance() : null;
   const decision = decideSpend(bal, estUnits, unitFloor(), hasKey);
@@ -239,13 +239,28 @@ export async function budgetAllows(estUnits: number): Promise<boolean> {
       floor: unitFloor(),
     });
   }
-  return decision.allow;
+  return decision;
+}
+
+export async function budgetAllows(estUnits: number): Promise<boolean> {
+  return (await budgetDecision(estUnits)).allow;
+}
+
+/**
+ * The reason to report when the guard said no. "Below the floor" and "could
+ * not read the balance" are different problems with different fixes, and for
+ * weeks both were reported as the first — see lib/semrush-reason.ts.
+ */
+export function refusalReason(d: SpendDecision): { reason: SemrushReason; note: string } {
+  return d.reason === 'balance-unknown'
+    ? { reason: 'balance_unknown', note: 'Unit balance could not be read — the key may not have Standard API (v3) access; serving cache/link-out only' }
+    : { reason: 'budget', note: 'Unit balance at protection floor — serving cache/link-out only' };
 }
 
 export type KeywordCapability = {
   /** Would a keyword lookup for a draft run live right now? */
   ok: boolean;
-  reason: 'ok' | 'no_token' | 'budget' | 'balance-unknown';
+  reason: 'ok' | 'no_token' | 'budget' | 'balance_unknown';
   balance: number | null;
   floor: number;
 };
@@ -274,7 +289,7 @@ export async function keywordCapability(): Promise<KeywordCapability> {
   if (decision.allow) return { ok: true, reason: 'ok', balance, floor };
   return {
     ok: false,
-    reason: decision.reason === 'balance-unknown' ? 'balance-unknown' : 'budget',
+    reason: decision.reason === 'balance-unknown' ? 'balance_unknown' : 'budget',
     balance,
     floor,
   };
@@ -364,8 +379,9 @@ async function runReport(
 
   const limit = Math.max(1, Math.min(opts.limit ?? 12, 50));
   const estUnits = (UNIT_COST[report] ?? 40) * limit;
-  if (!(await budgetAllows(estUnits))) {
-    return { ok: false, source: 'none', reason: 'budget', note: 'Unit balance at protection floor — serving cache/link-out only', unitsSpent: 0 };
+  const decision = await budgetDecision(estUnits);
+  if (!decision.allow) {
+    return { ok: false, source: 'none', ...refusalReason(decision), unitsSpent: 0 };
   }
 
   const url = new URL(API_BASE.replace(/\/$/, '') + '/');

@@ -127,8 +127,10 @@ export async function GET() {
             ? 'The key is set but the unit balance (' + keywords.balance + ') is at or below the protection ' +
               'floor (SEMRUSH_UNIT_FLOOR=' + keywords.floor + '), so every live lookup is refused. Top up units ' +
               'or lower the floor. Until then the keyword layer is serving cache-or-link-out only.'
-            : 'The key is set but the balance endpoint could not be read, so the guard is failing closed. ' +
-              'Recovers by itself within 30s of Semrush answering again.',
+            : 'The key is set but countapiunits.html (a v3 endpoint) returns no number, so the spend guard ' +
+              'fails closed and every live lookup is refused. On this account that is because the keys on the ' +
+              'API Keys page are v4 keys; every report in this app is Standard API (v3), which needs a Business-plan ' +
+              'Standard API key. Adding units changes nothing. If Semrush is merely down, this clears within 30s.',
     },
     {
       name: 'images',

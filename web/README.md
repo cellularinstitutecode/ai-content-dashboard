@@ -119,6 +119,17 @@ trigger a regeneration. Relevance, composition and rendering taste are
 flag. Before the split, "unclear relevance" put an amber warning on four of
 five usable images.
 
+## Semrush needs a Standard API (v3) key
+
+Every report this app runs — and the free balance endpoint that guards spend —
+is Semrush's Standard API (v3). The keys issued on Semrush's "API Keys" page
+are **v4** keys, which v3 endpoints reject. With a v4 key the balance reads as
+unreadable, the spend guard fails closed, and every live lookup is refused;
+the app reports this as `balance_unknown` (health `code`, panel notice, status
+banner) and says explicitly that adding units will not change it. A Standard
+API key is a Business-plan entitlement. Do not diagnose "no keyword data" as
+"out of units" until `/api/semrush?action=balance` returns a number.
+
 ## Health means capability
 
 `/api/health` reports configuration, with one exception: the Semrush check asks
