@@ -242,6 +242,44 @@ export async function budgetAllows(estUnits: number): Promise<boolean> {
   return decision.allow;
 }
 
+export type KeywordCapability = {
+  /** Would a keyword lookup for a draft run live right now? */
+  ok: boolean;
+  reason: 'ok' | 'no_token' | 'budget' | 'balance-unknown';
+  balance: number | null;
+  floor: number;
+};
+
+/**
+ * Whether keyword research is actually WORKING — not whether it is configured.
+ *
+ * /api/health asked `has('SEMRUSH_API_KEY')`, which on the live deployment was
+ * true while every lookup was being refused by the unit floor. So the status
+ * banner built to announce exactly that condition stayed silent, and the
+ * dashboard showed a blank Site Audit dial, an empty rank chart and a
+ * "written without live keyword data" note with no stated cause. This answers
+ * the question the banner needs answered, with the same guard the real calls
+ * go through, priced at the first report a draft would spend on.
+ *
+ * Cost: one read of the FREE balance endpoint, cached for ten minutes and
+ * served stale on error — so it cannot itself fail because Semrush is down;
+ * it just fails closed, which is the truthful answer in that case too.
+ */
+export async function keywordCapability(): Promise<KeywordCapability> {
+  const hasKey = Boolean(process.env.SEMRUSH_API_KEY);
+  const floor = unitFloor();
+  if (!hasKey) return { ok: false, reason: 'no_token', balance: null, floor };
+  const balance = await getUnitsBalance();
+  const decision = decideSpend(balance, UNIT_COST.phrase_related, floor, hasKey);
+  if (decision.allow) return { ok: true, reason: 'ok', balance, floor };
+  return {
+    ok: false,
+    reason: decision.reason === 'balance-unknown' ? 'balance-unknown' : 'budget',
+    balance,
+    floor,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Supabase cache + usage log (both fail-open: DB trouble never blocks research)
 // ---------------------------------------------------------------------------

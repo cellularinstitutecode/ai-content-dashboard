@@ -110,12 +110,23 @@ are unmounted while closed, which also stops the SEO panel spending Semrush
 units on a section nobody opened. The daily job — Create, Publish, Autopilot,
 Recent Drafts — stays open.
 
+## Image verification: defects vs. opinions
+
+The vision reviewer's findings are split by `lib/image-verdict.ts`. Text,
+anatomy, logos and graphic content are **blocking** — they flag the image and
+trigger a regeneration. Relevance, composition and rendering taste are
+**advisory** — shown as a note count on the verified badge, never a reason to
+flag. Before the split, "unclear relevance" put an amber warning on four of
+five usable images.
+
+## Health means capability
+
+`/api/health` reports configuration, with one exception: the Semrush check asks
+the budget guard whether a lookup would actually run, not whether the key is
+set. The status banner on the dashboard reads the `code` it returns to say
+*why* keyword research is paused.
+
 ## Known gaps to wire next
 - Multi-account team roles.
-- The floating Drafting Assistant still duplicates the dashboard's Content
-  Generator. One of the two should become the front door and the other should
-  go, but that is a product decision, not a cleanup.
-- `/api/templates` (list/create/delete) has no allowlist or rate-limit check of
-  its own; it relies on middleware + RLS, unlike its siblings.
 - The Opus webhook replay guard (`seenSalts`) is per-instance, so it is
   best-effort on multi-instance serverless.

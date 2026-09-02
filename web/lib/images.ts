@@ -22,6 +22,7 @@ import 'server-only';
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import type { BrandContext } from '@/lib/ai';
+import { classifyVerdict } from './image-verdict.ts';
 
 // Machine verification: every generated image is inspected by a vision model
 // before it is accepted, so hallucinated output (garbled text, warped
@@ -30,7 +31,13 @@ import type { BrandContext } from '@/lib/ai';
 export type ImageVerification = {
   status: 'approved' | 'flagged' | 'unchecked'; // unchecked = the check itself was unavailable
   score: number | null; // 0-100 quality/safety confidence from the checker
+  // BLOCKING findings — the reasons the status is 'flagged'. Defects only:
+  // text, anatomy, logos, graphic content (see lib/image-verdict.ts).
   issues: string[];
+  // Matters of taste the reviewer raised — relevance, composition, mood —
+  // shown to a person, never a reason to flag or regenerate. Four of five
+  // usable images used to wear an amber warning for exactly these.
+  advisory?: string[];
   // HARD RULE: generated visuals must be pure CONTENT images — any words,
   // letters, numbers or pseudo-typography the checker sees sets this flag,
   // and the pipeline treats it as the worst possible outcome (always
@@ -253,7 +260,7 @@ const VERIFY_SYSTEM = `You are a strict visual QA reviewer for a premium regener
 4. Graphic or inappropriate medical content: needles piercing skin, blood, wounds, distressing imagery.
 5. Uncanny, distorted, or low-quality rendering unfit for a premium medical brand.
 6. Relevance: the scene should plausibly illustrate the given topic for a clinic audience.
-Return STRICT JSON only: {"approved": boolean, "textDetected": boolean, "score": number 0-100, "issues": string[]}. textDetected=true whenever check 1 finds ANYTHING (when unsure, say true). approved=false whenever any check 1-5 fails or relevance is clearly wrong; issues lists each problem in a short phrase (empty when approved with no concerns).`;
+Return STRICT JSON only: {"approved": boolean, "textDetected": boolean, "score": number 0-100, "blocking": string[], "advisory": string[]}. textDetected=true whenever check 1 finds ANYTHING (when unsure, say true). "blocking" lists each DEFECT from checks 1-4 as a short phrase — these fail the image. "advisory" lists observations from checks 5-6 (rendering quality, relevance, composition) as short phrases — these are notes for a human and do NOT fail the image. approved=false only when "blocking" is non-empty. Both lists empty when the image is clean.`;
 
 async function verifyGeneratedImage(img: GeneratedImage, topic: string): Promise<ImageVerification> {
   const base: ImageVerification = {
@@ -294,27 +301,15 @@ async function verifyGeneratedImage(img: GeneratedImage, topic: string): Promise
     if (!res.ok) throw new Error(`vision ${res.status}`);
     const data = await res.json();
     const raw = String(data?.choices?.[0]?.message?.content ?? '{}');
-    const obj = JSON.parse(raw) as { approved?: unknown; textDetected?: unknown; score?: unknown; issues?: unknown };
-    const score = typeof obj.score === 'number' && Number.isFinite(obj.score)
-      ? Math.max(0, Math.min(100, Math.round(obj.score)))
-      : null;
-    let issues = Array.isArray(obj.issues)
-      ? obj.issues.map((i) => String(i).slice(0, 160)).filter(Boolean).slice(0, 8)
-      : [];
-    // Belt and braces: even if the model forgets the dedicated flag, catch a
-    // text mention in its own issue list.
-    const textDetected = obj.textDetected === true
-      || issues.some((i) => /\btext\b|letter|typograph|caption|word|writing|lettering/i.test(i));
-    // Text can never pass, whatever the model said about "approved".
-    const approved = obj.approved === true && !textDetected;
-    if (textDetected && !issues.some((i) => /\btext\b/i.test(i))) {
-      issues = ['visible text/letters detected — content images must be text-free', ...issues].slice(0, 8);
-    }
+    // Defects flag; opinions are notes. The split (and the text hard rule)
+    // lives in lib/image-verdict.ts where it is unit-tested.
+    const verdict = classifyVerdict(JSON.parse(raw));
     return {
-      status: approved ? 'approved' : 'flagged',
-      score,
-      issues,
-      textDetected,
+      status: verdict.status,
+      score: verdict.score,
+      issues: verdict.issues,
+      advisory: verdict.advisory,
+      textDetected: verdict.textDetected,
       model: VISION_MODEL,
       checkedAt: new Date().toISOString(),
     };
