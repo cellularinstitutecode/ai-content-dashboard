@@ -201,7 +201,7 @@ const [keywordSource, setKeywordSource] = useState<string>('none');
 // WHY there was no live keyword data, straight from /api/generate. Held so the
 // note under the output can state the true reason instead of assuming one.
 const [keywordReason, setKeywordReason] = useState<string | undefined>(undefined);
-const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string; verification?: { status?: string; score?: number | null; issues?: string[]; textDetected?: boolean } } | null>(null);
+const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string; verification?: { status?: string; score?: number | null; issues?: string[]; advisory?: string[]; textDetected?: boolean } } | null>(null);
 const [genImageLoading, setGenImageLoading] = useState(false);
 const [lastDraftId, setLastDraftId] = useState<string | null>(null);
 const [modalImgBusy, setModalImgBusy] = useState(false);
@@ -1293,9 +1293,9 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
       {genImage.verification?.textDetected ? (
         <span className="rounded-full bg-red-600/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(genImage.verification?.issues || []).join(' · ') || 'Text detected — content images must be text-free'}>✗ text in image — reroll</span>
       ) : genImage.verification?.status === 'approved' ? (
-        <span className="rounded-full bg-emerald-600/90 px-2 py-0.5 text-[10px] font-semibold text-white" title={'Machine-verified text-free' + (genImage.verification?.score != null ? ' · ' + genImage.verification.score + '/100' : '')}>✓ verified</span>
+        <span className="rounded-full bg-emerald-600/90 px-2 py-0.5 text-[10px] font-semibold text-white" title={'Machine-verified text-free' + (genImage.verification?.score != null ? ' · ' + genImage.verification.score + '/100' : '') + ((genImage.verification?.advisory || []).length ? ' · notes: ' + (genImage.verification?.advisory || []).join(' · ') : '')}>✓ verified{(genImage.verification?.advisory || []).length ? ' · ' + (genImage.verification?.advisory || []).length + ' note' + ((genImage.verification?.advisory || []).length === 1 ? '' : 's') : ''}</span>
       ) : genImage.verification?.status === 'flagged' ? (
-        <span className="rounded-full bg-amber-500/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(genImage.verification?.issues || []).join(' · ')}>⚠ flagged — reroll recommended</span>
+        <span className="rounded-full bg-amber-500/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(genImage.verification?.issues || []).join(' · ')}>⚠ defect found — reroll recommended</span>
       ) : null}
       <span className="text-[11px] text-ink-faint">🖼 AI hero image ({genImage.model || 'OpenAI'}) — saved on the draft, attaches when you schedule. Click to view full size.</span>
       <button type="button" onClick={regenGenImage} disabled={genImageLoading}

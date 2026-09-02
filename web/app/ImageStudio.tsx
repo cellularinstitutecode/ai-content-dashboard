@@ -27,6 +27,7 @@ type Verification = {
   status: 'approved' | 'flagged' | 'unchecked';
   score: number | null;
   issues: string[];
+  advisory?: string[];
   textDetected?: boolean;
 };
 
@@ -47,10 +48,13 @@ type DraftLite = {
 function VerifyBadge({ v, size = 'sm' }: { v?: Verification; size?: 'sm' | 'lg' }) {
   const cls = size === 'lg' ? 'px-2.5 py-1 text-[12px]' : 'px-2 py-0.5 text-[10px]';
   if (v?.status === 'approved') {
+    // Advisory notes (relevance, composition) ride on the tooltip and a small
+    // count. They are worth a glance; they are not a warning.
+    const notes = v.advisory || [];
     return (
-      <span title={'Machine-verified' + (v.score != null ? ' · score ' + v.score + '/100' : '')}
+      <span title={'Machine-verified' + (v.score != null ? ' · score ' + v.score + '/100' : '') + (notes.length ? ' · notes: ' + notes.join(' · ') : '')}
         className={'inline-flex items-center gap-1 rounded-full bg-emerald-600/90 font-semibold text-white ' + cls}>
-        ✓ verified
+        ✓ verified{notes.length ? <span className="font-normal opacity-80">· {notes.length} note{notes.length === 1 ? '' : 's'}</span> : null}
       </span>
     );
   }
@@ -227,7 +231,7 @@ export default function ImageStudio() {
           <p className="mt-0.5 text-[12px] text-ink-muted">
             Every image is a pure content image — no words, letters or logos, ever. Each one is created by the
             OpenAI image pipeline and machine-verified; anything with text is regenerated automatically.
-            ✓ = verified text-free, ✗ = text slipped through (reroll it), ⚠ = other issues found.
+            ✓ = verified text-free (a note count means the checker had an opinion, not a problem), ✗ = text slipped through (reroll it), ⚠ = a real defect found.
           </p>
         </div>
         <div className="flex w-full min-w-0 items-center gap-2 lg:w-auto">

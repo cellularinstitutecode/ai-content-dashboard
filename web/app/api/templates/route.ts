@@ -2,8 +2,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { normalizeStrategy } from '@/lib/autopilot';
+import { requireAllowlistedUser } from '@/lib/auth';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
+
+// Templates are not just the user's own data: every active one is picked up by
+// the org-wide Autopilot tick, which then spends AI and Semrush credit on it
+// without anyone else clicking. That puts this route in the same class as
+// /api/templates/apply and /api/generate — a shared, paid resource — so it
+// carries the same allowlist check they do, and a cap on how fast templates
+// can be written. Middleware and row-level security still apply; this is the
+// copy that stays correct if the middleware exemption list ever widens.
 
 // A schedule template: what to post and on which weekly cadence.
 type TemplateInput = {
@@ -35,9 +45,10 @@ function cleanTime(x: any): string {
 
 // GET /api/templates — list the user's templates.
 export async function GET() {
+  const auth = await requireAllowlistedUser();
+  if (!auth.ok) return auth.response;
   const sb = await supabaseServer();
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const user = { id: auth.userId };
 
   const { data, error } = await sb
     .from('schedule_templates')
@@ -58,9 +69,12 @@ export async function GET() {
 
 // POST /api/templates — create or update a template (upsert when id is present).
 export async function POST(req: NextRequest) {
+  const auth = await requireAllowlistedUser();
+  if (!auth.ok) return auth.response;
+  const rl = await checkRateLimit(auth.userId, 'templates');
+  if (!rl.ok) return NextResponse.json({ error: 'rate_limited' }, { status: 429 });
   const sb = await supabaseServer();
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const user = { id: auth.userId };
 
   const body: TemplateInput = await req.json().catch(() => ({}));
 
@@ -97,9 +111,10 @@ export async function POST(req: NextRequest) {
 
 // DELETE /api/templates?id=... — remove a template the user owns.
 export async function DELETE(req: NextRequest) {
+  const auth = await requireAllowlistedUser();
+  if (!auth.ok) return auth.response;
   const sb = await supabaseServer();
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const user = { id: auth.userId };
 
   const id = req.nextUrl.searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 });

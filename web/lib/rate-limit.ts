@@ -37,6 +37,9 @@ const POLICIES: Record<string, Policy> = {
   // at least as expensive as `generate`. Without an entry here it silently
   // took DEFAULT_POLICY — double the cap of the cheaper operation.
   'ai-research': { limit: 30, windowSec: 3600 },
+  // Writing a template is cheap, but every active one becomes automated spend
+  // on the next Autopilot tick. Nobody edits a weekly cadence 60 times an hour.
+  templates: { limit: 60, windowSec: 3600 },
   // Reaches a live brand account through a paid third party.
   schedule: { limit: 60, windowSec: 3600 },
   // Each call mints a spendable OpenAI Realtime credential.

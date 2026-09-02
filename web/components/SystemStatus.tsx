@@ -16,7 +16,7 @@ import { useEffect, useState } from 'react';
  * light that is always lit teaches people to stop looking at it.
  */
 
-type Check = { name: string; ok: boolean; severity: 'required' | 'optional'; detail?: string };
+type Check = { name: string; ok: boolean; severity: 'required' | 'optional'; detail?: string; code?: string };
 
 // What a degraded check MEANS for the work, and what still works despite it.
 // Deliberately says nothing about environment variables: the person reading
@@ -28,7 +28,7 @@ const PLAIN: Record<string, { down: string; stillWorks?: string }> = {
   allowed_emails: { down: 'Sign-in access is not configured.' },
   cron_secret: { down: 'Autopilot and performance tracking are not running.', stillWorks: 'Writing and scheduling by hand are unaffected.' },
   rate_limiting: { down: 'Usage limits are not being applied.' },
-  semrush: { down: 'Keyword research is not running.', stillWorks: 'Drafts are still written — just without live search data.' },
+  semrush: { down: 'Keyword research is paused.', stillWorks: 'Drafts are still written — just without live search data.' },
   images: { down: 'AI images are not being generated.', stillWorks: 'Posts still write and schedule as text.' },
   opus_webhook: { down: 'Video clips arrive more slowly than usual.', stillWorks: 'They still arrive.' },
   drive: { down: 'Video clips are not being saved permanently and stop playing after a few days.' },
@@ -62,7 +62,18 @@ export default function SystemStatus() {
   if (!failing.length) return null;
 
   const blocking = failing.some((c) => c.severity === 'required');
-  const lines = failing.map((c) => PLAIN[c.name] ?? { down: c.name.replace(/_/g, ' ') + ' is not available.' });
+  const lines = failing.map((c) => {
+    // Keyword research can be off for two very different reasons, and the
+    // difference is exactly who needs to act: nobody can "connect" their way
+    // out of an empty credit balance.
+    if (c.name === 'semrush' && c.code === 'budget') {
+      return { down: 'Keyword research is paused — the Semrush credit balance is at its protection floor.', stillWorks: 'Drafts are still written, just without live search data.' };
+    }
+    if (c.name === 'semrush' && c.code === 'no_token') {
+      return { down: 'Keyword research is not connected.', stillWorks: 'Drafts are still written, just without live search data.' };
+    }
+    return PLAIN[c.name] ?? { down: c.name.replace(/_/g, ' ') + ' is not available.' };
+  });
 
   return (
     <div

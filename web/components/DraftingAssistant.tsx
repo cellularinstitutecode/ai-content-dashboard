@@ -3,8 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useVoiceAssistant } from "@/components/useVoiceAssistant";
 import { useLiveContent } from "@/components/LiveContentProvider";
-import { announce } from "@/components/refreshBus";
-import { useWorkspace } from "@/components/workspace";
 import { PanelLoader } from '@/components/LoadingScreen';
 
 type Msg = { id: string; role: "assistant" | "user"; text: string; options?: string[] | null };
@@ -12,8 +10,7 @@ let __msgSeq = 0;
 const uid = () => `m_${Date.now().toString(36)}_${(__msgSeq++).toString(36)}`;
 
 export default function DraftingAssistant() {
-  const { applyAssistantResult, setStatus, setOutput } = useLiveContent();
-  const workspace = useWorkspace();
+  const { applyAssistantResult, setStatus } = useLiveContent();
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [session, setSession] = useState<any>(null);
@@ -25,88 +22,14 @@ export default function DraftingAssistant() {
     applyAssistantResult(data);
   });
   const [busy, setBusy] = useState(false);
-  const [genProvider, setGenProvider] = useState<'anthropic' | 'openai'>('anthropic');
-  const [genModel, setGenModel] = useState('claude-sonnet-4-5');
-  const [genFormat, setGenFormat] = useState('social');
-  const [genIdea, setGenIdea] = useState('');
-  // The assistant works on the same topic as the rest of the dashboard.
-  useEffect(() => {
-    const incoming = (workspace.topic || '').trim();
-    if (incoming && incoming !== genIdea.trim()) setGenIdea(incoming);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace.topic]);
-  const [genOutput, setGenOutput] = useState('');
-  const [genBusy, setGenBusy] = useState(false);
-  const [genErr, setGenErr] = useState('');
-  const [genKeywords, setGenKeywords] = useState<{ primary: string | null; keywords: string[]; source: string } | null>(null);
-
-  const GEN_MODELS: Record<'anthropic' | 'openai', { value: string; label: string }[]> = {
-    anthropic: [
-      { value: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
-      { value: 'claude-opus-4-1', label: 'Claude Opus 4.1' },
-      { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
-    ],
-    openai: [
-      { value: 'gpt-4o', label: 'GPT-4o' },
-      { value: 'gpt-4o-mini', label: 'GPT-4o mini' },
-      { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
-    ],
-  };
-  const GEN_FORMATS: { value: string; label: string }[] = [
-    { value: 'social', label: 'Social Post' },
-    { value: 'blog', label: 'Blog Article' },
-    { value: 'email', label: 'Email Campaign' },
-    { value: 'video', label: 'Video Script' },
-    { value: 'ad', label: 'Ad Copy' },
-  ];
-
-  function pickProvider(p: 'anthropic' | 'openai') {
-    setGenProvider(p);
-    setGenModel(GEN_MODELS[p][0].value);
-  }
-
-  async function runGenerate() {
-    if (!genIdea.trim()) { setGenErr('Describe your idea first.'); return; }
-    setGenErr('');
-    setGenBusy(true);
-    setGenOutput('');
-    try {
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-chi-progress-scope': 'assistant' },
-        body: JSON.stringify({ topic: genIdea, provider: genProvider, model: genModel, type: genFormat }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Failed to generate');
-      const pack = data?.pack || {};
-      const out = pack.instagram || pack.facebook || pack.linkedin || pack.blog || '';
-      setGenOutput(out || 'No content returned.');
-      // The chat path already routes through the shared Output pane; the
-      // Generate tab used to keep its result trapped inside this widget.
-      if (out) setOutput(out);
-      workspace.setTopic(genIdea, { source: 'assistant' });
-      // Surface the automatic Semrush keyword research that shaped this draft.
-      const sem = pack._semrush || null;
-      setGenKeywords(sem ? { primary: sem.primary ?? null, keywords: Array.isArray(sem.keywords) ? sem.keywords : [], source: String(sem.source || 'none') } : null);
-      // Persist to Recent Drafts so nothing generated here is lost (parity with
-      // the main dashboard + chat flows). Stamp the chosen format on the pack so
-      // the renderer can label it faithfully (email/video/ad).
-      try {
-        await fetch('/api/drafts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ topic: genIdea, pack: { ...pack, format: genFormat }, provider: genProvider }),
-        });
-        // Interconnection: the new draft should appear in Recent Drafts, the
-        // stat cards and the Image Studio immediately, not after a reload.
-        announce('drafts', 'stats');
-      } catch {}
-    } catch (e: any) {
-      setGenErr(e?.message || 'Failed to generate');
-    } finally {
-      setGenBusy(false);
-    }
-  }
+  // This widget used to carry its own copy of the dashboard's Content
+  // Generator — the same model buttons, format pills, idea box and Generate
+  // button, a second time, in a 380px panel. Two places to do the identical
+  // job, with no hint that they were the same, is the single most-cited
+  // confusion in the audit. The chat itself already drafts, saves, researches
+  // and schedules through its tools ("Draft an Instagram post … and save it"),
+  // so the form was pure duplication. It is gone; the panel on the dashboard
+  // is the one generator, and this is the one conversation.
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -194,94 +117,6 @@ export default function DraftingAssistant() {
           </header>
 
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
-            {/* Content Generator — first thing shown in the assistant */}
-            <div className="rounded-2xl bg-canvas p-3 ring-1 ring-black/10">
-              <p className="text-sm font-semibold text-ink">Content Generator</p>
-              <p className="mb-3 text-xs text-ink/50">Pick a model and format, describe your idea, and generate a ready-to-post pack.</p>
-            
-              <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-ink/40">Model</label>
-              <div className="mb-3 flex flex-wrap items-center gap-2">
-                {(["anthropic", "openai"] as const).map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    onClick={() => pickProvider(p)}
-                    className={"rounded-full px-3 py-1.5 text-xs font-medium transition ring-1 ring-black/10 " + (genProvider === p ? "bg-ink text-white" : "bg-surface text-ink hover:bg-black/5")}
-                  >
-                    {p === "anthropic" ? "Claude (Anthropic)" : "OpenAI"}
-                  </button>
-                ))}
-                <select
-                  value={genModel}
-                  onChange={(e) => setGenModel(e.target.value)}
-                  className="rounded-full bg-surface px-3 py-1.5 text-xs text-ink outline-none ring-1 ring-black/10 focus:ring-accent/40"
-                >
-                  {GEN_MODELS[genProvider].map((m) => (
-                    <option key={m.value} value={m.value}>{m.label}</option>
-                  ))}
-                </select>
-              </div>
-            
-              <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-ink/40">Format</label>
-              <div className="mb-3 flex flex-wrap gap-2">
-                {GEN_FORMATS.map((f) => (
-                  <button
-                    key={f.value}
-                    type="button"
-                    onClick={() => setGenFormat(f.value)}
-                    className={"rounded-full px-3 py-1.5 text-xs font-medium transition ring-1 ring-black/10 " + (genFormat === f.value ? "bg-accent text-white" : "bg-surface text-ink hover:bg-black/5")}
-                  >
-                    {f.label}
-                  </button>
-                ))}
-              </div>
-            
-              <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-ink/40">Your idea</label>
-              <textarea
-                value={genIdea}
-                onChange={(e) => setGenIdea(e.target.value)}
-                rows={3}
-                placeholder="e.g. 3 Instagram captions about exosome therapy benefits for athletes"
-                className="mb-3 w-full resize-none rounded-xl bg-surface px-3 py-2 text-sm text-ink outline-none ring-1 ring-black/10 focus:ring-accent/40"
-              />
-            
-              <button
-                type="button"
-                onClick={runGenerate}
-                disabled={genBusy || !genIdea.trim()}
-                className="w-full rounded-full bg-accent px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
-              >
-                {genBusy ? "Generating…" : "Generate"}
-              </button>
-            
-              {genErr && <p className="mt-2 text-xs text-red-600">{genErr}</p>}
-            
-              {genOutput && (
-                <div className="mt-3">
-                  <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-ink/40">Output</p>
-                  {genKeywords && genKeywords.source === 'semrush' && (
-                    <div className="mb-1.5 flex flex-wrap items-center gap-1">
-                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">🔑 Semrush ✓</span>
-                      {genKeywords.keywords.slice(0, 4).map((k, ki) => (
-                        <span key={k + ki} className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-800 ring-1 ring-emerald-200">{k}</span>
-                      ))}
-                    </div>
-                  )}
-                  {genKeywords && genKeywords.source !== 'semrush' && (
-                    <p className="mb-1.5 text-[10px] text-ink/40">Generated without live Semrush keyword data.</p>
-                  )}
-                  <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-xl bg-surface px-3 py-2 text-sm leading-relaxed text-ink ring-1 ring-black/10">{genOutput}</div>
-                  <button
-                    type="button"
-                    onClick={() => setInput(genOutput)}
-                    className="mt-2 rounded-full border border-accent/30 bg-accent/5 px-3 py-1 text-xs font-medium text-accent transition hover:bg-accent/10"
-                  >
-                    Use in chat
-                  </button>
-                </div>
-              )}
-            </div>
-            
 {msgs.every((m) => m.role !== "user") && (
               <div className="space-y-1.5">
                 <p className="text-[11px] font-medium uppercase tracking-wide text-ink/40">Try asking</p>

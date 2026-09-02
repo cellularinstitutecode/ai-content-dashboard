@@ -9,12 +9,18 @@
 // a missing CRON_SECRET makes both daily crons 401 forever. Nothing is broken in
 // a way anybody sees - Autopilot just never runs.
 //
-// This endpoint reports CONFIGURATION only. It never prints a secret, only
-// whether one is present, and it makes no upstream calls (so it costs nothing
-// and cannot itself fail because a third party is down).
+// This endpoint reports CONFIGURATION, with one deliberate exception. It never
+// prints a secret, only whether one is present, and it makes no paid upstream
+// calls. The exception is Semrush: "is the key set" was true on the live
+// deployment for weeks while every lookup was refused by the unit floor, so the
+// check reported healthy about a feature that was dead. It now asks the same
+// budget guard the real calls use (a FREE balance read, cached ten minutes,
+// stale-on-error — so a Semrush outage fails it closed rather than crashing
+// this endpoint).
 import { NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { ALLOWED_EMAILS, ALLOWED_BLOG_IDS } from '@/lib/access';
+import { keywordCapability } from '@/lib/semrush';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,6 +30,8 @@ type Check = {
   ok: boolean;
   severity: 'required' | 'optional';
   detail: string;
+  /** A short machine code for WHY, where one check can fail for several reasons. */
+  code?: string;
 };
 
 function has(name: string): boolean {
@@ -35,6 +43,8 @@ export async function GET() {
   // are live and which guards are unset.
   const auth = await requireAllowlistedUser();
   if (!auth.ok) return auth.response;
+
+  const keywords = await keywordCapability();
 
   const checks: Check[] = [
     {
@@ -105,12 +115,20 @@ export async function GET() {
     },
     {
       name: 'semrush',
-      ok: has('SEMRUSH_API_KEY'),
+      ok: keywords.ok,
+      code: keywords.reason,
       severity: 'optional',
-      detail:
-        'Unset means the entire keyword layer degrades to cache-or-link-out: the Semrush ' +
-        'panel, the assistant’s live grounding, and Autopilot’s angle selection all ' +
-        'lose their data. Degrading is fine; degrading without anyone choosing it is not.',
+      detail: keywords.ok
+        ? 'Live keyword research is running. Balance ' + keywords.balance + ' units, floor ' + keywords.floor + '.'
+        : keywords.reason === 'no_token'
+          ? 'SEMRUSH_API_KEY is unset: the keyword layer degrades to cache-or-link-out — the Semrush ' +
+            'panel, the assistant’s live grounding and Autopilot’s angle selection all lose their data.'
+          : keywords.reason === 'budget'
+            ? 'The key is set but the unit balance (' + keywords.balance + ') is at or below the protection ' +
+              'floor (SEMRUSH_UNIT_FLOOR=' + keywords.floor + '), so every live lookup is refused. Top up units ' +
+              'or lower the floor. Until then the keyword layer is serving cache-or-link-out only.'
+            : 'The key is set but the balance endpoint could not be read, so the guard is failing closed. ' +
+              'Recovers by itself within 30s of Semrush answering again.',
     },
     {
       name: 'images',
