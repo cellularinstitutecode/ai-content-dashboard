@@ -23,6 +23,7 @@ import 'server-only';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import type { BrandContext } from '@/lib/ai';
 import { classifyVerdict } from './image-verdict.ts';
+import { recordImageOutcome } from '@/lib/provider-status';
 
 // Machine verification: every generated image is inspected by a vision model
 // before it is accepted, so hallucinated output (garbled text, warped
@@ -374,7 +375,27 @@ export async function generatePackImage(opts: {
   brand?: BrandContext | null;
   variant?: number;
 }): Promise<PackImage> {
+  // Record how this went before handing the result (or the failure) on, so
+  // /api/health can say whether images WORK rather than whether a key is set.
+  // The refusal below is deliberately not recorded: nothing was attempted, and
+  // "IMAGE_GEN is off" is already a configuration check that health can see.
   if (!imagesEnabled()) throw new Error('image generation disabled (IMAGE_GEN=off or no OPENAI_API_KEY)');
+  try {
+    const made = await generateBestPackImage(opts);
+    recordImageOutcome({ ok: true });
+    return made;
+  } catch (e) {
+    recordImageOutcome({ ok: false, message: e instanceof Error ? e.message : String(e) });
+    throw e;
+  }
+}
+
+async function generateBestPackImage(opts: {
+  topic: string;
+  pack?: Record<string, unknown> | null;
+  brand?: BrandContext | null;
+  variant?: number;
+}): Promise<PackImage> {
   const baseVariant = Math.abs(Math.round(opts.variant ?? 0)) % STYLE_VARIANTS.length;
   const started = Date.now();
 

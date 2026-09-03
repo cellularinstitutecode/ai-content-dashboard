@@ -75,6 +75,16 @@ export default function SystemStatus() {
     if (c.name === 'semrush' && c.code === 'no_token') {
       return { down: 'Keyword research is not connected.', stillWorks: 'Drafts are still written, just without live search data.' };
     }
+    // "AI images are not being generated" is true but useless when the cause is
+    // an empty wallet, because the same account also runs the check that keeps
+    // text off those images and the voice assistant. Naming it stops three
+    // separate "is this broken?" conversations.
+    if (c.name === 'images' && c.code === 'no_credit') {
+      return { down: 'The OpenAI account is out of credit — images, image checks and voice are paused.', stillWorks: 'Text still works.' };
+    }
+    if (c.name === 'images' && c.code === 'bad_key') {
+      return { down: 'AI images are not being generated — OpenAI rejected the key on the last attempt.', stillWorks: 'Posts still write and schedule as text.' };
+    }
     return PLAIN[c.name] ?? { down: c.name.replace(/_/g, ' ') + ' is not available.' };
   });
 
