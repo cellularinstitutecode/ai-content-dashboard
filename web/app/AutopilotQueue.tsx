@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import ProcessTracker, { makeSteps, stepActive, stepError, stepsDone, type ProcessStep } from '@/components/ProcessTracker';
 import { announce, onRefresh } from '@/components/refreshBus';
 import { PanelLoader } from '@/components/LoadingScreen';
-import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
+import { friendlyError, friendlyErrorFromResponse, friendlyImageError } from '@/lib/friendly-error';
 import { fmtScheduleSlot } from '@/lib/schedule-clock';
 
 // The visible pipeline an engine run walks through. The tick call does all of
@@ -249,8 +249,12 @@ export default function AutopilotQueue() {
       announce('drafts', 'stats', 'images', 'autopilot', 'semrush'); // engine creates drafts + images and spends Semrush units → sync every panel
     } catch (e) {
       clearEngineTimers();
-      setEngineProc((p) => (p ? stepError(p) : p));
-      setErr(e instanceof Error ? e.message : 'Engine tick failed');
+      // The engine runs Claude for the words and OpenAI for the picture in one
+      // call, so we do not know which account failed unless the body says. No
+      // provider hint here on purpose: OpenAI is named only when it is named.
+      const why = friendlyImageError(e, 'The engine could not finish this tick. Nothing was lost — run it again in a moment.');
+      setEngineProc((p) => (p ? stepError(p, undefined, why) : p));
+      setErr(why);
     } finally {
       setEngineBusy(false);
     }

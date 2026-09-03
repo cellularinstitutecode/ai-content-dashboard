@@ -7,7 +7,7 @@
 // hunting for a billing problem that did not exist.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { friendlyError, GENERIC_FAILURE } from './friendly-error.ts';
+import { friendlyError, friendlyImageError, GENERIC_FAILURE, OPENAI_OUT_OF_CREDIT } from './friendly-error.ts';
 
 test('an expired session is reported as an expired session', () => {
   for (const body of [{ error: 'unauthenticated' }, { error: 'unauthorized' }, 'unauthenticated']) {
@@ -55,4 +55,60 @@ test('nothing at all still produces a sentence', () => {
   assert.equal(friendlyError(null), GENERIC_FAILURE);
   assert.equal(friendlyError({}), GENERIC_FAILURE);
   assert.equal(friendlyError(''), GENERIC_FAILURE);
+});
+
+// --- image failures -------------------------------------------------------
+//
+// A generation wrote and saved the text pack, then the Hero image step turned
+// red still saying "Generating an on-brand visual…". The body said
+// `openai images 429 … credit_balance_exhausted`. The shared mapping answers
+// that with "switch the model to Claude (Anthropic)" — right for text, useless
+// for a picture, because there is no other image provider to switch to.
+
+// What lib/images.ts throws and app/api/drafts/image relays as { error }.
+const OUT_OF_CREDIT = {
+  error: 'image generation failed: openai images 429: {"error":{"message":"Your credit balance is too low to access the OpenAI API","type":"invalid_request_error","code":"credit_balance_exhausted"}}',
+};
+
+test('an image path names the OpenAI account, not a model switch', () => {
+  const said = friendlyImageError(OUT_OF_CREDIT, 'fallback', { provider: 'openai' });
+  assert.match(said, /OpenAI account is out of credit/);
+  assert.doesNotMatch(said, /switch the model/i);
+  assert.doesNotMatch(said, /Claude/);
+});
+
+test('the raw provider body never reaches the person', () => {
+  const said = friendlyImageError(OUT_OF_CREDIT, 'fallback', { provider: 'openai' });
+  assert.doesNotMatch(said, /credit_balance_exhausted|invalid_request_error|\{/);
+});
+
+test('what survived the failure is said too, when the caller knows', () => {
+  assert.equal(
+    friendlyImageError(OUT_OF_CREDIT, 'fallback', { provider: 'openai', alsoSay: 'Your text is saved.' }),
+    OPENAI_OUT_OF_CREDIT + ' Your text is saved.',
+  );
+  assert.equal(friendlyImageError(OUT_OF_CREDIT, 'fallback', { provider: 'openai' }), OPENAI_OUT_OF_CREDIT);
+});
+
+test('any other image failure keeps the shared advice', () => {
+  assert.match(friendlyImageError({ error: 'openai images 504: upstream timed out' }, 'fallback', { provider: 'openai' }), /took too long/i);
+  assert.equal(friendlyImageError({}, 'the picture failed', { provider: 'openai' }), 'the picture failed');
+});
+
+test('a caller that cannot know the provider does not guess one', () => {
+  // The Autopilot engine runs Claude for the words and OpenAI for the picture
+  // in a single call. Blaming OpenAI for an Anthropic bill would send a person
+  // to top up the wrong account.
+  const anthropic = { error: 'anthropic 400: {"type":"invalid_request_error","message":"credit_balance_exhausted"}' };
+  const said = friendlyImageError(anthropic, 'fallback');
+  assert.doesNotMatch(said, /OpenAI/);
+  assert.match(said, /out of credit/i);
+  // ...but it still names OpenAI when the body itself does.
+  assert.match(friendlyImageError(OUT_OF_CREDIT, 'fallback'), /OpenAI account is out of credit/);
+});
+
+test('an Error and a bare string are read the same as a body', () => {
+  assert.match(friendlyImageError(new Error('openai images 429: credit_balance_exhausted'), 'fallback'), /OpenAI account/);
+  assert.match(friendlyImageError('openai images 429: insufficient_quota', 'fallback'), /OpenAI account/);
+  assert.equal(friendlyImageError(null, 'fallback'), 'fallback');
 });
