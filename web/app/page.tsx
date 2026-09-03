@@ -898,13 +898,21 @@ if (ir.ok && ij?.image?.url) {
 setGenImage(ij.image);
 setProc((p) => (p ? stepsDone(p) : p));
 } else {
-setProc((p) => (p ? stepError(stepActive(p, 'image'), 'image') : p));
+// Say why. The text pack is saved and fine; only the picture failed, and
+// the reason (out of OpenAI credit, a timeout) decides who needs to act.
+// Images are OpenAI-only, so the shared "switch to Claude" advice does not
+// apply here; name the account that needs topping up instead.
+const raw = String(ij?.error || '');
+const why = /credit_balance_exhausted|insufficient_quota|billing/i.test(raw)
+  ? 'The OpenAI account is out of credit — images and the image checker need it. Your text is saved and works without a picture.'
+  : friendlyError(ij, 'The image could not be generated. Your text is saved — try "New image" in a moment.');
+setProc((p) => (p ? stepError(stepActive(p, 'image'), 'image', why) : p));
 }
 })
-.catch(() => {
+.catch((e) => {
 if (genRun.current !== runId) return;
 clearProcTimers();
-setProc((p) => (p ? stepError(stepActive(p, 'image'), 'image') : p));
+setProc((p) => (p ? stepError(stepActive(p, 'image'), 'image', friendlyError(e, 'The image could not be generated. Your text is saved.')) : p));
 })
 .finally(() => {
 if (genRun.current === runId) setGenImageLoading(false);

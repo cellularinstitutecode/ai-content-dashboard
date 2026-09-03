@@ -28,10 +28,14 @@ export function stepActive(steps: ProcessStep[], id: string): ProcessStep[] {
 }
 
 // Mark the currently active step (or `id` when given) as failed; later steps stay pending.
-export function stepError(steps: ProcessStep[], id?: string): ProcessStep[] {
+// `detail`, when given, replaces the step's in-progress caption — otherwise a
+// failed "Hero image" step kept saying "Generating an on-brand visual…" under
+// a red cross, and the one fact the person needed (the OpenAI account is out
+// of credit) was thrown away with the response body.
+export function stepError(steps: ProcessStep[], id?: string, detail?: string): ProcessStep[] {
   const idx = id ? steps.findIndex((s) => s.id === id) : steps.findIndex((s) => s.status === 'active');
   if (idx < 0) return steps;
-  return steps.map((s, i) => (i === idx ? { ...s, status: 'error' } : s));
+  return steps.map((s, i) => (i === idx ? { ...s, status: 'error', ...(detail ? { detail } : {}) } : s));
 }
 
 // Mark specific steps skipped (e.g. image generation turned off).
