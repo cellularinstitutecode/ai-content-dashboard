@@ -23,6 +23,7 @@ type Check = { name: string; ok: boolean; severity: 'required' | 'optional'; det
 // this cannot set one, and the person who can does not need this banner.
 const PLAIN: Record<string, { down: string; stillWorks?: string }> = {
   supabase: { down: 'Saving and sign-in are unavailable.' },
+  database_schema: { down: 'The database is missing an update — ask whoever set this up to run the migration.', stillWorks: 'Writing and scheduling still work; Autopilot does not.' },
   ai_provider: { down: 'Writing is unavailable — no AI is connected.' },
   metricool: { down: 'Scheduling is unavailable.', stillWorks: 'You can still write and save drafts.' },
   allowed_emails: { down: 'Sign-in access is not configured.' },

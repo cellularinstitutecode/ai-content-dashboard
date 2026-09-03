@@ -22,6 +22,8 @@ import { requireAllowlistedUser } from '@/lib/auth';
 import { ALLOWED_EMAILS, ALLOWED_BLOG_IDS } from '@/lib/access';
 import { keywordCapability } from '@/lib/semrush';
 import { lastImageOutcome } from '@/lib/provider-status';
+import { missingSchema } from '@/lib/schema-check';
+import { schemaDetail } from '@/lib/schema-probe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,12 +49,28 @@ export async function GET() {
 
   const keywords = await keywordCapability();
 
+  // Did anyone actually run the .sql files? Nothing checked, ever.
+  const schemaGaps = await missingSchema();
+
   // Images: what the account last DID, not what is in the environment.
   const imagesConfigured = has('OPENAI_API_KEY') && process.env.IMAGE_GEN !== 'off';
   const lastImage = imagesConfigured ? await lastImageOutcome() : null;
   const imagesFailing = Boolean(lastImage && !lastImage.ok);
 
   const checks: Check[] = [
+    {
+      // Every migration in this repo is a file a human is asked to paste into
+      // the Supabase SQL editor. Nothing ever checked that they had, so a
+      // deployment could be fully configured — every key present, this
+      // endpoint green — while Autopilot failed on every single tick because
+      // autopilot.sql had never been run. Required severity: this is not a
+      // degraded feature, it is a feature that cannot work at all.
+      name: 'database_schema',
+      ok: schemaGaps.length === 0,
+      code: schemaGaps.length ? 'migration_pending' : undefined,
+      severity: 'required',
+      detail: schemaDetail(schemaGaps),
+    },
     {
       name: 'supabase',
       ok: has('NEXT_PUBLIC_SUPABASE_URL') && has('NEXT_PUBLIC_SUPABASE_ANON_KEY') && has('SUPABASE_SERVICE_ROLE_KEY'),
