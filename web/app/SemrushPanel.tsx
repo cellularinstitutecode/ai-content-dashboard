@@ -461,6 +461,8 @@ function SectionNotice({ meta, what }: { meta: SectionMeta; what: string }) {
       ? 'Live ' + what.toLowerCase() + ' needs Semrush connected — ask whoever set this up to add the key. Showing stored data.'
       : meta.reason === 'budget'
       ? 'Unit balance is at the protection floor — ' + what.toLowerCase() + ' will refresh when the budget recovers.'
+      : meta.reason === 'balance_unknown'
+      ? 'The Semrush key cannot read the account balance, so live ' + what.toLowerCase() + ' is paused. This usually means a v4 key where a Standard API (v3) key is needed — ask whoever set this up. Adding units will not change it.'
       : meta.reason === 'v3_key'
       ? 'This Semrush plan does not include live ' + what.toLowerCase() + ' — showing stored data instead.'
       : meta.reason === 'plan'

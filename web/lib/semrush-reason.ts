@@ -9,7 +9,15 @@
 //   v3_key   the credential cannot call the v3 API     → nothing to fix by retry
 //   plan     the report/units are not on this plan     → nothing to fix by retry
 //   budget   our own unit floor stopped the call       → clears by itself
+//   balance_unknown  the balance endpoint is unreadable  → a human should fix it
 //   empty    Semrush genuinely has no data yet         → nothing is wrong
+//
+// `balance_unknown` is the one that hid for weeks. The spend guard fails closed
+// when it cannot read the balance (correctly), but every caller reported that
+// refusal as `budget` — "unit balance at protection floor" — which sent people
+// to buy units. On the live account the balance was unreadable because both
+// keys were v4 keys and countapiunits.html is a v3 endpoint: no amount of
+// units would ever have changed the answer.
 //
 // `v3_key` exists because Semrush runs two independent key systems. A v4 key —
 // the only kind the API Keys page issues today — is accepted ONLY on v4
@@ -27,7 +35,8 @@ export type SemrushReason =
   | 'http'
   | 'network'
   | 'empty'
-  | 'budget';
+  | 'budget'
+  | 'balance_unknown';
 
 // The v3 API reports failures in the BODY as `ERROR <code> :: <text>`, with a
 // 200 status — so the code, not the status, is the signal here.
@@ -58,6 +67,7 @@ export function reasonForHttpStatus(status: number): SemrushReason {
 // The UI uses this to decide between a quiet note and an amber warning: only
 // states a human can actually act on deserve the amber.
 export function isInformationalReason(reason: SemrushReason | undefined): boolean {
+  // balance_unknown is deliberately NOT here: it is a human's job to fix.
   return reason === 'no_token' || reason === 'v3_key' || reason === 'budget' || reason === 'empty';
 }
 
@@ -81,6 +91,7 @@ const MESSAGES: Record<SemrushReason, string> = {
   v3_key: 'This Semrush plan does not include the keyword reports, so stored data is being shown.',
   plan: 'Semrush has no report credit left on this plan right now.',
   budget: 'Keyword research is paused to protect the Semrush credit balance — it resumes when the balance recovers.',
+  balance_unknown: 'Keyword research is paused because the Semrush key cannot read the account balance — usually the key is a v4 key, and this needs a Standard API (v3) key. Ask whoever set this up; adding units will not change it.',
   http: 'Semrush did not answer just now — showing stored data instead.',
   network: 'Semrush could not be reached just now — showing stored data instead.',
 };

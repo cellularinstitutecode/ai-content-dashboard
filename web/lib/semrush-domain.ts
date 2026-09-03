@@ -21,7 +21,8 @@
 
 import {
   UNIT_COST,
-  budgetAllows,
+  budgetDecision,
+  refusalReason,
   cacheGet,
   cachePut,
   db,
@@ -217,8 +218,9 @@ async function rawCsvReport(
   if (!key) return { ok: false, source: 'none', reason: 'no_token', note: 'SEMRUSH_API_KEY not set', unitsSpent: 0 };
 
   const estUnits = (UNIT_COST[report] ?? 40) * Math.max(1, opts.estLines);
-  if (!(await budgetAllows(estUnits))) {
-    return { ok: false, source: 'none', reason: 'budget', note: 'Unit balance at protection floor', unitsSpent: 0 };
+  const decision = await budgetDecision(estUnits);
+  if (!decision.allow) {
+    return { ok: false, source: 'none', ...refusalReason(decision), unitsSpent: 0 };
   }
 
   const url = new URL(API_BASE.replace(/\/$/, '') + (opts.path ?? '/'));
@@ -547,8 +549,9 @@ async function projectJson(
   const key = process.env.SEMRUSH_API_KEY;
   if (!key) return { json: null, meta: { ok: false, source: 'none', reason: 'no_token', unitsSpent: 0 } };
   const est = UNIT_COST.siteaudit_info;
-  if (!(await budgetAllows(est))) {
-    return { json: null, meta: { ok: false, source: 'none', reason: 'budget', note: 'Unit balance at protection floor', unitsSpent: 0 } };
+  const decision = await budgetDecision(est);
+  if (!decision.allow) {
+    return { json: null, meta: { ok: false, source: 'none', ...refusalReason(decision), unitsSpent: 0 } };
   }
   const url = new URL(API_BASE.replace(/\/$/, '') + path);
   url.searchParams.set('key', key);
