@@ -237,6 +237,40 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   check('the cron tick runs with the right secret', goodTick.ok && tickBody?.ok === true, goodTick.status + ' ' + JSON.stringify(tickBody));
   check('and it now reports how many stale runs it closed out', typeof tickBody?.expired === 'number', JSON.stringify(tickBody));
 
+  // ------------------------------------------- the migration nobody ran -----
+  // Every migration here is a .sql file a human is asked to paste into the
+  // Supabase SQL editor, and nothing checked that they had: Autopilot could
+  // fail on every tick forever while /api/health, which only read environment
+  // variables, called the deployment healthy.
+  const schemaOf = async () => {
+    const j = await jsonOf(await app('/api/health'));
+    return (j?.checks || []).find((c) => c.name === 'database_schema') || {};
+  };
+  const setMissing = (body) =>
+    fetch(SB + '/__missing', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+  await setMissing({});
+  const migrated = await schemaOf();
+  check('a fully migrated database passes the schema check', migrated.ok === true, JSON.stringify(migrated));
+
+  await setMissing({ tables: ['template_runs'] });
+  const noTable = await schemaOf();
+  check('a missing table is caught', noTable.ok === false && noTable.code === 'migration_pending', JSON.stringify(noTable));
+  check('and the detail names the file to run, not just the table',
+    /template_runs/.test(noTable.detail || '') && /supabase\/autopilot\.sql/.test(noTable.detail || ''), noTable.detail);
+
+  // The one a table-only probe would miss: schedule_templates.strategy is an
+  // ALTER TABLE, so the table is present and the column is not.
+  await setMissing({ columns: ['schedule_templates.strategy'] });
+  const noColumn = await schemaOf();
+  check('a missing COLUMN is caught, not just a missing table', noColumn.ok === false, JSON.stringify(noColumn));
+  check('and it is named as a column so nobody hunts for a missing table',
+    /schedule_templates\.strategy/.test(noColumn.detail || ''), noColumn.detail);
+
+  await setMissing({});
+  const recovered = await schemaOf();
+  check('running the migration clears the check', recovered.ok === true, JSON.stringify(recovered));
+
   console.log('\n' + (failed === 0 ? 'all' : String(failed) + ' FAILED of') + ' API e2e checks');
   process.exit(failed === 0 ? 0 : 1);
 })().catch((e) => { console.error(e); process.exit(1); });

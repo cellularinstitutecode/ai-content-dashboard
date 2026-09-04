@@ -174,6 +174,8 @@ function readBody(req) {
 }
 
 let reqLog = [];
+// Tables and 'table.column' names that should answer as if never migrated.
+const missing = new Set();
 // A pristine copy of the seed, so a test run can put the backend back exactly
 // as it found it (POST /__reseed). Without it, a second run of the API suite
 // sees the first run's rows and every "did this create something?" assertion
@@ -192,8 +194,22 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     return res.end(JSON.stringify(reqLog));
   }
-  if (url.pathname === '/__reset') { reqLog = []; res.writeHead(204); return res.end(); }
+  if (url.pathname === '/__reset') { reqLog = []; missing.clear(); res.writeHead(204); return res.end(); }
+  // Pretend a migration was never run: POST /__missing {"tables":["template_runs"],
+  // "columns":["schedule_templates.strategy"]} and those reads answer with the
+  // Postgres codes PostgREST really returns (42P01 undefined_table, 42703
+  // undefined_column). Nothing else can exercise the database_schema check,
+  // because this mock happily invents any table it is asked for.
+  if (url.pathname === '/__missing') {
+    const body = await readBody(req);
+    missing.clear();
+    for (const t of (body && body.tables) || []) missing.add(t);
+    for (const c of (body && body.columns) || []) missing.add(c);
+    res.writeHead(204);
+    return res.end();
+  }
   if (url.pathname === '/__reseed') {
+    missing.clear(); // a reseed is a fresh database: fully migrated
     tables = JSON.parse(JSON.stringify(SEED));
     reqLog = [];
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -228,6 +244,22 @@ const server = http.createServer(async (req, res) => {
   const rest = /^\/rest\/v1\/([a-zA-Z0-9_]+)$/.exec(url.pathname);
   if (rest) {
     const table = rest[1];
+    if (missing.has(table)) {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({
+        code: '42P01', message: 'relation "public.' + table + '" does not exist',
+        details: null, hint: null,
+      }));
+    }
+    const asked = String(url.searchParams.get('select') || '').split(',').map((c) => c.trim()).filter(Boolean);
+    const absent = asked.find((c) => missing.has(table + '.' + c));
+    if (absent) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({
+        code: '42703', message: 'column ' + table + '.' + absent + ' does not exist',
+        details: null, hint: null,
+      }));
+    }
     if (!(table in tables)) tables[table] = [];
     const rows = tables[table];
     const prefer = String(req.headers.prefer || '');

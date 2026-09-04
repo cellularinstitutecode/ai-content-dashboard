@@ -12,7 +12,7 @@ import ProcessTracker, { makeSteps, stepActive, stepError, stepsDone, type Proce
 import { announce, onRefresh, fetchDrafts } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
 import { PanelLoader } from '@/components/LoadingScreen';
-import { friendlyError } from '@/lib/friendly-error';
+import { friendlyError, friendlyImageError } from '@/lib/friendly-error';
 
 // The visible pipeline a standalone image walks through — each step lights up
 // as the real call behind it starts/finishes.
@@ -165,8 +165,16 @@ export default function ImageStudio() {
       }
     } catch (e) {
       clearProcTimers();
-      setProc((p) => (p ? stepError(p) : p));
-      setErr(e instanceof Error ? e.message : 'Image generation failed');
+      // Say why on the step itself, not just in the banner — a red cross under
+      // "gpt-image-1 is painting your visual…" tells nobody anything. The same
+      // sentence goes to the banner so the raw `openai images 429: {…}` body
+      // never reaches a person.
+      const why = friendlyImageError(e, 'The image could not be generated. The draft is unchanged.', {
+        provider: 'openai',
+        alsoSay: 'The draft is unchanged — only the picture failed.',
+      });
+      setProc((p) => (p ? stepError(p, undefined, why) : p));
+      setErr(why);
     } finally {
       setBusyId(null);
     }
@@ -207,8 +215,11 @@ export default function ImageStudio() {
       announce('drafts', 'stats', 'images'); // new image draft → update library + counters everywhere
     } catch (e) {
       clearProcTimers();
-      setProc((p) => (p ? stepError(p) : p));
-      setErr(e instanceof Error ? e.message : 'Image creation failed');
+      const why = friendlyImageError(e, 'The image could not be created. Try that idea again in a moment.', {
+        provider: 'openai',
+      });
+      setProc((p) => (p ? stepError(p, undefined, why) : p));
+      setErr(why);
     } finally {
       setQuickBusy(false);
     }

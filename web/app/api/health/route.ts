@@ -21,6 +21,9 @@ import { NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { ALLOWED_EMAILS, ALLOWED_BLOG_IDS } from '@/lib/access';
 import { keywordCapability } from '@/lib/semrush';
+import { lastImageOutcome } from '@/lib/provider-status';
+import { missingSchema } from '@/lib/schema-check';
+import { schemaDetail } from '@/lib/schema-probe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -46,7 +49,28 @@ export async function GET() {
 
   const keywords = await keywordCapability();
 
+  // Did anyone actually run the .sql files? Nothing checked, ever.
+  const schemaGaps = await missingSchema();
+
+  // Images: what the account last DID, not what is in the environment.
+  const imagesConfigured = has('OPENAI_API_KEY') && process.env.IMAGE_GEN !== 'off';
+  const lastImage = imagesConfigured ? await lastImageOutcome() : null;
+  const imagesFailing = Boolean(lastImage && !lastImage.ok);
+
   const checks: Check[] = [
+    {
+      // Every migration in this repo is a file a human is asked to paste into
+      // the Supabase SQL editor. Nothing ever checked that they had, so a
+      // deployment could be fully configured — every key present, this
+      // endpoint green — while Autopilot failed on every single tick because
+      // autopilot.sql had never been run. Required severity: this is not a
+      // degraded feature, it is a feature that cannot work at all.
+      name: 'database_schema',
+      ok: schemaGaps.length === 0,
+      code: schemaGaps.length ? 'migration_pending' : undefined,
+      severity: 'required',
+      detail: schemaDetail(schemaGaps),
+    },
     {
       name: 'supabase',
       ok: has('NEXT_PUBLIC_SUPABASE_URL') && has('NEXT_PUBLIC_SUPABASE_ANON_KEY') && has('SUPABASE_SERVICE_ROLE_KEY'),
@@ -133,10 +157,32 @@ export async function GET() {
               'Standard API key. Adding units changes nothing. If Semrush is merely down, this clears within 30s.',
     },
     {
+      // Capability, not configuration. `has('OPENAI_API_KEY')` stayed true
+      // through days of failed generations while the account sat at zero
+      // credit, so this endpoint reported healthy about a feature that was
+      // dead — the same mistake the semrush check above was corrected for.
+      // The last real attempt is recorded by lib/images.ts on every call; a
+      // failure older than a day is no longer evidence about right now.
       name: 'images',
-      ok: has('OPENAI_API_KEY') && process.env.IMAGE_GEN !== 'off',
+      ok: imagesConfigured && !imagesFailing,
+      code: !imagesConfigured ? 'not_configured' : imagesFailing ? (lastImage!.reason ?? 'other') : undefined,
       severity: 'optional',
-      detail: 'AI hero images need OPENAI_API_KEY and IMAGE_GEN not set to "off".',
+      detail: !imagesConfigured
+        ? 'AI hero images need OPENAI_API_KEY and IMAGE_GEN not set to "off".'
+        : !imagesFailing
+          ? 'AI hero images are configured' + (lastImage?.ok ? ' and the last generation succeeded.' : '.')
+          : lastImage!.reason === 'no_credit'
+            ? 'The key is set but the OpenAI account is out of credit: the last generation was refused for ' +
+              'billing. Images, the vision check that keeps text off them, and the voice assistant all run on ' +
+              'this one account, so all three are down until it is topped up. Text generation is unaffected — ' +
+              'it runs on Anthropic.'
+            : lastImage!.reason === 'bad_key'
+              ? 'The key is set but OpenAI rejected it on the last generation. Check OPENAI_API_KEY has not ' +
+                'been revoked or rotated.'
+              : lastImage!.reason === 'rate_limited'
+                ? 'OpenAI rate-limited the last generation. This usually clears itself; if it does not, the ' +
+                  'account may be at a usage cap.'
+                : 'The last image generation failed. Try one from the Image Studio to see the reason.',
     },
     {
       name: 'opus_webhook',

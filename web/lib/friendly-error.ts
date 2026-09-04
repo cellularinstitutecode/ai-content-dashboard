@@ -112,3 +112,57 @@ export async function friendlyErrorFromResponse(
   }
   return friendlyError(body, fallback);
 }
+
+// ---------------------------------------------------------------------------
+// Image failures
+//
+// Pictures come from OpenAI and only from OpenAI — gpt-image-1 for the visual,
+// a vision model for the text/anatomy check. So when that account runs out of
+// credit, fromMessage()'s "switch the model to Claude (Anthropic)" is exactly
+// the wrong thing to tell someone: there is no model to switch to on an image
+// path, and the person goes looking for a setting that does not exist.
+//
+// Naming the provider is only safe when we know which one failed. The image
+// route does (lib/images.ts throws `openai images <status>: <body>`, and the
+// route relays that verbatim), so those callers pass provider: 'openai'. The
+// Autopilot engine does not — it runs Claude for the text and OpenAI for the
+// picture in the same call — so it leaves the provider unknown and we name
+// OpenAI only when the body itself says so.
+
+const OUT_OF_CREDIT = /credit_balance_exhausted|insufficient_quota|billing/i;
+const NAMES_OPENAI = /openai|gpt-image|dall-?e/i;
+
+export const OPENAI_OUT_OF_CREDIT =
+  'The OpenAI account is out of credit — images and the image checker need it.';
+
+/** Everything a failure carried, flattened, so one regex can look at all of it. */
+function rawTextOf(input: unknown): string {
+  if (input == null) return '';
+  if (input instanceof Error) return input.message;
+  if (typeof input === 'string') return input;
+  if (typeof input === 'object') {
+    const body = input as Record<string, unknown>;
+    return [body.error, body.message].filter((v): v is string => typeof v === 'string').join(' ');
+  }
+  return String(input);
+}
+
+/**
+ * Say why an image (or an image-generating run) failed, in one sentence.
+ *
+ * @param input     a parsed JSON body, an Error, or a string
+ * @param fallback  what to say when nothing else fits
+ * @param opts.provider  'openai' when the caller knows only OpenAI was involved
+ * @param opts.alsoSay   appended to the out-of-credit sentence — what survived
+ */
+export function friendlyImageError(
+  input: unknown,
+  fallback: string = GENERIC_FAILURE,
+  opts: { provider?: 'openai' | 'unknown'; alsoSay?: string } = {},
+): string {
+  const raw = rawTextOf(input);
+  if (OUT_OF_CREDIT.test(raw) && (opts.provider === 'openai' || NAMES_OPENAI.test(raw))) {
+    return opts.alsoSay ? OPENAI_OUT_OF_CREDIT + ' ' + opts.alsoSay : OPENAI_OUT_OF_CREDIT;
+  }
+  return friendlyError(input, fallback);
+}

@@ -23,6 +23,7 @@ type Check = { name: string; ok: boolean; severity: 'required' | 'optional'; det
 // this cannot set one, and the person who can does not need this banner.
 const PLAIN: Record<string, { down: string; stillWorks?: string }> = {
   supabase: { down: 'Saving and sign-in are unavailable.' },
+  database_schema: { down: 'The database is missing an update — ask whoever set this up to run the migration.', stillWorks: 'Writing and scheduling still work; Autopilot does not.' },
   ai_provider: { down: 'Writing is unavailable — no AI is connected.' },
   metricool: { down: 'Scheduling is unavailable.', stillWorks: 'You can still write and save drafts.' },
   allowed_emails: { down: 'Sign-in access is not configured.' },
@@ -74,6 +75,16 @@ export default function SystemStatus() {
     }
     if (c.name === 'semrush' && c.code === 'no_token') {
       return { down: 'Keyword research is not connected.', stillWorks: 'Drafts are still written, just without live search data.' };
+    }
+    // "AI images are not being generated" is true but useless when the cause is
+    // an empty wallet, because the same account also runs the check that keeps
+    // text off those images and the voice assistant. Naming it stops three
+    // separate "is this broken?" conversations.
+    if (c.name === 'images' && c.code === 'no_credit') {
+      return { down: 'The OpenAI account is out of credit — images, image checks and voice are paused.', stillWorks: 'Text still works.' };
+    }
+    if (c.name === 'images' && c.code === 'bad_key') {
+      return { down: 'AI images are not being generated — OpenAI rejected the key on the last attempt.', stillWorks: 'Posts still write and schedule as text.' };
     }
     return PLAIN[c.name] ?? { down: c.name.replace(/_/g, ' ') + ' is not available.' };
   });

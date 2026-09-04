@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "e2e:api": "node e2e/api-e2e.cjs",
     "e2e:browser": "node e2e/browser-e2e.cjs",
-    "test": "node --experimental-strip-types --test lib/**/*.test.ts && node test/progress-bus.test.cjs && node test/refresh-bus.test.cjs && node --experimental-strip-types --import ./test/image-register.mjs --test test/image-pipeline.test.mjs"
+    "test": "node --experimental-strip-types --test lib/**/*.test.ts && node test/progress-bus.test.cjs && node test/refresh-bus.test.cjs && node --experimental-strip-types --import ./test/image-register.mjs --test test/image-pipeline.test.mjs test/provider-status.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.3",

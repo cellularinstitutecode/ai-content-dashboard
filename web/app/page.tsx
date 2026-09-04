@@ -13,7 +13,7 @@ import { announce, onRefresh, fetchDrafts } from "@/components/refreshBus";
 import { tightestLimit, networkLabel, parseVideoUrl, localDateTimeValue, draftLabel } from "@/lib/composer";
 import { useWorkspace } from "@/components/workspace";
 import { PanelLoader } from "@/components/LoadingScreen";
-import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
+import { friendlyError, friendlyErrorFromResponse, friendlyImageError } from '@/lib/friendly-error';
 import { semrushDraftNote } from '@/lib/semrush-reason';
 import { fmtScheduleDateTime, scheduleTzLabel, schedulePresetValue } from '@/lib/schedule-clock';
 
@@ -900,19 +900,17 @@ setProc((p) => (p ? stepsDone(p) : p));
 } else {
 // Say why. The text pack is saved and fine; only the picture failed, and
 // the reason (out of OpenAI credit, a timeout) decides who needs to act.
-// Images are OpenAI-only, so the shared "switch to Claude" advice does not
-// apply here; name the account that needs topping up instead.
-const raw = String(ij?.error || '');
-const why = /credit_balance_exhausted|insufficient_quota|billing/i.test(raw)
-  ? 'The OpenAI account is out of credit — images and the image checker need it. Your text is saved and works without a picture.'
-  : friendlyError(ij, 'The image could not be generated. Your text is saved — try "New image" in a moment.');
+const why = friendlyImageError(ij, 'The image could not be generated. Your text is saved — try "New image" in a moment.', {
+  provider: 'openai',
+  alsoSay: 'Your text is saved and works without a picture.',
+});
 setProc((p) => (p ? stepError(stepActive(p, 'image'), 'image', why) : p));
 }
 })
 .catch((e) => {
 if (genRun.current !== runId) return;
 clearProcTimers();
-setProc((p) => (p ? stepError(stepActive(p, 'image'), 'image', friendlyError(e, 'The image could not be generated. Your text is saved.')) : p));
+setProc((p) => (p ? stepError(stepActive(p, 'image'), 'image', friendlyImageError(e, 'The image could not be generated. Your text is saved.', { provider: 'openai', alsoSay: 'Your text is saved and works without a picture.' })) : p));
 })
 .finally(() => {
 if (genRun.current === runId) setGenImageLoading(false);

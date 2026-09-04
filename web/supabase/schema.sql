@@ -243,3 +243,22 @@ do $$ begin
     create policy "post_metrics: owner read" on public.post_metrics for select using (auth.uid() = user_id);
   end if;
 end $$;
+
+-- Provider status: the outcome of the last real call to each upstream account,
+-- so /api/health can report whether a feature WORKS rather than whether its key
+-- is present. `images: ok` was true for as long as OPENAI_API_KEY was set — it
+-- was set, the account was out of credit, and the health endpoint said fine.
+--
+-- One row per provider, overwritten in place; there is no history here on
+-- purpose. Written by the service-role client only (RLS on, no policies), and
+-- every read and write is wrapped in a try/catch, so an older database that
+-- predates this table degrades to "no record" instead of failing a generation.
+create table if not exists public.provider_status (
+  provider text primary key,
+  ok boolean not null,
+  reason text,
+  detail text,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.provider_status enable row level security;
