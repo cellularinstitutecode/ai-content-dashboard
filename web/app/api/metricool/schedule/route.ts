@@ -119,7 +119,16 @@ export async function POST(req: NextRequest) {
     }
     const post = (parsed && parsed.data) ? parsed.data : parsed;
     const id = post && (post.id || post.postId) ? (post.id || post.postId) : null;
-    const status = (post && post.providers && post.providers[0] && post.providers[0].status) || null;
+    // Metricool's word for the post, which is NOT our word for it. It answers
+  // 'scheduled' for a post it is holding in its REVIEW queue, and storing that
+  // verbatim made our own row claim a post had been approved when nobody had
+  // looked at it. app/api/assistant/route.ts already guarded against this; this
+  // path did not. Anything that would read as approved is stored as what it
+  // actually is: waiting for review.
+  const raw = (post && post.providers && post.providers[0] && post.providers[0].status) || null;
+  const status = raw && String(raw).toLowerCase() !== 'scheduled' && String(raw).toLowerCase() !== 'approved'
+    ? raw
+    : null;
     const publicationDate = post && post.publicationDate ? post.publicationDate : null;
     const providers = post && post.providers ? post.providers : [];
 

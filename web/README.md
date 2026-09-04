@@ -90,6 +90,19 @@ npm run dev
 - Schedule Templates (`/templates`) — save a reusable weekly posting cadence (providers, weekdays, time, text) via `/api/templates`.
 - Apply a template with `POST /api/templates/apply` to materialize the next N weeks of scheduled posts into the `posts` table.
 
+## Approval lives on the dashboard
+
+Every post the app creates lands in Metricool's review queue (`draft: true`,
+`autoPublish: false`). The reviewer's yes is `PATCH /api/posts { id,
+action: 'approve' }` (or `'publish_now'`), which replaces the post in Metricool
+with `draft: false, autoPublish: true`; Metricool then publishes at the set
+time. It is the only path by which a post goes out, it is reachable only from
+the Approve buttons (queue, calendar, Autopilot's "Approve & schedule"), and
+our row changes only after Metricool accepted the change. Nobody needs to open
+Metricool. `lib/metricool-post.ts` holds the mode flags and the replace body
+(a REPLACE must carry text, networks, date and media, or the picture is
+dropped); `lib/metricool.ts` does the HTTP.
+
 ## One clock, everywhere
 
 Times a person READS come from `lib/schedule-clock.ts`; times the app WRITES

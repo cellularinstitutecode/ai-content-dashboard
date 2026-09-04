@@ -40,7 +40,7 @@ import {
 } from '@/lib/semrush';
 import { keywordMovers, primaryDomain, topOrganicKeywords, type KeywordMovers } from '@/lib/semrush-domain';
 import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
-import { metricoolSchedulePost, type Provider as McProvider } from '@/lib/metricool';
+import { metricoolSchedulePost, readPostId, type Provider as McProvider } from '@/lib/metricool';
 import { ensureDraftImage, type PackImage } from '@/lib/images';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 
@@ -978,7 +978,17 @@ const MC_PROVIDERS: McProvider[] = [
   'youtube', 'gmb', 'pinterest', 'threads', 'bluesky',
 ];
 
-export async function approveRun(runId: string, userId: string): Promise<{ ok: boolean; note: string }> {
+export type ApproveOptions = {
+  /**
+   * true  → the post goes straight into Metricool's live queue and publishes
+   *         at the run's slot (the reviewer pressed "Approve & schedule");
+   * false → it lands in the review queue as before (the default).
+   * Either way a person pressed the button; the engine never sets this.
+   */
+  schedule?: boolean;
+};
+
+export async function approveRun(runId: string, userId: string, opts: ApproveOptions = {}): Promise<{ ok: boolean; note: string }> {
   const db = supabaseAdmin();
   const { data: r } = await db
     .from('template_runs').select('*').eq('id', runId).eq('user_id', userId).maybeSingle();
@@ -1066,6 +1076,7 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
   // ("the two sides can never disagree") refuses to record that state — so
   // does this one now.
   let handoffFailed = false;
+  let metricoolPostId: string | null = null;
   // Push a Metricool DRAFT (autoPublish: false) so it lands in the approval
   // queue there too. Fail-soft: missing env just means dashboard-only staging.
   if (mcProviders.length) {
@@ -1076,20 +1087,24 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
         ? [{ url: packImage.url }]
         : [];
     try {
-      await metricoolSchedulePost({
+      const created = await metricoolSchedulePost({
         text,
         providers: mcProviders,
         publicationDate: run.scheduled_for,
         media,
-      });
+      }, opts.schedule ? 'scheduled' : 'review');
+      // Keep Metricool's id on our row. Without it the queue's Approve,
+      // Reschedule and Delete had nothing to address upstream, so an Autopilot
+      // post could only ever be managed inside Metricool.
+      metricoolPostId = readPostId(created);
       note =
-        'Sent to Metricool as a DRAFT for ' + mcProviders.join(', ') +
+        (opts.schedule ? 'Approved and SCHEDULED in Metricool for ' : 'Sent to Metricool as a DRAFT for ') + mcProviders.join(', ') +
         (run.angle?.media?.url
           ? ' with clip "' + (run.angle?.media?.title || 'video') + '" attached'
           : packImage?.url
             ? ' with the AI hero image attached'
             : '') +
-        ' — publish happens only there.';
+        (opts.schedule ? ' — Metricool will publish it at the scheduled time.' : ' — press Approve in your queue to publish.');
     } catch (e) {
       handoffFailed = true;
       note = 'Could not send this to Metricool (' + (e instanceof Error ? e.message : 'error') + '). Nothing was scheduled and the run is back in your queue — press Approve again to retry.';
@@ -1115,7 +1130,12 @@ export async function approveRun(runId: string, userId: string): Promise<{ ok: b
     providers,
     text,
     publication_date: run.scheduled_for,
-    status: 'pending_review',
+    metricool_post_id: metricoolPostId,
+    // 'approved' — not 'scheduled' — is the one word /api/posts treats as
+    // live. See modeOf() there: 'scheduled' is also the column default and
+    // part of Metricool's own vocabulary, so it cannot mean "a person said
+    // yes to this".
+    status: opts.schedule && mcProviders.length ? 'approved' : 'pending_review',
   });
   await db
     .from('template_runs')

@@ -139,7 +139,11 @@ export async function POST(req: NextRequest) {
   if (!id || !action) return NextResponse.json({ error: 'id and action required' }, { status: 400 });
 
   if (action === 'approve') {
-    const result = await approveRun(id, user.id);
+    // `schedule: true` is the reviewer's explicit "Approve & schedule" — the
+    // post goes into Metricool's live queue instead of its review queue. It is
+    // read only from the request a signed-in reviewer sent; the engine has no
+    // path to it.
+    const result = await approveRun(id, user.id, { schedule: body?.schedule === true });
     if (!result.ok) return NextResponse.json({ error: result.note }, { status: 400 });
     return NextResponse.json({ ok: true, note: result.note });
   }
