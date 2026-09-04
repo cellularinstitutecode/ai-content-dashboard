@@ -15,10 +15,18 @@
 //
 // Auth: `key` query parameter (SEMRUSH_API_KEY env). Errors come back as an
 // "ERROR NN :: message" plain-text body, usually with HTTP 200.
+//
+// Transport: a v3 key talks to api.semrush.com directly; a v4 key (the only
+// kind the API Keys page issues on a Pro plan) is routed through Semrush's MCP
+// server, which runs the same reports and returns the same CSV — see
+// lib/semrush-transport.ts. Over MCP the free balance endpoint is not
+// available, so the spend guard works from the account's monthly allowance
+// minus what this app has logged in semrush_usage this month.
 
 import { reportError } from '@/lib/report';
 import { decideSpend, applyCharge, type SpendDecision } from '@/lib/semrush-budget';
 import { reasonForCode, reasonForHttpStatus, type SemrushReason } from '@/lib/semrush-reason';
+import { mcpExecuteReport, toMcpCall, toMcpProjectCall, transportFor, type McpCall, type SemrushTransport } from '@/lib/semrush-transport';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 
 // ---------------------------------------------------------------------------
@@ -102,6 +110,16 @@ function unitFloor(): number {
   const n = parseInt(process.env.SEMRUSH_UNIT_FLOOR || '5000', 10);
   return Number.isFinite(n) ? n : 5000;
 }
+function unitAllowance(): number {
+  const n = parseInt(process.env.SEMRUSH_UNIT_ALLOWANCE || '50000', 10);
+  return Number.isFinite(n) && n > 0 ? n : 50000;
+}
+
+/** Which way requests leave the app for the configured key. */
+export function semrushTransport(): SemrushTransport {
+  return transportFor(process.env.SEMRUSH_API_KEY, process.env.SEMRUSH_TRANSPORT);
+}
+
 function cacheTtlMs(): number {
   const d = parseInt(process.env.SEMRUSH_CACHE_TTL_DAYS || '30', 10);
   return (Number.isFinite(d) ? d : 30) * 24 * 60 * 60 * 1000;
@@ -175,12 +193,56 @@ const BALANCE_TTL_MS = 10 * 60 * 1000;
 // spend floor for ten minutes (see budgetAllows).
 const BALANCE_ERROR_TTL_MS = 30 * 1000;
 
+/**
+ * Over MCP there is no balance endpoint. The account has a monthly allowance
+ * (SEMRUSH_UNIT_ALLOWANCE, default 50,000 — the Pro plan's Standard API pool)
+ * and every live spend this app makes is logged in semrush_usage, so the
+ * balance is the allowance minus this month's logged spend. It cannot see
+ * units spent by other tools on the same account, which is why the floor
+ * stays in force on top of it. Fails closed (null) if the log is unreadable.
+ */
+async function allowanceBalance(): Promise<number | null> {
+  try {
+    const start = new Date();
+    start.setUTCDate(1);
+    start.setUTCHours(0, 0, 0, 0);
+    // PostgREST caps a select at the project's max-rows (1,000 by default),
+    // and a capped read here would not fail — it would silently return FEWER
+    // spend rows, making the balance look higher than it is and letting the
+    // guard approve spend it should refuse. An under-count is the one wrong
+    // answer this function must never give. So ask for the exact count
+    // alongside the rows and treat any shortfall as "cannot read the log";
+    // when the count itself is unavailable, a page that is full to the
+    // default cap is treated the same way. Both fail closed.
+    const POSTGREST_DEFAULT_MAX_ROWS = 1000;
+    const { data, error, count } = await supabaseAdmin()
+      .from('semrush_usage')
+      .select('units', { count: 'exact' })
+      .eq('source', 'live')
+      .gte('created_at', start.toISOString());
+    if (error) return null;
+    const rows = (data as { units: number }[] | null | undefined) ?? [];
+    const truncated = typeof count === 'number' ? count > rows.length : rows.length >= POSTGREST_DEFAULT_MAX_ROWS;
+    if (truncated) return null;
+    const spent = rows.reduce((a, r) => a + (Number(r.units) || 0), 0);
+    return Math.max(0, unitAllowance() - spent);
+  } catch {
+    return null;
+  }
+}
+
 export async function getUnitsBalance(force = false): Promise<number | null> {
   const key = process.env.SEMRUSH_API_KEY;
   if (!key) return null;
   const now = Date.now();
   const ttl = balanceCache.value == null ? BALANCE_ERROR_TTL_MS : BALANCE_TTL_MS;
   if (!force && balanceCache.at && now - balanceCache.at < ttl) return balanceCache.value;
+  if (semrushTransport() === 'mcp') {
+    const value = await allowanceBalance();
+    if (value == null) reportError('semrush:usage-unreadable', new Error('allowance balance unavailable'));
+    balanceCache = { value, at: now };
+    return value;
+  }
   try {
     const res = await fetch(BALANCE_URL + '?key=' + encodeURIComponent(key), { method: 'GET' });
     const text = (await res.text()).trim();
@@ -252,9 +314,12 @@ export async function budgetAllows(estUnits: number): Promise<boolean> {
  * weeks both were reported as the first — see lib/semrush-reason.ts.
  */
 export function refusalReason(d: SpendDecision): { reason: SemrushReason; note: string } {
-  return d.reason === 'balance-unknown'
-    ? { reason: 'balance_unknown', note: 'Unit balance could not be read — the key may not have Standard API (v3) access; serving cache/link-out only' }
-    : { reason: 'budget', note: 'Unit balance at protection floor — serving cache/link-out only' };
+  if (d.reason === 'balance-unknown') {
+    return semrushTransport() === 'mcp'
+      ? { reason: 'balance_unknown', note: 'Unit usage log could not be read, so the spend guard is closed — serving cache/link-out only' }
+      : { reason: 'balance_unknown', note: 'Unit balance could not be read — the key may not have Standard API (v3) access; serving cache/link-out only' };
+  }
+  return { reason: 'budget', note: 'Unit balance at protection floor — serving cache/link-out only' };
 }
 
 export type KeywordCapability = {
@@ -263,6 +328,8 @@ export type KeywordCapability = {
   reason: 'ok' | 'no_token' | 'budget' | 'balance_unknown';
   balance: number | null;
   floor: number;
+  /** How requests leave the app: direct v3, or Semrush's MCP server. */
+  transport: SemrushTransport;
 };
 
 /**
@@ -283,15 +350,17 @@ export type KeywordCapability = {
 export async function keywordCapability(): Promise<KeywordCapability> {
   const hasKey = Boolean(process.env.SEMRUSH_API_KEY);
   const floor = unitFloor();
-  if (!hasKey) return { ok: false, reason: 'no_token', balance: null, floor };
+  const transport = semrushTransport();
+  if (!hasKey) return { ok: false, reason: 'no_token', balance: null, floor, transport };
   const balance = await getUnitsBalance();
   const decision = decideSpend(balance, UNIT_COST.phrase_related, floor, hasKey);
-  if (decision.allow) return { ok: true, reason: 'ok', balance, floor };
+  if (decision.allow) return { ok: true, reason: 'ok', balance, floor, transport };
   return {
     ok: false,
     reason: decision.reason === 'balance-unknown' ? 'balance_unknown' : 'budget',
     balance,
     floor,
+    transport,
   };
 }
 
@@ -354,6 +423,61 @@ export async function logUsage(report: string, phrase: string, units: number, so
 }
 
 // ---------------------------------------------------------------------------
+// One door out: every live Semrush request in the app goes through here
+// ---------------------------------------------------------------------------
+
+export type SemrushWire = { status: number; text: string };
+
+/**
+ * Send one v3-shaped request over whichever transport the key needs and hand
+ * back the body as the v3 endpoint would: status + text. Callers keep their
+ * existing `ERROR NN` / HTTP-status handling. Throws on network failure.
+ *
+ * `report` is the v3 report name (or 'siteaudit_info' / 'tracking_report'
+ * for the Projects API, with `projectId`). `params` are the v3 query
+ * parameters WITHOUT the key.
+ */
+export async function semrushRequest(
+  report: string,
+  params: Record<string, string>,
+  opts: { path?: string; projectId?: string; accept?: string; timeoutMs?: number } = {}
+): Promise<SemrushWire> {
+  const key = process.env.SEMRUSH_API_KEY || '';
+  const timeoutMs = opts.timeoutMs ?? 8000;
+
+  if (semrushTransport() === 'mcp') {
+    let call: McpCall | null;
+    if (report === 'siteaudit_info' || report === 'tracking_report') {
+      call = toMcpProjectCall(report, opts.projectId || '', params);
+    } else {
+      call = toMcpCall(report, params);
+    }
+    // A report with no MCP equivalent is an entitlement gap, not a fault:
+    // the same shape v3 uses for "not on this plan" (ERROR 132 is the
+    // closest real code — API DISABLED for this report).
+    if (!call) return { status: 200, text: 'ERROR 132 :: report not available over the MCP transport' };
+    return mcpExecuteReport(
+      { key, url: process.env.SEMRUSH_MCP_URL || undefined, timeoutMs: Math.max(timeoutMs, 15000) },
+      call
+    );
+  }
+
+  const url = new URL(API_BASE.replace(/\/$/, '') + (opts.path ?? '/'));
+  if (report !== 'siteaudit_info' && report !== 'tracking_report') url.searchParams.set('type', report);
+  url.searchParams.set('key', key);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  const ctl = new AbortController();
+  const to = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url.toString(), { method: 'GET', headers: { accept: opts.accept ?? 'text/plain' }, signal: ctl.signal });
+    const text = (await res.text().catch(() => '')).trim();
+    return { status: res.status, text };
+  } finally {
+    clearTimeout(to);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Low-level report fetcher (cache-first, budget-guarded)
 // ---------------------------------------------------------------------------
 
@@ -384,35 +508,29 @@ async function runReport(
     return { ok: false, source: 'none', ...refusalReason(decision), unitsSpent: 0 };
   }
 
-  const url = new URL(API_BASE.replace(/\/$/, '') + '/');
-  url.searchParams.set('type', report);
-  url.searchParams.set('key', key);
-  url.searchParams.set('phrase', seed);
-  url.searchParams.set('database', database);
-  url.searchParams.set('export_columns', opts.exportColumns);
-  url.searchParams.set('display_limit', String(limit));
-  for (const [k, v] of Object.entries(opts.extraParams || {})) url.searchParams.set(k, v);
+  const params: Record<string, string> = {
+    phrase: seed,
+    database,
+    export_columns: opts.exportColumns,
+    display_limit: String(limit),
+    ...(opts.extraParams || {}),
+  };
 
-  const ctl = new AbortController();
-  const to = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 8000);
   try {
-    const res = await fetch(url.toString(), { method: 'GET', headers: { accept: 'text/plain' }, signal: ctl.signal });
-    const text = (await res.text().catch(() => '')).trim();
+    const { status, text } = await semrushRequest(report, params, { timeoutMs: opts.timeoutMs });
     if (/^ERROR\s+\d+/i.test(text)) {
       const code = parseInt(text.replace(/^ERROR\s+/i, ''), 10);
       const reason = reasonForCode(code);
       if (reason === 'empty') return { ok: true, body: '', source: 'live', reason: 'ok', unitsSpent: 0 };
       return { ok: false, source: 'none', reason, note: text.slice(0, 100), unitsSpent: 0 };
     }
-    if (!res.ok) {
-      const reason = reasonForHttpStatus(res.status);
-      return { ok: false, source: 'none', reason, note: 'HTTP ' + res.status, unitsSpent: 0 };
+    if (status < 200 || status >= 300) {
+      const reason = reasonForHttpStatus(status);
+      return { ok: false, source: 'none', reason, note: 'HTTP ' + status, unitsSpent: 0 };
     }
     return { ok: true, body: text, source: 'live', reason: 'ok', unitsSpent: estUnits };
   } catch (e: any) {
     return { ok: false, source: 'none', reason: 'network', note: e?.name || 'fetch failed', unitsSpent: 0 };
-  } finally {
-    clearTimeout(to);
   }
 }
 

@@ -174,6 +174,7 @@ function readBody(req) {
 }
 
 let reqLog = [];
+let maxRows = null;
 // Tables and 'table.column' names that should answer as if never migrated.
 const missing = new Set();
 // A pristine copy of the seed, so a test run can put the backend back exactly
@@ -208,7 +209,16 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204);
     return res.end();
   }
+  // PostgREST's max-rows: a capped page with the exact count still reporting
+  // the full total. POST /__maxrows {"n": 2} to simulate; {"n": null} clears.
+  if (url.pathname === '/__maxrows') {
+    const b = await readBody(req);
+    maxRows = b && Number.isFinite(Number(b.n)) && Number(b.n) > 0 ? Number(b.n) : null;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ maxRows }));
+  }
   if (url.pathname === '/__reseed') {
+    maxRows = null;
     missing.clear(); // a reseed is a fresh database: fully migrated
     tables = JSON.parse(JSON.stringify(SEED));
     reqLog = [];
@@ -274,6 +284,7 @@ const server = http.createServer(async (req, res) => {
       const range = /^(\d+)-(\d+)$/.exec(String(req.headers.range || ''));
       if (range) out = out.slice(parseInt(range[1], 10), parseInt(range[2], 10) + 1);
       else if (Number.isFinite(limit)) out = out.slice(offset, offset + limit);
+      if (maxRows != null && out.length > maxRows) out = out.slice(0, maxRows);
       const headers = { 'content-type': 'application/json' };
       if (wantCount) headers['content-range'] = (out.length ? '0-' + (out.length - 1) : '*') + '/' + total;
       const wantsObj = /vnd\.pgrst\.object/.test(String(req.headers.accept || ''));

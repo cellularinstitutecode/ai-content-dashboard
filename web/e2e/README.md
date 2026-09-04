@@ -45,6 +45,12 @@ clinic's account:
 - A run that failed weeks ago is still listed, so "Needs attention" cannot be
   falsely empty.
 - The cron guards still hold, and the tick reports what it expired.
+- Keyword research over Semrush's MCP server (`e2e/mock-semrush-mcp.cjs`): a
+  v4 key is routed through MCP with the app's v3 vocabulary translated to MCP
+  parameter names (the mock rejects v3 codes like the real server), one
+  session is reused, the CSV parses into a real brief, repeats hit the cache,
+  spend is logged and the balance is allowance-minus-spend, the domain panel
+  loads live, and "nothing found" / an MCP outage degrade without a crash.
 
 The mock can be told to reject a call (`/__fail?method=PUT`) so the fail-closed
 behaviour is exercised rather than assumed, and both mocks reset to their seed
@@ -68,10 +74,14 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiY
 SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiZXhwIjoyMDAwMDAwMDAwfQ.mock
 CRON_SECRET=e2e-cron-secret
 RATE_LIMIT_FAIL_OPEN=true
+# A v4-shaped Semrush key is routed through the MCP transport; point it at the mock.
+SEMRUSH_API_KEY=semrtkn-e2e-0000
+SEMRUSH_MCP_URL=http://127.0.0.1:54323
 ENV
 # 2. backend + app
 node e2e/mock-supabase.cjs &        # :54321
 node e2e/mock-metricool.cjs &      # :54322
+node e2e/mock-semrush-mcp.cjs &    # :54323
 npm run build && npx next start -p 3100 &
 # 3. session cookie (writes /tmp/cookie.txt) — see browser-e2e.cjs header
 # 4. the suites
