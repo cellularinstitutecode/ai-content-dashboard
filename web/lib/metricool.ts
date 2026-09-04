@@ -3,6 +3,8 @@
 // Base: https://app.metricool.com/api  |  Auth header: X-Mc-Auth: <userToken>
 
 import { formatForMetricool, SCHEDULE_TZ } from '@/lib/timezone';
+import { modeFlags, replacePostBody, type PostMode, type ReplacePostInput } from '@/lib/metricool-post';
+export { modeFlags, replacePostBody, type PostMode, type ReplacePostInput };
 
 export type Provider =
   | 'instagram' | 'facebook' | 'twitter' | 'linkedin'
@@ -85,7 +87,7 @@ function wallClock(publicationDate: string): string {
   return isNaN(at.getTime()) ? String(publicationDate) : formatForMetricool(at, SCHEDULE_TZ);
 }
 
-export async function metricoolSchedulePost(input: SchedulePostInput) {
+export async function metricoolSchedulePost(input: SchedulePostInput, mode: PostMode = 'review') {
   const body = {
     text: input.text,
     // Metricool's scheduler expects provider OBJECTS ({ network }), not bare
@@ -95,14 +97,12 @@ export async function metricoolSchedulePost(input: SchedulePostInput) {
     publicationDate: { dateTime: wallClock(input.publicationDate), timezone: SCHEDULE_TZ },
     firstCommentText: input.firstCommentText,
     media: input.media || [],
-    // Publishing is a human decision made in Metricool, so this client cannot
-    // express any other outcome. It used to accept an `autoPublish` option that
-    // every caller set to false - an option nobody uses is just a way for a
-    // future caller to get it wrong.
-    autoPublish: false,
-    // draft:true holds the post in Metricool's review queue rather than the live
-    // queue. Without it, an autoPublish:false post can still land as live-pending.
-    draft: true
+    // Publishing is a human decision. The default lands the post in Metricool's
+    // review queue; only an explicit `mode: 'scheduled'` — which every caller
+    // reaches through a person pressing Approve in the dashboard — puts it in
+    // the live queue. draft:true is what keeps an autoPublish:false post out of
+    // the live-pending state.
+    ...modeFlags(mode),
   };
 
   const res = await metricoolFetch('/v2/scheduler/posts', {
@@ -145,32 +145,38 @@ export function readPostId(data: any): string | null {
  * here for the same reason they are constants everywhere else: a replace that
  * omitted them would drop the post out of the review queue.
  */
-export async function metricoolUpdatePostDate(
-  postId: string,
-  publicationDate: string,
-  post: { text: string; providers: Provider[] },
-): Promise<void> {
-  const text = String(post.text || '').trim();
-  const providers = Array.isArray(post.providers) ? post.providers.filter(Boolean) : [];
-  if (!text || providers.length === 0) {
-    // Fail here rather than let Metricool reject it: an empty replace would be
-    // a destructive edit if it ever succeeded.
-    throw new Error('Metricool update needs the post text and at least one network');
-  }
+/**
+ * REPLACE a post in Metricool. Everything the post should still have must be
+ * in `post` — text, networks, date, media and which queue it sits in.
+ */
+export async function metricoolReplacePost(postId: string, post: ReplacePostInput): Promise<void> {
   const res = await metricoolFetch('/v2/scheduler/posts/' + encodeURIComponent(postId), {
     method: 'PUT',
-    body: JSON.stringify({
-      text,
-      providers: providers.map((network) => ({ network })),
-      publicationDate: { dateTime: wallClock(publicationDate), timezone: SCHEDULE_TZ },
-      autoPublish: false,
-      draft: true,
-    }),
+    body: JSON.stringify(replacePostBody(post)),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
     throw new Error('Metricool ' + res.status + ': ' + detail.slice(0, 300));
   }
+}
+
+/**
+ * Move a post to a new time, keeping it in whichever queue it is already in.
+ * A post the reviewer has approved must not fall back into review because it
+ * was dragged to another day; a draft must not go live because it was moved.
+ */
+export async function metricoolUpdatePostDate(
+  postId: string,
+  publicationDate: string,
+  post: { text: string; providers: Provider[]; media?: { url: string }[]; mode?: PostMode },
+): Promise<void> {
+  await metricoolReplacePost(postId, {
+    text: post.text,
+    providers: post.providers,
+    publicationDate,
+    media: post.media,
+    mode: post.mode || 'review',
+  });
 }
 
 /**

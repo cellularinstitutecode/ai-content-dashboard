@@ -7,6 +7,8 @@ import { announce, onRefresh } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
 import { PanelLoader } from '@/components/LoadingScreen';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
+// The Approve button must agree with the API about what may go out.
+import { isAwaitingApproval } from '@/lib/post-mode';
 import { fmtScheduleTime, scheduleDateKey, scheduleWallClock, isoAtScheduleWallClock, scheduleTzLabel } from '@/lib/schedule-clock';
 
 type Post = {
@@ -36,6 +38,13 @@ const NETWORKS: { id: string; label: string }[] = [
 
 // Shared with lib/composer so the rule has one home and one test.
 const dateKey = localDateKey;
+
+function statusWord(status?: string): string {
+  const s = String(status || '').toLowerCase();
+  if (s === 'published' || s === 'sent' || s === 'live') return 'Published';
+  if (s === 'failed' || s === 'error' || s === 'rejected') return 'Needs attention';
+  return 'Scheduled';
+}
 
 // Which calendar square a post belongs in, and the time printed on it — both
 // on the SCHEDULE clock. Bucketing by the viewer's clock put a late-evening
@@ -240,6 +249,30 @@ export default function CalendarPage() {
     }
   }
 
+  // The reviewer's yes, from the calendar. Same endpoint and same rules as the
+  // dashboard queue: Metricool moves the post to its live queue first, and our
+  // row changes only if that succeeded.
+  async function approve(post: Post) {
+    if (!post.id) return;
+    const nets = (post.providers || []).map(networkLabel).join(', ') || 'the selected channels';
+    if (!window.confirm('Approve this post?\n\nIt will be published to ' + nets + ' at ' + timeLabel(post.publication_date) + ' on this day (' + scheduleTzLabel() + ' time). Metricool does the publishing.')) return;
+    setSaving(post.id);
+    try {
+      const r = await fetch('/api/posts', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: post.id, action: 'approve' }),
+      });
+      if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'We could not approve that post.'));
+      await refresh();
+      announce('posts', 'stats', 'insights');
+    } catch (e: any) {
+      setErr(friendlyError(e, 'We could not approve that post.'));
+    } finally {
+      setSaving(null);
+    }
+  }
+
   // Open the scheduling panel for a given day.
   function openScheduler(day: Date) {
     setScheduleDay(day);
@@ -379,7 +412,22 @@ export default function CalendarPage() {
                         (saving === p.id ? 'opacity-50 ' : '')
                       }
                     >
-                      <div className="font-medium text-accent">{timeLabel(p.publication_date)}</div>
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-medium text-accent">{timeLabel(p.publication_date)}</span>
+                        {isAwaitingApproval(p.status) ? (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); void approve(p); }}
+                            disabled={saving === p.id}
+                            title="Approve — Metricool publishes it at this time"
+                            className="rounded-full bg-accent px-1.5 py-[1px] text-[9px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                          >
+                            Approve
+                          </button>
+                        ) : (
+                          <span className="text-[9px] font-medium text-emerald-700">{statusWord(p.status)}</span>
+                        )}
+                      </div>
                       <div className="truncate">{p.text || 'Untitled post'}</div>
                       {p.providers && p.providers.length > 0 && (
                         <div className="mt-0.5 truncate text-[10px] text-ink/40">{p.providers.join(', ')}</div>

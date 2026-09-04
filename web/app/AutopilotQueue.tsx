@@ -169,7 +169,7 @@ export default function AutopilotQueue() {
     return () => { cancelled = true; };
   }, [runs, load]);
 
-  async function act(id: string, action: 'approve' | 'skip' | 'run_now' | 'regenerate', extraNote?: string) {
+  async function act(id: string, action: 'approve' | 'skip' | 'run_now' | 'regenerate', extraNote?: string, schedule = false) {
     setBusyId(id);
     setErr(null);
     setNote(null);
@@ -177,7 +177,7 @@ export default function AutopilotQueue() {
       const r = await fetch('/api/autopilot/runs', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id, action, note: extraNote }),
+        body: JSON.stringify({ id, action, note: extraNote, schedule }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j?.error || 'Action failed (' + r.status + ')');
@@ -467,13 +467,28 @@ export default function AutopilotQueue() {
                   )}
 
                   <div className="flex flex-wrap items-center gap-2 border-t border-line bg-subtle/30 px-5 py-3">
+                    {/* Two ways to say yes. "Approve & schedule" is the reviewer's
+                        final word — Metricool publishes at the slot, nobody opens
+                        it. "Approve as draft" keeps the older two-step for anyone
+                        who wants a second look in the queue first. */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!window.confirm('Approve and schedule this post?\n\nIt will be published at ' + fmtSlot(r.scheduled_for) + ' (clinic time). Metricool does the publishing; you will not need to open it.')) return;
+                        void act(r.id, 'approve', undefined, true);
+                      }}
+                      disabled={busyId === r.id}
+                      className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+                    >
+                      {busyId === r.id ? 'Working…' : 'Approve & schedule'}
+                    </button>
                     <button
                       type="button"
                       onClick={() => act(r.id, 'approve')}
                       disabled={busyId === r.id}
-                      className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+                      className="rounded-full px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:text-ink disabled:opacity-50"
                     >
-                      {busyId === r.id ? 'Working…' : 'Approve → Metricool draft'}
+                      Approve as draft
                     </button>
                     <button
                       type="button"
@@ -494,7 +509,7 @@ export default function AutopilotQueue() {
                     >
                       {busyId === r.id ? 'Working…' : 'Skip this one'}
                     </button>
-                    <span className="ml-auto text-[11px] text-ink-muted">Publishing stays manual, always.</span>
+                    <span className="ml-auto text-[11px] text-ink-muted">You approve every post — nothing goes out on its own.</span>
                   </div>
                 </article>
               );

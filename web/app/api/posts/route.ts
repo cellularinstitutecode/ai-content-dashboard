@@ -1,8 +1,9 @@
 // web/app/api/posts/route.ts
 import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
-import { metricoolDeletePost, metricoolUpdatePostDate, type Provider } from '@/lib/metricool';
+import { metricoolDeletePost, metricoolReplacePost, type Provider } from '@/lib/metricool';
 import { reportError } from '@/lib/report';
+import { modeOfStatus, APPROVED_STATUS } from '@/lib/post-mode';
 
 export const runtime = 'nodejs';
 // Both mutating paths now make an upstream Metricool call before they touch the
@@ -27,14 +28,30 @@ export async function GET() {
 }
 
 // PATCH /api/posts
-// Reschedules a single post by updating its publication_date.
-// Body: { id: string, publication_date: string (ISO) }
 //
-// A post that lives in Metricool is moved THERE first. This route used to
-// update only the local row, so the queue and the calendar showed the new time
-// while Metricool still published on the old one — an action that looked like
-// it worked and silently hadn't. If the upstream move fails we return 502 and
-// leave the local row untouched, so the two sides can never disagree.
+// Three things a reviewer can do to a post, all of them in Metricool FIRST and
+// in our own row only if Metricool agreed — so the two sides can never disagree:
+//
+//   { id, publication_date }        move it (stays in whichever queue it is in)
+//   { id, action: 'approve' }       review queue → live queue; Metricool
+//                                   publishes it at its publication_date
+//   { id, action: 'publish_now' }   same, dated a couple of minutes from now
+//
+// `approve` is the only path in the whole app by which a post goes out, and it
+// is reachable only from a button a signed-in reviewer pressed after reading
+// the post. Every automated path (generator, calendar, templates, assistant,
+// Autopilot) still ends in the review queue.
+//
+// Metricool's update is a REPLACE: the post's text, networks AND media have to
+// be sent back with every change. Media is not on our `posts` row; it is the
+// hero image on the linked draft, so it is looked up there — the reschedule
+// path used to omit it, and a moved post silently lost its picture.
+const PUBLISH_NOW_LEAD_MS = 2 * 60 * 1000;
+
+// Which queue a post is in, and therefore whether a replace may carry
+// draft:false/autoPublish:true. One rule, one home, one test — see
+// lib/post-mode.ts for why 'scheduled' is not it.
+
 export async function PATCH(req: Request) {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
@@ -48,49 +65,104 @@ export async function PATCH(req: Request) {
   }
 
   const id = body && body.id;
+  const action: string = typeof body?.action === 'string' ? body.action : 'reschedule';
   const publicationDate = body && body.publication_date;
   if (!id || typeof id !== 'string') {
     return NextResponse.json({ error: 'id is required' }, { status: 400 });
   }
-  if (!publicationDate || typeof publicationDate !== 'string') {
-    return NextResponse.json({ error: 'publication_date is required' }, { status: 400 });
+  if (!['reschedule', 'approve', 'publish_now'].includes(action)) {
+    return NextResponse.json({ error: 'invalid_request', message: 'That is not something a post can do.' }, { status: 400 });
   }
-  if (isNaN(new Date(publicationDate).getTime())) {
-    return NextResponse.json({ error: 'publication_date must be a valid ISO date' }, { status: 400 });
+  if (action === 'reschedule') {
+    if (!publicationDate || typeof publicationDate !== 'string') {
+      return NextResponse.json({ error: 'publication_date is required' }, { status: 400 });
+    }
+    if (isNaN(new Date(publicationDate).getTime())) {
+      return NextResponse.json({ error: 'publication_date must be a valid ISO date' }, { status: 400 });
+    }
   }
 
-  // text and providers come along because Metricool's update is a REPLACE and
-  // rejects a body without them — see metricoolUpdatePostDate.
   const { data: existing, error: findErr } = await sb
     .from('posts')
-    .select('id, metricool_post_id, text, providers')
+    .select('id, metricool_post_id, text, providers, publication_date, status, draft_id')
     .eq('id', id)
     .eq('user_id', user.id)
     .maybeSingle();
   if (findErr) return NextResponse.json({ error: findErr.message }, { status: 500 });
   if (!existing) return NextResponse.json({ error: 'post not found' }, { status: 404 });
 
+  // The picture travels with every replace. It lives on the linked draft.
+  let media: { url: string }[] = [];
+  if (existing.draft_id) {
+    const { data: d } = await sb
+      .from('drafts').select('pack').eq('id', existing.draft_id).eq('user_id', user.id).maybeSingle();
+    const url = (d as any)?.pack?._image?.url;
+    const textInImage = (d as any)?.pack?._image?.verification?.textDetected === true;
+    if (typeof url === 'string' && url && !textInImage) media = [{ url }];
+  }
+
+  // What the post will look like after this call.
+  let nextDate: string = String(existing.publication_date || '');
+  let nextStatus: string | null = null;
+  let mode: 'review' | 'scheduled' = modeOfStatus(existing.status);
+
+  if (action === 'reschedule') {
+    nextDate = publicationDate;
+  } else {
+    if (mode === 'scheduled') {
+      return NextResponse.json(
+        { error: 'already_scheduled', message: 'This post is already approved and scheduled.' },
+        { status: 409 },
+      );
+    }
+    if (!existing.metricool_post_id) {
+      return NextResponse.json(
+        { error: 'not_in_metricool', message: 'This post was never sent to Metricool, so there is nothing to approve. Send it for review first.' },
+        { status: 409 },
+      );
+    }
+    if (action === 'publish_now') {
+      nextDate = new Date(Date.now() + PUBLISH_NOW_LEAD_MS).toISOString();
+    } else if (new Date(nextDate).getTime() <= Date.now()) {
+      // Metricool refuses a past date, and would say so in its own words.
+      // Say it in ours, before spending the call.
+      return NextResponse.json(
+        { error: 'date_passed', message: 'That date has already passed. Reschedule the post first, then approve it.' },
+        { status: 409 },
+      );
+    }
+    mode = 'scheduled';
+    nextStatus = APPROVED_STATUS;
+  }
+
   if (existing.metricool_post_id) {
     try {
-      await metricoolUpdatePostDate(String(existing.metricool_post_id), publicationDate, {
+      await metricoolReplacePost(String(existing.metricool_post_id), {
         text: String(existing.text || ''),
         providers: (existing.providers || []) as Provider[],
+        publicationDate: nextDate,
+        media,
+        mode,
       });
     } catch (e) {
-      reportError('posts:metricool-reschedule', e);
+      reportError(action === 'reschedule' ? 'posts:metricool-reschedule' : 'posts:metricool-approve', e);
       return NextResponse.json(
         {
           error: 'metricool_update_failed',
-          message: 'We could not move this post in Metricool, so it has been left where it was. Open it in Metricool to change the time there.',
+          message: action === 'reschedule'
+            ? 'We could not move this post in Metricool, so it has been left where it was. Open it in Metricool to change the time there.'
+            : 'Metricool did not accept the approval, so the post is still waiting for review. Nothing was scheduled — try again in a moment.',
         },
         { status: 502 },
       );
     }
   }
 
+  const patch: Record<string, unknown> = { publication_date: nextDate };
+  if (nextStatus) patch.status = nextStatus;
   const { data, error } = await sb
     .from('posts')
-    .update({ publication_date: publicationDate })
+    .update(patch)
     .eq('id', id)
     .eq('user_id', user.id)
     .select('*')

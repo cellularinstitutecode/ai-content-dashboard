@@ -119,6 +119,24 @@ function check(name, ok, detail) {
   });
   check('stat cards render from /api/stats', statOk);
 
+  // The reviewer's yes lives on the dashboard now. A post waiting for review
+  // must show Approve and Publish now; the Autopilot card must offer
+  // "Approve & schedule"; and the old "open Metricool to approve" copy is gone.
+  const approveUi = await page.evaluate(() => {
+    const t = document.body.innerText;
+    const buttons = [...document.querySelectorAll('button')].map((b) => b.innerText.trim());
+    return {
+      approve: buttons.includes('Approve'),
+      publishNow: buttons.includes('Publish now'),
+      autopilot: buttons.includes('Approve & schedule') && buttons.includes('Approve as draft'),
+      oldCopy: /approval yourself inside Metricool|approve it there to publish/i.test(t),
+    };
+  });
+  check('a post waiting for review offers Approve on the dashboard', approveUi.approve);
+  check('and Publish now', approveUi.publishNow);
+  check('the Autopilot card offers Approve & schedule alongside Approve as draft', approveUi.autopilot);
+  check('nothing on screen still sends the reviewer into Metricool to approve', !approveUi.oldCopy);
+
   // ---- 3: content-image verification badges -------------------------------
   check('✓ verified badge on machine-verified text-free images', body.includes('✓ verified') || body.includes('verified'));
   const redBadge = body.includes('✗ text');

@@ -14,6 +14,7 @@ import { tightestLimit, networkLabel, parseVideoUrl, localDateTimeValue, draftLa
 import { useWorkspace } from "@/components/workspace";
 import { PanelLoader } from "@/components/LoadingScreen";
 import { friendlyError, friendlyErrorFromResponse, friendlyImageError } from '@/lib/friendly-error';
+import { isAwaitingApproval } from '@/lib/post-mode';
 import { semrushDraftNote } from '@/lib/semrush-reason';
 import { fmtScheduleDateTime, scheduleTzLabel, schedulePresetValue } from '@/lib/schedule-clock';
 
@@ -58,7 +59,7 @@ const ONBOARD_STEPS: { title: string; body: string }[] = [
 { title: '1 · Create', body: 'Describe your idea and generate a ready-to-post content pack for every channel.' },
 { title: '2 · Images', body: 'Every AI visual is generated and machine-verified text-free in the Image Studio.' },
 { title: '3 · Repurpose', body: 'Paste a long YouTube or Vimeo URL and OpusClip turns it into short vertical clips.' },
-{ title: '4 · Schedule', body: 'Send posts to Metricool for review — you approve the final publish there.' },
+{ title: '4 · Schedule', body: 'Send posts for review, then press Approve in your queue — Metricool publishes them for you.' },
 { title: '5 · Library', body: 'Everything you make is saved under Recent Drafts so you can edit, play, or reuse it.' },
 ];
 const ONBOARD_KEY = 'chi_onboarding_dismissed_v1';
@@ -103,13 +104,20 @@ function semrushUrl(keyword: string): string {
 }
 
 // Human-readable status for a scheduled post row from /api/posts.
+//
+// This label decides whether the Approve button is offered, so it asks the
+// same question the API asks before it sends anything — lib/post-mode.ts.
+// 'scheduled' is not an approval: it is the column default in schema.sql and
+// Metricool's own word for a post it is holding for review. Labelling those
+// rows "Scheduled" hid the one control that could actually send them, on
+// precisely the posts nobody had ever approved.
 function postStatusMeta(status: string): { label: string; tone: string } {
 const s = String(status || '').toLowerCase();
-if (s === 'pending_review' || s === 'draft' || s === 'pending') return { label: 'Waiting for your approval', tone: 'amber' };
-if (s === 'scheduled' || s === 'queued') return { label: 'Scheduled', tone: 'blue' };
 if (s === 'published' || s === 'sent' || s === 'live') return { label: 'Published', tone: 'green' };
 if (s === 'failed' || s === 'error' || s === 'rejected') return { label: 'Needs attention', tone: 'red' };
-return { label: status || 'Unknown', tone: 'gray' };
+return isAwaitingApproval(s)
+? { label: 'Waiting for your approval', tone: 'amber' }
+: { label: 'Scheduled', tone: 'blue' };
 }
 
 
@@ -201,6 +209,7 @@ const [keywordSource, setKeywordSource] = useState<string>('none');
 // WHY there was no live keyword data, straight from /api/generate. Held so the
 // note under the output can state the true reason instead of assuming one.
 const [keywordReason, setKeywordReason] = useState<string | undefined>(undefined);
+const [approvingId, setApprovingId] = useState<string | null>(null);
 const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string; verification?: { status?: string; score?: number | null; issues?: string[]; advisory?: string[]; textDetected?: boolean } } | null>(null);
 const [genImageLoading, setGenImageLoading] = useState(false);
 const [lastDraftId, setLastDraftId] = useState<string | null>(null);
@@ -706,6 +715,28 @@ refreshPosts(); announce('posts', 'stats', 'insights');
 } catch (e) { setActionMsg(friendlyError(e, 'We could not delete that post.')); }
 }
 
+// The reviewer's yes. This is the only control in the app that makes a post
+// go out, so it reads back exactly what will happen before it does anything.
+async function approvePost(p: any, now = false) {
+const id = String(p?.id || '');
+if (!id) return;
+const nets = (p?.providers || []).map((n: string) => networkLabel(n)).join(', ') || 'the selected channels';
+const when = now ? 'in the next couple of minutes' : 'on ' + fmtDateTime(p?.publication_date) + ' (' + scheduleTzLabel() + ' time)';
+if (typeof window !== 'undefined' && !window.confirm('Approve this post?\n\nIt will be published to ' + nets + ' ' + when + '. Metricool does the publishing; you will not need to open it.')) return;
+setApprovingId(id);
+try {
+const r = await fetch('/api/posts', {
+method: 'PATCH',
+headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({ id, action: now ? 'publish_now' : 'approve' }),
+});
+if (!r.ok) { setActionMsg(await friendlyErrorFromResponse(r, 'We could not approve that post.')); return; }
+setActionMsg(null);
+refreshPosts(); announce('posts', 'stats', 'insights');
+} catch (e) { setActionMsg(friendlyError(e, 'We could not approve that post.')); }
+finally { setApprovingId(null); }
+}
+
 async function deleteDraft(id: string) {
 if (!id) return;
 if (typeof window !== 'undefined' && !window.confirm('Delete this draft? This cannot be undone.')) return;
@@ -998,7 +1029,7 @@ return { network, ok: r.ok, status: r.status, data };
 const ok = results.filter((x) => x.ok).map((x) => x.network);
 const failed = results.filter((x) => !x.ok).map((x) => x.network);
 if (failed.length === 0) {
-setMStatus('Saved to Metricool as a draft on ' + ok.join(', ') + ' — approve it there to publish.');
+setMStatus('Saved as a draft on ' + ok.join(', ') + ' — press Approve in your queue below to publish.');
 setMText('');
 } else if (ok.length === 0) {
 setMStatus('Error: failed on ' + failed.join(', ') + '.');
@@ -1491,12 +1522,12 @@ return (
 </div>
 </div>
 <div className="mt-4 rounded-2xl bg-emerald-50 px-4 py-3 ring-1 ring-emerald-100">
-<p className="text-[13px] text-emerald-900"><span className="font-semibold">Nothing is ever posted automatically.</span> You write it here, send it for review, and give the final approval yourself inside Metricool.</p>
+<p className="text-[13px] text-emerald-900"><span className="font-semibold">Nothing is ever posted automatically.</span> You write it here, send it for review, and press Approve in your queue when you are happy. Metricool publishes it for you — you never have to open it.</p>
 </div>
 <ol className="mt-4 grid gap-3 sm:grid-cols-3">
 <li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">Write</div><div className="mt-0.5 text-[13px] text-ink-muted">Choose your networks and write the post below.</div></li>
 <li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">Send for review</div><div className="mt-0.5 text-[13px] text-ink-muted">It lands safely in Metricool as a draft — never live yet.</div></li>
-<li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">You approve</div><div className="mt-0.5 text-[13px] text-ink-muted">Open Metricool, take a final look, and publish when ready.</div></li>
+<li className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[12px] font-semibold text-accent">You approve</div><div className="mt-0.5 text-[13px] text-ink-muted">Take a final look in your queue and press Approve. It goes out at the time you set.</div></li>
 </ol>
 </div>
 <div className="grid gap-0 lg:grid-cols-5">
@@ -1560,7 +1591,7 @@ className={"mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring
 Too long for {networkLabel(mLimit.network)} by {mOverBy.toLocaleString()} character{mOverBy === 1 ? '' : 's'}. Trim it, or unselect that channel.
 </p>
 )}
-<p className="mt-3 text-[12px] text-ink-muted">Every post lands in Metricool as a draft. You approve it there to publish.</p>
+<p className="mt-3 text-[12px] text-ink-muted">Every post lands in your queue as a draft. Press Approve there to publish.</p>
 <div className="mt-4 flex flex-wrap items-center gap-3">
 <button onClick={schedulePost} disabled={!mCanSend} title={mProblem || undefined} className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">{mBusy ? 'Sending…' : 'Send to Metricool for review'}</button>
 <a href={metricoolPlannerUrl(activeBlogId)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:ring-accent">Open in Metricool ↗</a>
@@ -1569,7 +1600,7 @@ Too long for {networkLabel(mLimit.network)} by {mOverBy.toLocaleString()} charac
 {mProblem && !mBusy && (
 <p className="mt-3 text-[12px] font-medium text-ink-muted" role="status">{mProblem}</p>
 )}
-<p className="mt-3 text-[11px] text-ink-muted">Nothing publishes automatically — it lands in Metricool as a draft for you to approve.</p>
+<p className="mt-3 text-[11px] text-ink-muted">Nothing publishes automatically — it lands in your queue as a draft for you to approve.</p>
 </div>
 <div className="p-6 sm:p-8 lg:col-span-2">
 <div className="mb-3 flex items-center justify-between gap-2">
@@ -1655,6 +1686,12 @@ return (
 ))}
 {id && rescheduleId !== id && (
 <span className="ml-auto flex items-center gap-3">
+{meta.label === 'Waiting for your approval' && (
+<>
+<button type="button" disabled={approvingId === id} onClick={() => approvePost(p)} className="rounded-full bg-accent px-2.5 py-0.5 text-[11px] font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50">{approvingId === id ? 'Approving…' : 'Approve'}</button>
+<button type="button" disabled={approvingId === id} onClick={() => approvePost(p, true)} className="text-[11px] font-medium text-accent hover:underline disabled:opacity-50">Publish now</button>
+</>
+)}
 <button type="button" onClick={() => { setRescheduleId(id); setRescheduleAt(''); }} className="text-[11px] font-medium text-accent hover:underline">Reschedule</button>
 <button type="button" onClick={() => deletePost(id)} className="text-[11px] font-medium text-danger hover:underline">Delete</button>
 </span>
