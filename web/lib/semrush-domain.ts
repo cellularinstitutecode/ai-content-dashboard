@@ -28,7 +28,10 @@ import {
   db,
   decodeIntents,
   getUnitsBalance,
+  keywordCapability,
   logUsage,
+  semrushRequest,
+  type KeywordCapability,
   type SemReportResult,
   type SemSource,
 } from '@/lib/semrush';
@@ -143,13 +146,18 @@ export type DomainBundle = {
   history: SnapshotRow[];
   balance: number | null;
   unitsSpent: number;
+  /**
+   * Whether the automatic keyword research that stamps every draft would run
+   * live right now. The panel's "Active on every draft" badge used to be a
+   * constant; it said "active" while the status banner said "paused".
+   */
+  keywordResearch: { ok: boolean; reason: KeywordCapability['reason']; transport: KeywordCapability['transport'] };
 };
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
-const API_BASE = process.env.SEMRUSH_API_BASE || 'https://api.semrush.com';
 
 export function primaryDomain(): string {
   return (process.env.SEMRUSH_DOMAIN || 'cellularhopeinstitute.com')
@@ -223,31 +231,21 @@ async function rawCsvReport(
     return { ok: false, source: 'none', ...refusalReason(decision), unitsSpent: 0 };
   }
 
-  const url = new URL(API_BASE.replace(/\/$/, '') + (opts.path ?? '/'));
-  url.searchParams.set('type', report);
-  url.searchParams.set('key', key);
-  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-
-  const ctl = new AbortController();
-  const to = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 10000);
   try {
-    const res = await fetch(url.toString(), { method: 'GET', headers: { accept: 'text/plain' }, signal: ctl.signal });
-    const text = (await res.text().catch(() => '')).trim();
+    const { status, text } = await semrushRequest(report, params, { path: opts.path, timeoutMs: opts.timeoutMs ?? 10000 });
     if (/^ERROR\s+\d+/i.test(text)) {
       const code = parseInt(text.replace(/^ERROR\s+/i, ''), 10);
       const reason = reasonForCode(code);
       if (reason === 'empty') return { ok: true, body: '', source: 'live', reason: 'ok', unitsSpent: 0 };
       return { ok: false, source: 'none', reason, note: text.slice(0, 120), unitsSpent: 0 };
     }
-    if (!res.ok) {
-      const reason = reasonForHttpStatus(res.status);
-      return { ok: false, source: 'none', reason, note: 'HTTP ' + res.status, unitsSpent: 0 };
+    if (status < 200 || status >= 300) {
+      const reason = reasonForHttpStatus(status);
+      return { ok: false, source: 'none', reason, note: 'HTTP ' + status, unitsSpent: 0 };
     }
     return { ok: true, body: text, source: 'live', reason: 'ok', unitsSpent: estUnits };
   } catch (e: any) {
     return { ok: false, source: 'none', reason: 'network', note: e?.name || 'fetch failed', unitsSpent: 0 };
-  } finally {
-    clearTimeout(to);
   }
 }
 
@@ -536,8 +534,9 @@ export async function organicCompetitors(
 const PROJECT_TTL_MS = 12 * 60 * 60 * 1000;
 
 async function projectJson(
-  cacheReport: string,
+  cacheReport: 'siteaudit_info' | 'tracking_report',
   cachePhrase: string,
+  projectId: string,
   path: string,
   params: Record<string, string>
 ): Promise<{ json: any | null; meta: SectionMeta }> {
@@ -553,19 +552,18 @@ async function projectJson(
   if (!decision.allow) {
     return { json: null, meta: { ok: false, source: 'none', ...refusalReason(decision), unitsSpent: 0 } };
   }
-  const url = new URL(API_BASE.replace(/\/$/, '') + path);
-  url.searchParams.set('key', key);
-  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  const ctl = new AbortController();
-  const to = setTimeout(() => ctl.abort(), 12000);
   try {
-    const res = await fetch(url.toString(), { method: 'GET', headers: { accept: 'application/json' }, signal: ctl.signal });
-    const text = await res.text().catch(() => '');
-    if (!res.ok) {
+    const { status, text } = await semrushRequest(cacheReport, params, { path, projectId, accept: 'application/json', timeoutMs: 12000 });
+    if (/^ERROR\s+\d+/i.test(text)) {
+      // The MCP transport reports a missing entitlement the v3 way.
+      const reason = reasonForCode(parseInt(text.replace(/^ERROR\s+/i, ''), 10));
+      return { json: null, meta: { ok: false, source: 'none', reason: reason === 'empty' ? 'plan' : reason, note: text.slice(0, 120), unitsSpent: 0 } };
+    }
+    if (status < 200 || status >= 300) {
       // 404 on a project report means "not enabled for this project", which
       // belongs with the other plan/entitlement states rather than 'http'.
-      const reason = res.status === 404 ? 'plan' : reasonForHttpStatus(res.status);
-      return { json: null, meta: { ok: false, source: 'none', reason, note: 'HTTP ' + res.status, unitsSpent: 0 } };
+      const reason = status === 404 ? 'plan' : reasonForHttpStatus(status);
+      return { json: null, meta: { ok: false, source: 'none', reason, note: 'HTTP ' + status, unitsSpent: 0 } };
     }
     let json: any = null;
     try { json = JSON.parse(text); } catch { /* not JSON - an expected branch, not a fault */ }
@@ -575,8 +573,6 @@ async function projectJson(
     return { json, meta: { ok: true, source: 'live', reason: 'ok', unitsSpent: est } };
   } catch (e: any) {
     return { json: null, meta: { ok: false, source: 'none', reason: 'network', note: e?.name || 'fetch failed', unitsSpent: 0 } };
-  } finally {
-    clearTimeout(to);
   }
 }
 
@@ -588,7 +584,7 @@ export async function siteAudit(): Promise<{ data: SiteAuditSnapshot; meta: Sect
     pagesCrawled: null, pagesHealthy: null, pagesWithIssues: null, lastAudit: null,
   };
   if (!id) return { data: empty, meta: { ok: false, source: 'none', reason: 'no_token', note: 'SEMRUSH_PROJECT_ID not set', unitsSpent: 0 } };
-  const { json, meta: m } = await projectJson('siteaudit_info', id, `/reports/v1/projects/${encodeURIComponent(id)}/siteaudit/info`, {});
+  const { json, meta: m } = await projectJson('siteaudit_info', id, id, `/reports/v1/projects/${encodeURIComponent(id)}/siteaudit/info`, {});
   if (!json) return { data: empty, meta: m };
   const q = json.quality || {};
   return {
@@ -634,6 +630,7 @@ export async function trackingSummary(domain: string): Promise<{ data: TrackingS
   const { json, meta: m } = await projectJson(
     'tracking_report',
     id + ':' + fmt(begin).slice(0, 6),
+    id,
     `/reports/v1/projects/${encodeURIComponent(id)}/tracking/`,
     {
       action: 'report',
@@ -757,12 +754,13 @@ async function snapshotHistory(domain: string, days = 90): Promise<SnapshotRow[]
 
 export async function domainBundle(rawDomain?: string): Promise<DomainBundle> {
   const domain = normalizeDomain(rawDomain || '') || primaryDomain();
-  const [ov, bl, kw, comp, balance] = await Promise.all([
+  const [ov, bl, kw, comp, balance, cap] = await Promise.all([
     domainOverview(domain),
     backlinksOverview(domain),
     topOrganicKeywords(domain, 30),
     organicCompetitors(domain, 5),
     getUnitsBalance(),
+    keywordCapability(),
   ]);
   // Record today's snapshot, then read the accumulated history for charts.
   await recordSnapshot(domain, ov.data, bl.data);
@@ -781,6 +779,7 @@ export async function domainBundle(rawDomain?: string): Promise<DomainBundle> {
     history,
     balance,
     unitsSpent: ov.meta.unitsSpent + bl.meta.unitsSpent + kw.meta.unitsSpent + comp.meta.unitsSpent,
+    keywordResearch: { ok: cap.ok, reason: cap.reason, transport: cap.transport },
   };
 }
 

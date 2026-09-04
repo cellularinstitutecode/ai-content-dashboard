@@ -143,7 +143,9 @@ export async function GET() {
       code: keywords.reason,
       severity: 'optional',
       detail: keywords.ok
-        ? 'Live keyword research is running. Balance ' + keywords.balance + ' units, floor ' + keywords.floor + '.'
+        ? 'Live keyword research is running over ' +
+          (keywords.transport === 'mcp' ? 'the Semrush MCP server (v4 key)' : 'the Standard API (v3 key)') +
+          '. Balance ' + keywords.balance + ' units, floor ' + keywords.floor + '.'
         : keywords.reason === 'no_token'
           ? 'SEMRUSH_API_KEY is unset: the keyword layer degrades to cache-or-link-out — the Semrush ' +
             'panel, the assistant’s live grounding and Autopilot’s angle selection all lose their data.'
@@ -151,10 +153,14 @@ export async function GET() {
             ? 'The key is set but the unit balance (' + keywords.balance + ') is at or below the protection ' +
               'floor (SEMRUSH_UNIT_FLOOR=' + keywords.floor + '), so every live lookup is refused. Top up units ' +
               'or lower the floor. Until then the keyword layer is serving cache-or-link-out only.'
-            : 'The key is set but countapiunits.html (a v3 endpoint) returns no number, so the spend guard ' +
-              'fails closed and every live lookup is refused. On this account that is because the keys on the ' +
-              'API Keys page are v4 keys; every report in this app is Standard API (v3), which needs a Business-plan ' +
-              'Standard API key. Adding units changes nothing. If Semrush is merely down, this clears within 30s.',
+            : keywords.transport === 'mcp'
+              ? 'The key is a v4 key routed through the Semrush MCP server, where the balance is the monthly allowance ' +
+                '(SEMRUSH_UNIT_ALLOWANCE) minus the spend logged in semrush_usage — and that log could not be read, so the ' +
+                'spend guard fails closed. Check the database; this clears within 30s of the log being readable again.'
+              : 'The key is set but countapiunits.html (a v3 endpoint) returns no number, so the spend guard ' +
+                'fails closed and every live lookup is refused. A v4 key (semrtkn-…) is routed through the MCP server ' +
+                'automatically; a key of any other shape is assumed to be a Standard API (v3) key, and if Semrush ' +
+                'rejects it there, this is the result. If Semrush is merely down, this clears within 30s.',
     },
     {
       // Capability, not configuration. `has('OPENAI_API_KEY')` stayed true

@@ -72,3 +72,9 @@ useful for the auth behaviour it cannot check for itself.
 
 - Semrush Site Health tab needs `SEMRUSH_PROJECT_ID` (Projects API access).
 - `SEMRUSH_UNIT_FLOOR` (default 5000) guards the unit pot — tune if needed.
+- A v4 key (`semrtkn-…`, the only kind the API Keys page issues on a Pro plan)
+  is routed through Semrush's MCP server automatically (`lib/semrush-transport.ts`);
+  any other key shape goes to the Standard API (v3). `SEMRUSH_TRANSPORT=v3|mcp`
+  forces one. Over MCP the balance is `SEMRUSH_UNIT_ALLOWANCE` (default 50,000,
+  the monthly Standard API pool) minus the spend this app has logged this month;
+  `SEMRUSH_MCP_URL` overrides the server (the e2e harness points it at a mock).

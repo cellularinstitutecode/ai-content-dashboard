@@ -98,8 +98,8 @@ test('the draft note leads with the draft being fine', () => {
 // --- The one that hid for weeks ------------------------------------------
 test('an unreadable balance is its own reason, never "at the floor"', () => {
   const msg = semrushMessage('balance_unknown');
-  assert.match(msg, /cannot read/i);
-  assert.match(msg, /units will not/i);
+  assert.match(msg, /cannot confirm/i);
+  assert.match(msg, /ask whoever set this up/i);
   assert.doesNotMatch(msg, /protection floor/i);
 });
 

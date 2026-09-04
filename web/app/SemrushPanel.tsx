@@ -99,6 +99,7 @@ type DomainBundle = {
   history: SnapshotRow[];
   balance: number | null;
   unitsSpent: number;
+  keywordResearch?: { ok: boolean; reason: 'ok' | 'no_token' | 'budget' | 'balance_unknown'; transport: 'v3' | 'mcp' };
 };
 
 type SiteAuditSnapshot = {
@@ -462,7 +463,7 @@ function SectionNotice({ meta, what }: { meta: SectionMeta; what: string }) {
       : meta.reason === 'budget'
       ? 'Unit balance is at the protection floor — ' + what.toLowerCase() + ' will refresh when the budget recovers.'
       : meta.reason === 'balance_unknown'
-      ? 'The Semrush key cannot read the account balance, so live ' + what.toLowerCase() + ' is paused. This usually means a v4 key where a Standard API (v3) key is needed — ask whoever set this up. Adding units will not change it.'
+      ? 'The app cannot confirm the Semrush unit balance, so live ' + what.toLowerCase() + ' is paused — ask whoever set this up to check the Semrush connection. Showing stored data.'
       : meta.reason === 'v3_key'
       ? 'This Semrush plan does not include live ' + what.toLowerCase() + ' — showing stored data instead.'
       : meta.reason === 'plan'
@@ -1035,7 +1036,15 @@ export default function SemrushPanel({
             <Card
               tag="AI × Semrush"
               title="Automatic keyword research"
-              right={<span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">✓ Active on every draft</span>}
+              right={
+                bundle?.keywordResearch && !bundle.keywordResearch.ok ? (
+                  // The same fact the status banner states, so the two never
+                  // disagree: research is paused, drafts still write.
+                  <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800">Paused — drafts write without live data</span>
+                ) : (
+                  <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">✓ Active on every draft</span>
+                )
+              }
             >
               <p className="text-[12px] leading-relaxed text-ink-muted">
                 Before the AI writes anything — dashboard generator, chat assistant, guided wizard or research copilot — it runs a Semrush

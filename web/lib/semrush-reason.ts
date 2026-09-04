@@ -91,7 +91,7 @@ const MESSAGES: Record<SemrushReason, string> = {
   v3_key: 'This Semrush plan does not include the keyword reports, so stored data is being shown.',
   plan: 'Semrush has no report credit left on this plan right now.',
   budget: 'Keyword research is paused to protect the Semrush credit balance — it resumes when the balance recovers.',
-  balance_unknown: 'Keyword research is paused because the Semrush key cannot read the account balance — usually the key is a v4 key, and this needs a Standard API (v3) key. Ask whoever set this up; adding units will not change it.',
+  balance_unknown: 'Keyword research is paused because the app cannot confirm the Semrush unit balance — ask whoever set this up to check the Semrush connection.',
   http: 'Semrush did not answer just now — showing stored data instead.',
   network: 'Semrush could not be reached just now — showing stored data instead.',
 };

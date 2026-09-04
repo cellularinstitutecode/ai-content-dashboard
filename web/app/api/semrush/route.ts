@@ -80,7 +80,9 @@ export async function GET(req: NextRequest) {
   }
 
   if (action === 'balance') {
-    const balance = await getUnitsBalance();
+    // `fresh=1` bypasses the ten-minute balance cache (free on v3; one
+    // Supabase read on the MCP transport) — for a deliberate refresh.
+    const balance = await getUnitsBalance(req.nextUrl.searchParams.get('fresh') === '1');
     return NextResponse.json({ balance }, { headers: { 'Cache-Control': 'no-store' } });
   }
 

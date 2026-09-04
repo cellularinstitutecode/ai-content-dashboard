@@ -372,6 +372,59 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   const recovered = await schemaOf();
   check('running the migration clears the check', recovered.ok === true, JSON.stringify(recovered));
 
+  // ------------------------------------------ keyword research over MCP -----
+  // The account's key is a v4 (Pro-plan) token, which the Standard API v3
+  // endpoints refuse. lib/semrush-transport routes such a key through
+  // Semrush's MCP server instead. The mock MCP validates parameter NAMES like
+  // the real one, so this proves the translation, the session handshake, the
+  // v3 CSV parsing, the cache, the spend log and the health signal, end to end.
+  const MCP = 'http://127.0.0.1:54323';
+  const mcpCalls = async () => (await fetch(MCP + '/__calls')).json();
+  await fetch(MCP + '/__reset', { method: 'POST' });
+  await fetch(SB + '/__reseed', { method: 'POST' });
+
+  const healthSem = ((await jsonOf(await app('/api/health')))?.checks || []).find((c) => c.name === 'semrush') || {};
+  check('health reports live keyword research over the MCP server for a v4 key',
+    healthSem.ok === true && /MCP/.test(healthSem.detail || ''), JSON.stringify(healthSem));
+
+  const topic = 'exosome therapy for knees';
+  const brief1 = await jsonOf(await app('/api/semrush?topic=' + encodeURIComponent(topic)));
+  check('a keyword brief is researched live through MCP', brief1?.ok === true && brief1.source === 'semrush' && brief1.fromCache === false, JSON.stringify(brief1).slice(0, 300));
+  check('and it carries a primary keyword with real volume', Boolean(brief1?.brief?.primary?.keyword) && brief1.brief.primary.volume > 0, JSON.stringify(brief1?.brief?.primary));
+  check('and searcher questions', Array.isArray(brief1?.questions) && brief1.questions.length > 0);
+  const calls1 = await mcpCalls();
+  const reports1 = calls1.map((c) => c.report).sort();
+  check('MCP received the related + questions reports', reports1.includes('phrase_related') && reports1.includes('phrase_questions'), reports1.join(','));
+  check('with MCP column names, never v3 codes',
+    calls1.every((c) => Array.isArray(c.params.export_columns) && c.params.export_columns.every((col) => /^[a-z_]+$/.test(col))), JSON.stringify(calls1[0]?.params));
+  check('and the key never travels inside the parameters', !JSON.stringify(calls1).includes('semrtkn'));
+  check('on one session, not a handshake per call', new Set(calls1.map((c) => c.session)).size === 1);
+
+  const brief2 = await jsonOf(await app('/api/semrush?topic=' + encodeURIComponent(topic)));
+  const calls2 = await mcpCalls();
+  check('the same topic again is served from cache and spends nothing', brief2?.fromCache === true && brief2.unitsSpent === 0 && calls2.length === calls1.length, JSON.stringify({ fromCache: brief2?.fromCache, calls: calls2.length }));
+
+  const spendRows = await (await fetch(SB + '/rest/v1/semrush_usage?source=eq.live&select=units', { headers: { apikey: 'x', authorization: 'Bearer x' } })).json();
+  const spent = (Array.isArray(spendRows) ? spendRows : []).reduce((a, r) => a + (Number(r.units) || 0), 0);
+  check('every live MCP spend is logged as units', spent > 0, JSON.stringify(spendRows));
+  const bal = await jsonOf(await app('/api/semrush?action=balance&fresh=1'));
+  check('and a fresh balance read is the monthly allowance minus the logged spend', bal?.balance === 50000 - spent, JSON.stringify({ balance: bal?.balance, spent }));
+
+  const dom = await jsonOf(await app('/api/semrush?action=domain'));
+  check('the domain panel loads live over MCP: overview', dom?.overview?.rank === 1209589 && dom.overviewMeta?.source === 'live', JSON.stringify(dom?.overviewMeta));
+  check('  backlinks', dom?.backlinks?.authorityScore === 11, JSON.stringify(dom?.backlinks));
+  check('  top keywords (v3 domain_organic → MCP resource_organic)', Array.isArray(dom?.topKeywords) && dom.topKeywords.length === 2 && dom.topKeywords[0].position === 1, JSON.stringify(dom?.topKeywordsMeta));
+  check('  competitors', Array.isArray(dom?.competitors) && dom.competitors[0]?.domain === 'bookimed.com', JSON.stringify(dom?.competitorsMeta));
+  check('and the panel badge is told research is active over mcp', dom?.keywordResearch?.ok === true && dom.keywordResearch.transport === 'mcp', JSON.stringify(dom?.keywordResearch));
+
+  const nothing = await jsonOf(await app('/api/semrush?topic=' + encodeURIComponent('zxqv nothing here')));
+  check('"nothing found" from MCP is an empty brief, not an error', nothing?.ok === false && nothing.source === 'none' && nothing.reason !== 'http' && nothing.reason !== 'network', JSON.stringify({ ok: nothing?.ok, reason: nothing?.reason, note: nothing?.note }));
+
+  await fetch(MCP + '/__fail', { method: 'POST', body: JSON.stringify({ report: 'phrase_related' }) });
+  const broken = await jsonOf(await app('/api/semrush?topic=' + encodeURIComponent('prp vs stem cells')));
+  check('an MCP failure degrades to "no live data" and never a crash', broken?.ok === false && broken.source === 'none', JSON.stringify({ ok: broken?.ok, reason: broken?.reason, note: broken?.note }));
+  await fetch(MCP + '/__reset', { method: 'POST' });
+
   console.log('\n' + (failed === 0 ? 'all' : String(failed) + ' FAILED of') + ' API e2e checks');
   process.exit(failed === 0 ? 0 : 1);
 })().catch((e) => { console.error(e); process.exit(1); });
