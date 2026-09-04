@@ -206,22 +206,24 @@ async function allowanceBalance(): Promise<number | null> {
     const start = new Date();
     start.setUTCDate(1);
     start.setUTCHours(0, 0, 0, 0);
-    // Ask for one row more than we are willing to add up. PostgREST caps a
-    // select at the project's max-rows, and a capped read here would not fail
-    // — it would silently return FEWER spend rows, making the balance look
-    // higher than it is and letting the guard approve spend it should refuse.
-    // An under-count is the one wrong answer this function must never give, so
-    // hitting the cap is treated as "cannot read the log" and fails closed.
-    const SUM_ROW_CAP = 5000;
-    const { data, error } = await supabaseAdmin()
+    // PostgREST caps a select at the project's max-rows (1,000 by default),
+    // and a capped read here would not fail — it would silently return FEWER
+    // spend rows, making the balance look higher than it is and letting the
+    // guard approve spend it should refuse. An under-count is the one wrong
+    // answer this function must never give. So ask for the exact count
+    // alongside the rows and treat any shortfall as "cannot read the log";
+    // when the count itself is unavailable, a page that is full to the
+    // default cap is treated the same way. Both fail closed.
+    const POSTGREST_DEFAULT_MAX_ROWS = 1000;
+    const { data, error, count } = await supabaseAdmin()
       .from('semrush_usage')
-      .select('units')
+      .select('units', { count: 'exact' })
       .eq('source', 'live')
-      .gte('created_at', start.toISOString())
-      .limit(SUM_ROW_CAP + 1);
+      .gte('created_at', start.toISOString());
     if (error) return null;
     const rows = (data as { units: number }[] | null | undefined) ?? [];
-    if (rows.length > SUM_ROW_CAP) return null;
+    const truncated = typeof count === 'number' ? count > rows.length : rows.length >= POSTGREST_DEFAULT_MAX_ROWS;
+    if (truncated) return null;
     const spent = rows.reduce((a, r) => a + (Number(r.units) || 0), 0);
     return Math.max(0, unitAllowance() - spent);
   } catch {

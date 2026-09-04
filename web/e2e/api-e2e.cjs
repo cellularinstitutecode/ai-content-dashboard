@@ -410,6 +410,17 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   const bal = await jsonOf(await app('/api/semrush?action=balance&fresh=1'));
   check('and a fresh balance read is the monthly allowance minus the logged spend', bal?.balance === 50000 - spent, JSON.stringify({ balance: bal?.balance, spent }));
 
+  // The spend log read must never under-count: PostgREST caps a page at the
+  // project's max-rows while the exact count still says how many there are.
+  await fetch(SB + '/__maxrows', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ n: 1 }) });
+  const capped = await jsonOf(await app('/api/semrush?action=balance&fresh=1'));
+  check('a capped spend-log page reads as "balance unknown", never as a higher balance', capped?.balance === null, JSON.stringify(capped));
+  const healthCapped = ((await jsonOf(await app('/api/health')))?.checks || []).find((c) => c.name === 'semrush') || {};
+  check('and the guard fails closed while it lasts', healthCapped.ok === false && healthCapped.code === 'balance_unknown', JSON.stringify(healthCapped));
+  await fetch(SB + '/__maxrows', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ n: null }) });
+  const uncapped = await jsonOf(await app('/api/semrush?action=balance&fresh=1'));
+  check('and recovers on the next full read', uncapped?.balance === 50000 - spent, JSON.stringify(uncapped));
+
   const dom = await jsonOf(await app('/api/semrush?action=domain'));
   check('the domain panel loads live over MCP: overview', dom?.overview?.rank === 1209589 && dom.overviewMeta?.source === 'live', JSON.stringify(dom?.overviewMeta));
   check('  backlinks', dom?.backlinks?.authorityScore === 11, JSON.stringify(dom?.backlinks));
