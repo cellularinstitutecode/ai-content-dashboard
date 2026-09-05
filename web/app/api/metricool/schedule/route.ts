@@ -1,4 +1,4 @@
-import { reportError } from '@/lib/report';
+import { reportError, redact } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -114,7 +114,7 @@ export async function POST(req: NextRequest) {
     try { parsed = JSON.parse(rawText); } catch { parsed = { raw: rawText }; }
     if (!r.ok) {
       // Do not leak the raw upstream body to the client; log it server-side instead.
-      console.error('Metricool schedule error', r.status, rawText.slice(0, 500));
+      console.error('Metricool schedule error', r.status, redact(rawText.slice(0, 500)));
       return NextResponse.json({ error: 'Metricool rejected the request. Please review and try again.', status: r.status }, { status: 502 });
     }
     const post = (parsed && parsed.data) ? parsed.data : parsed;
@@ -179,7 +179,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (err: any) {
     const lastErr = err && err.message ? err.message : String(err);
-    console.error('Metricool schedule exception', lastErr);
+    reportError('metricool:schedule', lastErr);
     return NextResponse.json({ error: 'Could not reach Metricool. Please try again.' }, { status: 502 });
   }
 }

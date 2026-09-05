@@ -1,5 +1,5 @@
 import { isAllowedEmail } from '@/lib/access';
-import { reportError } from '@/lib/report';
+import {reportError, redact} from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { opusCreateClipProject, opusGetExportableClips } from '@/lib/opus';
 import { supabaseServer } from '@/lib/supabase';
@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
       // so fail loudly instead of creating an orphan job. The raw `project`
       // object used to ride along in this response - it carries the org id and
       // internal job fields, which the browser has no use for.
-      console.error('opus/clip: create returned no project id', JSON.stringify(project).slice(0, 500));
+      console.error('opus/clip: create returned no project id', redact(JSON.stringify(project).slice(0, 500)));
       return NextResponse.json({ error: 'opus returned no project id' }, { status: 502 });
     }
     const thumbnailUrl = thumbnailOf(project);
@@ -100,7 +100,7 @@ export async function POST(req: NextRequest) {
       source_url: videoUrl,
       status: 'processing',
     });
-    if (clipErr) console.error('opus/clip: clips insert failed', clipErr.message);
+    if (clipErr) console.error('opus/clip: clips insert failed', redact(clipErr.message));
 
     // Create the gallery draft SERVER-SIDE, in the same request that owns the
     // authoritative projectId. Previously the client created this draft in a
@@ -130,7 +130,7 @@ export async function POST(req: NextRequest) {
     // onto, so the job would silently produce nothing the user can ever see.
     // Report it instead of returning ok:true with draft:null.
     if (draftErr || !draft) {
-      console.error('opus/clip: gallery draft insert failed', draftErr?.message);
+      console.error('opus/clip: gallery draft insert failed', redact(String(draftErr?.message || '')));
       return NextResponse.json(
         { error: 'Clip job started at OpusClip but could not be saved to your library. Please try again.', projectId },
         { status: 500 }

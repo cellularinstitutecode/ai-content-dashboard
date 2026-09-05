@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { isAllowedEmail, DEFAULT_BLOG_ID, isAllowedBlogId } from '@/lib/access';
+import { redact } from '@/lib/report';
 
 export const runtime = 'nodejs';
 
@@ -60,13 +61,13 @@ export async function GET(req: NextRequest) {
       // endpoint by path only. (The comment two lines below promised exactly
       // this and the code did the opposite.)
       attempts.push({ endpoint: new URL(url).pathname, status: r.status, ok: r.ok });
-      if (!r.ok) console.error('Metricool analytics error', url, r.status, text.slice(0, 500));
+      if (!r.ok) console.error('Metricool analytics error', redact(url), r.status, redact(text.slice(0, 500)));
       if (r.ok) {
         // Note: no userId in the payload — it's server config, not client data.
         return NextResponse.json({ blogId, range: { start: fmt(start), end: fmt(today) }, endpoint: new URL(url).pathname, data: body });
       }
     } catch (e: any) {
-      console.error('Metricool analytics exception', url, e && e.message ? e.message : String(e));
+      console.error('Metricool analytics exception', redact(url), redact(e && e.message ? e.message : String(e)));
       attempts.push({ endpoint: new URL(url).pathname, error: 'request failed' });
     }
   }
