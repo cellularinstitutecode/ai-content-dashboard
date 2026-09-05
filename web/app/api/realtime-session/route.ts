@@ -1,4 +1,5 @@
 import { isAllowedEmail } from "@/lib/access";
+import { redact } from "@/lib/report";
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -157,7 +158,7 @@ export async function POST() {
   if (!r.ok) {
     // Log the upstream body, do not return it: it carries account and quota
     // detail the browser has no use for.
-    console.error("realtime-session: OpenAI rejected the request", r.status, (await r.text()).slice(0, 500));
+    console.error("realtime-session: OpenAI rejected the request", r.status, redact((await r.text()).slice(0, 500)));
     return NextResponse.json({ error: "session_failed" }, { status: 502 });
   }
   return NextResponse.json(await r.json());

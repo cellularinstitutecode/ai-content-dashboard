@@ -9,6 +9,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { recordDraftKeywords } from '@/lib/semrush';
+import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -151,7 +152,7 @@ export async function POST(req: NextRequest) {
     // The provider helpers throw with the upstream response body attached
     // (`anthropic 429: {...}`), which carries account and quota detail. Log it,
     // return a generic message - /api/metricool/schedule already does this.
-    console.error('generate: failed', e?.message || e);
+    reportError('generate', e);
     return NextResponse.json(
       { error: 'Generation failed. Please try again.' },
       { status: 500 }

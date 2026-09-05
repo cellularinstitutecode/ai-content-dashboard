@@ -12,6 +12,7 @@
 // leave it unset in production. Apply web/supabase/schema.sql to activate.
 import 'server-only';
 import { supabaseAdmin } from '@/lib/supabase-admin';
+import { redact } from './report.ts';
 
 export type RateLimitResult = {
   ok: boolean;
@@ -89,7 +90,7 @@ export async function checkRateLimit(userId: string, action: string): Promise<Ra
     // same way a failed count is.
     const { error: insertError } = await admin.from('usage_events').insert({ user_id: userId, action });
     if (insertError) {
-      console.error('rate-limit: usage_events insert failed', action, insertError.message);
+      console.error('rate-limit: usage_events insert failed', action, redact(insertError.message));
       return failOpen
         ? { ok: true, limit: policy.limit, remaining: policy.limit, retryAfterSec: 0 }
         : { ok: false, limit: policy.limit, remaining: 0, retryAfterSec: policy.windowSec };

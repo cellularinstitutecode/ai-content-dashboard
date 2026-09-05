@@ -1,4 +1,4 @@
-import { reportError } from '@/lib/report';
+import {reportError, redact} from '@/lib/report';
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
 import { supabaseServer } from '@/lib/supabase';
@@ -306,7 +306,7 @@ async function doSchedule(userId: string, p: PendingSchedule) {
   let parsed: any = null;
   try { parsed = JSON.parse(rawText); } catch { parsed = { raw: rawText }; }
   if (!r.ok) {
-    console.error("Metricool schedule error", r.status, rawText.slice(0, 300));
+    console.error("Metricool schedule error", r.status, redact(rawText.slice(0, 300)));
     throw new Error("Metricool rejected the request (status " + r.status + ").");
   }
   const post = parsed && parsed.data ? parsed.data : parsed;

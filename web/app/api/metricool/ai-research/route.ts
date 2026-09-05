@@ -77,7 +77,7 @@ export async function POST(req: NextRequest) {
     const { provider: used, result, semrush } = await researchTopic({ topic, provider, network, brand });
     return NextResponse.json({ provider: used, ...result, keywordResearch: semrush });
   } catch (err) {
-    console.error('[ai-research] failed:', err);
+    reportError('ai-research', err);
     return NextResponse.json(
       { error: 'AI research is taking longer than expected right now. Please try again in a moment.' },
       { status: 500 },
