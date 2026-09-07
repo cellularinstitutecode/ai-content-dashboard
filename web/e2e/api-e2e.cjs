@@ -556,6 +556,27 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   const vAfter = await jsonOf(await app('/api/sources?kind=videos&fresh=1'));
   check('and the video sheet shows it back', (vAfter?.entries || []).some((v) => /retitled from the dashboard/.test(v.copy)));
 
+  // "Type in something new": a brand new row in the sheet.
+  const added = await app('/api/sources', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'add_row', kind: 'calendar', tab: calRow.tab,
+      values: { description: 'A post written from the dashboard.', date: '2026-12-01', status: 'Not started', owner: 'Meriz' } }),
+  });
+  const addedBody = await jsonOf(added);
+  check('a new row can be written into the sheet from here', added.ok && addedBody?.row > 0, String(added.status) + ' ' + JSON.stringify(addedBody));
+  const stateAfterAdd = await (await fetch(GO + '/__state')).json();
+  const addedRow = stateAfterAdd[st.ids.calendar].tabs.find((t) => t.title === calRow.tab).rows[addedBody.row - 1];
+  check('and it lands in the task-table columns, not the month grid',
+    addedRow.join('|').includes('A post written from the dashboard') && addedRow.slice(0, 7).every((c) => !String(c || '').trim()),
+    JSON.stringify(addedRow));
+  const afterAdd = await jsonOf(await app('/api/sources?kind=calendar&fresh=1'));
+  check('and the dashboard reads it straight back', (afterAdd?.entries || []).some((e) => /written from the dashboard/.test(e.caption)));
+  const badNew = await app('/api/sources', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'add_row', kind: 'calendar', tab: calRow.tab, values: { sun: 'X' } }),
+  });
+  check('a new row cannot write outside the allowed fields either', badNew.status === 400 && (await jsonOf(badNew))?.error === 'field_not_editable', String(badNew.status));
+
   // Adding a photo to the shared folder.
   const oneByOne = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
   const up = await app('/api/sources', {

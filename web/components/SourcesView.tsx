@@ -45,6 +45,10 @@ function sheetEmbed(id: string): string {
   // it, which opens the real sheet in a tab.
   return 'https://docs.google.com/spreadsheets/d/' + id + '/preview';
 }
+/** Google's own editor. Whether it survives being framed is the browser's call. */
+function sheetEditEmbed(id: string): string {
+  return 'https://docs.google.com/spreadsheets/d/' + id + '/edit?widget=true&headers=false&rm=minimal';
+}
 function sheetOpen(id: string): string {
   return 'https://docs.google.com/spreadsheets/d/' + id + '/edit';
 }
@@ -53,13 +57,31 @@ function sheetOpen(id: string): string {
 // block third-party cookies show the sheet signed-out inside the frame, so the
 // "Open in Google Sheets" button is always there.
 function SheetFrame({ id, title, height }: { id: string; title: string; height: number }) {
+  // /preview always renders but is read-only; Google's own editor may or may
+  // not survive being framed here — it depends on the browser's third-party
+  // cookie setting as much as on Google. Rather than guess for everyone, offer
+  // the swap: if the editor loads for you, type in it; if it comes up blank,
+  // switch back and use the fields beside it, which write to the same sheet.
+  const [tryEditor, setTryEditor] = useState(false);
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.08)', fontSize: 12 }}>
-        <span style={{ opacity: .7 }}>{title} — the live sheet. Open it in Google Sheets to edit; changes appear here.</span>
-        <a href={sheetOpen(id)} target="_blank" rel="noreferrer" style={{ ...ghost, textDecoration: 'none' }}>Open in Google Sheets ↗</a>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.08)', fontSize: 12, flexWrap: 'wrap' }}>
+        <span style={{ opacity: .7 }}>
+          {title} — {tryEditor ? 'Google’s editor, embedded. If this panel is blank, switch back to read-only.' : 'the live sheet, read-only here. Edit with the fields beside it, or open it in Google.'}
+        </span>
+        <span style={{ display: 'flex', gap: 8 }}>
+          <button type="button" style={ghost} onClick={() => setTryEditor(!tryEditor)}>
+            {tryEditor ? 'Back to read-only' : 'Try editing here'}
+          </button>
+          <a href={sheetOpen(id)} target="_blank" rel="noreferrer" style={{ ...ghost, textDecoration: 'none' }}>Open in Google Sheets ↗</a>
+        </span>
       </div>
-      <iframe title={title + ' (Google Sheets)'} src={sheetEmbed(id)} style={{ width: '100%', height, border: 0, display: 'block' }} />
+      <iframe
+        key={tryEditor ? 'edit' : 'preview'}
+        title={title + ' (Google Sheets)'}
+        src={tryEditor ? sheetEditEmbed(id) : sheetEmbed(id)}
+        style={{ width: '100%', height, border: 0, display: 'block' }}
+      />
     </div>
   );
 }
@@ -133,6 +155,60 @@ function RowEditor({ kind, tab, row, fields, onSaved }: {
           {busy ? 'Saving…' : 'Save to sheet'}
         </button>
         <span style={{ fontSize: 10, opacity: .55 }}>Writes into row {row} of “{tab}”.</span>
+      </div>
+    </div>
+  );
+}
+
+
+/** Write a brand new row into a sheet tab. */
+function RowAdder({ kind, tab, fields, onAdded }: {
+  kind: 'calendar' | 'videos';
+  tab: string;
+  fields: { name: string; label: string; multiline?: boolean }[];
+  onAdded: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function add() {
+    const values = Object.fromEntries(Object.entries(draft).filter(([, v]) => String(v || '').trim()));
+    if (!Object.keys(values).length) { setErr('Write something first.'); return; }
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch('/api/sources', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'add_row', kind, tab, values }),
+      });
+      if (!r.ok) { setErr(await friendlyErrorFromResponse(r, 'That row was not added.')); return; }
+      setDraft({}); setOpen(false); onAdded();
+    } catch (e) {
+      setErr(friendlyError(e, 'That row was not added.'));
+    } finally { setBusy(false); }
+  }
+
+  if (!open) {
+    return <button type="button" style={{ ...btn, marginTop: 10 }} onClick={() => setOpen(true)}>Add a post to the sheet</button>;
+  }
+  return (
+    <div style={{ display: 'grid', gap: 8, marginTop: 10, borderTop: '1px solid rgba(0,0,0,0.08)', paddingTop: 10 }}>
+      <strong style={{ fontSize: 12 }}>New row in “{tab}”</strong>
+      {fields.map((f) => (
+        <label key={f.name} style={{ display: 'grid', gap: 3, fontSize: 11 }}>
+          <span style={{ opacity: .6 }}>{f.label}</span>
+          {f.multiline
+            ? <textarea rows={4} value={draft[f.name] || ''} onChange={(ev) => setDraft({ ...draft, [f.name]: ev.target.value })}
+                style={{ font: 'inherit', fontSize: 12, padding: 7, borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', resize: 'vertical' }} />
+            : <input value={draft[f.name] || ''} onChange={(ev) => setDraft({ ...draft, [f.name]: ev.target.value })}
+                style={{ font: 'inherit', fontSize: 12, padding: '6px 7px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)' }} />}
+        </label>
+      ))}
+      {err && <p role="alert" style={{ margin: 0, fontSize: 11, color: '#b42318' }}>{err}</p>}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button type="button" style={btn} disabled={busy} onClick={add}>{busy ? 'Adding…' : 'Add to sheet'}</button>
+        <button type="button" style={ghost} disabled={busy} onClick={() => { setOpen(false); setErr(null); }}>Cancel</button>
       </div>
     </div>
   );
@@ -265,7 +341,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                   <button type="button" style={ghost} onClick={() => load('calendar', true)}>Refresh</button>
                 </div>
                 {!calendar ? <p style={{ fontSize: 13, opacity: .6 }}>Reading the sheet…</p>
-                  : upcoming.length === 0 ? <p style={{ fontSize: 13, opacity: .6 }}>Nothing dated from today onward yet.</p>
+                  : upcoming.length === 0 ? <p style={{ fontSize: 13, opacity: .6 }}>Nothing dated from today onward — every row below is editable.</p>
                   : (
                     <ul style={{ listStyle: 'none', padding: 0, margin: '12px 0 0', display: 'grid', gap: 10 }}>
                       {upcoming.slice(0, 14).map((e, i) => (
@@ -299,15 +375,49 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                       ))}
                     </ul>
                   )}
+                {calendar && calendar.entries.length > 0 && (
+                  <RowAdder
+                    kind="calendar"
+                    tab={calendar.entries[0].tab}
+                    onAdded={() => void load('calendar', true)}
+                    fields={[
+                      { name: 'description', label: 'Post text', multiline: true },
+                      { name: 'date', label: 'Date' },
+                      { name: 'status', label: 'Status' },
+                      { name: 'owner', label: 'Owner' },
+                    ].filter((f) => (calendar.entries[0].columns as Record<string, string>)[f.name])}
+                  />
+                )}
               </section>
               {calendar && recent.length > 0 && (
                 <section style={card}>
-                  <h2 style={{ margin: 0, fontSize: 15 }}>Recently posted</h2>
+                  <h2 style={{ margin: 0, fontSize: 15 }}>Everything else on the sheet ({recent.length})</h2>
+                  <p style={{ fontSize: 11, opacity: .6, margin: '4px 0 0' }}>Press Edit on any row to change it here; it saves into the sheet.</p>
                   <ul style={{ listStyle: 'none', padding: 0, margin: '12px 0 0', display: 'grid', gap: 8, fontSize: 12 }}>
                     {recent.map((e, i) => (
-                      <li key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, opacity: .8 }}>
-                        <span style={{ display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{e.caption || e.fileName}</span>
-                        <span style={{ whiteSpace: 'nowrap', opacity: .6 }}>{e.date || e.tab}</span>
+                      <li key={i} style={{ borderTop: '1px solid rgba(0,0,0,0.08)', paddingTop: 8 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                          <span style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{e.caption || e.fileName}</span>
+                          <span style={{ whiteSpace: 'nowrap', opacity: .6 }}>{e.date || e.tab}</span>
+                        </div>
+                        <div style={{ marginTop: 5, display: 'flex', gap: 6, alignItems: 'center' }}>
+                          {e.caption && <button type="button" style={{ ...ghost, padding: '3px 9px', fontSize: 11 }} onClick={() => handoff(e.caption, '', '')}>Use in post</button>}
+                          <button type="button" style={{ ...ghost, padding: '3px 9px', fontSize: 11 }} onClick={() => setEditing(editing === e.tab + ':' + e.row ? null : e.tab + ':' + e.row)}>
+                            {editing === e.tab + ':' + e.row ? 'Close' : 'Edit'}
+                          </button>
+                        </div>
+                        {editing === e.tab + ':' + e.row && (
+                          <RowEditor
+                            kind="calendar" tab={e.tab} row={e.row}
+                            onSaved={() => { setEditing(null); void load('calendar', true); }}
+                            fields={[
+                              { name: 'description', label: 'Post text', value: e.caption, multiline: true },
+                              { name: 'date', label: 'Date', value: e.date || '' },
+                              { name: 'status', label: 'Status', value: e.status || '' },
+                              { name: 'owner', label: 'Owner', value: e.owner || '' },
+                            ].filter((f) => e.columns && (e.columns as Record<string, string>)[f.name])}
+                          />
+                        )}
                       </li>
                     ))}
                   </ul>

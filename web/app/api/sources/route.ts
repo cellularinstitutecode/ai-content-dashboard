@@ -18,6 +18,7 @@ import {
   readCalendar,
   readRowCells,
   readVideos,
+  appendRow,
   updateRowCells,
   uploadFolderImage,
   serviceAccountEmail,
@@ -210,6 +211,38 @@ export async function POST(req: NextRequest) {
 
   let body: any = null;
   try { body = await req.json(); } catch { body = null; }
+  // Add a NEW row to one of the sheets — the "type in something new" case.
+  // The tab's own column map decides where each field lands, so this cannot
+  // write outside the task table any more than an edit can.
+  if (body?.action === 'add_row') {
+    const kind = String(body?.kind || '');
+    const tab = String(body?.tab || '');
+    const values = body?.values && typeof body.values === 'object' ? body.values as Record<string, string> : null;
+    if ((kind !== 'calendar' && kind !== 'videos') || !tab || !values || !Object.keys(values).length) {
+      return NextResponse.json({ error: 'invalid_request', message: 'Say which sheet, which tab, and what to write.' }, { status: 400 });
+    }
+    const allowedNew: readonly string[] = kind === 'calendar' ? CALENDAR_EDITABLE : VIDEO_EDITABLE;
+    const notAllowed = Object.keys(values).filter((f) => !allowedNew.includes(f));
+    if (notAllowed.length) {
+      return NextResponse.json({ error: 'field_not_editable', message: 'The dashboard does not write ' + notAllowed.join(', ') + '.', fields: notAllowed }, { status: 400 });
+    }
+    try {
+      const sheetId = kind === 'calendar' ? SOURCE_IDS.calendarSheet() : SOURCE_IDS.videosSheet();
+      // Take the column map from a row the reader already understands on this
+      // tab, so a new row lines up with the ones beside it.
+      const sample = kind === 'calendar'
+        ? (await readCalendar()).entries.find((e) => e.tab === tab)
+        : (await readVideos()).entries.find((e) => e.tab === tab);
+      if (!sample) {
+        return NextResponse.json({ error: 'unknown_tab', message: 'The dashboard cannot read that tab, so it will not write to it.' }, { status: 400 });
+      }
+      const { row } = await appendRow(sheetId, tab, sample.columns as Record<string, string | undefined>, values);
+      return NextResponse.json({ ok: true, tab, row });
+    } catch (e) {
+      return failure(e, 'add-row-' + kind);
+    }
+  }
+
   // Add a photo to the team's folder. Base64 because the browser sends it
   // through the same JSON endpoint as everything else; 12 MB is Drive-friendly
   // and well under the platform's body cap.
