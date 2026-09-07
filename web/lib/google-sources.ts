@@ -163,7 +163,7 @@ export async function readCalendar(spreadsheetId = SOURCE_IDS.calendarSheet()): 
       const caption = pick(r, 'caption', 'copy');
       const date = parseSheetDate(pick(r, 'date', 'fecha'));
       if (!caption && !date) continue;
-      const networks = NETWORK_COLUMNS.filter(([col]) => /^(x|✓|✔|yes|si|sí|true|posted|done)$/i.test(pick(r, col))).map(([, n]) => n);
+      const networks = NETWORK_COLUMNS.filter(([col]) => YES.test(pick(r, col))).map(([, n]) => n);
       entries.push({
         tab: t.title,
         date,
@@ -195,6 +195,9 @@ export type VideoEntry = {
   notes: string;
 };
 
+/** What counts as "yes" in a hand-kept sheet column: ticks, x, TRUE — never FALSE. */
+const YES = /^(x|✓|✔|yes|si|sí|true|posted|done)$/i;
+
 const VIDEO_NETWORKS: [string, string][] = [['youtube', 'youtube'], ['linkedin', 'linkedin'], ['tiktok', 'tiktok'], ['x', 'twitter'], ['facebook', 'facebook'], ['instagram', 'instagram'], ['email', 'email']];
 
 /** The video inventory across every year tab. */
@@ -212,7 +215,12 @@ export async function readVideos(spreadsheetId = SOURCE_IDS.videosSheet()): Prom
       const title = pick(r, 'título del video', 'titulo del video', 'title');
       const videoLink = pick(r, 'link video', 'link', 'video link');
       if (!title && !videoLink) continue;
-      const networks = VIDEO_NETWORKS.filter(([col]) => Boolean(pick(r, col))).map(([, n]) => n);
+      // The same strict allowlist the calendar above uses. Any-non-empty is
+      // wrong here: Rodrigo's sheet fills these columns with TRUE *and FALSE*
+      // (Google's checkbox default), so treating a value as a yes marked every
+      // FALSE column as a network the video ships to — a video the sheet says
+      // is YouTube-only was listed as LinkedIn and Email as well.
+      const networks = VIDEO_NETWORKS.filter(([col]) => YES.test(pick(r, col))).map(([, n]) => n);
       entries.push({
         tab: t.title,
         creator: firstKey ? r[firstKey] || '' : '',

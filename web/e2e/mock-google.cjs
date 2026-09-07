@@ -43,8 +43,15 @@ function seed() {
       tabs: [
         { title: '2026 CELLULAR HOPE', sheetId: 1, rows: [
           [' ', 'FECHA DE ELABORACIÓN', 'TIPO DE VIDEO', 'TÍTULO DEL VIDEO', 'COPY', 'LINK VIDEO', 'FORMATO', 'YOUTUBE', 'LINKEDIN', 'TIKTOK', 'X', 'FACEBOOK', 'INSTAGRAM', 'EMAIL', 'OBSERVACIÓN', 'TÍTULO THUMBNAILS', 'LINK PORTADA'],
-          ['Rodrigo', 'Feb.', 'Your Journey Begins Here', 'How Our Medical Evaluation Process Works | Cellular Institute Cancun', '', 'https://drive.google.com/file/d/1FXHc/view', 'Horizontal 16:9', 'Unlisted', '', '', '', '', '', '', '', "you're in! here's what happens next", 'https://drive.google.com/file/d/1ZHf/view'],
-          ['Milán', 'Feb.', 'IV Therapy', 'IV therapy guided by physicians in Cancun within a structured clinical environment.', 'IV therapy guided by physicians in Cancun.', '1. https://drive.google.com/file/d/1Mhg/view 2. https://drive.google.com/file/d/1Hdf/view', 'Vertical 9:16', '', '', 'x', '', 'x', 'x', '', '', '', ''],
+          // These two rows are copied cell-for-cell from the real sheet, TIPO DE
+          // VIDEO blank and all. An earlier fixture omitted that column, which
+          // shifted every value one place left: the copy showed up as the
+          // title, and 'Unlisted' (an OBSERVACIÓN) landed in YOUTUBE and was
+          // read as a network. The flags really are Google's TRUE/FALSE
+          // checkboxes, so FALSE has to be here or nothing tests that FALSE
+          // means no.
+          ['Rodrigo', 'Feb.', '', 'Your Journey Begins Here', 'How Our Medical Evaluation Process Works | Cellular Institute Cancun', 'https://drive.google.com/file/d/1FXHc/view', 'Horizontal 16:9', 'TRUE', 'FALSE', '', '', '', '', 'FALSE', 'Unlisted', "you're in! here's what happens next", 'https://drive.google.com/file/d/1ZHf/view'],
+          ['Milán', 'Feb.', '', 'IV Therapy', 'IV therapy guided by physicians in Cancun within a structured clinical environment.', '1. https://drive.google.com/file/d/1Mhg/view 2. https://drive.google.com/file/d/1Hdf/view', 'Vertical 9:16', 'TRUE', 'FALSE', 'TRUE', 'FALSE', 'TRUE', 'TRUE', 'FALSE', '', '', ''],
         ] },
       ],
     },

@@ -429,8 +429,23 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   check('a row carries its date, status, graphic and the networks ticked', sep && sep.date && sep.status === 'For approval' && /drive\.google/.test(sep.graphicsLink) && sep.networks.includes('instagram') && sep.networks.includes('facebook'), JSON.stringify(sep));
   const vids = await jsonOf(await app('/api/sources?kind=videos&fresh=1'));
   check("Rodrigo's sheet is read with its Spanish headers", Array.isArray(vids?.entries) && vids.entries.length === 2, JSON.stringify(vids?.entries?.length));
-  const iv = (vids?.entries || []).find((v) => /IV Therapy/.test(v.type) || /IV therapy/.test(v.title));
-  check('a video carries creator, copy, link, format and networks', iv && iv.creator === 'Milán' && /drive\.google/.test(iv.videoLink) && iv.format === 'Vertical 9:16' && iv.networks.includes('instagram') && iv.networks.includes('facebook'), JSON.stringify(iv));
+  const iv = (vids?.entries || []).find((v) => /IV Therapy/.test(v.title));
+  check('a video carries creator, title, copy, link and format',
+    iv && iv.creator === 'Milán' && iv.title === 'IV Therapy' &&
+    /structured clinical environment/.test(iv.copy) &&
+    /drive\.google/.test(iv.videoLink) && iv.format === 'Vertical 9:16', JSON.stringify(iv));
+  // The flags in this sheet are Google checkboxes, so a column reads TRUE or
+  // FALSE — never blank. Counting any non-empty cell as a yes listed a video
+  // as going everywhere its sheet says it does NOT.
+  check('and only the networks the sheet says TRUE for',
+    iv && ['youtube', 'tiktok', 'facebook', 'instagram'].every((n) => iv.networks.includes(n)) &&
+    !iv.networks.includes('linkedin') && !iv.networks.includes('twitter') && !iv.networks.includes('email'),
+    JSON.stringify(iv?.networks));
+  const jrn = (vids?.entries || []).find((v) => /Journey Begins/.test(v.title));
+  check('a YouTube-only video is not also listed as LinkedIn and Email',
+    jrn && jrn.networks.length === 1 && jrn.networks[0] === 'youtube', JSON.stringify(jrn?.networks));
+  check('and its OBSERVACIÓN stays a note, not a network',
+    jrn && jrn.notes === 'Unlisted', JSON.stringify({ notes: jrn?.notes }));
   const imgs = await jsonOf(await app('/api/sources?kind=images&fresh=1'));
   check('the image folder lists its photos with thumbnails', Array.isArray(imgs?.images) && imgs.images.length === 3 && imgs.images.every((i) => /drive\.google\.com\/thumbnail/.test(i.thumbUrl)), JSON.stringify(imgs?.images?.length));
   const imp = await app('/api/sources', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'import_image', fileId: imgs.images[0].id }) });
