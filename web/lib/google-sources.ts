@@ -23,6 +23,9 @@ import 'server-only';
 
 import { google } from 'googleapis';
 import { reportError } from '@/lib/report';
+import { classifyGoogleError, type GoogleFailure } from './google-error.ts';
+
+export { classifyGoogleError, type GoogleFailure };
 import { parseSheetDate, pick, tableFromRows } from '@/lib/sheet-table';
 
 // The clinic's documents. Overridable per environment, never secret.
@@ -99,15 +102,26 @@ async function gfetch(url: string, init: RequestInit = {}, timeoutMs = 12000): P
 }
 
 export class GoogleSourceError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+    /** Google's own machine reason, e.g. 'accessNotConfigured' or 'permissionDenied'. */
+    public reason: GoogleFailure = 'unknown',
+    /** Google's own sentence, kept so a person can read what Google actually said. */
+    public detail: string = '',
+  ) {
     super(message);
   }
 }
 
 async function json<T>(res: Response, what: string): Promise<T> {
   if (!res.ok) {
-    // 403/404 here almost always means "not shared with the service account".
-    throw new GoogleSourceError(res.status, what + ' failed: HTTP ' + res.status);
+    // Read the body. Google says exactly which of several very different
+    // problems this is, and throwing that away is what left the dashboard
+    // guessing out loud.
+    const body = await res.text().catch(() => '');
+    const { reason, detail } = classifyGoogleError(res.status, body);
+    throw new GoogleSourceError(res.status, what + ' failed: HTTP ' + res.status, reason, detail);
   }
   return (await res.json()) as T;
 }
