@@ -68,7 +68,13 @@ async function accessToken(): Promise<string> {
   const jwt = new google.auth.JWT({
     email: creds.client_email,
     key: creds.private_key,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'],
+    // Least privilege for what this module actually does. Sheets is read AND
+    // written (the approvals tab is appended to), but every Drive call here is
+    // a read: list the folder, read a file's metadata, download its bytes. The
+    // full drive scope would let a bug in this path modify or delete anything
+    // the service account can see, including the clip-storage folder that
+    // lib/drive.ts owns — that module mints its own token and is unaffected.
+    scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive.readonly'],
   });
   const t = await jwt.getAccessToken();
   const value = typeof t === 'string' ? t : String(t?.token || '');
