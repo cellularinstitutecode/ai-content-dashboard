@@ -4,8 +4,41 @@
 // name (in English or Spanish), and dates are read in the forms people type.
 // Pure, so it is unit-tested; lib/google-sources.ts does the fetching.
 
-/** Find the header row (the first row with ≥ 3 of the wanted names) and map rows to objects keyed by normalised header. */
-export function tableFromRows(rows: string[][], wanted: string[]): { header: string[]; records: Record<string, string>[] } {
+/** A1 column letter for a zero-based index: 0 → A, 25 → Z, 26 → AA. */
+export function columnLetter(index: number): string {
+  let n = index + 1;
+  let out = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    out = String.fromCharCode(65 + rem) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out;
+}
+
+export type SheetRecord = {
+  /** The row's cells, keyed by normalised header. */
+  rec: Record<string, string>;
+  /** 1-based row number in the tab, so the row can be written back. */
+  row: number;
+};
+
+export type SheetTable = {
+  header: string[];
+  /** 1-based row number of the header itself. */
+  headerRow: number;
+  records: SheetRecord[];
+};
+
+/**
+ * Find the header row (the first row with ≥ 3 of the wanted names) and map rows
+ * to objects keyed by normalised header.
+ *
+ * Each record carries its 1-based ROW NUMBER. Without it a value read out of a
+ * sheet can never be written back: an update needs "'September 2026'!M7", and
+ * the row is the half that cannot be recovered afterwards.
+ */
+export function tableFromRows(rows: string[][], wanted: string[]): SheetTable {
   const norm = (s: string) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
   const wantedNorm = wanted.map(norm);
   let headerIdx = -1;
@@ -14,18 +47,32 @@ export function tableFromRows(rows: string[][], wanted: string[]): { header: str
     const hits = cells.filter((c) => c && wantedNorm.some((w) => c === w || c.startsWith(w))).length;
     if (hits >= 3) { headerIdx = i; break; }
   }
-  if (headerIdx < 0) return { header: [], records: [] };
+  if (headerIdx < 0) return { header: [], headerRow: 0, records: [] };
   // An unnamed column keeps its place under a positional key, so a sheet
   // whose first column is a name with no header (Rodrigo's) is not lost.
   const header = (rows[headerIdx] || []).map((h, i) => norm(h) || 'col' + i);
-  const records: Record<string, string>[] = [];
-  for (const row of rows.slice(headerIdx + 1)) {
-    if (!row || row.every((c) => !String(c || '').trim())) continue;
+  const records: SheetRecord[] = [];
+  rows.slice(headerIdx + 1).forEach((row, offset) => {
+    if (!row || row.every((c) => !String(c || '').trim())) return;
     const rec: Record<string, string> = {};
     header.forEach((h, i) => { rec[h] = String(row[i] ?? '').trim(); });
-    records.push(rec);
+    // +1 for the header itself, +1 again because sheets count from 1.
+    records.push({ rec, row: headerIdx + offset + 2 });
+  });
+  return { header, headerRow: headerIdx + 1, records };
+}
+
+/**
+ * The A1 column letter a named field lives in, or null when the sheet has no
+ * such column. Matches the same way pick() does, so what you can read you can
+ * address.
+ */
+export function columnFor(header: string[], ...names: string[]): string | null {
+  for (const n of names) {
+    const i = header.findIndex((h) => h === n || h.startsWith(n));
+    if (i >= 0) return columnLetter(i);
   }
-  return { header, records };
+  return null;
 }
 
 export function pick(rec: Record<string, string>, ...names: string[]): string {

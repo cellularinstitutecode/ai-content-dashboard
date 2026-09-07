@@ -12,16 +12,16 @@
 // of truth. "Use in post" and "Use as hero image" hand the content to the
 // Publishing composer on the dashboard through the shared workspace.
 
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import PageNav from '@/components/PageNav';
 import { useWorkspace } from '@/components/workspace';
-import { friendlyErrorFromResponse } from '@/lib/friendly-error';
+import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 
 export type Tab = 'calendar' | 'videos' | 'images';
 
-type CalendarEntry = { tab: string; date: string | null; type: string; caption: string; fileName: string; graphicsLink: string; status: string; networks: string[] };
-type VideoEntry = { tab: string; creator: string; month: string; type: string; title: string; copy: string; videoLink: string; format: string; networks: string[]; thumbnailTitle: string; coverLink: string; notes: string };
+type CalendarEntry = { tab: string; row: number; headerRow: number; columns: Record<string, string>; date: string | null; type: string; pillar: string; owner: string; cta: string; caption: string; fileName: string; graphicsLink: string; status: string; networks: string[] };
+type VideoEntry = { tab: string; row: number; headerRow: number; columns: Record<string, string>; creator: string; month: string; type: string; title: string; copy: string; videoLink: string; format: string; networks: string[]; thumbnailTitle: string; coverLink: string; notes: string };
 type DriveImage = { id: string; name: string; mimeType: string; modifiedTime: string; size: number | null; viewUrl: string; thumbUrl: string };
 type Status = { configured: boolean; serviceAccount: string | null; ids: { calendar: string; videos: string; images: string } };
 
@@ -70,11 +70,108 @@ export const SOURCE_SECTIONS: { id: Tab; href: string; label: string }[] = [
   { id: 'images', href: '/sources/images', label: 'Image Library' },
 ];
 
+
+/**
+ * Edit one row of a Google Sheet from here, written straight back to the file.
+ *
+ * Google will not let its editor be framed by another site, so "edit live"
+ * cannot mean their editor inside our page. It means these fields: what you
+ * save lands in the real sheet immediately. `expected` carries the values the
+ * row had when it was read, and the server refuses the write if any of them
+ * moved — so two people editing the same row cannot silently overwrite one
+ * another.
+ */
+function RowEditor({ kind, tab, row, fields, onSaved }: {
+  kind: 'calendar' | 'videos';
+  tab: string;
+  row: number;
+  fields: { name: string; label: string; value: string; multiline?: boolean }[];
+  onSaved: () => void;
+}) {
+  const [draft, setDraft] = useState<Record<string, string>>(() =>
+    Object.fromEntries(fields.map((f) => [f.name, f.value])));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const dirty = fields.some((f) => draft[f.name] !== f.value);
+
+  async function save() {
+    const changes: Record<string, string> = {};
+    const expected: Record<string, string> = {};
+    for (const f of fields) {
+      if (draft[f.name] !== f.value) { changes[f.name] = draft[f.name]; expected[f.name] = f.value; }
+    }
+    if (!Object.keys(changes).length) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch('/api/sources', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind, tab, row, changes, expected }),
+      });
+      if (!r.ok) { setErr(await friendlyErrorFromResponse(r, 'That change was not saved.')); return; }
+      onSaved();
+    } catch (e) {
+      setErr(friendlyError(e, 'That change was not saved.'));
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+      {fields.map((f) => (
+        <label key={f.name} style={{ display: 'grid', gap: 3, fontSize: 11 }}>
+          <span style={{ opacity: .6 }}>{f.label}</span>
+          {f.multiline
+            ? <textarea value={draft[f.name]} rows={4} onChange={(ev) => setDraft({ ...draft, [f.name]: ev.target.value })}
+                style={{ font: 'inherit', fontSize: 12, padding: 7, borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)', resize: 'vertical' }} />
+            : <input value={draft[f.name]} onChange={(ev) => setDraft({ ...draft, [f.name]: ev.target.value })}
+                style={{ font: 'inherit', fontSize: 12, padding: '6px 7px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.15)' }} />}
+        </label>
+      ))}
+      {err && <p role="alert" style={{ margin: 0, fontSize: 11, color: '#b42318' }}>{err}</p>}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <button type="button" style={{ ...btn, opacity: dirty && !busy ? 1 : .45 }} disabled={!dirty || busy} onClick={save}>
+          {busy ? 'Saving…' : 'Save to sheet'}
+        </button>
+        <span style={{ fontSize: 10, opacity: .55 }}>Writes into row {row} of “{tab}”.</span>
+      </div>
+    </div>
+  );
+}
+
 export default function SourcesView({ kind }: { kind: Tab }) {
   const router = useRouter();
   const workspace = useWorkspace();
   const tab: Tab = kind;
   const [status, setStatus] = useState<Status | null>(null);
+  // Which row has its editor open, as "tab:row".
+  const [editing, setEditing] = useState<string | null>(null);
+
+  // Add a photo to the shared Drive folder. Upload only — the dashboard never
+  // renames or deletes anything in Drive, because adding a file is undoable in
+  // one click and removing one is not.
+  const [uploading, setUploading] = useState(false);
+  const [uploadErr, setUploadErr] = useState<string | null>(null);
+  async function uploadImage(file: File) {
+    setUploading(true); setUploadErr(null);
+    try {
+      if (file.size > 12 * 1024 * 1024) { setUploadErr('That image is over 12 MB. Add it in Drive directly.'); return; }
+      const data = await new Promise<string>((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result || ''));
+        fr.onerror = () => reject(new Error('could not read the file'));
+        fr.readAsDataURL(file);
+      });
+      const r = await fetch('/api/sources', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'upload_image', name: file.name, contentType: file.type, data }),
+      });
+      if (!r.ok) { setUploadErr(await friendlyErrorFromResponse(r, 'That photo was not added.')); return; }
+      await load('images', true);
+    } catch (e) {
+      setUploadErr(friendlyError(e, 'That photo was not added.'));
+    } finally { setUploading(false); }
+  }
+
   const [calendar, setCalendar] = useState<{ entries: CalendarEntry[]; tabs: string[] } | null>(null);
   const [videos, setVideos] = useState<{ entries: VideoEntry[]; tabs: string[] } | null>(null);
   const [images, setImages] = useState<DriveImage[] | null>(null);
@@ -181,8 +278,23 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                           <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                             {e.networks.map((n) => <span key={n} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 999, background: '#eef3ff', color: '#1d4ed8' }}>{n}</span>)}
                             {e.caption && <button type="button" style={{ ...ghost, padding: '3px 9px', fontSize: 11 }} onClick={() => handoff(e.caption, '', '')}>Use in post</button>}
+                            <button type="button" style={{ ...ghost, padding: '3px 9px', fontSize: 11 }} onClick={() => setEditing(editing === e.tab + ':' + e.row ? null : e.tab + ':' + e.row)}>
+                              {editing === e.tab + ':' + e.row ? 'Close' : 'Edit'}
+                            </button>
                             {e.graphicsLink && <a href={e.graphicsLink} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>graphic ↗</a>}
                           </div>
+                          {editing === e.tab + ':' + e.row && (
+                            <RowEditor
+                              kind="calendar" tab={e.tab} row={e.row}
+                              onSaved={() => { setEditing(null); void load('calendar', true); }}
+                              fields={[
+                                { name: 'description', label: 'Post text', value: e.caption, multiline: true },
+                                { name: 'date', label: 'Date', value: e.date || '' },
+                                { name: 'status', label: 'Status', value: e.status || '' },
+                                { name: 'owner', label: 'Owner', value: e.owner || '' },
+                              ].filter((f) => e.columns && (e.columns as Record<string, string>)[f.name])}
+                            />
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -231,7 +343,8 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                       </thead>
                       <tbody>
                         {filteredVideos.map((v, i) => (
-                          <tr key={i} style={{ borderTop: '1px solid rgba(0,0,0,0.08)', verticalAlign: 'top' }}>
+                          <Fragment key={i}>
+                          <tr style={{ borderTop: '1px solid rgba(0,0,0,0.08)', verticalAlign: 'top' }}>
                             <td style={{ padding: '8px' }}>
                               <div style={{ fontWeight: 600 }}>{v.title || v.type || '—'}</div>
                               <div style={{ opacity: .6 }}>{[v.type, v.month, v.tab].filter(Boolean).join(' · ')}</div>
@@ -242,9 +355,31 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                             <td style={{ padding: '8px' }}><div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>{v.networks.map((n) => <span key={n} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 999, background: '#eef3ff', color: '#1d4ed8' }}>{n}</span>)}</div></td>
                             <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>{v.creator || '—'}</td>
                             <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>
-                              <button type="button" style={btn} onClick={() => handoff([v.copy || v.title, v.videoLink ? 'Watch: ' + (v.videoLink.split(/\s+/).find((x) => /^https?:/.test(x)) || v.videoLink) : ''].filter(Boolean).join('\n\n'), '', '')}>Use in post</button>
+                              <div style={{ display: 'flex', gap: 6 }}>
+                                <button type="button" style={btn} onClick={() => handoff([v.copy || v.title, v.videoLink ? 'Watch: ' + (v.videoLink.split(/\s+/).find((x) => /^https?:/.test(x)) || v.videoLink) : ''].filter(Boolean).join('\n\n'), '', '')}>Use in post</button>
+                                <button type="button" style={{ ...ghost, padding: '5px 10px' }} onClick={() => setEditing(editing === v.tab + ':' + v.row ? null : v.tab + ':' + v.row)}>
+                                  {editing === v.tab + ':' + v.row ? 'Close' : 'Edit'}
+                                </button>
+                              </div>
                             </td>
                           </tr>
+                          {editing === v.tab + ':' + v.row && (
+                            <tr>
+                              <td colSpan={6} style={{ padding: '4px 8px 14px', background: 'rgba(0,0,0,0.02)' }}>
+                                <RowEditor
+                                  kind="videos" tab={v.tab} row={v.row}
+                                  onSaved={() => { setEditing(null); void load('videos', true); }}
+                                  fields={[
+                                    { name: 'title', label: 'Title', value: v.title },
+                                    { name: 'copy', label: 'Copy', value: v.copy, multiline: true },
+                                    { name: 'format', label: 'Format', value: v.format },
+                                    { name: 'notes', label: 'Notes (OBSERVACIÓN)', value: v.notes },
+                                  ].filter((f) => v.columns && (v.columns as Record<string, string>)[f.name])}
+                                />
+                              </td>
+                            </tr>
+                          )}
+                          </Fragment>
                         ))}
                       </tbody>
                     </table>
@@ -269,10 +404,16 @@ export default function SourcesView({ kind }: { kind: Tab }) {
               <h2 style={{ margin: 0, fontSize: 15 }}>Images {images ? '(' + images.length + ')' : ''}</h2>
               <div style={{ display: 'flex', gap: 8 }}>
                 {ids && <a href={'https://drive.google.com/drive/folders/' + ids.images} target="_blank" rel="noreferrer" style={{ ...ghost, textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}>Open folder in Drive ↗</a>}
+                <label style={{ ...btn, display: 'inline-flex', alignItems: 'center', cursor: uploading ? 'wait' : 'pointer', opacity: uploading ? .5 : 1 }}>
+                  {uploading ? 'Uploading…' : 'Add a photo'}
+                  <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={uploading} style={{ display: 'none' }}
+                    onChange={(ev) => { const f = ev.target.files?.[0]; ev.target.value = ''; if (f) void uploadImage(f); }} />
+                </label>
                 <button type="button" style={ghost} onClick={() => load('images', true)}>Refresh</button>
               </div>
             </div>
-            <p style={{ fontSize: 12, opacity: .65, marginTop: 8 }}>Upload new photos in the Drive folder; they appear here. &quot;Use as hero image&quot; copies the photo into the dashboard so Metricool can publish it — the photo itself stays in Drive.</p>
+            {uploadErr && <p role="alert" style={{ fontSize: 12, color: '#b42318', marginTop: 8 }}>{uploadErr}</p>}
+            <p style={{ fontSize: 12, opacity: .65, marginTop: 8 }}>&quot;Add a photo&quot; puts it straight into the team&apos;s Drive folder — everyone sees it, not just the dashboard. &quot;Use as hero image&quot; copies one into the dashboard so Metricool can publish it; the photo itself stays in Drive.</p>
             {!images ? <p style={{ fontSize: 13, opacity: .6 }}>Reading the folder…</p>
               : images.length === 0 ? <p style={{ fontSize: 13, opacity: .6 }}>No images in the folder yet.</p>
               : (

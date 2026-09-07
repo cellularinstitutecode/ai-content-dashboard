@@ -25,7 +25,27 @@ function seed() {
   return {
     [CALENDAR]: {
       tabs: [
-        { title: 'Content Calendar', sheetId: 1, rows: [['May 2026', 'Task Delegation'], ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'ID', 'Date', 'Pillar', 'Type', 'Description', 'Owner', 'Status', 'CTA'], ['1', '2', '1'], ['3', '4', '5', '6', '7', '8', '9', '2', '', '', '', '', '', 'Not started']] },
+        // Meriz's real layout: a month grid down columns A-G, a BLANK spacer in
+        // H, and the task table from I onward — ID · Date · Pillar · Type ·
+        // Description · Owner · Status · CTA. There is no "Caption" column and
+        // no "Graphics Link"; the post text lives in Description. An earlier
+        // fixture invented those names, so the reader passed its tests and
+        // still returned nothing at all from the real sheet.
+        { title: 'Content Calendar', sheetId: 1, rows: [
+          ['Cellular Institute Social Media Calendar'],
+          [],
+          ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', '', 'ID', 'Date', 'Pillar', 'Type', 'Description', 'Owner', 'Status', 'CTA'],
+          ['', '', '', '', '', '1', '2', '', '1', future(3), 'Education', 'Reel', 'Exosome therapy: what the evidence says about joint recovery.', 'Meriz', 'For approval', 'Book a call'],
+          ['3', '4', '5', '6', '7', '8', '9', '', '2', future(10), 'Proof', 'Carousel', 'Meet the team behind your evaluation.', 'Meriz', 'Not started', ''],
+          ['10', '11', '12', '13', '14', '15', '16', '', '3', '', '', '', '', '', '', ''],
+        ] },
+        // A tab with a Date column and no post text is a planning skeleton, not
+        // posts. The reader must skip it or the "coming up" list fills with
+        // blank rows.
+        { title: 'Task Delegation', sheetId: 9, rows: [
+          ['Owner', 'Date', 'Status'],
+          ['Meriz', '2026-09-01', 'Ongoing'],
+        ] },
         { title: 'May Content', sheetId: 2, rows: [
           ['Cellular Institute Content Calendar'],
           ['Number of Posts', 'Date', 'Type of Post', 'Caption', 'File Name', 'Graphics Link', 'Status', 'IG', 'FB', 'LinkedIn', 'TikTok', 'X', 'YouTube', 'AVISO DE PUBLICIDAD: 2623022002A00090'],
@@ -79,6 +99,15 @@ function send(res, status, obj, type = 'application/json') { res.writeHead(statu
 // need three different actions from three different people.
 let refuse = null;
 
+/** 'A' -> 0, 'Z' -> 25, 'AA' -> 26. */
+let uploadSeq = 0;
+
+function colIndex(letters) {
+  let n = 0;
+  for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1:' + PORT);
   if (url.pathname === '/__refuse') {
@@ -120,6 +149,53 @@ const server = http.createServer(async (req, res) => {
     const b = await body(req);
     for (const r of b?.requests || []) if (r.addSheet) docs[id].tabs.push({ title: r.addSheet.properties.title, sheetId: 100 + docs[id].tabs.length, rows: [] });
     return send(res, 200, { replies: [] });
+  }
+  // Multipart upload into the folder, the way "Add a photo" does it.
+  if (p === '/upload/drive/v3/files' && req.method === 'POST') {
+    const chunks = []; for await (const c of req) chunks.push(c);
+    const raw = Buffer.concat(chunks);
+    const meta = /\{[^}]*"name"[^}]*\}/.exec(raw.toString('utf8', 0, Math.min(raw.length, 2000)));
+    let name = 'upload.jpg', parents = [];
+    try { const j = JSON.parse(meta ? meta[0] : '{}'); name = j.name || name; parents = j.parents || []; } catch {}
+    const id = 'uploaded-' + (++uploadSeq);
+    const file = { id, name, mimeType: 'image/jpeg', size: String(raw.length), modifiedTime: new Date().toISOString(), parents };
+    IMAGES.unshift(file);
+    return send(res, 200, file);
+  }
+  // Writing single cells, the way the dashboard edits a row.
+  if ((m = /^\/v4\/spreadsheets\/([^/]+)\/values:batchUpdate$/.exec(p)) && req.method === 'POST') {
+    const doc = docs[m[1]];
+    if (!doc) return send(res, 404, { error: { code: 404, status: 'NOT_FOUND', message: 'No such spreadsheet' } });
+    const b = await body(req);
+    let updated = 0;
+    for (const d of b?.data || []) {
+      const cell = /^'?([^'!]+)'?!([A-Z]+)(\d+)$/.exec(String(d.range || ''));
+      if (!cell) continue;
+      const tab = doc.tabs.find((t) => t.title === cell[1]);
+      if (!tab) return send(res, 400, { error: { code: 400, status: 'INVALID_ARGUMENT', message: 'Unable to parse range: ' + d.range } });
+      const col = colIndex(cell[2]);
+      const row = Number(cell[3]) - 1;
+      while (tab.rows.length <= row) tab.rows.push([]);
+      const r = tab.rows[row];
+      while (r.length <= col) r.push('');
+      r[col] = String(d.values?.[0]?.[0] ?? '');
+      updated++;
+    }
+    return send(res, 200, { totalUpdatedCells: updated });
+  }
+  // Reading named cells back, for the "did anyone change this underneath us" check.
+  if ((m = /^\/v4\/spreadsheets\/([^/]+)\/values:batchGet$/.exec(p))) {
+    const doc = docs[m[1]];
+    if (!doc) return send(res, 404, { error: { code: 404, status: 'NOT_FOUND', message: 'No such spreadsheet' } });
+    const ranges = url.searchParams.getAll('ranges');
+    const valueRanges = ranges.map((rg) => {
+      const cell = /^'?([^'!]+)'?!([A-Z]+)(\d+)$/.exec(rg);
+      if (!cell) return { range: rg };
+      const tab = doc.tabs.find((t) => t.title === cell[1]);
+      const v = tab && tab.rows[Number(cell[3]) - 1] ? tab.rows[Number(cell[3]) - 1][colIndex(cell[2])] : undefined;
+      return v === undefined || v === '' ? { range: rg } : { range: rg, values: [[String(v)]] };
+    });
+    return send(res, 200, { valueRanges });
   }
   if ((m = /^\/v4\/spreadsheets\/([^/]+)\/values\/([^/:]+)(:append)?$/.exec(p))) {
     const id = decodeURIComponent(m[1]);
