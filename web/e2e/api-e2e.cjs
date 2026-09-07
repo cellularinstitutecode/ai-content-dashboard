@@ -18,6 +18,7 @@ const assert = require('assert');
 const BASE = 'http://127.0.0.1:3100';
 const MC = 'http://127.0.0.1:54322';
 const SB = 'http://127.0.0.1:54321';
+const GO = 'http://127.0.0.1:54325';
 const COOKIE = 'sb-127-auth-token=' + fs.readFileSync('/tmp/cookie.txt', 'utf8');
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -446,6 +447,38 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
     jrn && jrn.networks.length === 1 && jrn.networks[0] === 'youtube', JSON.stringify(jrn?.networks));
   check('and its OBSERVACIÓN stays a note, not a network',
     jrn && jrn.notes === 'Unlisted', JSON.stringify({ notes: jrn?.notes }));
+  // Google refuses in several very different ways and each needs a different
+  // person to do a different thing. The dashboard used to answer every one of
+  // them with "share it with the service account", which on these documents —
+  // already shared with anyone-who-has-the-link — was the one thing that was
+  // not wrong.
+  const GOOGLE_REFUSALS = [
+    ['the Sheets API was never switched on', 403,
+      { error: { code: 403, status: 'PERMISSION_DENIED', message: 'Google Sheets API has not been used in project 504518 before or it is disabled.' } },
+      'api_disabled', /not switched on for this project/i],
+    ['the document really is not shared', 403,
+      { error: { code: 403, status: 'PERMISSION_DENIED', message: 'The caller does not have permission' } },
+      'not_shared', /press Share, and add that address/i],
+    ['the key does not carry the right scopes', 403,
+      { error: { code: 403, status: 'PERMISSION_DENIED', message: 'Request had insufficient authentication scopes.' } },
+      'bad_scopes', /re-issue the service-account key/i],
+    ['the id points at nothing', 404,
+      { error: { code: 404, status: 'NOT_FOUND', message: 'Requested entity was not found.' } },
+      'not_found', /no document with the id/i],
+  ];
+  for (const [name, status, body, reason, advice] of GOOGLE_REFUSALS) {
+    await fetch(GO + '/__refuse', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status, body: JSON.stringify(body) }) });
+    const r = await jsonOf(await app('/api/sources?kind=calendar&fresh=1'));
+    check('Google refusal — ' + name + ' — is named as itself', r?.error === reason, JSON.stringify(r?.error));
+    check('  and the advice is the action that would actually fix it', advice.test(r?.message || ''), String(r?.message).slice(0, 140));
+    check('  and Google\'s own sentence is quoted, not swallowed',
+      /Google said/.test(r?.message || '') && r.message.includes(body.error.message.slice(0, 30)), String(r?.message).slice(-140));
+  }
+  await fetch(GO + '/__refuse', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: null }) });
+  const calAfterRefusals = await jsonOf(await app('/api/sources?kind=calendar&fresh=1'));
+  check('and the calendar reads again once Google stops refusing', Array.isArray(calAfterRefusals?.entries), JSON.stringify(calAfterRefusals?.error));
+
   const imgs = await jsonOf(await app('/api/sources?kind=images&fresh=1'));
   check('the image folder lists its photos with thumbnails', Array.isArray(imgs?.images) && imgs.images.length === 3 && imgs.images.every((i) => /drive\.google\.com\/thumbnail/.test(i.thumbUrl)), JSON.stringify(imgs?.images?.length));
   const imp = await app('/api/sources', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'import_image', fileId: imgs.images[0].id }) });
@@ -466,7 +499,14 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   await fetch(G + '/__unshare', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: st.ids.videos }) });
   const unshared = await app('/api/sources?kind=videos&fresh=1');
   const unsharedBody = await jsonOf(unshared);
-  check('a document not shared with the service account says so, naming the account to share with', unshared.status === 502 && unsharedBody?.error === 'not_shared' && /share it/i.test(unsharedBody?.message || ''), JSON.stringify(unsharedBody));
+  check('a document not shared with the service account says so, and says to Share it',
+    unshared.status === 502 && unsharedBody?.error === 'not_shared' && /press Share/i.test(unsharedBody?.message || ''), JSON.stringify(unsharedBody));
+  // The address to share WITH only exists when a service-account key is
+  // configured; this harness authenticates with a static token, so the field
+  // is carried separately rather than glued into the sentence — the dashboard
+  // reads it from there and shows it when it has one.
+  check('and it carries the service-account field for the UI to name',
+    'serviceAccount' in (unsharedBody || {}), JSON.stringify(Object.keys(unsharedBody || {})));
   await fetch(G + '/__reset', { method: 'POST' });
 
   // ------------------------------------------- the migration nobody ran -----

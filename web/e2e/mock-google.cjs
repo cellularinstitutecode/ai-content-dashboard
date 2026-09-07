@@ -72,8 +72,26 @@ let unshared = new Set();
 async function body(req) { let raw = ''; for await (const c of req) raw += c; try { return raw ? JSON.parse(raw) : null; } catch { return null; } }
 function send(res, status, obj, type = 'application/json') { res.writeHead(status, { 'content-type': type }); res.end(typeof obj === 'string' || Buffer.isBuffer(obj) ? obj : JSON.stringify(obj)); }
 
+// Make Google refuse the way Google really refuses. POST /__refuse
+// {"status":403,"body":"..."} and the next Sheets/Drive read fails with that
+// exact payload; {"status":null} clears it. Nothing else can exercise the
+// difference between "not shared", "API not enabled" and "bad scopes", which
+// need three different actions from three different people.
+let refuse = null;
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1:' + PORT);
+  if (url.pathname === '/__refuse') {
+    const chunks = []; for await (const c of req) chunks.push(c);
+    let b = {}; try { b = JSON.parse(Buffer.concat(chunks).toString() || '{}'); } catch {}
+    refuse = b && b.status ? { status: Number(b.status), body: String(b.body || '{}') } : null;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ refuse }));
+  }
+  if (refuse && (url.pathname.startsWith('/v4/') || url.pathname.startsWith('/drive/'))) {
+    res.writeHead(refuse.status, { 'content-type': 'application/json' });
+    return res.end(refuse.body);
+  }
   const p = url.pathname;
 
   if (p === '/__state') return send(res, 200, docs);

@@ -33,19 +33,43 @@ async function cached<T>(key: string, fresh: boolean, load: () => Promise<T>): P
   return value;
 }
 
+// What to actually DO about each way Google can refuse. The previous version
+// said "share it with the service account" for every 403 and 404, which is one
+// of at least four causes and was the wrong one on documents already shared
+// with anyone-who-has-the-link.
 function failure(e: unknown, what: string) {
   reportError('sources:' + what, e);
-  if (e instanceof GoogleSourceError && (e.status === 403 || e.status === 404)) {
-    return NextResponse.json(
-      {
-        error: 'not_shared',
-        message: 'Google refused this document for the dashboard. Share it with the service account as Editor' +
-          (serviceAccountEmail() ? ' (' + serviceAccountEmail() + ')' : '') + ' and try again.',
-      },
-      { status: 502 },
-    );
+  if (!(e instanceof GoogleSourceError)) {
+    return NextResponse.json({ error: 'google_unavailable', message: 'Google did not answer just now. Try again in a moment.' }, { status: 502 });
   }
-  return NextResponse.json({ error: 'google_unavailable', message: 'Google did not answer just now. Try again in a moment.' }, { status: 502 });
+  const who = serviceAccountEmail();
+  const project = (who || '').split('@')[1]?.split('.')[0] || '';
+  const said = e.detail ? ' Google said: “' + e.detail.slice(0, 240) + '”' : '';
+  const advice: Record<string, string> = {
+    api_disabled:
+      'The Google Sheets and Drive APIs are not switched on for this project' + (project ? ' (' + project + ')' : '') +
+      '. Enable both in the Google Cloud console — APIs & Services → Library — then reload. Sharing the document again will not help.',
+    bad_scopes:
+      'The dashboard’s Google credentials do not carry the access this needs. Whoever set it up should re-issue the service-account key; no change to the document will help.',
+    bad_credentials:
+      'Google rejected the dashboard’s credentials. GOOGLE_SERVICE_ACCOUNT_JSON is missing, malformed or revoked — it needs replacing in the deployment settings.',
+    not_shared:
+      'The document is not visible to the dashboard’s service account' + (who ? ' (' + who + ')' : '') +
+      '. Open it in Google, press Share, and add that address — Viewer is enough for the video and image libraries, Editor for the calendar so approvals can be written back.',
+    not_found:
+      'Google has no document with the id the dashboard is configured to read. Check the id in the deployment settings against the document’s URL.',
+    rate_limited: 'Google is rate-limiting the dashboard. This clears itself; try again in a minute.',
+    unknown: 'Google refused this document and did not say why in a way the dashboard recognises.',
+  };
+  return NextResponse.json(
+    {
+      error: e.reason,
+      message: (advice[e.reason] || advice.unknown) + said,
+      serviceAccount: who,
+      googleStatus: e.status,
+    },
+    { status: 502 },
+  );
 }
 
 export async function GET(req: NextRequest) {
