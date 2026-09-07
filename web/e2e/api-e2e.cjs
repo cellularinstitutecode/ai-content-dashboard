@@ -425,9 +425,20 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   const st = await jsonOf(await app('/api/sources?kind=status'));
   check('sources report as configured with the three document ids', st?.configured === true && st?.ids?.calendar && st?.ids?.videos && st?.ids?.images, JSON.stringify(st));
   const cal = await jsonOf(await app('/api/sources?kind=calendar&fresh=1'));
-  check('the calendar sheet is read across its monthly tabs, skipping the planning grid', Array.isArray(cal?.entries) && cal.entries.length === 4 && !cal.tabs.includes('Content Calendar'), JSON.stringify({ n: cal?.entries?.length, tabs: cal?.tabs }));
+  // 'Task Delegation' has a Date column but no post text, so it is a planning
+  // skeleton and must not become blank rows in "coming up".
+  check('the calendar is read across its tabs, skipping the ones with no post text',
+    Array.isArray(cal?.entries) && cal.entries.length === 6 && !cal.tabs.includes('Task Delegation'),
+    JSON.stringify({ n: cal?.entries?.length, tabs: cal?.tabs }));
+  // Meriz's real tab: month grid on the left, ID/Date/Pillar/Type/Description/
+  // Owner/Status/CTA on the right. There is no Caption and no Graphics Link.
   const sep = (cal?.entries || []).find((e) => /Exosome therapy/.test(e.caption));
-  check('a row carries its date, status, graphic and the networks ticked', sep && sep.date && sep.status === 'For approval' && /drive\.google/.test(sep.graphicsLink) && sep.networks.includes('instagram') && sep.networks.includes('facebook'), JSON.stringify(sep));
+  check('a row from the real layout carries its date, status, owner and pillar',
+    sep && sep.date && sep.status === 'For approval' && sep.owner === 'Meriz' && sep.pillar === 'Education', JSON.stringify(sep));
+  // The older layout, still in the workbook, still reads — including networks.
+  const legacy = (cal?.entries || []).find((e) => /body starts showing signals/.test(e.caption));
+  check('and a row from the older layout still carries its graphic and networks',
+    legacy && /drive\.google/.test(legacy.graphicsLink) && legacy.networks.includes('instagram') && legacy.networks.includes('facebook'), JSON.stringify(legacy));
   const vids = await jsonOf(await app('/api/sources?kind=videos&fresh=1'));
   check("Rodrigo's sheet is read with its Spanish headers", Array.isArray(vids?.entries) && vids.entries.length === 2, JSON.stringify(vids?.entries?.length));
   const iv = (vids?.entries || []).find((v) => /IV Therapy/.test(v.title));
@@ -479,8 +490,91 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   const calAfterRefusals = await jsonOf(await app('/api/sources?kind=calendar&fresh=1'));
   check('and the calendar reads again once Google stops refusing', Array.isArray(calAfterRefusals?.entries), JSON.stringify(calAfterRefusals?.error));
 
+  // ---- editing the sheets from the dashboard --------------------------------
+  // Google will not let its editor be framed, so "edit live" means these
+  // writes: what the dashboard saves has to land in the real file.
+  const calBefore = await jsonOf(await app('/api/sources?kind=calendar&fresh=1'));
+  const calRow = (calBefore?.entries || []).find((e) => /Exosome therapy/.test(e.caption));
+  check('a calendar row knows the tab and row it came from', Boolean(calRow && calRow.tab && calRow.row >= 2), JSON.stringify(calRow && { tab: calRow.tab, row: calRow.row }));
+  check('and which A1 column each editable field lives in',
+    Boolean(calRow?.columns?.description && calRow.columns.status), JSON.stringify(calRow?.columns));
+
+  const edited = await app('/api/sources', {
+    method: 'PATCH', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: 'calendar', tab: calRow.tab, row: calRow.row,
+      changes: { description: 'Exosome therapy, rewritten from the dashboard.', status: 'Ready' },
+      expected: { description: calRow.caption, status: calRow.status } }),
+  });
+  check('editing a calendar row succeeds', edited.ok, String(edited.status) + ' ' + JSON.stringify(await jsonOf(edited)));
+  const sheetNow = await (await fetch(GO + '/__state')).json();
+  const calTab = sheetNow[st.ids.calendar].tabs.find((t) => t.title === calRow.tab);
+  const writtenRow = calTab.rows[calRow.row - 1];
+  check('and the words are in the sheet itself, in the right row',
+    writtenRow.join('|').includes('rewritten from the dashboard'), JSON.stringify(writtenRow));
+  check('and the month grid beside it was not touched',
+    writtenRow.slice(0, 7).join('|') === ['', '', '', '', '', '1', '2'].join('|'), JSON.stringify(writtenRow.slice(0, 7)));
+  const reread = await jsonOf(await app('/api/sources?kind=calendar&fresh=1'));
+  check('and reading it back shows the new text', (reread?.entries || []).some((e) => /rewritten from the dashboard/.test(e.caption)));
+
+  // Somebody else got there first.
+  const stale = await app('/api/sources', {
+    method: 'PATCH', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: 'calendar', tab: calRow.tab, row: calRow.row,
+      changes: { description: 'A third version.' },
+      expected: { description: calRow.caption } }),
+  });
+  const staleBody = await jsonOf(stale);
+  check('a row edited in Google underneath you is refused, not overwritten',
+    stale.status === 409 && staleBody?.error === 'changed_underneath', String(stale.status) + ' ' + JSON.stringify(staleBody?.error));
+  check('and it says to reload rather than blaming the person', /reload/i.test(staleBody?.message || ''), staleBody?.message);
+  const afterStale = await (await fetch(GO + '/__state')).json();
+  check('and the sheet still holds the first edit',
+    afterStale[st.ids.calendar].tabs.find((t) => t.title === calRow.tab).rows[calRow.row - 1].join('|').includes('rewritten from the dashboard'));
+
+  // The month grid, and anything else off the allowlist, is unreachable.
+  for (const field of ['sun', 'mon', 'id', 'col0']) {
+    const bad = await app('/api/sources', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'calendar', tab: calRow.tab, row: calRow.row, changes: { [field]: 'X' } }),
+    });
+    check('"' + field + '" cannot be written through the dashboard', bad.status === 400 && (await jsonOf(bad))?.error === 'field_not_editable', String(bad.status));
+  }
+  const badRow = await app('/api/sources', {
+    method: 'PATCH', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: 'calendar', tab: calRow.tab, row: 1, changes: { description: 'X' } }),
+  });
+  check('the header row cannot be written either', badRow.status === 400, String(badRow.status));
+
+  // The video sheet edits the same way.
+  const vidsNow = await jsonOf(await app('/api/sources?kind=videos&fresh=1'));
+  const vt = (vidsNow?.entries || []).find((v) => /IV Therapy/.test(v.title));
+  const vEdit = await app('/api/sources', {
+    method: 'PATCH', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: 'videos', tab: vt.tab, row: vt.row, changes: { copy: 'IV therapy, retitled from the dashboard.' }, expected: { copy: vt.copy } }),
+  });
+  check('a video row edits the same way', vEdit.ok, String(vEdit.status) + ' ' + JSON.stringify(await jsonOf(vEdit)));
+  const vAfter = await jsonOf(await app('/api/sources?kind=videos&fresh=1'));
+  check('and the video sheet shows it back', (vAfter?.entries || []).some((v) => /retitled from the dashboard/.test(v.copy)));
+
+  // Adding a photo to the shared folder.
+  const oneByOne = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const up = await app('/api/sources', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'upload_image', name: 'clinic-room.png', contentType: 'image/png', data: oneByOne }),
+  });
+  const upBody = await jsonOf(up);
+  check('a photo can be added to the team\'s Drive folder from here', up.ok && Boolean(upBody?.image?.id), String(up.status) + ' ' + JSON.stringify(upBody));
+  const afterUpload = await jsonOf(await app('/api/sources?kind=images&fresh=1'));
+  check('and it appears in the gallery straight away', (afterUpload?.images || []).some((i) => i.name === 'clinic-room.png'), JSON.stringify((afterUpload?.images || []).map((i) => i.name)));
+  const badType = await app('/api/sources', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'upload_image', name: 'notes.pdf', contentType: 'application/pdf', data: oneByOne }),
+  });
+  check('and only images are accepted', badType.status === 400, String(badType.status));
+
   const imgs = await jsonOf(await app('/api/sources?kind=images&fresh=1'));
-  check('the image folder lists its photos with thumbnails', Array.isArray(imgs?.images) && imgs.images.length === 3 && imgs.images.every((i) => /drive\.google\.com\/thumbnail/.test(i.thumbUrl)), JSON.stringify(imgs?.images?.length));
+  check('the image folder lists its photos with thumbnails',
+    Array.isArray(imgs?.images) && imgs.images.length >= 3 && imgs.images.every((i) => /drive\.google\.com\/thumbnail/.test(i.thumbUrl)), JSON.stringify(imgs?.images?.length));
   const imp = await app('/api/sources', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'import_image', fileId: imgs.images[0].id }) });
   const impBody = await jsonOf(imp);
   check('"Use as hero image" copies the Drive photo into the app\'s own public storage', imp.ok && /^http/.test(impBody?.url || '') && !/drive\.google/.test(impBody?.url || ''), String(imp.status) + ' ' + JSON.stringify(impBody));

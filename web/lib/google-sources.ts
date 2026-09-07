@@ -20,13 +20,14 @@
 // are found by content, not position; columns are matched by name in either
 // language; missing cells are missing, not errors.
 import 'server-only';
+import { randomUUID } from 'crypto';
 
 import { google } from 'googleapis';
 import { reportError } from '@/lib/report';
 import { classifyGoogleError, type GoogleFailure } from './google-error.ts';
 
 export { classifyGoogleError, type GoogleFailure };
-import { parseSheetDate, pick, tableFromRows } from '@/lib/sheet-table';
+import { parseSheetDate, pick, tableFromRows, columnFor } from '@/lib/sheet-table';
 
 // The clinic's documents. Overridable per environment, never secret.
 export const SOURCE_IDS = {
@@ -71,13 +72,17 @@ async function accessToken(): Promise<string> {
   const jwt = new google.auth.JWT({
     email: creds.client_email,
     key: creds.private_key,
-    // Least privilege for what this module actually does. Sheets is read AND
-    // written (the approvals tab is appended to), but every Drive call here is
-    // a read: list the folder, read a file's metadata, download its bytes. The
-    // full drive scope would let a bug in this path modify or delete anything
-    // the service account can see, including the clip-storage folder that
-    // lib/drive.ts owns — that module mints its own token and is unaffected.
-    scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive.readonly'],
+    // drive.file, not the full drive scope: it grants access only to files
+    // this app itself created or that were explicitly opened to it, so a bug
+    // here cannot reach the rest of the Drive — including the clip-storage
+    // folder lib/drive.ts owns, which mints its own token anyway. Paired with
+    // drive.readonly because the Image Library also LISTS and DOWNLOADS photos
+    // the team put there, which drive.file alone would not see.
+    scopes: [
+      'https://www.googleapis.com/auth/spreadsheets',
+      'https://www.googleapis.com/auth/drive.readonly',
+      'https://www.googleapis.com/auth/drive.file',
+    ],
   });
   const t = await jwt.getAccessToken();
   const value = typeof t === 'string' ? t : String(t?.token || '');
@@ -145,8 +150,47 @@ export async function readTab(spreadsheetId: string, tab: string): Promise<strin
   return j.values || [];
 }
 
+/**
+ * The columns this app is willing to touch on a calendar row, as
+ * field → A1 letter. The month grid on the left of every tab (Sun…Sat) is
+ * deliberately absent: those cells are Meriz's layout, not data, and a write
+ * that landed in one would corrupt the calendar's appearance silently.
+ */
+export const CALENDAR_EDITABLE = ['description', 'date', 'status', 'owner', 'pillar', 'type', 'cta'] as const;
+export type CalendarField = (typeof CALENDAR_EDITABLE)[number];
+
+const CALENDAR_WANTED = [
+  'date', 'description', 'status', 'owner', 'pillar', 'type', 'cta', 'id',
+  // Older/other layouts this reader has met.
+  'caption', 'type of post', 'graphics link', 'file name',
+];
+
+function calendarColumns(header: string[]): Partial<Record<CalendarField, string>> {
+  const out: Partial<Record<CalendarField, string>> = {};
+  const at = (f: CalendarField, ...names: string[]) => {
+    const c = columnFor(header, ...names);
+    if (c) out[f] = c;
+  };
+  at('description', 'description', 'caption', 'copy');
+  at('date', 'date', 'fecha');
+  at('status', 'status', 'estatus', 'estado');
+  at('owner', 'owner', 'responsable');
+  at('pillar', 'pillar', 'pilar');
+  at('type', 'type of post', 'type', 'tipo');
+  at('cta', 'cta', 'call to action');
+  return out;
+}
+
 export type CalendarEntry = {
   tab: string;
+  /** 1-based row in that tab, so the row can be edited. */
+  row: number;
+  headerRow: number;
+  /** Which A1 column each editable field lives in, on this tab. */
+  columns: Partial<Record<CalendarField, string>>;
+  pillar: string;
+  owner: string;
+  cta: string;
   date: string | null;
   type: string;
   caption: string;
@@ -168,20 +212,33 @@ export async function readCalendar(spreadsheetId = SOURCE_IDS.calendarSheet()): 
   for (const t of chosen) {
     let rows: string[][] = [];
     try { rows = await readTab(spreadsheetId, t.title); } catch (e) { reportError('sources:calendar-tab', e, { tab: t.title }); continue; }
-    const { header, records } = tableFromRows(rows, ['date', 'caption', 'status', 'type of post', 'graphics link', 'file name']);
-    // The planning tab ("Content Calendar") has a Date column but no captions;
-    // only tabs that hold actual posts count.
-    if (!header.some((h) => h.startsWith('caption'))) continue;
+    // The real sheet's task table is headed ID · Date · Pillar · Type ·
+    // Description · Owner · Status · CTA — there is no "Caption", no "Graphics
+    // Link" and no "File Name". Asking only for those three meant two matches
+    // against a threshold of three, so the reader abandoned every tab and the
+    // calendar came back empty however good the access was. The post text
+    // lives in Description.
+    const { header, headerRow, records } = tableFromRows(rows, CALENDAR_WANTED);
+    // A tab with dates but nothing written in them is a planning grid, not
+    // posts. Description (or Caption, on older layouts) is what makes it real.
+    const textCol = columnFor(header, 'description', 'caption', 'copy');
+    if (!textCol) continue;
     used.push(t.title);
-    for (const r of records) {
-      const caption = pick(r, 'caption', 'copy');
+    for (const { rec: r, row } of records) {
+      const caption = pick(r, 'description', 'caption', 'copy');
       const date = parseSheetDate(pick(r, 'date', 'fecha'));
       if (!caption && !date) continue;
       const networks = NETWORK_COLUMNS.filter(([col]) => YES.test(pick(r, col))).map(([, n]) => n);
       entries.push({
         tab: t.title,
+        row,
+        headerRow,
+        columns: calendarColumns(header),
         date,
         type: pick(r, 'type of post', 'type', 'tipo'),
+        pillar: pick(r, 'pillar', 'pilar'),
+        owner: pick(r, 'owner', 'responsable'),
+        cta: pick(r, 'cta', 'call to action'),
         caption,
         fileName: pick(r, 'file name', 'archivo'),
         graphicsLink: pick(r, 'graphics link', 'graphic', 'link'),
@@ -194,8 +251,31 @@ export async function readCalendar(spreadsheetId = SOURCE_IDS.calendarSheet()): 
   return { entries, tabs: used };
 }
 
+/** The columns this app may write on a video row. */
+export const VIDEO_EDITABLE = ['title', 'copy', 'format', 'type', 'notes',
+  'youtube', 'linkedin', 'tiktok', 'x', 'facebook', 'instagram', 'email'] as const;
+export type VideoField = (typeof VIDEO_EDITABLE)[number];
+
+function videoColumns(header: string[]): Partial<Record<VideoField, string>> {
+  const out: Partial<Record<VideoField, string>> = {};
+  const at = (f: VideoField, ...names: string[]) => {
+    const c = columnFor(header, ...names);
+    if (c) out[f] = c;
+  };
+  at('title', 'título del video', 'titulo del video', 'title');
+  at('copy', 'copy', 'caption');
+  at('format', 'formato', 'format');
+  at('type', 'tipo de video', 'tipo', 'type');
+  at('notes', 'observación', 'observacion', 'notes');
+  for (const [col] of VIDEO_NETWORKS) at(col as VideoField, col);
+  return out;
+}
+
 export type VideoEntry = {
   tab: string;
+  row: number;
+  headerRow: number;
+  columns: Partial<Record<VideoField, string>>;
   creator: string;
   month: string;
   type: string;
@@ -221,11 +301,12 @@ export async function readVideos(spreadsheetId = SOURCE_IDS.videosSheet()): Prom
   for (const t of tabs) {
     let rows: string[][] = [];
     try { rows = await readTab(spreadsheetId, t.title); } catch (e) { reportError('sources:videos-tab', e, { tab: t.title }); continue; }
-    const { header, records } = tableFromRows(rows, ['tipo de video', 'título del video', 'titulo del video', 'copy', 'link video', 'formato', 'title', 'video']);
+    const { header, headerRow, records } = tableFromRows(rows, ['tipo de video', 'título del video', 'titulo del video', 'copy', 'link video', 'formato', 'title', 'video']);
     if (!header.length) continue;
     // The first column carries the creator's name and has no header.
     const firstKey = header[0] || 'col0';
-    for (const r of records) {
+    const columns = videoColumns(header);
+    for (const { rec: r, row } of records) {
       const title = pick(r, 'título del video', 'titulo del video', 'title');
       const videoLink = pick(r, 'link video', 'link', 'video link');
       if (!title && !videoLink) continue;
@@ -237,6 +318,9 @@ export async function readVideos(spreadsheetId = SOURCE_IDS.videosSheet()): Prom
       const networks = VIDEO_NETWORKS.filter(([col]) => YES.test(pick(r, col))).map(([, n]) => n);
       entries.push({
         tab: t.title,
+        row,
+        headerRow,
+        columns,
         creator: firstKey ? r[firstKey] || '' : '',
         month: pick(r, 'fecha de elaboración', 'fecha', 'month'),
         type: pick(r, 'tipo de video', 'tipo', 'type'),
@@ -258,6 +342,61 @@ export async function readVideos(spreadsheetId = SOURCE_IDS.videosSheet()): Prom
  * Append one approved post to the calendar sheet, on its own tab so nothing
  * Meriz laid out by hand is touched. The tab is created on first use.
  */
+/**
+ * Write single cells on one row of one tab.
+ *
+ * Deliberately narrow. It takes explicit A1 column letters — never a field
+ * name it resolves itself — because the caller has already checked those
+ * columns against an allowlist, and the month grid that sits to the left of
+ * the task table on every calendar tab must never be reachable from here. It
+ * writes one row at a time so a bug cannot run down the sheet.
+ */
+export async function updateRowCells(
+  spreadsheetId: string,
+  tab: string,
+  row: number,
+  cells: { column: string; value: string }[],
+): Promise<void> {
+  if (!Number.isInteger(row) || row < 2) throw new GoogleSourceError(400, 'refusing to write to row ' + row, 'unknown', 'Row 1 is the header.');
+  if (!cells.length) return;
+  for (const c of cells) {
+    if (!/^[A-Z]{1,3}$/.test(c.column)) throw new GoogleSourceError(400, 'bad column ' + c.column, 'unknown', 'Not an A1 column.');
+  }
+  const data = cells.map((c) => ({
+    range: "'" + tab.replace(/'/g, "''") + "'!" + c.column + row,
+    values: [[c.value]],
+  }));
+  const res = await gfetch(
+    SHEETS_BASE() + '/v4/spreadsheets/' + encodeURIComponent(spreadsheetId) + '/values:batchUpdate',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ valueInputOption: 'USER_ENTERED', data }),
+    },
+  );
+  await json(res, 'update row');
+}
+
+/** The current values of named columns on one row — for checking nothing moved underneath us. */
+export async function readRowCells(
+  spreadsheetId: string,
+  tab: string,
+  row: number,
+  columns: string[],
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  if (!columns.length) return out;
+  const ranges = columns.map((c) => "ranges=" + encodeURIComponent("'" + tab.replace(/'/g, "''") + "'!" + c + row)).join('&');
+  const res = await gfetch(
+    SHEETS_BASE() + '/v4/spreadsheets/' + encodeURIComponent(spreadsheetId) + '/values:batchGet?' + ranges,
+  );
+  const body = await json<{ valueRanges?: { values?: string[][] }[] }>(res, 'read row');
+  (body.valueRanges || []).forEach((vr, i) => {
+    out[columns[i]] = String(vr?.values?.[0]?.[0] ?? '').trim();
+  });
+  return out;
+}
+
 export async function appendApproval(
   row: { approvedAt: string; publishDate: string; networks: string[]; caption: string; mediaUrl: string; source: string; postId: string },
   spreadsheetId = SOURCE_IDS.calendarSheet()
@@ -332,6 +471,45 @@ export async function listFolderImages(folderId = SOURCE_IDS.imagesFolder(), lim
 }
 
 /** Download one Drive file's bytes (for copying an image into the app's own public storage). */
+/**
+ * Put a photo into the team's image folder.
+ *
+ * Upload only. There is no rename and no delete here on purpose: adding a file
+ * is recoverable by deleting it in Drive, and the reverse is not. Multipart
+ * because Drive wants the metadata and the bytes in one request.
+ */
+export async function uploadFolderImage(
+  bytes: Buffer,
+  contentType: string,
+  name: string,
+  folderId = SOURCE_IDS.imagesFolder(),
+): Promise<DriveImage> {
+  const boundary = 'chi' + randomUUID().replace(/-/g, '');
+  const meta = JSON.stringify({ name, parents: [folderId] });
+  const body = Buffer.concat([
+    Buffer.from('--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + meta + '\r\n'),
+    Buffer.from('--' + boundary + '\r\nContent-Type: ' + contentType + '\r\n\r\n'),
+    bytes,
+    Buffer.from('\r\n--' + boundary + '--'),
+  ]);
+  const res = await gfetch(
+    DRIVE_BASE() + '/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=' +
+      encodeURIComponent('id,name,mimeType,size,thumbnailLink,webViewLink'),
+    { method: 'POST', headers: { 'content-type': 'multipart/related; boundary=' + boundary }, body: body as unknown as BodyInit },
+    60000,
+  );
+  const f = await json<{ id: string; name: string; mimeType: string; size?: string }>(res, 'upload image');
+  return {
+    id: f.id,
+    name: f.name,
+    mimeType: f.mimeType,
+    modifiedTime: new Date().toISOString(),
+    size: Number(f.size || 0),
+    thumbUrl: 'https://drive.google.com/thumbnail?id=' + f.id + '&sz=w400',
+    viewUrl: 'https://drive.google.com/file/d/' + f.id + '/view',
+  };
+}
+
 export async function downloadDriveFile(fileId: string): Promise<{ bytes: Buffer; contentType: string; name: string }> {
   const metaRes = await gfetch(DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?fields=' + encodeURIComponent('id,name,mimeType,size') + '&supportsAllDrives=true');
   const meta = await json<{ name: string; mimeType: string; size?: string }>(metaRes, 'file metadata');

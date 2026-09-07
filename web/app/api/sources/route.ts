@@ -9,12 +9,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
 import {
+  CALENDAR_EDITABLE,
   GoogleSourceError,
   SOURCE_IDS,
+  VIDEO_EDITABLE,
   downloadDriveFile,
   listFolderImages,
   readCalendar,
+  readRowCells,
   readVideos,
+  updateRowCells,
+  uploadFolderImage,
   serviceAccountEmail,
   sourcesConfigured,
 } from '@/lib/google-sources';
@@ -98,6 +103,102 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ error: 'unknown kind' }, { status: 400 });
 }
 
+/**
+ * PATCH /api/sources — edit one row of one of the team's sheets, in place.
+ *
+ * Body: { kind: 'calendar' | 'videos', tab, row, changes: {field: value},
+ *         expected?: {field: value} }
+ *
+ * Three rules, in this order, because this writes into a document other people
+ * are working in at the same time:
+ *
+ *  1. Only fields on the allowlist for that sheet, resolved to the A1 column
+ *     the READER found on that tab. Nothing else is addressable — in
+ *     particular the month grid down the left of every calendar tab, which is
+ *     Meriz's layout and not data.
+ *  2. If `expected` is given, every named cell must still hold that value.
+ *     Someone editing the same row in Google while you had the page open loses
+ *     nothing: the write is refused and you are told to reload.
+ *  3. One row per request.
+ */
+export async function PATCH(req: NextRequest) {
+  const auth = await requireAllowlistedUser();
+  if (!auth.ok) return auth.response;
+  if (!sourcesConfigured()) {
+    return NextResponse.json({ error: 'not_configured', message: 'Google access is not set up yet.' }, { status: 503 });
+  }
+  const rl = await checkRateLimit(auth.userId, 'sources-edit');
+  if (!rl.ok) return NextResponse.json({ error: 'rate_limited', limit: rl.limit }, { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } });
+
+  let body: any = null;
+  try { body = await req.json(); } catch { body = null; }
+  const kind = String(body?.kind || '');
+  const tab = String(body?.tab || '');
+  const row = Number(body?.row);
+  const changes = body?.changes && typeof body.changes === 'object' ? body.changes as Record<string, unknown> : null;
+  if ((kind !== 'calendar' && kind !== 'videos') || !tab || !Number.isInteger(row) || row < 2 || !changes || !Object.keys(changes).length) {
+    return NextResponse.json({ error: 'invalid_request', message: 'Say which sheet, which tab, which row, and what to change.' }, { status: 400 });
+  }
+
+  const allowed: readonly string[] = kind === 'calendar' ? CALENDAR_EDITABLE : VIDEO_EDITABLE;
+  const bad = Object.keys(changes).filter((f) => !allowed.includes(f));
+  if (bad.length) {
+    return NextResponse.json(
+      { error: 'field_not_editable', message: 'The dashboard does not edit ' + bad.join(', ') + ' on this sheet.', fields: bad },
+      { status: 400 },
+    );
+  }
+
+  try {
+    // Ask the READER where these fields live on this tab. Column letters are
+    // never taken from the request: a caller cannot name a cell, only a field.
+    const sheetId = kind === 'calendar' ? SOURCE_IDS.calendarSheet() : SOURCE_IDS.videosSheet();
+    const found = kind === 'calendar'
+      ? (await readCalendar()).entries.find((e) => e.tab === tab && e.row === row)
+      : (await readVideos()).entries.find((e) => e.tab === tab && e.row === row);
+    if (!found) {
+      return NextResponse.json({ error: 'row_not_found', message: 'That row is no longer in the sheet. Reload and try again.' }, { status: 409 });
+    }
+    const columns = found.columns as Record<string, string | undefined>;
+
+    const missing = Object.keys(changes).filter((f) => !columns[f]);
+    if (missing.length) {
+      return NextResponse.json(
+        { error: 'no_such_column', message: 'This tab has no column for ' + missing.join(', ') + '.', fields: missing },
+        { status: 400 },
+      );
+    }
+
+    // Nobody else moved it while the page was open.
+    const expected = body?.expected && typeof body.expected === 'object' ? body.expected as Record<string, string> : null;
+    if (expected) {
+      const cols = Object.keys(expected).filter((f) => columns[f]).map((f) => columns[f] as string);
+      const now = await readRowCells(sheetId, tab, row, cols);
+      const clashes = Object.keys(expected)
+        .filter((f) => columns[f])
+        .filter((f) => String(now[columns[f] as string] ?? '') !== String(expected[f] ?? ''));
+      if (clashes.length) {
+        return NextResponse.json(
+          {
+            error: 'changed_underneath',
+            message: 'Somebody edited this row in Google while you had it open, so nothing was overwritten. Reload to see their version.',
+            fields: clashes,
+          },
+          { status: 409 },
+        );
+      }
+    }
+
+    await updateRowCells(sheetId, tab, row, Object.keys(changes).map((f) => ({
+      column: columns[f] as string,
+      value: String(changes[f] ?? ''),
+    })));
+    return NextResponse.json({ ok: true, tab, row, changed: Object.keys(changes) });
+  } catch (e) {
+    return failure(e, 'edit-' + kind);
+  }
+}
+
 export async function POST(req: NextRequest) {
   const auth = await requireAllowlistedUser();
   if (!auth.ok) return auth.response;
@@ -109,6 +210,30 @@ export async function POST(req: NextRequest) {
 
   let body: any = null;
   try { body = await req.json(); } catch { body = null; }
+  // Add a photo to the team's folder. Base64 because the browser sends it
+  // through the same JSON endpoint as everything else; 12 MB is Drive-friendly
+  // and well under the platform's body cap.
+  if (body?.action === 'upload_image') {
+    const name = String(body?.name || '').trim().replace(/[/\\]/g, '-').slice(0, 120);
+    const contentType = String(body?.contentType || '');
+    const b64 = typeof body?.data === 'string' ? body.data.replace(/^data:[^;]+;base64,/, '') : '';
+    if (!name || !/^image\/(png|jpe?g|webp|gif)$/.test(contentType) || !b64) {
+      return NextResponse.json({ error: 'invalid_request', message: 'Send a PNG, JPEG, WebP or GIF with a name.' }, { status: 400 });
+    }
+    let bytes: Buffer;
+    try { bytes = Buffer.from(b64, 'base64'); } catch { bytes = Buffer.alloc(0); }
+    if (!bytes.length) return NextResponse.json({ error: 'invalid_request', message: 'That file was empty.' }, { status: 400 });
+    if (bytes.length > 12 * 1024 * 1024) {
+      return NextResponse.json({ error: 'too_large', message: 'That image is over 12 MB. Please add it in Drive directly.' }, { status: 413 });
+    }
+    try {
+      const image = await uploadFolderImage(bytes, contentType, name);
+      return NextResponse.json({ image });
+    } catch (e) {
+      return failure(e, 'upload-image');
+    }
+  }
+
   if (body?.action !== 'import_image' || typeof body.fileId !== 'string' || !/^[A-Za-z0-9_-]{10,}$/.test(body.fileId)) {
     return NextResponse.json({ error: 'invalid_request' }, { status: 400 });
   }
