@@ -1,3 +1,4 @@
+import { complianceGate } from '@/lib/compliance-gate';
 import {reportError, redact} from '@/lib/report';
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
@@ -282,6 +283,13 @@ async function doSchedule(userId: string, p: PendingSchedule) {
   if (!when) throw new Error("publishAt must be a date and time, e.g. 2026-09-01T09:00");
   const publishAt = when.wallClock;
   if (!p.text) throw new Error("text is required");
+  // The advertising rule applies however a post is created, and the assistant
+  // is a door to Metricool like any other. Refusing here keeps a
+  // non-compliant Instagram/Facebook post out of the review queue entirely,
+  // rather than leaving one there for somebody to publish from Metricool's
+  // own UI, where this app's Approve gate cannot reach it.
+  const gate = await complianceGate(userId, p.text, provider);
+  if (!gate.ok) throw new Error(gate.message + " Add the missing line(s) and ask me again.");
   const blogId = process.env.METRICOOL_BLOG_ID;
   if (!blogId) throw new Error("METRICOOL_BLOG_ID must be configured");
   const body: any = {

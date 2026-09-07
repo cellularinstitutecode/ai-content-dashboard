@@ -41,6 +41,8 @@ const csp = [
   // Drive assets. blob:/data: cover locally-rendered previews.
   "img-src 'self' data: blob: https:",
   "media-src 'self' blob: https:",
+  // The Sources section embeds the team's Google Sheets in their own editor.
+  "frame-src 'self' https://docs.google.com https://drive.google.com",
   [
     'connect-src',
     "'self'",

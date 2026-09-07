@@ -45,6 +45,16 @@ clinic's account:
 - A run that failed weeks ago is still listed, so "Needs attention" cannot be
   falsely empty.
 - The cron guards still hold, and the tick reports what it expired.
+- The advertising rule (lib/compliance.ts): an Instagram/Facebook post without
+  "AVISO DE PUBLICIDAD: <permit>" and a "REF:" citation is refused at Send for
+  review (422, naming the missing lines) and at Approve; the wrong permit
+  number is refused; LinkedIn is untouched; with both lines it goes through.
+- Sources (e2e/mock-google.cjs): Meriz's calendar is read across its monthly
+  tabs (the planning grid skipped), Rodrigo's sheet with its Spanish headers
+  and unnamed creator column, the image folder with thumbnails; "Use as hero
+  image" copies a Drive photo into the app's storage; an approval writes a row
+  to the calendar sheet's own "Dashboard Approvals" tab; a document not shared
+  with the service account says so.
 - Keyword research over Semrush's MCP server (`e2e/mock-semrush-mcp.cjs`): a
   v4 key is routed through MCP with the app's v3 vocabulary translated to MCP
   parameter names (the mock rejects v3 codes like the real server), one
@@ -77,11 +87,16 @@ RATE_LIMIT_FAIL_OPEN=true
 # A v4-shaped Semrush key is routed through the MCP transport; point it at the mock.
 SEMRUSH_API_KEY=semrtkn-e2e-0000
 SEMRUSH_MCP_URL=http://127.0.0.1:54323
+# Google Sheets/Drive + Crossref stand-in (e2e/mock-google.cjs)
+GOOGLE_API_BASE=http://127.0.0.1:54325
+GOOGLE_STATIC_TOKEN=e2e-google-token
+CROSSREF_API_BASE=http://127.0.0.1:54325/crossref
 ENV
 # 2. backend + app
 node e2e/mock-supabase.cjs &        # :54321
 node e2e/mock-metricool.cjs &      # :54322
 node e2e/mock-semrush-mcp.cjs &    # :54323
+node e2e/mock-google.cjs &         # :54325 (Sheets, Drive, Crossref)
 npm run build && npx next start -p 3100 &
 # 3. session cookie (writes /tmp/cookie.txt) — see browser-e2e.cjs header
 # 4. the suites

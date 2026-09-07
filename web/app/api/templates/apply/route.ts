@@ -1,5 +1,6 @@
 // web/app/api/templates/apply/route.ts
 import { NextRequest, NextResponse } from 'next/server';
+import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
 import { supabaseServer } from '@/lib/supabase';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { metricoolConfigured, metricoolSchedulePost, readPostId, type Provider } from '@/lib/metricool';
@@ -131,6 +132,19 @@ export async function POST(req: NextRequest) {
       .filter((row: any) => String(row.text || '').trim() === text)
       .map((row: any) => new Date(row.publication_date).getTime()),
   );
+
+  // The advertising rule, before anything is created. Every slot carries the
+  // SAME text, so a non-compliant template would put N identical breaches into
+  // Metricool's review queue — where the dashboard would then refuse to
+  // approve any of them, but a person working inside Metricool could still
+  // publish them. Refuse up front rather than half-create.
+  const gate = await complianceGate(user.id, text, providers as string[]);
+  if (!gate.ok) {
+    return NextResponse.json(
+      { ...gateRefusal(gate), message: gate.message + ' Edit the template text, then apply it again.' },
+      { status: 422 },
+    );
+  }
 
   const started = Date.now();
   const created: any[] = [];

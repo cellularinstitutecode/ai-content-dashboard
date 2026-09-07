@@ -331,6 +331,16 @@ function slugify(s: string): string {
 }
 
 async function storeImage(img: GeneratedImage, nameHint: string): Promise<string> {
+  return storeBytes(img.bytes, img.contentType, img.ext, nameHint);
+}
+
+/**
+ * Put any image bytes in the app's public bucket and return the URL Metricool
+ * can fetch. Used by the AI pipeline above and by the Image Library, which
+ * copies a Drive photo here because Drive links are not public.
+ */
+export async function storeBytes(bytes: Buffer, contentType: string, ext: string, nameHint: string): Promise<string> {
+  const img = { bytes, contentType, ext };
   const db = supabaseAdmin();
   // The bucket is public, so the object name is the only thing separating one
   // draft's image from anyone with a browser. `packs/<Date.now()>-<slug>` was

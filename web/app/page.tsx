@@ -12,6 +12,7 @@ import ProcessTracker, { makeSteps, stepActive, stepError, stepSkip, stepsDone, 
 import { announce, onRefresh, fetchDrafts } from "@/components/refreshBus";
 import { tightestLimit, networkLabel, parseVideoUrl, localDateTimeValue, draftLabel } from "@/lib/composer";
 import { useWorkspace } from "@/components/workspace";
+import { appliesTo as complianceApplies, checkCompliance, ensureAviso, DEFAULT_AVISO_NUMBER } from "@/lib/compliance";
 import { PanelLoader } from "@/components/LoadingScreen";
 import { friendlyError, friendlyErrorFromResponse, friendlyImageError } from '@/lib/friendly-error';
 import { isAwaitingApproval } from '@/lib/post-mode';
@@ -294,6 +295,32 @@ const [mBusy, setMBusy] = useState(false);
     return () => clearInterval(id);
   }, []);
 
+  // The advertising rule (lib/compliance.ts): Instagram / Facebook posts need
+  // the AVISO line and a REF citation. The permit number comes from Brand Brain.
+  const [avisoNumber, setAvisoNumber] = useState<string>(DEFAULT_AVISO_NUMBER);
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/brand').then((r) => (r.ok ? r.json() : null)).then((j) => {
+      const n = String(j?.brand?.aviso_publicidad || '').trim();
+      if (alive && n) setAvisoNumber(n.toUpperCase());
+    }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  const mCompliance = complianceApplies(mNetworks) && mText.trim() ? checkCompliance(mText, avisoNumber) : null;
+  // A post handed over from the Sources section (a video's copy, a Drive
+  // photo as the hero image). Consumed once, then cleared.
+  const handoffSeen = useRef(0);
+  useEffect(() => {
+    const nonce = workspace.handoffNonce || 0;
+    if (!nonce || nonce === handoffSeen.current) return;
+    handoffSeen.current = nonce;
+    if (workspace.handoffText) setMText(workspace.handoffText);
+    if (workspace.handoffMedia) { setMMedia(workspace.handoffMedia); setMMediaLabel(workspace.handoffMediaLabel || 'Image from Drive'); }
+    setMStatus(null);
+    workspace.patch({ handoffText: '', handoffMedia: '', handoffMediaLabel: '' });
+    try { scrollToPublisher(); } catch { /* not mounted yet */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.handoffNonce]);
   const mChars = mText.trim().length;
   const mLimit = tightestLimit(mNetworks);
   const mOverBy = mLimit ? mChars - mLimit.limit : 0;
@@ -308,6 +335,7 @@ const [mBusy, setMBusy] = useState(false);
     : mTooLong && mLimit ? networkLabel(mLimit.network) + ' allows ' + mLimit.limit.toLocaleString() + ' characters. Trim ' + mOverBy.toLocaleString() + '.'
     : !mDate ? 'Pick the date and time it should go out.'
     : mDateInPast ? 'That time has already passed. Pick a future time.'
+    : mCompliance && !mCompliance.ok ? (mCompliance.missing.includes('ref') ? 'Instagram and Facebook posts need a REF line citing a scientific study.' : 'Add the AVISO DE PUBLICIDAD line before sending.')
     : null;
   const mCanSend = !mProblem && !mBusy;
   const [mMedia, setMMedia] = useState<string>("");
@@ -1093,6 +1121,9 @@ const nav = [
 { href: '/calendar', label: 'Calendar', current: false },
 { href: '/brand', label: 'Brand Brain', current: false },
 { href: '/templates', label: 'Templates', current: false },
+{ href: '/sources/calendar', label: 'Social Calendar', current: false },
+{ href: '/sources/videos', label: 'Video Library', current: false },
+{ href: '/sources/images', label: 'Image Library', current: false },
 ];
 
 
@@ -1577,6 +1608,19 @@ className={"mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring
 )}
 <label htmlFor="composer-text" className="mt-4 block text-[12px] font-medium text-ink-muted">What should it say?</label>
 <textarea id="composer-text" value={mText} onChange={(e) => setMText(e.target.value)} rows={4} placeholder="Write your post… you can paste anything you generated above." aria-invalid={mTooLong || undefined} className={"mt-1 w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 placeholder:text-ink-faint focus:ring-accent " + (mTooLong ? "ring-danger" : "ring-line")} />
+{complianceApplies(mNetworks) && mText.trim() ? (
+  mCompliance && mCompliance.ok ? (
+    <p className="mt-2 text-[12px] text-emerald-700" role="status">✓ Advertising notice and scientific reference present.</p>
+  ) : (
+    <div className="mt-2 rounded-2xl bg-amber-50 p-3 text-[12px] text-amber-900 ring-1 ring-amber-200" role="status">
+      <div className="font-semibold">Instagram and Facebook posts must carry two lines</div>
+      <ul className="mt-1 list-disc pl-4">
+        <li>{mCompliance && !mCompliance.missing.includes('aviso') ? '✓ ' : ''}AVISO DE PUBLICIDAD: {avisoNumber}{mCompliance && mCompliance.missing.includes('aviso') ? (<> — <button type="button" onClick={() => setMText(ensureAviso(mText, avisoNumber))} className="font-semibold underline">add it now</button></>) : null}</li>
+        <li>{mCompliance && !mCompliance.missing.includes('ref') ? '✓ ' : ''}REF: a scientific study that supports the claim{mCompliance && mCompliance.missing.includes('ref') ? ' — add a line starting with "REF:" (author, year, journal, DOI). Drafts from the Content Generator include one.' : ''}</li>
+      </ul>
+    </div>
+  )
+) : null}
 {mMedia ? ((() => { const isImage = /image/i.test(mMediaLabel) || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(mMedia); return (<div className="mt-2 flex items-center justify-between gap-2 rounded-2xl bg-subtle p-2.5 ring-1 ring-line"><div className="flex min-w-0 items-center gap-2"><span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">{isImage ? '\uD83D\uDDBC' : '\uD83C\uDFAC'}</span><div className="min-w-0"><div className="truncate text-[13px] font-medium text-ink">{mMediaLabel || (isImage ? "Image attached" : "Video attached")}</div><div className="text-[11px] text-ink-faint">{isImage ? 'This image will be attached to the post.' : 'This video will be attached to the post.'}</div></div></div><button type="button" onClick={() => { setMMedia(""); setMMediaLabel(""); }} className="shrink-0 rounded-full px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white">Remove</button></div>); })()) : null}
 <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px]">
 <span className={mTooLong ? 'font-semibold text-danger' : 'text-ink-muted'}>

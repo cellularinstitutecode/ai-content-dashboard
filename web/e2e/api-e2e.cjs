@@ -43,7 +43,9 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
     body: JSON.stringify({
       name: 'E2E weekly tip',
       providers: ['facebook'],
-      text: 'Weekly recovery tip from the clinic.',
+      // Facebook copy carries the two lines the advertising rule requires
+      // (lib/compliance.ts); the rule itself is tested further down.
+      text: 'Weekly recovery tip from the clinic.\n\nREF: Rogeri, P.S., et al. (2021). "Strategies to Prevent Sarcopenia in the Aging Process." Nutrients, 14(1), 52. DOI: 10.3390/nu14010052\n\nAVISO DE PUBLICIDAD: 2623022002A00090',
       weekdays: [1, 3],
       time_of_day: '09:00',
       active: true,
@@ -80,7 +82,7 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
     JSON.stringify(sent[0]?.body?.publicationDate));
 
   let posts = (await jsonOf(await app('/api/posts')))?.posts || [];
-  const applied = posts.filter((p) => p.text === 'Weekly recovery tip from the clinic.');
+  const applied = posts.filter((p) => String(p.text || '').startsWith('Weekly recovery tip from the clinic.'));
   check('each stored post carries its Metricool id (so it can be moved or deleted later)',
     applied.length > 0 && applied.every((p) => p.metricool_post_id), JSON.stringify(applied[0]));
   check('the stored instant is 14:00Z — 09:00 in Cancun',
@@ -236,7 +238,7 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
     const rowId = 'never-approved-' + (++safetyN);
     await fetch(SB + '/rest/v1/posts', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify([{ id: rowId, user_id: USER_ID, providers: ['facebook'], text: 'Never approved',
+      body: JSON.stringify([{ id: rowId, user_id: USER_ID, providers: ['facebook'], text: 'Never approved\n\nREF: Rogeri, P.S., et al. (2021). Nutrients, 14(1), 52. DOI: 10.3390/nu14010052\n\nAVISO DE PUBLICIDAD: 2623022002A00090',
         publication_date: '2026-12-01T16:00:00.000Z', metricool_post_id: String(mcForSafety?.data?.id), status }]),
     });
     await app('/api/posts', { method: 'PATCH', headers: { 'content-type': 'application/json' },
@@ -337,6 +339,135 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   const tickBody = await jsonOf(goodTick);
   check('the cron tick runs with the right secret', goodTick.ok && tickBody?.ok === true, goodTick.status + ' ' + JSON.stringify(tickBody));
   check('and it now reports how many stale runs it closed out', typeof tickBody?.expired === 'number', JSON.stringify(tickBody));
+
+  // ------------------------------------------------ the advertising rule -----
+  // Every Instagram / Facebook post must carry "AVISO DE PUBLICIDAD: <permit>"
+  // and a "REF:" line citing a study (lib/compliance.ts). Enforced at both
+  // doors to Metricool; other networks are untouched.
+  const G = 'http://127.0.0.1:54325';
+  await fetch(G + '/__reset', { method: 'POST' }); // approvals below are written to the calendar sheet
+  const COMPLIANT = 'Real clinic tip.\n\nREF: Djuricic, I., & Calder, P.C. (2021). Nutrients, 13(7), 2421. DOI: 10.3390/nu13072421\n\nAVISO DE PUBLICIDAD: 2623022002A00090';
+  const sendFor = (network, text) => app('/api/metricool/schedule', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ network, text, publishAt: new Date(Date.now() + 3 * 86400e3).toISOString().slice(0, 16), blogId: '4308292' }) });
+  const bare = await sendFor('instagram', 'Real clinic tip with no lines.');
+  const bareBody = await jsonOf(bare);
+  check('an Instagram post without the notice and reference is refused before it reaches Metricool', bare.status === 422 && bareBody?.error === 'compliance', String(bare.status) + ' ' + JSON.stringify(bareBody));
+  check('and the refusal names both missing lines', Array.isArray(bareBody?.missing) && bareBody.missing.includes('aviso') && bareBody.missing.includes('ref'), JSON.stringify(bareBody?.missing));
+  check('and says it in plain words', /advertising notice/i.test(bareBody?.message || '') && /scientific reference/i.test(bareBody?.message || ''), bareBody?.message);
+  const wrongPermit = await sendFor('facebook', COMPLIANT.replace('2623022002A00090', '1111111111A00001'));
+  check('the wrong permit number is refused too', wrongPermit.status === 422 && /different permit/i.test((await jsonOf(wrongPermit))?.message || ''), String(wrongPermit.status));
+  const okSend = await sendFor('facebook', COMPLIANT);
+  check('a Facebook post carrying both lines goes through', okSend.ok, String(okSend.status) + ' ' + JSON.stringify(await jsonOf(okSend)));
+  const linkedin = await sendFor('linkedin', 'LinkedIn copy has no such rule.');
+  check('LinkedIn is not subject to the rule', linkedin.ok, String(linkedin.status));
+
+  // The approval door: a post that reached the queue without the lines
+  // (created before the rule, or edited in Metricool) cannot be approved.
+  const compliantRow = ((await jsonOf(await app('/api/posts')))?.posts || []).find((p) => p.text === COMPLIANT && (p.providers || []).includes('facebook'));
+  check('the compliant Facebook post landed in the queue with its Metricool id', Boolean(compliantRow?.metricool_post_id), JSON.stringify(compliantRow));
+  const gateId = compliantRow?.id;
+  await fetch(SB + '/rest/v1/posts?id=eq.' + encodeURIComponent(gateId), { method: 'PATCH', headers: { 'content-type': 'application/json', apikey: 'x' }, body: JSON.stringify({ text: 'Facebook draft with nothing.' }) });
+  const apBare = await app('/api/posts', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: gateId, action: 'approve' }) });
+  const putsBeforeGate = (await mc('/__requests')).filter((q) => q.method === 'PUT').length;
+  check('approving a Facebook post without the lines is refused (422)', apBare.status === 422 && (await jsonOf(apBare))?.error === 'compliance', String(apBare.status));
+  check('and nothing was sent to Metricool', (await mc('/__requests')).filter((q) => q.method === 'PUT').length === putsBeforeGate);
+  await fetch(SB + '/rest/v1/posts?id=eq.' + encodeURIComponent(gateId), { method: 'PATCH', headers: { 'content-type': 'application/json', apikey: 'x' }, body: JSON.stringify({ text: COMPLIANT }) });
+  const apOk = await app('/api/posts', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: gateId, action: 'approve' }) });
+  check('with both lines back, the same post approves', apOk.ok, String(apOk.status) + ' ' + JSON.stringify(await jsonOf(apOk)));
+
+  // The rule has to hold at every door that puts a post into Metricool, not
+  // only the two the dashboard drives. A non-compliant Instagram post sitting
+  // in Metricool's review queue is one this app will refuse to approve — but
+  // somebody working inside Metricool could still publish it, where no gate of
+  // ours can reach. So the creating routes refuse as well.
+  const badTpl = await jsonOf(await app('/api/templates', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'E2E compliance probe', providers: ['instagram'], weekdays: [1], time_local: '09:00', text: 'Stem cells cure everything.' }),
+  }));
+  const badTplId = badTpl?.template?.id;
+  const putsBeforeApply = (await mc('/__requests')).filter((q) => q.method === 'POST').length;
+  const applied422 = await app('/api/templates/apply', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: badTplId, weeks: 1 }),
+  });
+  check('applying a non-compliant Instagram template is refused (422)',
+    applied422.status === 422 && (await jsonOf(applied422))?.error === 'compliance', String(applied422.status));
+  check('and not one post was created in Metricool',
+    (await mc('/__requests')).filter((q) => q.method === 'POST').length === putsBeforeApply);
+
+  // ...while a compliant template still applies.
+  const okTpl = await jsonOf(await app('/api/templates', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'E2E compliant template', providers: ['instagram'], weekdays: [1], time_local: '09:00', text: COMPLIANT }),
+  }));
+  const okApplied = await app('/api/templates/apply', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: okTpl?.template?.id, weeks: 1 }),
+  });
+  check('a compliant Instagram template still applies', okApplied.ok, String(okApplied.status) + ' ' + JSON.stringify(await jsonOf(okApplied)));
+
+  // A network the rule does not cover is unaffected by any of this.
+  const liTpl = await jsonOf(await app('/api/templates', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'E2E linkedin template', providers: ['linkedin'], weekdays: [1], time_local: '09:00', text: 'No advertising notice needed here.' }),
+  }));
+  const liApplied = await app('/api/templates/apply', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: liTpl?.template?.id, weeks: 1 }),
+  });
+  check('a LinkedIn template is untouched by the advertising rule', liApplied.ok, String(liApplied.status));
+
+  // ----------------------------------------------------- Google sources ------
+  // Meriz's calendar, Rodrigo's video sheet and the image folder, read
+  // through the mock Google API (e2e/mock-google.cjs) shaped like the real
+  // documents; an approval is written back to the calendar sheet.
+  const st = await jsonOf(await app('/api/sources?kind=status'));
+  check('sources report as configured with the three document ids', st?.configured === true && st?.ids?.calendar && st?.ids?.videos && st?.ids?.images, JSON.stringify(st));
+  const cal = await jsonOf(await app('/api/sources?kind=calendar&fresh=1'));
+  check('the calendar sheet is read across its monthly tabs, skipping the planning grid', Array.isArray(cal?.entries) && cal.entries.length === 4 && !cal.tabs.includes('Content Calendar'), JSON.stringify({ n: cal?.entries?.length, tabs: cal?.tabs }));
+  const sep = (cal?.entries || []).find((e) => /Exosome therapy/.test(e.caption));
+  check('a row carries its date, status, graphic and the networks ticked', sep && sep.date && sep.status === 'For approval' && /drive\.google/.test(sep.graphicsLink) && sep.networks.includes('instagram') && sep.networks.includes('facebook'), JSON.stringify(sep));
+  const vids = await jsonOf(await app('/api/sources?kind=videos&fresh=1'));
+  check("Rodrigo's sheet is read with its Spanish headers", Array.isArray(vids?.entries) && vids.entries.length === 2, JSON.stringify(vids?.entries?.length));
+  const iv = (vids?.entries || []).find((v) => /IV Therapy/.test(v.title));
+  check('a video carries creator, title, copy, link and format',
+    iv && iv.creator === 'Milán' && iv.title === 'IV Therapy' &&
+    /structured clinical environment/.test(iv.copy) &&
+    /drive\.google/.test(iv.videoLink) && iv.format === 'Vertical 9:16', JSON.stringify(iv));
+  // The flags in this sheet are Google checkboxes, so a column reads TRUE or
+  // FALSE — never blank. Counting any non-empty cell as a yes listed a video
+  // as going everywhere its sheet says it does NOT.
+  check('and only the networks the sheet says TRUE for',
+    iv && ['youtube', 'tiktok', 'facebook', 'instagram'].every((n) => iv.networks.includes(n)) &&
+    !iv.networks.includes('linkedin') && !iv.networks.includes('twitter') && !iv.networks.includes('email'),
+    JSON.stringify(iv?.networks));
+  const jrn = (vids?.entries || []).find((v) => /Journey Begins/.test(v.title));
+  check('a YouTube-only video is not also listed as LinkedIn and Email',
+    jrn && jrn.networks.length === 1 && jrn.networks[0] === 'youtube', JSON.stringify(jrn?.networks));
+  check('and its OBSERVACIÓN stays a note, not a network',
+    jrn && jrn.notes === 'Unlisted', JSON.stringify({ notes: jrn?.notes }));
+  const imgs = await jsonOf(await app('/api/sources?kind=images&fresh=1'));
+  check('the image folder lists its photos with thumbnails', Array.isArray(imgs?.images) && imgs.images.length === 3 && imgs.images.every((i) => /drive\.google\.com\/thumbnail/.test(i.thumbUrl)), JSON.stringify(imgs?.images?.length));
+  const imp = await app('/api/sources', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'import_image', fileId: imgs.images[0].id }) });
+  const impBody = await jsonOf(imp);
+  check('"Use as hero image" copies the Drive photo into the app\'s own public storage', imp.ok && /^http/.test(impBody?.url || '') && !/drive\.google/.test(impBody?.url || ''), String(imp.status) + ' ' + JSON.stringify(impBody));
+  const badImp = await app('/api/sources', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'import_image', fileId: '../../etc/passwd' }) });
+  check('an invalid file id is refused', badImp.status === 400, String(badImp.status));
+
+  // Write-back: the approvals above landed on the calendar sheet's own tab.
+  await new Promise((r) => setTimeout(r, 300));
+  const gstate = await (await fetch(G + '/__state')).json();
+  const calDoc = gstate[st.ids.calendar];
+  const approvalsTab = (calDoc?.tabs || []).find((t) => t.title === 'Dashboard Approvals');
+  check('approving on the dashboard wrote a row to the calendar sheet, on its own "Dashboard Approvals" tab', Boolean(approvalsTab) && approvalsTab.rows.length >= 2, JSON.stringify(approvalsTab?.rows?.length));
+  check('with a header row and the caption, networks and post id', approvalsTab && approvalsTab.rows[0][0] === 'Approved at' && approvalsTab.rows.some((r) => r[2] === 'facebook' && /Real clinic tip/.test(r[3]) && r[6] === gateId), JSON.stringify(approvalsTab?.rows?.slice(0, 3)));
+  check('and the month tabs Meriz laid out were not touched', calDoc.tabs.find((t) => t.title === 'September Content').rows.length === 3);
+
+  await fetch(G + '/__unshare', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: st.ids.videos }) });
+  const unshared = await app('/api/sources?kind=videos&fresh=1');
+  const unsharedBody = await jsonOf(unshared);
+  check('a document not shared with the service account says so, naming the account to share with', unshared.status === 502 && unsharedBody?.error === 'not_shared' && /share it/i.test(unsharedBody?.message || ''), JSON.stringify(unsharedBody));
+  await fetch(G + '/__reset', { method: 'POST' });
 
   // ------------------------------------------- the migration nobody ran -----
   // Every migration here is a .sql file a human is asked to paste into the

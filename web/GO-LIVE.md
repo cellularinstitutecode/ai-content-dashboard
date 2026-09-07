@@ -72,6 +72,20 @@ useful for the auth behaviour it cannot check for itself.
 
 - Semrush Site Health tab needs `SEMRUSH_PROJECT_ID` (Projects API access).
 - `SEMRUSH_UNIT_FLOOR` (default 5000) guards the unit pot — tune if needed.
+- **Sources** (`/sources`): the three Google documents are read with the same
+  service account as clip storage (`GOOGLE_SERVICE_ACCOUNT_JSON`). Share Meriz's
+  calendar sheet, Rodrigo's video sheet and the images folder with the service
+  account's email as **Editor** (the email is shown by `/api/sources?kind=status`).
+  Ids default to the clinic's documents; `SOURCES_CALENDAR_SHEET_ID`,
+  `SOURCES_VIDEOS_SHEET_ID`, `SOURCES_IMAGES_FOLDER_ID` override them. Every
+  approval on the dashboard appends a row to the calendar sheet's
+  "Dashboard Approvals" tab.
+- **Advertising rule**: Instagram/Facebook posts must carry
+  `AVISO DE PUBLICIDAD: <permit>` and a `REF:` citation (`lib/compliance.ts`).
+  The permit number lives in Brand Brain (`brand_profiles.aviso_publicidad`;
+  run the `alter table` in `supabase/schema.sql`), with `AVISO_PUBLICIDAD` as
+  the environment fallback. Citations are checked against Crossref
+  (`CROSSREF_API_BASE` overrides the host for tests).
 - A v4 key (`semrtkn-…`, the only kind the API Keys page issues on a Pro plan)
   is routed through Semrush's MCP server automatically (`lib/semrush-transport.ts`);
   any other key shape goes to the Standard API (v3). `SEMRUSH_TRANSPORT=v3|mcp`

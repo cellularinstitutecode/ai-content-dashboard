@@ -1,4 +1,6 @@
 // web/app/api/posts/route.ts
+import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
+import { recordApproval } from '@/lib/approval-log';
 import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { metricoolDeletePost, metricoolReplacePost, type Provider } from '@/lib/metricool';
@@ -131,6 +133,10 @@ export async function PATCH(req: Request) {
         { status: 409 },
       );
     }
+    // The last door before a live post: Instagram / Facebook copy must carry
+    // the advertising notice and a scientific reference.
+    const gate = await complianceGate(user.id, String(existing.text || ''), (existing.providers || []) as string[]);
+    if (!gate.ok) return NextResponse.json(gateRefusal(gate), { status: 422 });
     mode = 'scheduled';
     nextStatus = APPROVED_STATUS;
   }
@@ -173,6 +179,20 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: 'post not found' }, { status: 404 });
   }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // An approved post is also written to the team's calendar sheet, so the
+  // sheet stays the record without anyone retyping. Best-effort: the post is
+  // already approved in Metricool, so a sheet hiccup is reported, not fatal.
+  if (nextStatus) {
+    void recordApproval({
+      publishDate: nextDate,
+      networks: (existing.providers || []) as string[],
+      caption: String(existing.text || ''),
+      mediaUrl: media[0]?.url || '',
+      source: action === 'publish_now' ? 'Dashboard · publish now' : 'Dashboard · approve',
+      postId: id,
+    });
+  }
   return NextResponse.json({ post: data });
 }
 

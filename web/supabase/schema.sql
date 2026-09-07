@@ -134,6 +134,10 @@ create table if not exists public.brand_profiles (
   updated_at timestamptz default now()
 );
 
+-- The clinic's COFEPRIS advertising permit number: appended as the
+-- "AVISO DE PUBLICIDAD" line on every Instagram/Facebook post (lib/compliance.ts).
+alter table public.brand_profiles add column if not exists aviso_publicidad text default '';
+
 alter table public.brand_profiles enable row level security;
 
 do $$ begin
