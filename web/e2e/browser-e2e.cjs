@@ -222,7 +222,9 @@ function check(name, ok, detail) {
     ['/calendar', 'calendar'],
     ['/templates', 'emplate'],
     ['/brand', 'Brand Brain'],
-    ['/sources', 'Social Calendar (Meriz)'],
+    ['/sources/calendar', 'Social Calendar'],
+    ['/sources/videos', 'Video Library'],
+    ['/sources/images', 'Image Library'],
   ]) {
     await page.goto(BASE + path, { waitUntil: 'networkidle', timeout: 60000 });
     const t = await page.evaluate(() => document.body.innerText);
@@ -231,10 +233,21 @@ function check(name, ok, detail) {
   await page.screenshot({ path: '/tmp/e2e-brand.png', fullPage: false });
 
   // ---- 5a: Sources reads the team's documents and hands a video to the composer
-  await page.goto(BASE + '/sources', { waitUntil: 'networkidle', timeout: 60000 });
+  await page.goto(BASE + '/sources/calendar', { waitUntil: 'networkidle', timeout: 60000 });
+  await page.waitForFunction(() => /Exosome therapy: what the evidence says/.test(document.body.innerText), null, { timeout: 20000 }).catch(() => undefined);
   const calText = await page.evaluate(() => document.body.innerText);
-  check('Sources shows what is coming up on the calendar sheet', /Exosome therapy: what the evidence says/.test(calText), calText.slice(0, 200));
-  await page.getByRole('button', { name: /Video Library/ }).click();
+  check('Social Calendar shows what is coming up on the sheet', /Exosome therapy: what the evidence says/.test(calText), calText.slice(0, 200));
+  // The sheet panel is an iframe, and WHICH Google URL it points at decides
+  // whether it paints at all: Google serves the /edit editor with
+  // X-Frame-Options: DENY, so an /edit embed is the browser's broken-page box
+  // however the document is shared. Nothing else on the page can show this —
+  // the "coming up" list beside it comes from the API and renders either way.
+  const sheetFrames = await page.evaluate(() => [...document.querySelectorAll('iframe')].map((f) => f.src).filter((u) => /docs\.google\.com/.test(u)));
+  check('the sheet panel embeds the document, not the editor Google refuses to frame',
+    sheetFrames.length === 1 && /\/preview$/.test(sheetFrames[0]) && !/\/edit/.test(sheetFrames[0]), JSON.stringify(sheetFrames));
+  check('and editing is still one click away',
+    /Open in Google Sheets/.test(calText), calText.slice(0, 200));
+  await page.goto(BASE + '/sources/videos', { waitUntil: 'networkidle', timeout: 60000 });
   await page.waitForFunction(() => /IV therapy guided by physicians/.test(document.body.innerText), null, { timeout: 20000 });
   const useBtns = page.getByRole('button', { name: 'Use in post' });
   check('every video has a "Use in post" button', (await useBtns.count()) >= 2, String(await useBtns.count()));
@@ -245,9 +258,8 @@ function check(name, ok, detail) {
     return ta && /IV therapy guided by physicians/.test(ta.value);
   }, null, { timeout: 20000 });
   check('"Use in post" lands the video copy in the Publishing composer', true);
-  await page.getByRole('button', { name: /Image Library/ }).click().catch(() => undefined);
-  await page.goto(BASE + '/sources', { waitUntil: 'networkidle', timeout: 60000 });
-  await page.getByRole('button', { name: /Image Library/ }).click();
+  await page.waitForLoadState('networkidle').catch(() => undefined);
+  await page.goto(BASE + '/sources/images', { waitUntil: 'networkidle', timeout: 60000 });
   await page.waitForFunction(() => /ALE02947\.jpg/.test(document.body.innerText), null, { timeout: 20000 });
   check('the Image Library shows the Drive photos', true);
 

@@ -1121,7 +1121,9 @@ const nav = [
 { href: '/calendar', label: 'Calendar', current: false },
 { href: '/brand', label: 'Brand Brain', current: false },
 { href: '/templates', label: 'Templates', current: false },
-{ href: '/sources', label: 'Sources', current: false },
+{ href: '/sources/calendar', label: 'Social Calendar', current: false },
+{ href: '/sources/videos', label: 'Video Library', current: false },
+{ href: '/sources/images', label: 'Image Library', current: false },
 ];
 
 

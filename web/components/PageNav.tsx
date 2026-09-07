@@ -10,7 +10,9 @@ export const SECTIONS = [
   { href: '/calendar', label: 'Calendar' },
   { href: '/brand', label: 'Brand Brain' },
   { href: '/templates', label: 'Templates' },
-  { href: '/sources', label: 'Sources' },
+  { href: '/sources/calendar', label: 'Social Calendar' },
+  { href: '/sources/videos', label: 'Video Library' },
+  { href: '/sources/images', label: 'Image Library' },
 ] as const;
 
 export default function PageNav({ current }: { current: string }) {
