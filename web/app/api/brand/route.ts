@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));
-  const { name, mission, voice, audience, keywords, guidelines } = body || {};
+  const { name, mission, voice, audience, keywords, guidelines, aviso_publicidad } = body || {};
 
   const payload = {
     user_id: user.id,
@@ -38,6 +38,8 @@ export async function POST(req: NextRequest) {
     audience: (audience ?? '').toString(),
     keywords: Array.isArray(keywords) ? keywords : [],
     guidelines: (guidelines ?? '').toString(),
+    // Permit numbers are letters and digits only; anything else is a typo.
+    aviso_publicidad: (aviso_publicidad ?? '').toString().replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 40),
     updated_at: new Date().toISOString(),
   };
 

@@ -4,6 +4,8 @@
 import 'server-only';
 
 import { MEDICAL_SAFETY_GUARDRAILS } from '@/lib/safety';
+import { REF_INSTRUCTION, avisoNumberFor, checkCompliance, ensureAviso, type ComplianceCheck } from '@/lib/compliance';
+import { verifyDoi, type CitationCheck } from '@/lib/citation';
 import { researchBundle, briefPromptFrom, type KeywordBrief } from '@/lib/semrush';
 
 export type Provider = 'anthropic' | 'openai';
@@ -24,6 +26,21 @@ export type BrandContext = {
   audience?: string;
   keywords?: string[];
   guidelines?: string;
+  /** COFEPRIS advertising permit number for the AVISO DE PUBLICIDAD line. */
+  aviso_publicidad?: string | null;
+};
+
+/**
+ * What the compliance pass did to a pack, stamped on it as `_compliance` so
+ * the composer, the queue and the approval gate all read the same verdict.
+ */
+export type ComplianceStamp = {
+  aviso: string;
+  instagram: ComplianceCheck;
+  facebook: ComplianceCheck;
+  citation: CitationCheck | null;
+  /** True when the first draft's citation was rejected by Crossref and the copy was regenerated once. */
+  regenerated: boolean;
 };
 
 export type GenerateInput = {
@@ -89,7 +106,7 @@ const TYPE_INSTRUCTIONS: Record<ContentType, string> = {
 
 function systemPrompt(type: ContentType, brand?: BrandContext) {
   const voice = brand?.voice ? `You are the marketing content writer for ${brand.name || 'this brand'}. Write in this brand voice: ${brand.voice}` : DEFAULT_VOICE;
-  return `${voice} You always return STRICT JSON with exactly the keys: instagram, facebook, linkedin, blog. Each value is a finished, ready-to-use string. ${TYPE_INSTRUCTIONS[type]}${MEDICAL_SAFETY_GUARDRAILS} Return strict JSON only. No prose, no markdown fences.`;
+  return `${voice} You always return STRICT JSON with exactly the keys: instagram, facebook, linkedin, blog. Each value is a finished, ready-to-use string. ${TYPE_INSTRUCTIONS[type]}${MEDICAL_SAFETY_GUARDRAILS}${REF_INSTRUCTION} Return strict JSON only. No prose, no markdown fences.`;
 }
 
 function brandBlock(brand?: BrandContext): string {
@@ -277,7 +294,10 @@ export async function generateContentPack(
     semrush = auto.stamp;
   }
 
-  const call = () => (provider === 'openai' ? callOpenAI(input) : callAnthropic(input));
+  const call = (extra?: string) => {
+    const inp = extra ? { ...input, topic: input.topic + '\n\n' + extra } : input;
+    return provider === 'openai' ? callOpenAI(inp) : callAnthropic(inp);
+  };
   let pack: ContentPack;
   try {
     pack = await call();
@@ -289,6 +309,33 @@ export async function generateContentPack(
       throw e;
     }
   }
+
+  // Compliance pass: the AVISO line is appended here (never left to the
+  // model), and the REF line's DOI is checked against Crossref. A citation
+  // Crossref does not know earns exactly one regeneration; after that the
+  // reviewer sees the flag and decides.
+  const aviso = avisoNumberFor(input.brand?.aviso_publicidad);
+  let citation = await verifyDoi(checkCompliance(pack.instagram, aviso).doi || checkCompliance(pack.facebook, aviso).doi);
+  let regenerated = false;
+  if (citation.status === 'not_found') {
+    try {
+      const again = await call('IMPORTANT: the previous draft cited DOI ' + citation.doi + ', which does not exist. Cite a DIFFERENT real study with a real DOI.');
+      const c2 = await verifyDoi(checkCompliance(again.instagram, aviso).doi || checkCompliance(again.facebook, aviso).doi);
+      if (c2.status !== 'not_found') { pack = again; citation = c2; }
+      regenerated = true;
+    } catch { /* keep the first draft; the badge tells the reviewer */ }
+  }
+  pack.instagram = ensureAviso(pack.instagram, aviso);
+  pack.facebook = ensureAviso(pack.facebook, aviso);
+  const stamp: ComplianceStamp = {
+    aviso,
+    instagram: checkCompliance(pack.instagram, aviso),
+    facebook: checkCompliance(pack.facebook, aviso),
+    citation,
+    regenerated,
+  };
+  (pack as ContentPack & { _compliance?: ComplianceStamp })._compliance = stamp;
+
   // Stamp provenance on the pack so every saved draft carries the audit trail.
   if (semrush) (pack as ContentPack & { _semrush?: SemrushStamp })._semrush = semrush;
   return { provider, pack, keywordBrief, semrush };

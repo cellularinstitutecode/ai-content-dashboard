@@ -21,6 +21,9 @@ import { reportError } from '@/lib/report';
 import 'server-only';
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
+import { appliesTo, checkCompliance, complianceMessage, ensureAviso } from '@/lib/compliance';
+import { avisoForUser } from '@/lib/compliance-gate';
+import { recordApproval } from '@/lib/approval-log';
 import {
   chatAssistant,
   generateContentPack,
@@ -566,7 +569,7 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   try {
     const { data: bp } = await db
       .from('brand_profiles')
-      .select('name, mission, voice, audience, keywords, guidelines')
+      .select('name, mission, voice, audience, keywords, guidelines, aviso_publicidad')
       .eq('user_id', run.user_id)
       .maybeSingle();
     if (bp) brand = bp as BrandContext;
@@ -1048,7 +1051,28 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // with providers ['blog','instagram'] shipped the full long-form article as
   // the Instagram caption (far past the 2,200-char limit) while the
   // purpose-written pack.instagram copy went unused.
-  const text = channelText(pack, mcProviders[0] || providers[0] || 'instagram');
+  let text = channelText(pack, mcProviders[0] || providers[0] || 'instagram');
+
+  // Advertising rule (lib/compliance.ts): Instagram / Facebook copy must carry
+  // the AVISO line and a REF citation. The AVISO is deterministic, so it is
+  // added here if the pack predates the rule; a missing REF cannot be invented
+  // and returns the run for review with the reason written down.
+  if (appliesTo(mcProviders)) {
+    const aviso = await avisoForUser(run.user_id);
+    text = ensureAviso(text, aviso);
+    const check = checkCompliance(text, aviso);
+    if (!check.ok) {
+      await db
+        .from('template_runs')
+        .update({
+          state: 'ready_for_review',
+          log: logLine(run, 'approve-refused', 'Not sent: ' + complianceMessage(check) + ' Edit the draft, then approve again.'),
+        })
+        .eq('id', run.id)
+        .eq('state', 'approved');
+      return { ok: false, note: complianceMessage(check) + ' The run is back in your queue.' };
+    }
+  }
 
   // Image enrichment: make sure the draft carries its AI hero image before
   // the handoff, so the Metricool draft ships with a visual. Best-effort —
@@ -1124,7 +1148,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     return { ok: false, note };
   }
 
-  await db.from('posts').insert({
+  const { data: inserted } = await db.from('posts').insert({
     user_id: userId,
     draft_id: run.draft_id,
     providers,
@@ -1136,7 +1160,19 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     // part of Metricool's own vocabulary, so it cannot mean "a person said
     // yes to this".
     status: opts.schedule && mcProviders.length ? 'approved' : 'pending_review',
-  });
+  }).select('id').maybeSingle();
+  // A run approved straight to a live slot is also recorded on the team's
+  // calendar sheet (best-effort; see lib/approval-log.ts).
+  if (opts.schedule && mcProviders.length) {
+    void recordApproval({
+      publishDate: run.scheduled_for,
+      networks: providers,
+      caption: text,
+      mediaUrl: run.angle?.media?.url || packImage?.url || '',
+      source: 'Autopilot · approve & schedule',
+      postId: String((inserted as { id?: string } | null)?.id || run.id),
+    });
+  }
   await db
     .from('template_runs')
     // State was already set by the claim above; this records the outcome.

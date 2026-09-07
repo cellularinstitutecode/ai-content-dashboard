@@ -222,12 +222,46 @@ function check(name, ok, detail) {
     ['/calendar', 'calendar'],
     ['/templates', 'emplate'],
     ['/brand', 'Brand Brain'],
+    ['/sources', 'Social Calendar (Meriz)'],
   ]) {
     await page.goto(BASE + path, { waitUntil: 'networkidle', timeout: 60000 });
     const t = await page.evaluate(() => document.body.innerText);
     check(path + ' page renders', !page.url().includes('sign-in') && t.toLowerCase().includes(String(needle).toLowerCase()), page.url());
   }
   await page.screenshot({ path: '/tmp/e2e-brand.png', fullPage: false });
+
+  // ---- 5a: Sources reads the team's documents and hands a video to the composer
+  await page.goto(BASE + '/sources', { waitUntil: 'networkidle', timeout: 60000 });
+  const calText = await page.evaluate(() => document.body.innerText);
+  check('Sources shows what is coming up on the calendar sheet', /Exosome therapy: what the evidence says/.test(calText), calText.slice(0, 200));
+  await page.getByRole('button', { name: /Video Library/ }).click();
+  await page.waitForFunction(() => /IV therapy guided by physicians/.test(document.body.innerText), null, { timeout: 20000 });
+  const useBtns = page.getByRole('button', { name: 'Use in post' });
+  check('every video has a "Use in post" button', (await useBtns.count()) >= 2, String(await useBtns.count()));
+  await useBtns.last().click();
+  await page.waitForURL(/\/(#section-publish)?$/, { timeout: 20000 });
+  await page.waitForFunction(() => {
+    const ta = document.getElementById('composer-text');
+    return ta && /IV therapy guided by physicians/.test(ta.value);
+  }, null, { timeout: 20000 });
+  check('"Use in post" lands the video copy in the Publishing composer', true);
+  await page.getByRole('button', { name: /Image Library/ }).click().catch(() => undefined);
+  await page.goto(BASE + '/sources', { waitUntil: 'networkidle', timeout: 60000 });
+  await page.getByRole('button', { name: /Image Library/ }).click();
+  await page.waitForFunction(() => /ALE02947\.jpg/.test(document.body.innerText), null, { timeout: 20000 });
+  check('the Image Library shows the Drive photos', true);
+
+  // ---- 5c: the composer states the advertising rule for Instagram/Facebook
+  await page.goto(BASE + '/', { waitUntil: 'networkidle', timeout: 60000 });
+  await page.fill('#composer-text', 'A caption with neither line.');
+  await page.waitForFunction(() => /must carry two lines/.test(document.body.innerText), null, { timeout: 15000 });
+  const ruleText = await page.evaluate(() => document.body.innerText);
+  check('the composer explains the AVISO + REF rule for a Facebook post', /AVISO DE PUBLICIDAD: 2623022002A00090/.test(ruleText) && /REF:/.test(ruleText), '');
+  await page.getByRole('button', { name: 'add it now' }).click();
+  const withAviso = await page.$eval('#composer-text', (el) => el.value);
+  check('"add it now" appends the AVISO line', /AVISO DE PUBLICIDAD: 2623022002A00090$/.test(withAviso.trim()), withAviso);
+  const sendBtn = page.getByRole('button', { name: 'Send to Metricool for review' });
+  check('send stays disabled until the REF line is there too', await sendBtn.isDisabled());
 
   // ---- 5b: a failed load must not look like an empty account ---------------
   //

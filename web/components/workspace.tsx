@@ -20,9 +20,16 @@ export type Workspace = {
   domain: string;         // the domain under analysis in Semrush
   draftId: string;        // the draft currently open / most recently touched
   source: string;         // which panel last set the topic (for a subtle hint in the UI)
+  // A post handed to the Publishing composer from another page (the Sources
+  // section's "Use in post" / "Use as hero image"). The composer consumes it
+  // once — `handoffNonce` changing is the signal — and clears it.
+  handoffText: string;
+  handoffMedia: string;
+  handoffMediaLabel: string;
+  handoffNonce: number;
 };
 
-const BLANK: Workspace = { topic: '', keyword: '', domain: '', draftId: '', source: '' };
+const BLANK: Workspace = { topic: '', keyword: '', domain: '', draftId: '', source: '', handoffText: '', handoffMedia: '', handoffMediaLabel: '', handoffNonce: 0 };
 const STORE = 'chi:workspace:v1';
 const EVENT = 'chi:workspace';
 
@@ -91,7 +98,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const merged = { ...prev, ...next };
       if (
         merged.topic === prev.topic && merged.keyword === prev.keyword &&
-        merged.domain === prev.domain && merged.draftId === prev.draftId
+        merged.domain === prev.domain && merged.draftId === prev.draftId &&
+        merged.handoffNonce === prev.handoffNonce && merged.handoffText === prev.handoffText &&
+        merged.handoffMedia === prev.handoffMedia
       ) return prev;
       write(merged);
       return merged;

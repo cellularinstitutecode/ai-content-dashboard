@@ -1,4 +1,6 @@
 import { reportError, redact } from '@/lib/report';
+import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
+import { apiBase as metricoolApiBase } from '@/lib/metricool';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -84,6 +86,11 @@ export async function POST(req: NextRequest) {
   if (!provider) return NextResponse.json({ error: 'Unsupported network: ' + network }, { status: 400 });
   if (!text) return NextResponse.json({ error: 'text is required' }, { status: 400 });
 
+  // Instagram / Facebook copy must carry the advertising notice and a
+  // scientific reference before it goes anywhere near the account.
+  const gate = await complianceGate(user.id, text, network);
+  if (!gate.ok) return NextResponse.json(gateRefusal(gate), { status: 422 });
+
   const body: any = {
     text: text,
     publicationDate: { dateTime: publishAt, timezone: TIMEZONE },
@@ -97,8 +104,11 @@ export async function POST(req: NextRequest) {
     body.media = [{ url: String(payload.mediaUrl) }];
   }
 
-  const base = 'https://app.metricool.com';
-  const url = base + '/api/v2/scheduler/posts?blogId=' + encodeURIComponent(blogId) + '&userId=' + encodeURIComponent(userId);
+  // The same base every other Metricool call uses (lib/metricool.ts), so the
+  // e2e harness can stand in for the scheduler here too. This route hard-coded
+  // the production host, which is why the composer's own path was the one
+  // door the mock could never watch.
+  const url = metricoolApiBase() + '/v2/scheduler/posts?blogId=' + encodeURIComponent(blogId) + '&userId=' + encodeURIComponent(userId);
 
   try {
     const r = await fetch(url, {

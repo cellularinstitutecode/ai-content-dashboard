@@ -46,8 +46,8 @@ let tables = {
       created_at: iso(-86400e3), updated_at: iso(-3600e3),
       pack: {
         format: 'social',
-        instagram: 'Exosome therapy is changing recovery timelines. #regenerativemedicine',
-        facebook: 'How exosome therapy supports joint recovery — what patients ask us most.',
+        instagram: 'Exosome therapy is changing recovery timelines. #regenerativemedicine\n\nREF: Rogeri, P.S., et al. (2021). Nutrients, 14(1), 52. DOI: 10.3390/nu14010052\n\nAVISO DE PUBLICIDAD: 2623022002A00090',
+        facebook: 'How exosome therapy supports joint recovery — what patients ask us most.\n\nREF: Rogeri, P.S., et al. (2021). Nutrients, 14(1), 52. DOI: 10.3390/nu14010052\n\nAVISO DE PUBLICIDAD: 2623022002A00090',
         linkedin: 'A measured look at exosome therapy for joint recovery.',
         blog: 'Exosome Therapy for Joint Recovery\nWhat the science says today...',
         _semrush: { checked: true, source: 'semrush', primary: 'exosome therapy', volume: 1900, difficulty: 34, keywords: ['exosome therapy', 'joint recovery'], questions: [], intent: 'informational', fromCache: true, unitsSpent: 0, checkedAt: iso(-86400e3) },
@@ -60,8 +60,8 @@ let tables = {
       created_at: iso(-7200e3), updated_at: iso(-1800e3),
       pack: {
         format: 'social',
-        instagram: 'Stem cell therapy for knees: what candidates should know.',
-        facebook: 'Considering stem cell therapy for knee pain? Start here.',
+        instagram: 'Stem cell therapy for knees: what candidates should know.\n\nREF: Rogeri, P.S., et al. (2021). Nutrients, 14(1), 52. DOI: 10.3390/nu14010052\n\nAVISO DE PUBLICIDAD: 2623022002A00090',
+        facebook: 'Considering stem cell therapy for knee pain? Start here.\n\nREF: Rogeri, P.S., et al. (2021). Nutrients, 14(1), 52. DOI: 10.3390/nu14010052\n\nAVISO DE PUBLICIDAD: 2623022002A00090',
         linkedin: 'Stem cell therapy for knees — evidence and expectations.',
         blog: 'Stem Cell Therapy for Knees\nA practical guide...',
         _autopilot: { run_id: 'run-1', template_id: 'tpl-1', template_name: 'Weekly knees series', scheduled_for: iso(86400e3), angle: { type: 'answer', query: 'stem cell therapy for knees' } },

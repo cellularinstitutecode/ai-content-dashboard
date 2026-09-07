@@ -11,6 +11,7 @@ type Brand = {
   audience?: string;
   keywords?: string[];
   guidelines?: string;
+  aviso_publicidad?: string;
 };
 
 const inputStyle: React.CSSProperties = {
@@ -104,6 +105,12 @@ export default function BrandPage() {
             </label>
             <label style={{ fontSize: 13 }}>Guidelines / do&apos;s and don&apos;ts
               <textarea style={{ ...inputStyle, minHeight: 200, lineHeight: 1.5 }} value={brand.guidelines || ''} onChange={(e) => update('guidelines', e.target.value)} placeholder="Avoid medical claims, always include a CTA..." />
+            </label>
+            <label style={{ fontSize: 13 }}>Aviso de publicidad (COFEPRIS advertising permit number)
+              <input style={inputStyle} value={brand.aviso_publicidad || ''} onChange={(e) => update('aviso_publicidad', e.target.value)} placeholder="2623022002A00090" />
+              <span style={{ display: 'block', marginTop: 6, fontSize: 12, opacity: .7 }}>
+                Added automatically as &quot;AVISO DE PUBLICIDAD: …&quot; on every Instagram and Facebook post. Those posts also need a REF line citing a scientific study — the app writes it and will not send a post without both.
+              </span>
             </label>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <button onClick={save} disabled={saving} style={{ padding: '10px 18px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', cursor: saving ? 'default' : 'pointer' }}>

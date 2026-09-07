@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
     try {
       const { data: bp } = await sb
         .from('brand_profiles')
-        .select('name, mission, voice, audience, keywords, guidelines')
+        .select('name, mission, voice, audience, keywords, guidelines, aviso_publicidad')
         .eq('user_id', user.id)
         .maybeSingle();
       if (bp) brand = bp as BrandContext;
