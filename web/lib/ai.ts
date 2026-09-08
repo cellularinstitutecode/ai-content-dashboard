@@ -137,7 +137,7 @@ async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
   if (!key) throw new Error('ANTHROPIC_API_KEY missing');
   const model = input.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
   const type = input.contentType || 'social';
-  const res = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
+  const res = await fetchWithRetry((process.env.ANTHROPIC_API_BASE || 'https://api.anthropic.com').replace(/\/$/, '') + '/v1/messages', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',

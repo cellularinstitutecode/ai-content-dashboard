@@ -189,7 +189,8 @@ return [];
 }
 
 
-export default function Dashboard() {
+export default function Dashboard({ mode = 'overview' }: { mode?: 'overview' | 'draft' } = {}) {
+const isDraft = mode === 'draft';
 const { output, setOutput, drafts, setDrafts, stats, setStats } = useLiveContent();
 const workspace = useWorkspace();
 const [provider, setProvider] = useState<Provider>('anthropic');
@@ -539,6 +540,7 @@ try { if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'sm
       // otherwise the card lands the viewer on a closed header.
       window.dispatchEvent(new CustomEvent('section:open', { detail: STEP_ANCHORS[i] }));
       const el = typeof document !== 'undefined' ? document.getElementById(STEP_ANCHORS[i]) : null;
+      if (!el && !isDraft) { window.location.href = '/draft#' + STEP_ANCHORS[i]; return; }
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         el.classList.add('ring-2', 'ring-accent');
@@ -830,6 +832,14 @@ function formatMeta(pack: any): { key: string; label: string; lead: string } {
 }
 function formatSections(pack: any): { label: string; text: string }[] {
   if (!pack || typeof pack !== 'object') return [];
+  if (pack.kind === 'video') {
+    // A prepared video: the two channel texts, then the transcript it was written from.
+    const v: { label: string; text: string }[] = [];
+    if (typeof pack.linkedin === 'string' && pack.linkedin.trim()) v.push({ label: 'LINKEDIN', text: String(pack.linkedin) });
+    if (typeof pack.tiktok === 'string' && pack.tiktok.trim()) v.push({ label: 'TIKTOK CAPTION', text: String(pack.tiktok) });
+    if (typeof pack.transcript === 'string' && pack.transcript.trim()) v.push({ label: 'TRANSCRIPT \u00b7 ' + (pack.transcriptSource === 'youtube' ? 'YouTube captions' : 'pasted') + (pack.sourceUrl ? ' \u00b7 ' + String(pack.sourceUrl) : ''), text: String(pack.transcript) });
+    return v;
+  }
   const meta = formatMeta(pack);
   const out: { label: string; text: string }[] = [];
   const socials: [string, string][] = [['instagram','INSTAGRAM'],['facebook','FACEBOOK'],['linkedin','LINKEDIN']];
@@ -1117,10 +1127,11 @@ const statCards = [
 ];
 
 const nav = [
-{ href: '/', label: 'Dashboard', current: true },
-{ href: '/calendar', label: 'Calendar', current: false },
-{ href: '/brand', label: 'Brand Brain', current: false },
+{ href: '/', label: 'Dashboard', current: !isDraft },
+{ href: '/draft', label: 'Draft', current: isDraft },
 { href: '/templates', label: 'Templates', current: false },
+{ href: '/calendar', label: 'Calendar / Publishing', current: false },
+{ href: '/brand', label: 'Brand Brain', current: false },
 { href: '/sources/calendar', label: 'Social Calendar', current: false },
 { href: '/sources/videos', label: 'Video Library', current: false },
 { href: '/sources/images', label: 'Image Library', current: false },
@@ -1160,8 +1171,8 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 <main className="min-w-0 flex-1 animate-in">
 <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
 <div>
-<h1 className="text-title font-semibold">Good to see you</h1>
-<p className="mt-1 text-[15px] text-ink-muted">Create, schedule, and repurpose content — all in one place.</p>
+<h1 className="text-title font-semibold">{isDraft ? 'Draft' : 'Good to see you'}</h1>
+<p className="mt-1 text-[15px] text-ink-muted">{isDraft ? 'Create, picture, repurpose and send for review — everything before a post is approved.' : 'What is coming up, what needs your approval, and how the site is doing.'}</p>
 </div>
 <div className="flex items-center gap-2 lg:hidden">
 {nav.map(n => (
@@ -1192,6 +1203,7 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
     looking like three unrelated glitches. Silent when all is well. */}
 <SystemStatus />
 
+{!isDraft && (<>
 {/* Onboarding "How this works" strip — dismissible, remembered per browser */}
       {(
         <section className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
@@ -1227,6 +1239,7 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 </div>
 ))}
 </section>
+</>)}
 
 
 {/* Generator */}
@@ -1253,10 +1266,16 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 
     Reading order still runs create → images → repurpose → publish →
     autopilot → library, which the browser check enforces. No dense packing:
+    The grid is shared by two pages. Draft (/draft) shows create, images,
+    repurpose, publish, research, library; the overview shows publish, SEO,
+    Autopilot, library. Each drawer that loses its partner in the split
+    (SEO on the overview, Research on Draft) takes a full row, and Recent
+    Drafts takes a full row on Draft where Autopilot is not there to pair with.
     a full-width panel starts a fresh row by itself once the pair above it is
     complete, and it was dense that previously pulled Autopilot ahead of
     Publishing. */}
 <div className="2xl:grid 2xl:grid-cols-2 2xl:items-start 2xl:gap-8">
+{isDraft && (<>
 <section id="section-create" className="relative mb-8 2xl:mb-0 2xl:col-span-2 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
 <PanelLoader scope="create" />
 <div className="border-b border-line px-6 py-5 sm:px-8">
@@ -1554,6 +1573,7 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 tex
 </div>
 </div>
 </CollapsibleSection>
+</>)}
 
 {/* Publishing (Metricool) — compose, review flow, and live queue */}
 <section id="section-publish" className="relative mb-8 2xl:mb-0 2xl:col-span-2 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
@@ -1563,8 +1583,8 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 tex
 <div className="flex items-center gap-3">
 <span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-2xl bg-accent/10 text-accent text-[18px]">📣</span>
 <div>
-<span className="mb-1 inline-block rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">Step 4 · Schedule</span><h2 className="text-[18px] font-semibold text-ink">Publishing</h2>
-<p className="text-[13px] text-ink-muted">Plan, schedule, and track your posts across every channel.</p>
+<span className="mb-1 inline-block rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">{isDraft ? 'Step 4 · Schedule' : 'Approvals'}</span><h2 className="text-[18px] font-semibold text-ink">{isDraft ? 'Publishing' : 'Your publishing queue'}</h2>
+<p className="text-[13px] text-ink-muted">{isDraft ? 'Plan, schedule, and track your posts across every channel.' : 'Posts waiting for your approval, and the accounts they go to. Write new posts under Draft.'}</p>
 </div>
 </div>
 <div className="flex items-center gap-2">
@@ -1591,6 +1611,7 @@ return (
 </ol>
 </div>
 <div className="grid gap-0 lg:grid-cols-5">
+{isDraft && (
 <div className="border-b border-line p-6 sm:p-8 lg:col-span-3 lg:border-b-0 lg:border-r">
 <div className="mb-3 flex items-center justify-between gap-2">
 <h3 className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Schedule a post</h3>
@@ -1675,7 +1696,8 @@ Too long for {networkLabel(mLimit.network)} by {mOverBy.toLocaleString()} charac
 )}
 <p className="mt-3 text-[11px] text-ink-muted">Nothing publishes automatically — it lands in your queue as a draft for you to approve.</p>
 </div>
-<div className="p-6 sm:p-8 lg:col-span-2">
+)}
+<div className={"p-6 sm:p-8 " + (isDraft ? "lg:col-span-2" : "lg:col-span-5")}>
 <div className="mb-3 flex items-center justify-between gap-2">
 <h3 className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Connection health</h3>
 <button type="button" onClick={() => { loadAnalytics(false); loadInsights(activeBlogId); }} className="text-[12px] font-medium text-accent hover:underline">{(mLoading || insightsLoading) ? 'Checking…' : 'Refresh'}</button>
@@ -1793,9 +1815,10 @@ return (
               {/* Semrush Intelligence — the full SEO command center (domain
                   overview, rankings, competitors, backlinks, site health) plus
                   the keyword brain that pre-filters every draft */}
+{!isDraft && (
 <CollapsibleSection
   id="section-semrush"
-  className="2xl:mb-0"
+  className="2xl:mb-0 2xl:col-span-2"
   title="SEO intelligence"
   summary="Rankings, competitors, backlinks and site health for cellularhopeinstitute.com. Keyword research already runs on every draft — this is for looking deeper."
 >
@@ -1809,11 +1832,13 @@ return (
                 />
               </div>
 </CollapsibleSection>
+)}
 
               {/* AI Research & Draft Copilot — full-width band below the two columns */}
+{isDraft && (
 <CollapsibleSection
   id="section-research"
-  className="2xl:mb-0"
+  className="2xl:mb-0 2xl:col-span-2"
   title="Research a topic first"
   summary="Angles, keywords, hashtags and hooks for a topic before you write. Open when you want the legwork done for you."
 >
@@ -1977,15 +2002,16 @@ return (
               </div>
               </div>
 </CollapsibleSection>
+)}
 
 </section>
 
 
 {/* Autopilot: dynamic-template runs waiting for review — everything but publish */}
-<AutopilotQueue />
+{!isDraft && <AutopilotQueue />}
 
 {/* Recent Drafts */}
-<section id="section-library" className="rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7">
+<section id="section-library" className={"rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7" + (isDraft ? " 2xl:col-span-2" : "")}>
 <h2 className="mb-4 text-headline font-semibold">Recent Drafts</h2>
 {/* Clips from Opus — long-form to Shorts */}
 {(() => {

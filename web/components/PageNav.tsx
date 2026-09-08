@@ -7,9 +7,10 @@
 
 export const SECTIONS = [
   { href: '/', label: 'Dashboard' },
-  { href: '/calendar', label: 'Calendar' },
-  { href: '/brand', label: 'Brand Brain' },
+  { href: '/draft', label: 'Draft' },
   { href: '/templates', label: 'Templates' },
+  { href: '/calendar', label: 'Calendar / Publishing' },
+  { href: '/brand', label: 'Brand Brain' },
   { href: '/sources/calendar', label: 'Social Calendar' },
   { href: '/sources/videos', label: 'Video Library' },
   { href: '/sources/images', label: 'Image Library' },

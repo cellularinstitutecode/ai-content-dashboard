@@ -19,7 +19,8 @@ panel. No external services, no secrets, fully deterministic.
 - Browser: every panel renders from live data, boot shows only the hairline
   top bar (never an overlay), drafting raises the **panel-scoped** percentage
   loader inside the Content Generator, panels sit in workflow order
-  (Create → Images → Repurpose → Schedule → Autopilot → Library),
+  on /draft (Create → Images → Repurpose → Schedule → Library; Autopilot and
+  SEO live on the overview),
   ✓/✗ verification badges appear, an
   `announce()` from one panel makes the others refetch with no reload, the
   calendar/templates/brand pages render, and there are zero unexpected
@@ -55,6 +56,12 @@ clinic's account:
   image" copies a Drive photo into the app's storage; an approval writes a row
   to the calendar sheet's own "Dashboard Approvals" tab; a document not shared
   with the service account says so.
+- Video Library → Prepare: a YouTube link is transcribed from the mock's
+  caption track (an uploaded English track, an auto-generated Spanish one, and a
+  video with none that asks for a pasted transcript), written up through the
+  mock writer with REF + AVISO, saved as a video draft, and sent to Metricool
+  as a LinkedIn draft. A network cell holding the published YouTube URL still
+  reads as "on YouTube".
 - Keyword research over Semrush's MCP server (`e2e/mock-semrush-mcp.cjs`): a
   v4 key is routed through MCP with the app's v3 vocabulary translated to MCP
   parameter names (the mock rejects v3 codes like the real server), one
@@ -91,12 +98,17 @@ SEMRUSH_MCP_URL=http://127.0.0.1:54323
 GOOGLE_API_BASE=http://127.0.0.1:54325
 GOOGLE_STATIC_TOKEN=e2e-google-token
 CROSSREF_API_BASE=http://127.0.0.1:54325/crossref
+# YouTube captions + the Anthropic writer are also served by mock-google.cjs, so
+# Video Library → Prepare runs offline end to end.
+YOUTUBE_BASE=http://127.0.0.1:54325/yt
+ANTHROPIC_API_BASE=http://127.0.0.1:54325/anthropic
+ANTHROPIC_API_KEY=e2e-anthropic-key
 ENV
 # 2. backend + app
 node e2e/mock-supabase.cjs &        # :54321
 node e2e/mock-metricool.cjs &      # :54322
 node e2e/mock-semrush-mcp.cjs &    # :54323
-node e2e/mock-google.cjs &         # :54325 (Sheets, Drive, Crossref)
+node e2e/mock-google.cjs &         # :54325 (Sheets, Drive, Crossref, YouTube, Anthropic)
 npm run build && npx next start -p 3100 &
 # 3. session cookie (writes /tmp/cookie.txt) — see browser-e2e.cjs header
 # 4. the suites
