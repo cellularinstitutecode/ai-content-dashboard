@@ -31,6 +31,9 @@ const POLICIES: Record<string, Policy> = {
   image: { limit: 20, windowSec: 3600 },
   // Paid third-party credit spend — these were previously uncapped.
   'autopilot-tick': { limit: 12, windowSec: 3600 },
+  // Each sweep can transcribe several videos and write a content pack for each
+  // — the most expensive single button in the app.
+  'video-sweep': { limit: 12, windowSec: 3600 },
   'autopilot-action': { limit: 40, windowSec: 3600 },
   semrush: { limit: 120, windowSec: 3600 },
   keywords: { limit: 60, windowSec: 3600 },

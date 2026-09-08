@@ -24,6 +24,7 @@ export const MACHINE_PATHS = [
   '/api/opus/webhook',
   '/api/metricool/sync',
   '/api/autopilot/tick',
+  '/api/videos/watch',
 ] as const;
 
 export function isMachinePath(pathname: string): boolean {
@@ -54,7 +55,10 @@ export function isMachineRequest(
 
   // The two Vercel crons authenticate with a bearer token. Compare the VALUE, so
   // a forged header cannot buy a trip past the allowlist.
-  if (pathname === '/api/metricool/sync' || pathname === '/api/autopilot/tick') {
+  // The crons and the sheet's own Apps Script trigger authenticate with a
+  // bearer token. Compare the VALUE, so a forged header cannot buy a trip past
+  // the allowlist.
+  if (pathname === '/api/metricool/sync' || pathname === '/api/autopilot/tick' || pathname === '/api/videos/watch') {
     if (!cronSecret) return false;
     return headers.get('authorization') === 'Bearer ' + cronSecret;
   }

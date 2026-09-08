@@ -150,12 +150,21 @@ for (const row of TABLE) {
   });
 }
 
-test('the machine-path list is exactly the three routes middleware exempts', () => {
+test('the machine-path list is exactly the routes middleware exempts', () => {
   assert.deepEqual([...MACHINE_PATHS], [
     '/api/opus/webhook',
     '/api/metricool/sync',
     '/api/autopilot/tick',
+    '/api/videos/watch',
   ]);
   assert.equal(isMachinePath('/api/drafts'), false);
   assert.equal(isMachinePath('/api/autopilot/tick'), true);
+});
+
+test('the video sweep needs the real cron secret, not merely a bearer header', () => {
+  const path = '/api/videos/watch';
+  assert.equal(isMachineRequest(path, headers({ authorization: 'Bearer s3cret' }), 's3cret'), true);
+  assert.equal(isMachineRequest(path, headers({ authorization: 'Bearer guess' }), 's3cret'), false);
+  assert.equal(isMachineRequest(path, headers({ authorization: 'Bearer s3cret' }), undefined), false);
+  assert.equal(isMachineRequest(path, headers({}), 's3cret'), false);
 });

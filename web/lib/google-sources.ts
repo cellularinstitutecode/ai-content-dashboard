@@ -27,7 +27,7 @@ import { reportError } from '@/lib/report';
 import { classifyGoogleError, type GoogleFailure } from './google-error.ts';
 
 export { classifyGoogleError, type GoogleFailure };
-import { parseSheetDate, pick, tableFromRows, columnFor } from '@/lib/sheet-table';
+import { parseSheetDate, pick, tableFromRows, columnFor, columnLetter } from '@/lib/sheet-table';
 
 // The clinic's documents. Overridable per environment, never secret.
 export const SOURCE_IDS = {
@@ -135,12 +135,19 @@ async function json<T>(res: Response, what: string): Promise<T> {
 // Sheets
 // ---------------------------------------------------------------------------
 
-type SheetMeta = { title: string; sheetId: number; index: number };
+type SheetMeta = { title: string; sheetId: number; index: number; columnCount: number };
 
 export async function listTabs(spreadsheetId: string): Promise<SheetMeta[]> {
   const res = await gfetch(SHEETS_BASE() + '/v4/spreadsheets/' + encodeURIComponent(spreadsheetId) + '?fields=sheets.properties');
-  const j = await json<{ sheets?: { properties: { title: string; sheetId: number; index: number } }[] }>(res, 'sheet metadata');
-  return (j.sheets || []).map((s) => ({ title: s.properties.title, sheetId: s.properties.sheetId, index: s.properties.index }));
+  const j = await json<{ sheets?: { properties: { title: string; sheetId: number; index: number; gridProperties?: { columnCount?: number } } }[] }>(res, 'sheet metadata');
+  return (j.sheets || []).map((s) => ({
+    title: s.properties.title,
+    sheetId: s.properties.sheetId,
+    index: s.properties.index,
+    // A tab is 26 columns wide by default. Writing past the grid is an error,
+    // not an auto-expand, so a caller adding a column has to know this.
+    columnCount: s.properties.gridProperties?.columnCount ?? 26,
+  }));
 }
 
 export async function readTab(spreadsheetId: string, tab: string): Promise<string[][]> {
@@ -251,10 +258,26 @@ export async function readCalendar(spreadsheetId = SOURCE_IDS.calendarSheet()): 
   return { entries, tabs: used };
 }
 
-/** The columns this app may write on a video row. */
+/**
+ * The columns this app may write on a video row.
+ *
+ * `keywords`, `ref` and `aiStatus` are the three the automatic sweep adds
+ * (lib/video-autopilot.ts) and are the reason the sheet needs three new
+ * headers; every other field here predates it. The network checkbox columns
+ * are writable by a person editing a row in the dashboard — the sweep never
+ * touches them, because ticking one is a publishing decision.
+ */
 export const VIDEO_EDITABLE = ['title', 'copy', 'format', 'type', 'notes',
+  'keywords', 'ref', 'aiStatus',
   'youtube', 'linkedin', 'tiktok', 'x', 'facebook', 'instagram', 'email'] as const;
 export type VideoField = (typeof VIDEO_EDITABLE)[number];
+
+/** The headers the sweep writes into, in the order they should be appended to a tab. */
+export const AI_COLUMNS: { field: VideoField; header: string }[] = [
+  { field: 'keywords', header: 'KEYWORDS' },
+  { field: 'ref', header: 'REF' },
+  { field: 'aiStatus', header: 'ESTADO IA' },
+];
 
 function videoColumns(header: string[]): Partial<Record<VideoField, string>> {
   const out: Partial<Record<VideoField, string>> = {};
@@ -267,6 +290,9 @@ function videoColumns(header: string[]): Partial<Record<VideoField, string>> {
   at('format', 'formato', 'format');
   at('type', 'tipo de video', 'tipo', 'type');
   at('notes', 'observación', 'observacion', 'notes');
+  at('keywords', 'keywords', 'palabras clave');
+  at('ref', 'ref', 'referencia', 'reference');
+  at('aiStatus', 'estado ia', 'ai status', 'estatus ia');
   for (const [col] of VIDEO_NETWORKS) at(col as VideoField, col);
   return out;
 }
@@ -289,6 +315,12 @@ export type VideoEntry = {
   thumbnailTitle: string;
   coverLink: string;
   notes: string;
+  /** The keyword brief the sweep wrote, when this tab has the column. */
+  keywords: string;
+  /** The REF citation the sweep wrote. */
+  ref: string;
+  /** What the sweep last did with this row: 'ready', 'needs transcript', an error. */
+  aiStatus: string;
 };
 
 /** What counts as "yes" in a hand-kept sheet column: ticks, x, TRUE — never FALSE. */
@@ -341,6 +373,9 @@ export async function readVideos(spreadsheetId = SOURCE_IDS.videosSheet()): Prom
         thumbnailTitle: pick(r, 'título thumbnails', 'titulo thumbnails', 'thumbnail'),
         coverLink: pick(r, 'link portada', 'cover'),
         notes: pick(r, 'observación', 'observacion', 'notes'),
+        keywords: pick(r, 'keywords', 'palabras clave'),
+        ref: pick(r, 'ref', 'referencia', 'reference'),
+        aiStatus: pick(r, 'estado ia', 'ai status', 'estatus ia'),
       });
     }
   }
@@ -365,8 +400,11 @@ export async function updateRowCells(
   tab: string,
   row: number,
   cells: { column: string; value: string }[],
+  /** Only ensureAiColumns passes this, to write a NEW header into the header row. */
+  opts: { allowHeaderRow?: boolean } = {},
 ): Promise<void> {
-  if (!Number.isInteger(row) || row < 2) throw new GoogleSourceError(400, 'refusing to write to row ' + row, 'unknown', 'Row 1 is the header.');
+  const floor = opts.allowHeaderRow ? 1 : 2;
+  if (!Number.isInteger(row) || row < floor) throw new GoogleSourceError(400, 'refusing to write to row ' + row, 'unknown', 'Row 1 is the header.');
   if (!cells.length) return;
   for (const c of cells) {
     if (!/^[A-Z]{1,3}$/.test(c.column)) throw new GoogleSourceError(400, 'bad column ' + c.column, 'unknown', 'Not an A1 column.');
@@ -431,6 +469,56 @@ export async function appendRow(
   const row = last + 1;
   await updateRowCells(spreadsheetId, tab, row, placed);
   return { row };
+}
+
+/**
+ * Make sure a tab has the three columns the sweep writes into, adding any that
+ * are missing to the RIGHT of everything already there.
+ *
+ * Appended, never inserted. An insert shifts every column after it, and the
+ * columns after these are Rodrigo's network checkboxes — the ones a person
+ * reads down at a glance to see where a video has gone. Nothing already in the
+ * sheet moves, and a tab that already has the headers is left completely alone.
+ *
+ * Returns the A1 letter for each field, including the ones that already existed.
+ */
+export async function ensureAiColumns(
+  spreadsheetId: string,
+  tab: string,
+  headerRow: number,
+  header: string[],
+  /** The widest row on the tab. A column can hold data without having a header. */
+  usedWidth = header.length,
+): Promise<Partial<Record<VideoField, string>>> {
+  const found: Partial<Record<VideoField, string>> = {};
+  const missing: { field: VideoField; header: string }[] = [];
+  for (const { field, header: name } of AI_COLUMNS) {
+    const at = videoColumns(header)[field];
+    if (at) found[field] = at;
+    else missing.push({ field, header: name });
+  }
+  if (!missing.length) return found;
+
+  // The first free column: past the header's own width, and past anything
+  // further right that a row below happens to use.
+  const width = Math.max(header.length, usedWidth);
+  const need = width + missing.length;
+  const meta = (await listTabs(spreadsheetId)).find((t) => t.title === tab);
+  if (meta && meta.columnCount < need) {
+    const res = await gfetch(SHEETS_BASE() + '/v4/spreadsheets/' + encodeURIComponent(spreadsheetId) + ':batchUpdate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        requests: [{ appendDimension: { sheetId: meta.sheetId, dimension: 'COLUMNS', length: need - meta.columnCount } }],
+      }),
+    });
+    await json(res, 'widen tab');
+  }
+
+  const cells = missing.map((m, i) => ({ column: columnLetter(width + i), value: m.header }));
+  await updateRowCells(spreadsheetId, tab, headerRow, cells, { allowHeaderRow: true });
+  missing.forEach((m, i) => { found[m.field] = columnLetter(width + i); });
+  return found;
 }
 
 export async function appendApproval(
@@ -544,6 +632,63 @@ export async function uploadFolderImage(
     thumbUrl: 'https://drive.google.com/thumbnail?id=' + f.id + '&sz=w400',
     viewUrl: 'https://drive.google.com/file/d/' + f.id + '/view',
   };
+}
+
+/**
+ * Download a VIDEO or AUDIO file from Drive, for transcription.
+ *
+ * Separate from downloadDriveFile above, which is the Image Library's path and
+ * refuses anything that is not an image. The cap is a real constraint, not a
+ * guess: OpenAI's transcription endpoint rejects uploads over 25 MB, so a file
+ * above it must be reported as such rather than sent and failed.
+ */
+export const TRANSCRIBE_MAX_BYTES = 25 * 1024 * 1024;
+
+export type DriveMedia = { bytes: Buffer; contentType: string; name: string; sizeBytes: number };
+
+export type DriveMediaResult =
+  | { ok: true; media: DriveMedia }
+  | { ok: false; reason: 'not_media' | 'too_large' | 'unreachable'; message: string; name: string | null; sizeBytes: number | null };
+
+export async function downloadDriveMedia(fileId: string, maxBytes = TRANSCRIBE_MAX_BYTES): Promise<DriveMediaResult> {
+  let meta: { name: string; mimeType: string; size?: string };
+  try {
+    const metaRes = await gfetch(
+      DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?fields=' + encodeURIComponent('id,name,mimeType,size') + '&supportsAllDrives=true',
+    );
+    meta = await json<{ name: string; mimeType: string; size?: string }>(metaRes, 'media metadata');
+  } catch (e) {
+    const detail = e instanceof GoogleSourceError && e.reason === 'not_shared'
+      ? 'The dashboard cannot open that Drive file. Share it with ' + (serviceAccountEmail() || 'the service account') + '.'
+      : 'Drive did not hand over that file just now.';
+    return { ok: false, reason: 'unreachable', message: detail, name: null, sizeBytes: null };
+  }
+  const size = meta.size ? Number(meta.size) : null;
+  if (!/^(video|audio)\//.test(meta.mimeType || '')) {
+    return { ok: false, reason: 'not_media', message: 'That Drive file is a ' + (meta.mimeType || 'file') + ', not a video or audio recording.', name: meta.name || null, sizeBytes: size };
+  }
+  // Checked BEFORE the download, so an oversized file costs one metadata call
+  // rather than 200 MB of transfer that is then thrown away.
+  if (size !== null && size > maxBytes) {
+    return {
+      ok: false,
+      reason: 'too_large',
+      message: 'That video is ' + (size / 1024 / 1024).toFixed(0) + ' MB. Automatic transcription tops out at ' + Math.floor(maxBytes / 1024 / 1024) + ' MB.',
+      name: meta.name || null,
+      sizeBytes: size,
+    };
+  }
+  const res = await gfetch(DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true', {}, 120000);
+  if (!res.ok) {
+    return { ok: false, reason: 'unreachable', message: 'Drive refused the download (HTTP ' + res.status + ').', name: meta.name || null, sizeBytes: size };
+  }
+  const bytes = Buffer.from(await res.arrayBuffer());
+  // A file with no size in its metadata (Drive omits it for some shortcuts)
+  // still must not sail past the cap.
+  if (bytes.byteLength > maxBytes) {
+    return { ok: false, reason: 'too_large', message: 'That video is larger than the ' + Math.floor(maxBytes / 1024 / 1024) + ' MB transcription limit.', name: meta.name || null, sizeBytes: bytes.byteLength };
+  }
+  return { ok: true, media: { bytes, contentType: meta.mimeType, name: meta.name, sizeBytes: bytes.byteLength } };
 }
 
 export async function downloadDriveFile(fileId: string): Promise<{ bytes: Buffer; contentType: string; name: string }> {
