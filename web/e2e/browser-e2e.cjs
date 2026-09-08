@@ -293,9 +293,10 @@ function check(name, ok, detail) {
   const brandVisual = await page.evaluate(() => {
     const t = document.body.innerText;
     const swatches = document.querySelectorAll('[aria-label="palette preview"] > div');
-    return { section: /Visual identity/.test(t), swatches: swatches.length, hexes: [...swatches].map((s) => s.innerText.trim()), photography: /Photography direction/.test(t), materials: /Materials & light/.test(t) };
+    return { section: /Visual identity/.test(t), swatches: swatches.length, hexes: [...swatches].map((s) => s.innerText.trim()), photography: /Photography direction/.test(t), materials: /Materials & light/.test(t), fonts: /Brand typeface files/.test(t), upload: Boolean(document.querySelector('#brand-fonts input[type="file"]')), body: (document.querySelector('[data-testid="font-body"]') || {}).innerText || '' };
   });
   check('Brand Brain shows the visual identity: five palette swatches with their hex codes, materials and photography direction', brandVisual.section && brandVisual.swatches === 5 && brandVisual.hexes.includes('#9F4D27') && brandVisual.hexes.includes('#E0D2B7') && brandVisual.photography && brandVisual.materials, JSON.stringify(brandVisual));
+  check('and a place to upload the licensed typefaces, reporting which face is still a stand-in', brandVisual.fonts && brandVisual.upload && /Body:/.test(brandVisual.body), JSON.stringify({ fonts: brandVisual.fonts, upload: brandVisual.upload, body: brandVisual.body }));
 
   // ---- 5a: Sources reads the team's documents and hands a video to the composer
   // Put the Google documents back to their seeded state first. The API suite

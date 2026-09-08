@@ -21,12 +21,31 @@ import path from 'node:path';
 import { WORDMARK, BRANDMARK, markHeight, type BrandMark } from './brand-marks.ts';
 import { CARD_SIZES, groundHex, inkFor, headlineSize, footerText, type CardSpec } from './brand-card-layout.ts';
 import { DEFAULT_VISUAL, type BrandVisual } from './brand-visual.ts';
+import { describeFontFile, isTrialFont, type FontRole } from './brand-font-rules.ts';
 
-type Font = { name: string; data: ArrayBuffer; weight?: 400 | 500 | 600 | 700; style?: 'normal' | 'italic' };
-export type FontSet = { fonts: Font[]; headlineFamily: string; bodyFamily: string; standIn: boolean };
+type Font = { name: string; data: ArrayBuffer; weight?: 300 | 400 | 500 | 600 | 700; style?: 'normal' | 'italic' };
+export type FontSet = {
+  fonts: Font[];
+  headlineFamily: string;
+  bodyFamily: string;
+  /** True when any role runs on an open stand-in. */
+  standIn: boolean;
+  /** Which roles run on a stand-in — 'headline' until Canela is licensed, 'body' until Nexa or Rische is. */
+  standInFaces: FontRole[];
+  /** File names the licensed faces were loaded from. */
+  sources: string[];
+};
 
 const BRAND_DIR = () => path.join(process.cwd(), 'public', 'fonts', 'brand');
 const STANDIN_DIR = () => path.join(process.cwd(), 'public', 'fonts', 'standin');
+// Licensed files come from two places: the gitignored local folder (development)
+// and the private storage bucket Brand Brain uploads into (production). The
+// bucket read is injected so this module stays testable without Supabase.
+type StoredFontReader = () => Promise<{ name: string; data: ArrayBuffer }[]>;
+let storedFontReader: StoredFontReader | null = null;
+export function setStoredFontReader(reader: StoredFontReader | null): void { storedFontReader = reader; fontCache = null; }
+const FONT_CACHE_MS = 60_000;
+let fontCacheAt = 0;
 
 async function readFont(file: string): Promise<ArrayBuffer | null> {
   try {
@@ -41,52 +60,69 @@ let fontCache: Promise<FontSet> | null = null;
 
 /**
  * The brand's own type when the files are there, the stand-in when not.
- * Matching is by file name: anything containing "canela" is the headline face;
- * "nexa" or "rische" the body face; "bold"/"semibold"/"medium" in the name
- * sets the weight, "italic" the style.
+ * Matching is by file name (lib/brand-font-rules.ts): "canela" is the headline
+ * face; "nexa" or "rische" the body face; weight and style from the name.
+ * Trial/demo builds are ignored even if someone put them on disk. Cached for
+ * a minute so an upload shows up without a redeploy.
  */
 export function loadFonts(): Promise<FontSet> {
-  if (!fontCache) fontCache = loadFontsUncached();
+  if (!fontCache || Date.now() - fontCacheAt > FONT_CACHE_MS) { fontCache = loadFontsUncached(); fontCacheAt = Date.now(); }
   return fontCache;
 }
 
 async function loadFontsUncached(): Promise<FontSet> {
-  const fonts: Font[] = [];
-  let headlineFamily = '';
-  let bodyFamily = '';
+  const candidates: { name: string; data: ArrayBuffer }[] = [];
   let files: string[] = [];
   try { files = await fs.readdir(BRAND_DIR()); } catch { files = []; }
   for (const f of files) {
-    if (!/\.(otf|ttf|woff)$/i.test(f)) continue;
-    const lower = f.toLowerCase();
-    const family = /canela/.test(lower) ? 'Canela' : /nexa/.test(lower) ? 'Nexa' : /rische/.test(lower) ? 'Rische' : null;
-    if (!family) continue;
     const data = await readFont(path.join(BRAND_DIR(), f));
-    if (!data) continue;
-    const weight: Font['weight'] = /bold|black|xbold|extrabold/.test(lower) ? 700 : /semibold/.test(lower) ? 600 : /medium/.test(lower) ? 500 : 400;
-    const style: Font['style'] = /italic/.test(lower) ? 'italic' : 'normal';
-    fonts.push({ name: family, data, weight, style });
-    if (family === 'Canela') headlineFamily = 'Canela';
-    if ((family === 'Nexa' || family === 'Rische') && !bodyFamily) bodyFamily = family;
+    if (data) candidates.push({ name: f, data });
   }
-  const standIn = !headlineFamily || !bodyFamily;
+  if (storedFontReader) {
+    try { candidates.push(...(await storedFontReader())); } catch { /* the local files and stand-ins still work */ }
+  }
+  const fonts: Font[] = [];
+  const sources: string[] = [];
+  let headlineFamily = '';
+  let nexa = false;
+  let rische = false;
+  for (const c of candidates) {
+    const d = describeFontFile(c.name);
+    if (!d || isTrialFont(c.name)) continue;
+    fonts.push({ name: d.family, data: c.data, weight: d.weight, style: d.style });
+    sources.push(c.name);
+    if (d.family === 'Canela') headlineFamily = 'Canela';
+    if (d.family === 'Nexa') nexa = true;
+    if (d.family === 'Rische') rische = true;
+  }
+  let bodyFamily = nexa ? 'Nexa' : rische ? 'Rische' : '';
+  const standInFaces: FontRole[] = [];
   if (!headlineFamily) {
+    standInFaces.push('headline');
     const data = await readFont(path.join(STANDIN_DIR(), 'InstrumentSerif-Regular.ttf'));
     if (data) fonts.push({ name: 'Instrument Serif', data, weight: 400, style: 'normal' });
     headlineFamily = 'Instrument Serif';
   }
   if (!bodyFamily) {
+    standInFaces.push('body');
     const reg = await readFont(path.join(STANDIN_DIR(), 'Outfit-Regular.ttf'));
     const bold = await readFont(path.join(STANDIN_DIR(), 'Outfit-Bold.ttf'));
     if (reg) fonts.push({ name: 'Outfit', data: reg, weight: 400, style: 'normal' });
     if (bold) fonts.push({ name: 'Outfit', data: bold, weight: 700, style: 'normal' });
     bodyFamily = 'Outfit';
   }
-  return { fonts, headlineFamily, bodyFamily, standIn };
+  return { fonts, headlineFamily, bodyFamily, standIn: standInFaces.length > 0, standInFaces, sources };
 }
 
 /** Drop the cache (tests, or after fonts are uploaded). */
-export function resetFontCache(): void { fontCache = null; }
+export function resetFontCache(): void { fontCache = null; fontCacheAt = 0; }
+
+/** The corner note a card carries while a face is still a stand-in. */
+export function standInNote(faces: FontRole[]): string {
+  if (!faces.length) return '';
+  const missing = faces.map((f) => (f === 'headline' ? 'Canela' : 'Nexa / Rische'));
+  return 'stand-in ' + faces.join(' + ') + ' type · add ' + missing.join(' and ') + ' in Brand Brain';
+}
 
 // satori supports inline SVG; a mark is a viewBox plus filled paths.
 function mark(m: BrandMark, color: string, width: number, opacity = 1): ReactElement {
@@ -171,7 +207,7 @@ export function cardElement(input: RenderInput, fontSet: FontSet): ReactElement 
         ? h('div', { style: { fontFamily: sans, fontSize: 16, letterSpacing: 1, color: muted, display: 'flex' } }, 'AVISO DE PUBLICIDAD: ' + spec.aviso)
         : h('div', {}),
       spec.standIn
-        ? h('div', { style: { fontFamily: sans, fontSize: 12, color: muted, display: 'flex', opacity: 0.8 } }, 'stand-in type · add Canela / Nexa to public/fonts/brand')
+        ? h('div', { style: { fontFamily: sans, fontSize: 12, color: muted, display: 'flex', opacity: 0.8 } }, standInNote(fontSet.standInFaces))
         : h('div', {}),
     ),
   );
@@ -187,13 +223,13 @@ export function cardElement(input: RenderInput, fontSet: FontSet): ReactElement 
 }
 
 /** Render one card to PNG bytes. */
-export async function renderBrandCard(input: RenderInput): Promise<{ png: Buffer; width: number; height: number; standIn: boolean }> {
+export async function renderBrandCard(input: RenderInput): Promise<{ png: Buffer; width: number; height: number; standIn: boolean; standInFaces: FontRole[] }> {
   const fontSet = await loadFonts();
   const spec = { ...input.spec, standIn: fontSet.standIn };
   const { width, height } = CARD_SIZES[spec.size];
   const res = new ImageResponse(cardElement({ ...input, spec }, fontSet), { width, height, fonts: fontSet.fonts });
   const png = Buffer.from(await res.arrayBuffer());
-  return { png, width, height, standIn: fontSet.standIn };
+  return { png, width, height, standIn: fontSet.standIn, standInFaces: fontSet.standInFaces };
 }
 
 /** PNG header → dimensions, for callers (and tests) that want to check what came out. */

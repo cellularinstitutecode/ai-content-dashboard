@@ -53,7 +53,7 @@ test('the card tree carries the words exactly, the slide count, the permit line 
   assert.ok(text.includes('IMPORTANT'), 'the kicker is set in caps');
   assert.ok(text.includes('3/8'));
   assert.ok(text.includes('AVISO DE PUBLICIDAD: 2623022002A00090'));
-  assert.ok(text.some((t) => /stand-in type/.test(t)));
+  assert.ok(text.some((t) => /^stand-in .*type · add /.test(t)), 'the corner note names the stand-in role and the face to add');
   assert.ok(svgs >= 3, 'brandmark top, watermark, wordmark bottom: ' + svgs);
   // Pearl ground → Eerie Black ink on the headline.
   const headline = JSON.stringify(el).match(/"color":"(#[0-9A-F]{6})","letterSpacing"/i);

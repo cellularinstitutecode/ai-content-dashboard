@@ -701,6 +701,33 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   const d1b = (Array.isArray(afterHero?.drafts) ? afterHero.drafts : Array.isArray(afterHero) ? afterHero : []).find((d) => d.id === 'draft-1');
   check('the draft now carries the card as its image, marked as a brand card', d1b?.pack?._image?.source === 'brand-card' && /^https?:/.test(d1b?.pack?._image?.url || ''), JSON.stringify(d1b?.pack?._image?.source));
 
+  // ------------------------------------------------ Brand typeface files
+  // Licensed fonts are uploaded from Brand Brain into private storage (never the
+  // repo). Trial builds are refused with the reason; a licensed Rische is stored,
+  // listed, and becomes the body face of the next card; removing it undoes that.
+  const fontBytes = require('fs').readFileSync(require('path').join(__dirname, '..', 'public', 'fonts', 'standin', 'Outfit-Regular.ttf'));
+  const fontForm = (name) => { const fd = new FormData(); fd.append('files', new Blob([fontBytes], { type: 'font/otf' }), name); return fd; };
+  const fontsBefore = await jsonOf(await app('/api/brand/fonts'));
+  check('the font store lists what is uploaded and which faces still run on a stand-in', Array.isArray(fontsBefore?.fonts) && Array.isArray(fontsBefore?.standInFaces) && fontsBefore.standInFaces.includes('headline'), JSON.stringify(fontsBefore));
+  const trialUp = await app('/api/brand/fonts', { method: 'POST', body: fontForm('Nexa-Trial-Bold.otf') });
+  const trialBody = await jsonOf(trialUp);
+  check('a trial/demo font upload is refused (422) and told why', trialUp.status === 422 && trialBody?.refused?.[0] && /trial\/demo/.test(trialBody.refused[0].reason) && (trialBody.saved || []).length === 0, String(trialUp.status) + ' ' + JSON.stringify(trialBody?.refused));
+  const junkUp = await app('/api/brand/fonts', { method: 'POST', body: fontForm('Comic.ttf') });
+  check('a font that is not one of the brand faces is refused', junkUp.status === 422 && /Canela, Nexa, Rische/.test(JSON.stringify(await jsonOf(junkUp))), String(junkUp.status));
+  const noFiles = await app('/api/brand/fonts', { method: 'POST', body: new FormData() });
+  check('an upload with no files is a 400', noFiles.status === 400, String(noFiles.status));
+  const rischeUp = await app('/api/brand/fonts', { method: 'POST', body: fontForm('Rische-Regular.otf') });
+  const rischeBody = await jsonOf(rischeUp);
+  check('a licensed Rische file is stored and becomes the body face; the headline still needs Canela', rischeUp.ok && rischeBody?.saved?.includes('Rische-Regular.otf') && rischeBody.body === 'Rische' && rischeBody.headline === null && JSON.stringify(rischeBody.standInFaces) === JSON.stringify(['headline']), String(rischeUp.status) + ' ' + JSON.stringify({ saved: rischeBody?.saved, body: rischeBody?.body, faces: rischeBody?.standInFaces }));
+  const fontsAfter = await jsonOf(await app('/api/brand/fonts'));
+  check('and it is listed with its family, role and weight', fontsAfter?.fonts?.some((f) => f.name === 'Rische-Regular.otf' && f.file?.family === 'Rische' && f.file?.role === 'body' && f.file?.weight === 400), JSON.stringify(fontsAfter?.fonts));
+  const cardWithRische = await jsonOf(await card({ id: 'draft-1', ground: 'pearl', slides: [{ headline: 'Set in Rische' }] }));
+  check('the next card is drawn with the uploaded body face — only the headline is still a stand-in', cardWithRische?.cards?.standIn === true && JSON.stringify(cardWithRische.cards.standInFaces) === JSON.stringify(['headline']), JSON.stringify(cardWithRische?.cards?.standInFaces));
+  const badDel = await app('/api/brand/fonts?name=../secrets.txt', { method: 'DELETE' });
+  check('removing something that is not a font file is refused', badDel.status === 400, String(badDel.status));
+  const fontDel = await jsonOf(await app('/api/brand/fonts?name=Rische-Regular.otf', { method: 'DELETE' }));
+  check('removing the file puts the body back on the stand-in', fontDel?.ok === true && fontDel.body === null && !(fontDel.fonts || []).some((f) => f.name === 'Rische-Regular.otf'), JSON.stringify({ body: fontDel?.body, fonts: fontDel?.fonts?.map((f) => f.name) }));
+
   // ------------------------------------------- the migration nobody ran -----
   // Every migration here is a .sql file a human is asked to paste into the
   // Supabase SQL editor, and nothing checked that they had: Autopilot could
