@@ -46,7 +46,7 @@ export const DEFAULT_VISUAL: BrandVisual = {
     'cool blue clinical lighting, chrome and glass laboratory clichés',
     'crowded frames, props, or decorative clutter',
   ],
-  fonts: { headline: 'Canela', body: 'Nexa' },
+  fonts: { headline: 'Canela', body: 'Rische' },
 };
 
 /** Off-white paper the guide sets everything on — the card ground when no palette colour is asked for. */

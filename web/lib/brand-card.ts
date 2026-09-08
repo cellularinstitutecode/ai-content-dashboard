@@ -21,7 +21,7 @@ import path from 'node:path';
 import { WORDMARK, BRANDMARK, markHeight, type BrandMark } from './brand-marks.ts';
 import { CARD_SIZES, groundHex, inkFor, headlineSize, footerText, type CardSpec } from './brand-card-layout.ts';
 import { DEFAULT_VISUAL, type BrandVisual } from './brand-visual.ts';
-import { describeFontFile, isTrialFont, type FontRole } from './brand-font-rules.ts';
+import { describeFontFile, isTrialFont, isVariableFont, type FontRole } from './brand-font-rules.ts';
 
 type Font = { name: string; data: ArrayBuffer; weight?: 300 | 400 | 500 | 600 | 700; style?: 'normal' | 'italic' };
 export type FontSet = {
@@ -88,7 +88,7 @@ async function loadFontsUncached(): Promise<FontSet> {
   let rische = false;
   for (const c of candidates) {
     const d = describeFontFile(c.name);
-    if (!d || isTrialFont(c.name)) continue;
+    if (!d || isTrialFont(c.name) || isVariableFont(c.name)) continue;
     fonts.push({ name: d.family, data: c.data, weight: d.weight, style: d.style });
     sources.push(c.name);
     if (d.family === 'Canela') headlineFamily = 'Canela';

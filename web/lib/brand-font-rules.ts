@@ -34,6 +34,15 @@ export function describeFontFile(name: string): FontFile | null {
   return { family, role: family === 'Canela' ? 'headline' : 'body', weight, style };
 }
 
+/**
+ * A variable font (one file, many weights). satori sets type from static
+ * instances only, so a variable file is listed and counted but never handed to
+ * the renderer — the static weights alongside it are what get used.
+ */
+export function isVariableFont(name: string): boolean {
+  return /variable|\[wght\]|-vf\b/i.test(String(name || ''));
+}
+
 /** Trial, demo and evaluation builds carry it in the file name; they are not licensed for production. */
 export function isTrialFont(name: string): boolean {
   return /trial|demo|eval|sample|test/i.test(String(name || '').replace(FONT_EXT, ''));

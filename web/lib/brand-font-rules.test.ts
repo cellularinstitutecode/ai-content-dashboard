@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { describeFontFile, isTrialFont, validateFontUpload, coverage, MAX_FONT_BYTES } from './brand-font-rules.ts';
+import { describeFontFile, isTrialFont, isVariableFont, validateFontUpload, coverage, MAX_FONT_BYTES } from './brand-font-rules.ts';
 
 test('family, role, weight and style are read from the file name', () => {
   assert.deepEqual(describeFontFile('Rische-Semibold.otf'), { family: 'Rische', role: 'body', weight: 600, style: 'normal' });
@@ -43,4 +43,11 @@ test('coverage says which role still runs on a stand-in', () => {
   assert.deepEqual(coverage(['Rische-Regular.otf', 'Nexa-Bold.otf']).body, 'Nexa', 'Nexa outranks Rische for the body when both are licensed');
   assert.deepEqual(coverage(['Rische-Regular.otf', 'Nexa-Trial-Bold.otf']).body, 'Rische', 'a trial Nexa does not count');
   assert.deepEqual(coverage(['Canela-Regular.otf', 'Rische-Regular.otf']).standInFaces, []);
+});
+
+test('a variable font file is recognised so the renderer can prefer the static weights', () => {
+  assert.equal(isVariableFont('Rische-Variable.ttf'), true);
+  assert.equal(isVariableFont('Canela[wght].ttf'), true);
+  assert.equal(isVariableFont('Rische-Regular.otf'), false);
+  assert.equal(validateFontUpload('Rische-Variable.ttf', 40_000).ok, true, 'it is still accepted and listed');
 });
