@@ -282,6 +282,8 @@ export type VideoEntry = {
   title: string;
   copy: string;
   videoLink: string;
+  /** The published YouTube URL, when the YOUTUBE column holds one (it may just say "Unlisted"). */
+  youtubeLink: string;
   format: string;
   networks: string[];
   thumbnailTitle: string;
@@ -291,6 +293,12 @@ export type VideoEntry = {
 
 /** What counts as "yes" in a hand-kept sheet column: ticks, x, TRUE — never FALSE. */
 const YES = /^(x|✓|✔|yes|si|sí|true|posted|done)$/i;
+/**
+ * A network column can also hold the published link itself (Rodrigo pastes
+ * the YouTube URL into YOUTUBE once a video is up). A link there is the
+ * strongest "yes" the sheet can give, so it counts — FALSE still does not.
+ */
+const isTicked = (v: string) => YES.test(v) || /^https?:\/\//i.test(v.trim());
 
 const VIDEO_NETWORKS: [string, string][] = [['youtube', 'youtube'], ['linkedin', 'linkedin'], ['tiktok', 'tiktok'], ['x', 'twitter'], ['facebook', 'facebook'], ['instagram', 'instagram'], ['email', 'email']];
 
@@ -315,7 +323,7 @@ export async function readVideos(spreadsheetId = SOURCE_IDS.videosSheet()): Prom
       // (Google's checkbox default), so treating a value as a yes marked every
       // FALSE column as a network the video ships to — a video the sheet says
       // is YouTube-only was listed as LinkedIn and Email as well.
-      const networks = VIDEO_NETWORKS.filter(([col]) => YES.test(pick(r, col))).map(([, n]) => n);
+      const networks = VIDEO_NETWORKS.filter(([col]) => isTicked(pick(r, col))).map(([, n]) => n);
       entries.push({
         tab: t.title,
         row,
@@ -327,6 +335,7 @@ export async function readVideos(spreadsheetId = SOURCE_IDS.videosSheet()): Prom
         title,
         copy: pick(r, 'copy', 'caption'),
         videoLink,
+        youtubeLink: (String(pick(r, 'youtube')).match(/https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/\S+/i) || [''])[0],
         format: pick(r, 'formato', 'format'),
         networks,
         thumbnailTitle: pick(r, 'título thumbnails', 'titulo thumbnails', 'thumbnail'),

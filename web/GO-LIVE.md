@@ -86,6 +86,19 @@ useful for the auth behaviour it cannot check for itself.
   run the `alter table` in `supabase/schema.sql`), with `AVISO_PUBLICIDAD` as
   the environment fallback. Citations are checked against Crossref
   (`CROSSREF_API_BASE` overrides the host for tests).
+- **Video Library → Prepare**: a YouTube link is transcribed from the video's
+  own caption track (no key needed; `YOUTUBE_BASE` overrides the host for
+  tests), run through the keyword brief, written as a LinkedIn post and a
+  TikTok caption (with REF + AVISO), saved as a draft, and only then sent to
+  Metricool for review on the date you pick. Videos with no captions ask for a
+  pasted transcript. `ANTHROPIC_API_BASE` overrides the writer's host for tests.
+- **Calendar / Publishing**: the month grid on the left, the ordered
+  "Publishing list" (everything from today on, Approve / +1 day / Delete) on
+  the right. **Draft** (`/draft`) holds the generators and the composer; the
+  Dashboard keeps the stats, Semrush and the Autopilot queue.
+- **Weekly planner** (Templates): one theme per weekday, several slots a day.
+  Each slot is a `fixed_topic` Autopilot template — the subject stays, the
+  angle/keyword/citation change every occurrence, so nothing is copy-paste.
 - A v4 key (`semrtkn-…`, the only kind the API Keys page issues on a Pro plan)
   is routed through Semrush's MCP server automatically (`lib/semrush-transport.ts`);
   any other key shape goes to the Standard API (v3). `SEMRUSH_TRANSPORT=v3|mcp`

@@ -83,10 +83,10 @@ function check(name, ok, detail) {
   });
 
   // ---- 2: loading screen with a percentage (in-page MutationObserver) ------
-  await page.goto(BASE + '/', { waitUntil: 'networkidle', timeout: 60000 });
+  await page.goto(BASE + '/draft', { waitUntil: 'networkidle', timeout: 60000 });
   const percentSamples = await page.evaluate(() => window.__pctLog || []);
 
-  check('dashboard renders (signed in, no redirect to /sign-in)', !page.url().includes('sign-in'), page.url());
+  check('the Draft workspace renders (signed in, no redirect to /sign-in)', !page.url().includes('sign-in'), page.url());
   check('hairline top bar showed a live percentage while panels loaded', percentSamples.length > 0, 'samples: ' + percentSamples.join(','));
   const bootOverlays = await page.evaluate(() => window.__overlayLog || []);
   check('sign-in/boot never raised a full-screen loading overlay', !bootOverlays.includes('full-screen'), bootOverlays.join(','));
@@ -94,26 +94,24 @@ function check(name, ok, detail) {
   check('percentage stayed sane (0-100) and progressed', percentSamples.every((p) => p >= 0 && p <= 100) && (percentSamples.length < 2 || percentSamples[percentSamples.length - 1] >= percentSamples[0]), percentSamples.join(','));
 
   const body = await page.evaluate(() => document.body.innerText);
-  // ---- 1: every panel present, fed by the API -----------------------------
+  // ---- 1: every creation panel present on /draft, fed by the API -----------
   for (const [name, needle] of [
     ['AI Image Studio panel', 'AI Image Studio'],
-    ['Autopilot queue panel', 'Autopilot'],
     ['Content Generator panel', 'Content Generator'],
     ['Publishing panel', 'Publishing'],
     ['Recent Drafts library', 'Recent Drafts'],
-    ['Autopilot run card shows the researched angle', 'stem cell therapy for knees'],
-    ['Autopilot run card shows its quality score', '84/100'],
     ['drafts from the API render in the library', 'Exosome therapy for joint recovery'],
   ]) check(name, body.includes(needle));
+  check('the Draft page carries no Autopilot queue or SEO panel (those live on the overview)', !/Run engine now/.test(body) && !/Semrush Intelligence/.test(body));
 
   // Panels must follow the workflow order — now READING order, because they sit
   // two across: down the rows, and left to right within a row. The old check
   // demanded a strictly increasing top edge, which only held while every panel
   // had a row to itself; it earned its keep the moment the layout changed, by
   // catching a dense-packed grid that had pulled Autopilot up ahead of
-  // Publishing.
+  // Publishing. (Autopilot now lives on the overview, so it is not in this list.)
   const order = await page.evaluate(() => {
-    const ids = ['section-create', 'section-images', 'section-repurpose', 'section-publish', 'section-autopilot', 'section-library'];
+    const ids = ['section-create', 'section-images', 'section-repurpose', 'section-publish', 'section-library'];
     const boxes = ids.map((id) => {
       const el = document.getElementById(id);
       if (!el) return null;
@@ -124,13 +122,30 @@ function check(name, ok, detail) {
     const reading = [...boxes].sort((a, b) => (a.top - b.top) || (a.left - b.left)).map((b) => b.id);
     return { ok: reading.join(',') === ids.join(','), seen: reading.join(','), rows: boxes.map((b) => b.id + '@' + b.top + ',' + b.left).join(' ') };
   });
-  check('panels read in workflow order: Create → Images → Repurpose → Schedule → Autopilot → Library', order.ok, order.seen + '  [' + (order.rows || '') + ']');
+  check('panels read in workflow order: Create → Images → Repurpose → Schedule → Library', order.ok, order.seen + '  [' + (order.rows || '') + ']');
 
-  const statOk = await page.evaluate(() => {
+  // The overview (/) keeps the stats, the queue, Autopilot and SEO — and no composer.
+  const overviewPage = await ctx.newPage();
+  await overviewPage.goto(BASE + '/', { waitUntil: 'networkidle', timeout: 60000 });
+  const overview = await overviewPage.evaluate(() => {
     const t = document.body.innerText;
-    return /Drafts/.test(t) && /Scheduled posts/.test(t);
+    const buttons = [...document.querySelectorAll('button')].map((b) => b.innerText.trim());
+    return {
+      stats: /Drafts/.test(t) && /Scheduled posts/.test(t),
+      autopilot: /Autopilot/.test(t) && /stem cell therapy for knees/.test(t) && /84\/100/.test(t),
+      autopilotButtons: buttons.includes('Approve & schedule') && buttons.includes('Approve as draft'),
+      composer: Boolean(document.getElementById('composer-text')),
+      queueApprove: buttons.includes('Approve'),
+      draftLink: [...document.querySelectorAll('a')].some((a) => a.getAttribute('href') === '/draft'),
+      text: t,
+    };
   });
-  check('stat cards render from /api/stats', statOk);
+  check('stat cards render from /api/stats on the overview', overview.stats);
+  check('the overview shows the Autopilot queue with its researched angle and score', overview.autopilot);
+  check('the Autopilot card offers Approve & schedule alongside Approve as draft', overview.autopilotButtons);
+  check('the overview keeps the approval queue but has no composer', overview.queueApprove && !overview.composer);
+  check('the sidebar links to Draft', overview.draftLink);
+  await overviewPage.close();
 
   // The reviewer's yes lives on the dashboard now. A post waiting for review
   // must show Approve and Publish now; the Autopilot card must offer
@@ -141,19 +156,18 @@ function check(name, ok, detail) {
     return {
       approve: buttons.includes('Approve'),
       publishNow: buttons.includes('Publish now'),
-      autopilot: buttons.includes('Approve & schedule') && buttons.includes('Approve as draft'),
       oldCopy: /approval yourself inside Metricool|approve it there to publish/i.test(t),
     };
   });
-  check('a post waiting for review offers Approve on the dashboard', approveUi.approve);
+  check('a post waiting for review offers Approve', approveUi.approve);
   check('and Publish now', approveUi.publishNow);
-  check('the Autopilot card offers Approve & schedule alongside Approve as draft', approveUi.autopilot);
   check('nothing on screen still sends the reviewer into Metricool to approve', !approveUi.oldCopy);
 
   // ---- 3: content-image verification badges -------------------------------
   check('✓ verified badge on machine-verified text-free images', body.includes('✓ verified') || body.includes('verified'));
-  const redBadge = body.includes('✗ text');
-  check('red ✗ text badge on the text-flagged image (hard rule visible)', redBadge);
+  // The flagged image sits on an Autopilot run, which lives on the overview.
+  const redBadge = overview.text.includes('✗ text');
+  check('red ✗ text badge on the text-flagged image (hard rule visible in the Autopilot queue)', redBadge);
   const galleryImgs = await page.evaluate(() => Array.from(document.querySelectorAll('img')).filter((i) => i.src.includes('content-images')).length);
   check('Image Studio gallery renders stored images', galleryImgs >= 2, galleryImgs + ' imgs');
 
@@ -232,7 +246,8 @@ function check(name, ok, detail) {
 
   // ---- 5: the other pages render ------------------------------------------
   for (const [path, needle] of [
-    ['/calendar', 'calendar'],
+    ['/calendar', 'Publishing list'],
+    ['/draft', 'Content Generator'],
     ['/templates', 'emplate'],
     ['/brand', 'Brand Brain'],
     ['/sources/calendar', 'Social Calendar'],
@@ -273,7 +288,7 @@ function check(name, ok, detail) {
   const useBtns = page.getByRole('button', { name: 'Use in post' });
   check('every video has a "Use in post" button', (await useBtns.count()) >= 2, String(await useBtns.count()));
   await useBtns.last().click();
-  await page.waitForURL(/\/(#section-publish)?$/, { timeout: 20000 });
+  await page.waitForURL(/\/draft(#section-publish)?$/, { timeout: 20000 });
   await page.waitForFunction(() => {
     const ta = document.getElementById('composer-text');
     return ta && /IV therapy guided by physicians/.test(ta.value);
@@ -284,8 +299,74 @@ function check(name, ok, detail) {
   await page.waitForFunction(() => /ALE02947\.jpg/.test(document.body.innerText), null, { timeout: 20000 });
   check('the Image Library shows the Drive photos', true);
 
+  // ---- 5d: Calendar / Publishing — the ordered list beside the month grid
+  await page.goto(BASE + '/calendar', { waitUntil: 'networkidle', timeout: 60000 });
+  await page.waitForFunction(() => /Scheduled: recovery stories/.test(document.body.innerText), null, { timeout: 20000 }).catch(() => undefined);
+  const pubList = await page.evaluate(() => {
+    const aside = document.getElementById('publishing-list');
+    const text = aside ? aside.innerText : '';
+    const items = Array.from(aside ? aside.querySelectorAll('li') : []).map((li) => li.innerText);
+    return { present: Boolean(aside), text, items };
+  });
+  check('the Calendar / Publishing page has the Publishing list beside the grid', pubList.present && /Publishing list/i.test(pubList.text), pubList.text.slice(0, 120));
+  check('the list is in date order: the post 2 days out comes before the one 4 days out', pubList.items.findIndex((t) => /exosome therapy explainer/.test(t)) < pubList.items.findIndex((t) => /recovery stories/.test(t)), pubList.items.join(' | ').slice(0, 300));
+  check('a post waiting for review shows its state and an Approve button in the list', /Waiting for approval/.test(pubList.text) && /Approve/.test(pubList.text), '');
+  check('every item offers +1 day and Delete', pubList.items.length >= 2 && pubList.items.every((t) => /\+1 day/.test(t) && /Delete/.test(t)), pubList.items.join(' | ').slice(0, 300));
+
+  // ---- 5e: Weekly planner — a Tuesday theme saved as a fresh-angle template
+  await page.goto(BASE + '/templates', { waitUntil: 'networkidle', timeout: 60000 });
+  await page.waitForFunction(() => /Weekly planner/.test(document.body.innerText), null, { timeout: 20000 });
+  const plannerBefore = await page.evaluate(() => document.body.innerText);
+  check('the existing Monday/Wednesday template appears under both days of the planner', /Weekly knees series|stem cell therapy for knees/.test(plannerBefore), '');
+  const addButtons = page.getByRole('button', { name: '+ Add theme' });
+  check('every weekday offers "+ Add theme"', (await addButtons.count()) === 7, String(await addButtons.count()));
+  await addButtons.nth(1).click(); // Tuesday
+  await page.fill('#planner-topic', 'Patient questions about recovery time');
+  const tplPosts = page.waitForResponse((r) => r.url().includes('/api/templates') && r.request().method() === 'POST', { timeout: 20000 });
+  await page.getByRole('button', { name: 'Save slot' }).click();
+  const tplRes = await tplPosts;
+  const tplReq = JSON.parse(tplRes.request().postData() || '{}');
+  check('saving a Tuesday theme creates a template on weekday 2 with a fixed topic and a fresh angle each time', tplRes.ok() && tplReq.weekdays && tplReq.weekdays.join() === '2' && tplReq.strategy?.mode === 'fixed_topic' && tplReq.strategy?.topic === 'Patient questions about recovery time' && /^Tuesday · /.test(tplReq.name), JSON.stringify(tplReq).slice(0, 300));
+  await page.waitForFunction(() => /Patient questions about recovery time/.test(document.body.innerText), null, { timeout: 20000 });
+  const tueSlot = await page.evaluate(() => Array.from(document.querySelectorAll('section')).map((s) => s.innerText).find((t) => /Weekly planner/.test(t)) || '');
+  check('the new slot shows in the planner as "fresh angle weekly"', /Patient questions about recovery time[\s\S]*fresh angle weekly/.test(tueSlot), '');
+  // The save announces a refresh; let the follow-up reload land before leaving the page.
+  await page.waitForTimeout(1500);
+  await page.waitForLoadState('networkidle').catch(() => undefined);
+
+  // ---- 5f: Video Library → Prepare: transcript → keywords → copy → Metricool
+  await page.goto(BASE + '/sources/videos', { waitUntil: 'networkidle', timeout: 60000 });
+  await page.waitForFunction(() => /How Our Medical Evaluation Process Works/.test(document.body.innerText), null, { timeout: 20000 });
+  const prepBtns = page.locator('table').getByRole('button', { name: 'Prepare', exact: true });
+  check('a video with a YouTube link offers Prepare (the Drive-only one does not)', (await prepBtns.count()) === 1, String(await prepBtns.count()));
+  await prepBtns.first().click();
+  await page.waitForFunction(() => (document.getElementById('video-url') || {}).value === 'https://www.youtube.com/watch?v=capt0000001', null, { timeout: 10000 });
+  const prepRes = page.waitForResponse((r) => r.url().includes('/api/videos/prepare'), { timeout: 60000 });
+  await page.locator('#video-prepare').getByRole('button', { name: 'Prepare' }).click();
+  check('Prepare calls the pipeline and succeeds', (await prepRes).ok(), String((await prepRes).status()));
+  await page.waitForFunction(() => /Transcript · YouTube captions/.test(document.body.innerText), null, { timeout: 20000 });
+  const prepUi = await page.evaluate(() => ({
+    text: document.getElementById('video-prepare').innerText,
+    linkedin: (document.getElementById('video-linkedin') || {}).value || '',
+    tiktok: (document.getElementById('video-tiktok') || {}).value || '',
+  }));
+  check('the badges show transcript source, keyword source and citation status', /Transcript · YouTube captions · en/.test(prepUi.text) && /Keywords/.test(prepUi.text) && /itation/.test(prepUi.text), prepUi.text.slice(0, 300));
+  check('the LinkedIn copy is editable and ends with the video link', /Watch: https:\/\/www\.youtube\.com\/watch\?v=capt0000001/.test(prepUi.linkedin), prepUi.linkedin.slice(-80));
+  check('the TikTok caption carries REF + AVISO', /REF:/.test(prepUi.tiktok) && /AVISO DE PUBLICIDAD/.test(prepUi.tiktok), prepUi.tiktok.slice(0, 200));
+  await page.fill('#video-linkedin', prepUi.linkedin.replace('In our latest video', 'In this week\'s video'));
+  const sendRes = page.waitForResponse((r) => r.url().includes('/api/metricool/schedule'), { timeout: 30000 });
+  await page.getByRole('button', { name: 'Send LinkedIn to Metricool for review' }).click();
+  const sendR = await sendRes;
+  await sendR.finished().catch(() => undefined);
+  const sendReq = JSON.parse(sendR.request().postData() || '{}');
+  check('the edited LinkedIn text is what goes to Metricool, as LinkedIn, for review', sendR.ok() && sendReq.network === 'linkedin' && /In this week's video/.test(sendReq.text), String(sendR.status()) + ' ' + JSON.stringify(sendReq).slice(0, 200));
+  await page.waitForFunction(() => Boolean(document.querySelector('#video-prepare [role="status"]')), null, { timeout: 10000 }).catch(() => undefined);
+  const sentMsg = await page.evaluate(() => (document.querySelector('#video-prepare [role="status"]') || {}).innerText || '');
+  check('and the page confirms it is in the queue waiting for Approve', /press Approve/.test(sentMsg), sentMsg);
+  await page.waitForLoadState('networkidle').catch(() => undefined);
+
   // ---- 5c: the composer states the advertising rule for Instagram/Facebook
-  await page.goto(BASE + '/', { waitUntil: 'networkidle', timeout: 60000 });
+  await page.goto(BASE + '/draft', { waitUntil: 'networkidle', timeout: 60000 });
   await page.fill('#composer-text', 'A caption with neither line.');
   await page.waitForFunction(() => /must carry two lines/.test(document.body.innerText), null, { timeout: 15000 });
   const ruleText = await page.evaluate(() => document.body.innerText);

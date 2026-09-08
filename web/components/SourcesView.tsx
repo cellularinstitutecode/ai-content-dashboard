@@ -14,14 +14,16 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import type { Route } from 'next';
 import PageNav from '@/components/PageNav';
 import { useWorkspace } from '@/components/workspace';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
+import VideoPrepare from '@/components/VideoPrepare';
 
 export type Tab = 'calendar' | 'videos' | 'images';
 
 type CalendarEntry = { tab: string; row: number; headerRow: number; columns: Record<string, string>; date: string | null; type: string; pillar: string; owner: string; cta: string; caption: string; fileName: string; graphicsLink: string; status: string; networks: string[] };
-type VideoEntry = { tab: string; row: number; headerRow: number; columns: Record<string, string>; creator: string; month: string; type: string; title: string; copy: string; videoLink: string; format: string; networks: string[]; thumbnailTitle: string; coverLink: string; notes: string };
+type VideoEntry = { tab: string; row: number; headerRow: number; columns: Record<string, string>; creator: string; month: string; type: string; title: string; copy: string; videoLink: string; youtubeLink?: string; format: string; networks: string[]; thumbnailTitle: string; coverLink: string; notes: string };
 type DriveImage = { id: string; name: string; mimeType: string; modifiedTime: string; size: number | null; viewUrl: string; thumbUrl: string };
 type Status = { configured: boolean; serviceAccount: string | null; ids: { calendar: string; videos: string; images: string } };
 
@@ -267,6 +269,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [q, setQ] = useState('');
+  const [prepareUrl, setPrepareUrl] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     fetch('/api/sources?kind=status').then((r) => (r.ok ? r.json() : null)).then((j) => j && setStatus(j)).catch(() => undefined);
@@ -291,9 +294,23 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     }
   }
 
+  function firstLink(v: VideoEntry): string {
+    return (v.videoLink || '').split(/\s+/).find((x) => /^https?:/.test(x)) || v.videoLink || '';
+  }
+  function youtubeOf(v: VideoEntry): string {
+    const l = v.youtubeLink || firstLink(v);
+    return /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(l) ? l : '';
+  }
+  function prepare(v: VideoEntry) {
+    const link = youtubeOf(v);
+    if (!link) return;
+    setPrepareUrl(link);
+    setTimeout(() => document.getElementById('video-prepare')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  }
+
   function handoff(text: string, media: string, mediaLabel: string) {
     workspace.patch({ handoffText: text, handoffMedia: media, handoffMediaLabel: mediaLabel, handoffNonce: Date.now() });
-    router.push('/#section-publish');
+    router.push('/draft#section-publish' as Route);
   }
 
   async function importImage(img: DriveImage) {
@@ -450,6 +467,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
 
         {tab === 'videos' && (
           <div style={{ display: 'grid', gap: 20 }}>
+            <VideoPrepare initialUrl={prepareUrl} />
             <section style={{ ...card, padding: 0, overflow: 'hidden' }}>
               {ids && <SheetFrame id={ids.videos} title="Distribución RRSS CHI" height={sheetHeight - 60} />}
             </section>
@@ -485,8 +503,11 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                             <td style={{ padding: '8px' }}><div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>{v.networks.map((n) => <span key={n} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 999, background: '#eef3ff', color: '#1d4ed8' }}>{n}</span>)}</div></td>
                             <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>{v.creator || '—'}</td>
                             <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>
-                              <div style={{ display: 'flex', gap: 6 }}>
-                                <button type="button" style={btn} onClick={() => handoff([v.copy || v.title, v.videoLink ? 'Watch: ' + (v.videoLink.split(/\s+/).find((x) => /^https?:/.test(x)) || v.videoLink) : ''].filter(Boolean).join('\n\n'), '', '')}>Use in post</button>
+                              <div style={{ display: 'grid', gap: 6 }}>
+                                {youtubeOf(v) && (
+                                  <button type="button" style={btn} onClick={() => prepare(v)} title="Transcript → keywords → LinkedIn + TikTok copy">Prepare</button>
+                                )}
+                                <button type="button" style={ghost} onClick={() => handoff([v.copy || v.title, v.videoLink ? 'Watch: ' + firstLink(v) : ''].filter(Boolean).join('\n\n'), '', '')}>Use in post</button>
                                 <button type="button" style={{ ...ghost, padding: '5px 10px' }} onClick={() => setEditing(editing === v.tab + ':' + v.row ? null : v.tab + ':' + v.row)}>
                                   {editing === v.tab + ':' + v.row ? 'Close' : 'Edit'}
                                 </button>

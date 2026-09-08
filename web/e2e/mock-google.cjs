@@ -69,8 +69,10 @@ function seed() {
           // title, and 'Unlisted' (an OBSERVACIÓN) landed in YOUTUBE and was
           // read as a network. The flags really are Google's TRUE/FALSE
           // checkboxes, so FALSE has to be here or nothing tests that FALSE
-          // means no.
-          ['Rodrigo', 'Feb.', '', 'Your Journey Begins Here', 'How Our Medical Evaluation Process Works | Cellular Institute Cancun', 'https://drive.google.com/file/d/1FXHc/view', 'Horizontal 16:9', 'TRUE', 'FALSE', '', '', '', '', 'FALSE', 'Unlisted', "you're in! here's what happens next", 'https://drive.google.com/file/d/1ZHf/view'],
+          // means no. The first row's YOUTUBE cell holds the published link
+          // instead of TRUE — the sheet does that too once a video is up — so
+          // it must still read as "on YouTube" AND offer Prepare.
+          ['Rodrigo', 'Feb.', '', 'Your Journey Begins Here', 'How Our Medical Evaluation Process Works | Cellular Institute Cancun', 'https://drive.google.com/file/d/1FXHc/view', 'Horizontal 16:9', 'https://www.youtube.com/watch?v=capt0000001', 'FALSE', '', '', '', '', 'FALSE', 'Unlisted', "you're in! here's what happens next", 'https://drive.google.com/file/d/1ZHf/view'],
           ['Milán', 'Feb.', '', 'IV Therapy', 'IV therapy guided by physicians in Cancun within a structured clinical environment.', '1. https://drive.google.com/file/d/1Mhg/view 2. https://drive.google.com/file/d/1Hdf/view', 'Vertical 9:16', 'TRUE', 'FALSE', 'TRUE', 'FALSE', 'TRUE', 'TRUE', 'FALSE', '', '', ''],
         ] },
       ],
@@ -88,6 +90,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 
 let docs = seed();
 let unshared = new Set();
+let anthropicFailNext = 0; // POST /__anthropic_fail {"n"}: the next n writer calls answer 500
 
 async function body(req) { let raw = ''; for await (const c of req) raw += c; try { return raw ? JSON.parse(raw) : null; } catch { return null; } }
 function send(res, status, obj, type = 'application/json') { res.writeHead(status, { 'content-type': type }); res.end(typeof obj === 'string' || Buffer.isBuffer(obj) ? obj : JSON.stringify(obj)); }
@@ -128,8 +131,46 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
 
   if (p === '/__state') return send(res, 200, docs);
-  if (p === '/__reset') { docs = seed(); unshared = new Set(); return send(res, 200, { ok: true }); }
+  if (p === '/__reset') { docs = seed(); unshared = new Set(); anthropicFailNext = 0; return send(res, 200, { ok: true }); }
+  if (p === '/__anthropic_fail') { const b = await body(req); anthropicFailNext = Number(b?.n || 0); return send(res, 200, { ok: true }); }
   if (p === '/__unshare') { const b = await body(req); if (b?.id) unshared.add(b.id); return send(res, 200, { ok: true }); }
+
+  // YouTube stand-in (no auth): YOUTUBE_BASE=http://127.0.0.1:54325/yt
+  // /yt/watch?v=capt0000001 has an uploaded English track; v=auto0000001 only an
+  // auto-generated one; v=nocap000001 none; anything else is a 404 page.
+  if (p === '/yt/watch') {
+    const v = url.searchParams.get('v') || '';
+    const head = (title) => '<html><script>var ytInitialPlayerResponse = {"videoDetails":{"videoId":"' + v + '","title":"' + title + '","lengthSeconds":"93"},';
+    if (v === 'capt0000001') return send(res, 200, head('Stem cells and knee pain: what the evidence says') + '"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"baseUrl":"http://127.0.0.1:54325/yt/api/timedtext?v=capt0000001\\u0026lang=en","languageCode":"en","name":{"simpleText":"English"}}]}}};</script></html>', 'text/html');
+    if (v === 'auto0000001') return send(res, 200, head('Auto captions only') + '"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"baseUrl":"http://127.0.0.1:54325/yt/api/timedtext?v=auto0000001\\u0026lang=es","languageCode":"es","kind":"asr","name":{"simpleText":"Spanish (auto-generated)"}}]}}};</script></html>', 'text/html');
+    if (v === 'nocap000001') return send(res, 200, head('A video without captions') + '"playabilityStatus":{"status":"OK"}};</script></html>', 'text/html');
+    return send(res, 404, '<html>not found</html>', 'text/html');
+  }
+  if (p === '/yt/api/timedtext') {
+    const v = url.searchParams.get('v') || '';
+    const lines = v === 'auto0000001'
+      ? ['hola y bienvenidos a la clínica', 'hoy hablamos de terapia celular para rodilla', 'consulta siempre con tu médico antes de decidir']
+      : ['Welcome to Cellular Institute.', 'Today we look at what published studies say about stem cell therapy for knee osteoarthritis,', 'including a 2021 review that found improvements in pain scores at twelve months.', 'Always talk to your doctor before choosing a treatment.'];
+    return send(res, 200, { events: lines.map((t, i) => ({ tStartMs: i * 3000, dDurationMs: 2900, segs: [{ utf8: t }] })) });
+  }
+
+  // Anthropic stand-in (no auth check): ANTHROPIC_API_BASE=http://127.0.0.1:54325/anthropic
+  // Returns a compliant social pack whose REF line carries a DOI Crossref
+  // (above) knows, so the whole write → cite → AVISO path runs offline.
+  if (p === '/anthropic/v1/messages' && req.method === 'POST') {
+    const b = await body(req);
+    if (anthropicFailNext > 0) { anthropicFailNext--; return send(res, 500, { type: 'error', error: { type: 'api_error', message: 'mock: writer down' } }); }
+    const user = String(b?.messages?.[0]?.content || '');
+    const fromVideo = /TRANSCRIPT:/.test(user);
+    const ref = 'REF: Rogeri PS et al. (2021) Nutrients 14(1):52. DOI: 10.3390/nu14010052';
+    const pack = {
+      instagram: (fromVideo ? 'New video: what the evidence says about stem cell therapy for knee pain. ' : 'Mock Instagram caption. ') + '#stemcells #kneepain\n' + ref,
+      facebook: (fromVideo ? 'We sat down to go through the published studies on knee osteoarthritis and cell therapy. ' : 'Mock Facebook post. ') + ref,
+      linkedin: (fromVideo ? 'In our latest video we walk through what peer-reviewed studies report on stem cell therapy for knee osteoarthritis — including pain-score improvements at twelve months — and why the conversation always starts with your doctor.' : 'Mock LinkedIn post.') + '\n' + ref,
+      blog: '',
+    };
+    return send(res, 200, { id: 'msg_mock', type: 'message', role: 'assistant', model: b?.model || 'mock', content: [{ type: 'text', text: JSON.stringify(pack) }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } });
+  }
 
   // Crossref stand-in (no auth).
   if (p.startsWith('/crossref/works/')) {

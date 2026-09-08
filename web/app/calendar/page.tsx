@@ -345,17 +345,48 @@ export default function CalendarPage() {
   // Empty until mount, so the server-rendered grid never marks a stale day.
   const todayKey = mounted ? dateKey(today) : '';
 
+  // Everything from today onward, soonest first — the right-hand list.
+  const upcomingList = useMemo(() => {
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    return posts
+      .filter((p) => p.publication_date && new Date(p.publication_date).getTime() >= start.getTime())
+      .sort((a, b) => new Date(a.publication_date || 0).getTime() - new Date(b.publication_date || 0).getTime());
+  }, [posts]);
+
+  function jumpTo(p: Post) {
+    if (!p.publication_date) return;
+    const d = new Date(p.publication_date);
+    setCursor({ year: d.getFullYear(), month: d.getMonth() });
+  }
+
+  async function removePost(p: Post) {
+    if (!p.id) return;
+    if (!window.confirm('Delete this post? It is removed from Metricool too. This cannot be undone.')) return;
+    setSaving(p.id);
+    try {
+      const r = await fetch('/api/posts?id=' + encodeURIComponent(p.id), { method: 'DELETE' });
+      if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'We could not delete that post.'));
+      await refresh();
+      announce('posts', 'stats', 'insights');
+    } catch (e: any) {
+      setErr(friendlyError(e, 'We could not delete that post.'));
+    } finally {
+      setSaving(null);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-canvas text-ink">
       <header className="flex items-center justify-between border-b border-black/5 bg-surface px-8 py-5">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Content Calendar</h1>
-          <p className="mt-1 text-sm text-ink/50">Click a day to schedule a post, or drag a post to another day to reschedule it. All times {scheduleTzLabel()} time.</p>
+          <h1 className="text-xl font-semibold tracking-tight">Calendar / Publishing</h1>
+          <p className="mt-1 text-sm text-ink/50">The month on the left, everything coming up in order on the right. Click a day to schedule a post, or drag a post to another day. All times {scheduleTzLabel()} time.</p>
         </div>
         <PageNav current="/calendar" />
       </header>
 
-      <div className="mx-auto max-w-[1100px] px-6 py-8">
+      <div className="mx-auto grid max-w-[1500px] gap-6 px-6 py-8 lg:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="min-w-0">
         <div className="mb-5 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <button onClick={prevMonth} className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5">&lsaquo; Prev</button>
@@ -443,6 +474,48 @@ export default function CalendarPage() {
         {!loading && posts.length === 0 && (
           <p className="mt-6 text-sm text-ink/50">No scheduled posts yet. Click any day above to schedule one.</p>
         )}
+      </div>
+
+      {/* Publishing list: every upcoming post in date order, with the same
+          actions as the calendar. Clicking one jumps the grid to its month. */}
+      <aside id="publishing-list" className="min-w-0">
+        <div className="sticky top-6 rounded-2xl border border-black/5 bg-surface p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-[13px] font-semibold uppercase tracking-wide text-ink/60">Publishing list</h2>
+            <span className="text-xs text-ink/40">{upcomingList.length} coming up</span>
+          </div>
+          {loading && posts.length === 0 ? (
+            <p className="text-sm text-ink/50">Loading…</p>
+          ) : upcomingList.length === 0 ? (
+            <p className="text-sm text-ink/50">Nothing scheduled from today onward. Write a post under Draft, or click a day on the calendar.</p>
+          ) : (
+            <ol className="max-h-[70vh] space-y-2 overflow-y-auto pr-1">
+              {upcomingList.map((p) => {
+                const waiting = isAwaitingApproval(p.status);
+                const d = p.publication_date ? new Date(p.publication_date) : null;
+                return (
+                  <li key={p.id} className={'rounded-xl border p-3 text-[12px] ' + (waiting ? 'border-amber-200 bg-amber-50/60' : 'border-black/5 bg-canvas')}>
+                    <button type="button" onClick={() => jumpTo(p)} className="flex w-full items-center justify-between gap-2 text-left">
+                      <span className="font-semibold text-ink">{d ? d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : '—'} · {timeLabel(p.publication_date)}</span>
+                      <span className={'rounded-full px-2 py-[2px] text-[10px] font-semibold ' + (waiting ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800')}>{waiting ? 'Waiting for approval' : statusWord(p.status)}</span>
+                    </button>
+                    <div className="mt-1 line-clamp-2 text-ink/80" title={p.text || ''}>{p.text || 'Untitled post'}</div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      {(p.providers || []).map((n) => <span key={n} className="rounded-full bg-black/5 px-2 py-[1px] text-[10px] text-ink/60">{networkLabel(n)}</span>)}
+                      <span className="flex-1" />
+                      {waiting && (
+                        <button type="button" disabled={saving === p.id} onClick={() => void approve(p)} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Approve</button>
+                      )}
+                      <button type="button" disabled={saving === p.id} onClick={() => { const day = d ? new Date(d.getTime() + 86400000) : null; if (day) void reschedule(String(p.id), day); }} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/60 hover:bg-black/5" title="Move one day later">+1 day</button>
+                      <button type="button" disabled={saving === p.id} onClick={() => void removePost(p)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-red-600 hover:bg-red-50">Delete</button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </div>
+      </aside>
       </div>
 
       {scheduleDay && (

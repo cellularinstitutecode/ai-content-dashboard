@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import PageNav from '@/components/PageNav';
+import WeeklyPlanner, { type PlannerTemplate } from '@/components/WeeklyPlanner';
 import { announce, onRefresh } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
 
@@ -216,6 +217,29 @@ export default function TemplatesPage() {
     }
   }
 
+  // The weekly planner saves straight through the same route as the form.
+  async function savePlanned(t: PlannerTemplate) {
+    await api('/api/templates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(t) });
+    setStatus('Weekly slot saved — Autopilot will draft each occurrence ahead of time.');
+    await load();
+    announce('templates', 'autopilot');
+  }
+  async function togglePlanned(t: PlannerTemplate, active: boolean) {
+    await api('/api/templates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...t, active }) });
+    await load();
+    announce('templates', 'autopilot');
+  }
+  async function removePlanned(id: string) {
+    setErr(null);
+    try {
+      await api('/api/templates?id=' + encodeURIComponent(id), { method: 'DELETE' });
+      await load();
+      announce('templates', 'autopilot');
+    } catch (e) {
+      setErr(errMsg(e));
+    }
+  }
+
   async function remove(id?: string) {
     if (!id) return;
     const t = templates.find((x) => x.id === id);
@@ -269,15 +293,17 @@ export default function TemplatesPage() {
     <main style={{ minHeight: '100vh', background: '#f5f5f7', color: '#1d1d1f', fontFamily: '-apple-system,Segoe UI,sans-serif' }}>
       <header style={{ padding: '20px 32px', borderBottom: '1px solid rgba(0,0,0,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 22 }}>Schedule Templates</h1>
-          <div style={{ fontSize: 13, opacity: .6, marginTop: 4 }}>Reusable weekly posting cadences. Apply one to generate upcoming scheduled posts.</div>
+          <h1 style={{ margin: 0, fontSize: 22 }}>Templates</h1>
+          <div style={{ fontSize: 13, opacity: .6, marginTop: 4 }}>Plan the week by theme; Autopilot writes each occurrence fresh and waits for your approval. The classic template form is below.</div>
         </div>
         <PageNav current="/templates" />
       </header>
 
-      <div style={{ maxWidth: 900, margin: '0 auto', padding: 24, display: 'grid', gap: 24 }}>
+      <div style={{ maxWidth: 1200, margin: '0 auto', padding: 24, display: 'grid', gap: 24 }}>
         {err && <div role="alert" aria-live="assertive" style={{ color: '#d70015', fontSize: 14 }}>Error: {err}</div>}
         {status && <div role="status" aria-live="polite" style={{ color: '#248a3d', fontSize: 14 }}>{status}</div>}
+
+        <WeeklyPlanner templates={templates as PlannerTemplate[]} onSave={savePlanned} onDelete={removePlanned} onToggle={togglePlanned} />
 
         <section style={card}>
           <h2 style={{ marginTop: 0, marginBottom: 20, fontSize: 17 }}>New template</h2>

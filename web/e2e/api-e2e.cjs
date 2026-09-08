@@ -306,6 +306,8 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   // so nothing ever surfaced as "Needs attention". The attempt is now claimed
   // BEFORE the step runs. This test pins the observable half of that: after a
   // tick in which a step fails, the run must carry the attempt.
+  // The writer (mock Anthropic, e2e/mock-google.cjs) is told to fail its next calls so the draft step breaks.
+  await fetch('http://127.0.0.1:54325/__anthropic_fail', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ n: 3 }) });
   const dueAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
   await fetch(SB + '/rest/v1/template_runs', {
     method: 'POST',
@@ -330,6 +332,7 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   check('and the reason is written into the run log a human can read',
     Boolean(dueRun) && Array.isArray(dueRun.log) && dueRun.log.some((l) => l && l.step === 'error'),
     dueRun && JSON.stringify((dueRun.log || []).map((l) => l && l.step)));
+  await fetch('http://127.0.0.1:54325/__anthropic_fail', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ n: 0 }) });
 
   // ------------------------------------------------------- cron still guarded -
   const noAuth = await fetch(BASE + '/api/autopilot/tick');
@@ -623,6 +626,42 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   check('and it carries the service-account field for the UI to name',
     'serviceAccount' in (unsharedBody || {}), JSON.stringify(Object.keys(unsharedBody || {})));
   await fetch(G + '/__reset', { method: 'POST' });
+
+  // ------------------------------------------------- Video Library → Prepare
+  // A YouTube link becomes a LinkedIn post + TikTok caption from the video's
+  // own captions (mock YouTube), through the keyword brief (mock Semrush) and
+  // the writer (mock Anthropic), cited (mock Crossref) and stamped with AVISO.
+  const prep = (b) => app('/api/videos/prepare', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) });
+  const badUrl = await prep({ url: 'https://vimeo.com/12345' });
+  check('a non-YouTube link is refused (400)', badUrl.status === 400 && (await jsonOf(badUrl))?.error === 'invalid_url', String(badUrl.status));
+  const noCap = await prep({ url: 'https://www.youtube.com/watch?v=nocap000001' });
+  const noCapBody = await jsonOf(noCap);
+  check('a video without captions asks for a pasted transcript (422), naming the video', noCap.status === 422 && noCapBody?.error === 'no_transcript' && noCapBody?.reason === 'no_captions' && /without captions/.test(noCapBody?.title || ''), String(noCap.status) + ' ' + JSON.stringify(noCapBody));
+  const goneVid = await prep({ url: 'https://youtu.be/gone0000001' });
+  check('a video YouTube does not know is reported as unavailable, not as a crash', goneVid.status === 422 && (await jsonOf(goneVid))?.reason === 'unavailable', String(goneVid.status));
+  const shortT = await prep({ url: 'https://www.youtube.com/watch?v=nocap000001', transcript: 'too short' });
+  check('a pasted transcript that is too short is refused', shortT.status === 422 && (await jsonOf(shortT))?.error === 'transcript_too_short', String(shortT.status));
+  const draftsBefore = ((await (await fetch(SB + '/rest/v1/drafts?select=id', { headers: { apikey: 'x' } })).json()) || []).length;
+  const ok = await prep({ url: 'https://www.youtube.com/watch?v=capt0000001' });
+  const okBody = await jsonOf(ok);
+  check('a captioned video is transcribed from YouTube and written up', ok.ok && okBody?.ok === true && okBody.transcript?.source === 'youtube' && okBody.transcript?.language === 'en' && okBody.transcript?.chars > 100, String(ok.status) + ' ' + JSON.stringify(okBody).slice(0, 300));
+  check("the title comes from YouTube's own page", /knee pain/i.test(okBody?.title || ''), JSON.stringify(okBody?.title));
+  check('the LinkedIn post is written from the transcript and ends with the video link', /twelve months|knee/i.test(okBody?.linkedin || '') && /Watch: https:\/\/www\.youtube\.com\/watch\?v=capt0000001$/.test(okBody?.linkedin || ''), JSON.stringify(okBody?.linkedin));
+  check('the TikTok caption carries the REF citation and the AVISO line', /REF: .*DOI: 10\.3390/.test(okBody?.tiktok || '') && /AVISO DE PUBLICIDAD: \d/.test(okBody?.tiktok || ''), JSON.stringify(okBody?.tiktok));
+  check('the citation was verified against Crossref', okBody?.compliance?.citation?.status === 'verified', JSON.stringify(okBody?.compliance?.citation));
+  check('the keyword brief ran over Semrush', okBody?.keywords?.checked === true && okBody.keywords.source === 'semrush' && okBody.keywords.primary, JSON.stringify(okBody?.keywords).slice(0, 200));
+  const draftsAfter = (await (await fetch(SB + '/rest/v1/drafts?select=id,topic,channels,pack', { headers: { apikey: 'x' } })).json()) || [];
+  const vDraft = draftsAfter.find((d) => d.id === okBody?.draftId);
+  check('and it was saved as a video draft for LinkedIn + TikTok', draftsAfter.length === draftsBefore + 1 && vDraft && vDraft.pack?.kind === 'video' && vDraft.pack?.videoId === 'capt0000001' && /^Video · /.test(vDraft.topic) && vDraft.channels.includes('tiktok'), JSON.stringify({ before: draftsBefore, after: draftsAfter.length, topic: vDraft?.topic }));
+  const autoCap = await prep({ url: 'https://www.youtube.com/watch?v=auto0000001' });
+  const autoBody = await jsonOf(autoCap);
+  check('an auto-generated Spanish track is used when it is all there is', autoCap.ok && autoBody?.transcript?.language === 'es', String(autoCap.status) + ' ' + JSON.stringify(autoBody?.transcript));
+  const pasted = await prep({ url: 'https://www.youtube.com/watch?v=nocap000001', title: 'Pasted talk', transcript: 'In this talk we explain how the clinic evaluates every patient before any cell therapy is considered, and what the published studies say about safety.' });
+  const pastedBody = await jsonOf(pasted);
+  check('a pasted transcript is accepted for a video without captions', pasted.ok && pastedBody?.transcript?.source === 'pasted' && pastedBody?.title === 'Pasted talk', String(pasted.status) + ' ' + JSON.stringify(pastedBody?.transcript));
+  // Send to Metricool for review — the same door the composer uses.
+  const sendLi = await app('/api/metricool/schedule', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ network: 'linkedin', text: okBody.linkedin, publishAt: new Date(Date.now() + 86400000).toISOString().slice(0, 16), draftId: okBody.draftId }) });
+  check('the LinkedIn copy goes to Metricool for review (draft, never auto-published)', sendLi.ok, String(sendLi.status) + ' ' + JSON.stringify(await jsonOf(sendLi)).slice(0, 200));
 
   // ------------------------------------------- the migration nobody ran -----
   // Every migration here is a .sql file a human is asked to paste into the
