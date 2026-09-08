@@ -101,6 +101,10 @@ let refuse = null;
 
 /** 'A' -> 0, 'Z' -> 25, 'AA' -> 26. */
 let uploadSeq = 0;
+// A pristine copy of the fixture so a suite can put the documents back exactly
+// as it found them — the API suite now EDITS these sheets, and the browser
+// suite that runs after it must not inherit those edits.
+const SEED = JSON.stringify({ docs, IMAGES });
 
 function colIndex(letters) {
   let n = 0;
@@ -149,6 +153,16 @@ const server = http.createServer(async (req, res) => {
     const b = await body(req);
     for (const r of b?.requests || []) if (r.addSheet) docs[id].tabs.push({ title: r.addSheet.properties.title, sheetId: 100 + docs[id].tabs.length, rows: [] });
     return send(res, 200, { replies: [] });
+  }
+  if (url.pathname === '/__reseed') {
+    const fresh = JSON.parse(SEED);
+    for (const k of Object.keys(docs)) delete docs[k];
+    Object.assign(docs, fresh.docs);
+    IMAGES.length = 0;
+    IMAGES.push(...fresh.IMAGES);
+    refuse = null;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ ok: true }));
   }
   // Multipart upload into the folder, the way "Add a photo" does it.
   if (p === '/upload/drive/v3/files' && req.method === 'POST') {

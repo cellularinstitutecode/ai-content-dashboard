@@ -28,6 +28,7 @@ function check(name, ok, detail) {
 }
 
 (async () => {
+
   const cookieValue = decodeURIComponent(
     fs.readFileSync('/tmp/cookie.txt', 'utf8').replace(/^sb-127-auth-token=/, '')
   );
@@ -233,6 +234,14 @@ function check(name, ok, detail) {
   await page.screenshot({ path: '/tmp/e2e-brand.png', fullPage: false });
 
   // ---- 5a: Sources reads the team's documents and hands a video to the composer
+  // Put the Google documents back to their seeded state first. The API suite
+  // EDITS those sheets now — that is the point of it — and this suite asserts
+  // on the seeded text. Reseeding the mock is not enough on its own: the route
+  // caches each read for a minute, so ask for each one fresh to clear it.
+  await fetch('http://127.0.0.1:54325/__reseed', { method: 'POST' }).catch(() => undefined);
+  for (const kind of ['calendar', 'videos', 'images']) {
+    await page.request.get(BASE + '/api/sources?kind=' + kind + '&fresh=1').catch(() => undefined);
+  }
   await page.goto(BASE + '/sources/calendar', { waitUntil: 'networkidle', timeout: 60000 });
   await page.waitForFunction(() => /Exosome therapy: what the evidence says/.test(document.body.innerText), null, { timeout: 20000 }).catch(() => undefined);
   const calText = await page.evaluate(() => document.body.innerText);

@@ -397,6 +397,33 @@ export async function readRowCells(
   return out;
 }
 
+/**
+ * Add a new row to a tab, placing each value in the column its field occupies.
+ *
+ * Appends after the last row that has anything in it, so a new post lands at
+ * the bottom of the task table rather than in the middle of somebody's month
+ * grid. Fields the tab has no column for are dropped rather than guessed at.
+ */
+export async function appendRow(
+  spreadsheetId: string,
+  tab: string,
+  columns: Record<string, string | undefined>,
+  values: Record<string, string>,
+): Promise<{ row: number }> {
+  const placed: { column: string; value: string }[] = [];
+  for (const [field, value] of Object.entries(values)) {
+    const col = columns[field];
+    if (col) placed.push({ column: col, value: String(value ?? '') });
+  }
+  if (!placed.length) throw new GoogleSourceError(400, 'nothing to write', 'unknown', 'None of those fields exist on this tab.');
+  const existing = await readTab(spreadsheetId, tab);
+  let last = 0;
+  existing.forEach((r, i) => { if (r && r.some((c) => String(c || '').trim())) last = i + 1; });
+  const row = last + 1;
+  await updateRowCells(spreadsheetId, tab, row, placed);
+  return { row };
+}
+
 export async function appendApproval(
   row: { approvedAt: string; publishDate: string; networks: string[]; caption: string; mediaUrl: string; source: string; postId: string },
   spreadsheetId = SOURCE_IDS.calendarSheet()
