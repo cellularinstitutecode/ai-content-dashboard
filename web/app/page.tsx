@@ -1129,7 +1129,7 @@ const nav = [
 
 return (
 <div className="glow min-h-screen bg-canvas text-ink">
-<div className="relative z-10 mx-auto flex max-w-[1400px] gap-8 px-6 py-8 lg:px-10">
+<div className="relative z-10 mx-auto flex max-w-[2100px] gap-8 px-6 py-8 lg:px-10">
 {/* Sidebar */}
 <aside className="hidden w-60 shrink-0 lg:block">
 <div className="sticky top-8">
@@ -1230,7 +1230,24 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 
 
 {/* Generator */}
-<section id="section-create" className="relative mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+{/* The panels, two across.
+    Stacked one-per-row they were 1048px wide inside a 1400px shell that threw
+    away 600px of a 2000px screen. Widened and paired they get ~770px each.
+    Two across only from 1536px up (2xl): at 1100px a two-column split
+    left each panel 358px, and the Content Generator splits in two again
+    inside itself, so its halves would have been ~170px. Below that the
+    panels stack full width — still wider than they were, because the shell
+    no longer throws away 600px.
+    Every panel takes one column, in DOM order, so the rows read
+    create | images, repurpose | publish, autopilot | library — the workflow
+    order the guide at the top promises, with no holes. Spanning the two
+    dense panels was the first attempt; it needed dense packing to avoid
+    gaps, and dense pulled Autopilot up ahead of Publishing, which a browser
+    check caught. Their inner grids hold at half width: Publishing's three
+    explainer cards land at ~250px and its channel chips at ~150px, and the
+    draft cards in Recent Drafts at ~250px. */}
+<div className="2xl:grid 2xl:grid-cols-2 2xl:items-start 2xl:gap-8">
+<section id="section-create" className="relative mb-8 2xl:mb-0 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
 <PanelLoader scope="create" />
 <div className="border-b border-line px-6 py-5 sm:px-8">
 <div className="flex items-center gap-2">
@@ -1396,6 +1413,7 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
     every content pack, so opening this is for making EXTRA visuals. */}
 <CollapsibleSection
   id="section-images"
+  className="2xl:mb-0"
   eyebrow="Step 2 · Images"
   title="AI Image Studio"
   summary="Every pack already comes with a verified hero image. Open this to make more, or to look through the ones you have."
@@ -1406,6 +1424,7 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
 {/* OpusClip — long-form to Shorts (video repurposing workspace) */}
 <CollapsibleSection
   id="section-repurpose"
+  className="2xl:mb-0"
   eyebrow="Step 3 · Repurpose"
   title="Long-form to Shorts"
   summary="Turn one long YouTube or Vimeo video into a set of captioned vertical clips."
@@ -1527,7 +1546,7 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 tex
 </CollapsibleSection>
 
 {/* Publishing (Metricool) — compose, review flow, and live queue */}
-<section id="section-publish" className="relative mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<section id="section-publish" className="relative mb-8 2xl:mb-0 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
 <PanelLoader scope="publish" />
 <div className="border-b border-line px-6 py-5 sm:px-8">
 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1766,6 +1785,7 @@ return (
                   the keyword brain that pre-filters every draft */}
 <CollapsibleSection
   id="section-semrush"
+  className="2xl:mb-0"
   title="SEO intelligence"
   summary="Rankings, competitors, backlinks and site health for cellularhopeinstitute.com. Keyword research already runs on every draft — this is for looking deeper."
 >
@@ -1783,6 +1803,7 @@ return (
               {/* AI Research & Draft Copilot — full-width band below the two columns */}
 <CollapsibleSection
   id="section-research"
+  className="2xl:mb-0"
   title="Research a topic first"
   summary="Angles, keywords, hashtags and hooks for a topic before you write. Open when you want the legwork done for you."
 >
@@ -2071,6 +2092,7 @@ className="rounded-full bg-subtle px-5 py-2 text-[13px] font-medium text-ink rin
 </>
 )}
 </section>
+</div>
 
 
 {/* Draft detail modal — click a draft to view / play / edit */}

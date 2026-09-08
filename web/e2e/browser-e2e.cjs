@@ -106,13 +106,25 @@ function check(name, ok, detail) {
     ['drafts from the API render in the library', 'Exosome therapy for joint recovery'],
   ]) check(name, body.includes(needle));
 
-  // Panels must follow the workflow order, top to bottom.
+  // Panels must follow the workflow order — now READING order, because they sit
+  // two across: down the rows, and left to right within a row. The old check
+  // demanded a strictly increasing top edge, which only held while every panel
+  // had a row to itself; it earned its keep the moment the layout changed, by
+  // catching a dense-packed grid that had pulled Autopilot up ahead of
+  // Publishing.
   const order = await page.evaluate(() => {
     const ids = ['section-create', 'section-images', 'section-repurpose', 'section-publish', 'section-autopilot', 'section-library'];
-    const tops = ids.map((id) => { const el = document.getElementById(id); return el ? el.getBoundingClientRect().top + window.scrollY : -1; });
-    return { tops, sorted: tops.every((t, i) => t >= 0 && (i === 0 || t > tops[i - 1])) };
+    const boxes = ids.map((id) => {
+      const el = document.getElementById(id);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { id, top: Math.round((r.top + window.scrollY) / 8) * 8, left: Math.round(r.left) };
+    });
+    if (boxes.some((b) => !b)) return { ok: false, seen: 'a panel is missing' };
+    const reading = [...boxes].sort((a, b) => (a.top - b.top) || (a.left - b.left)).map((b) => b.id);
+    return { ok: reading.join(',') === ids.join(','), seen: reading.join(','), rows: boxes.map((b) => b.id + '@' + b.top + ',' + b.left).join(' ') };
   });
-  check('panels appear in workflow order: Create → Images → Repurpose → Schedule → Autopilot → Library', order.sorted, order.tops.join(','));
+  check('panels read in workflow order: Create → Images → Repurpose → Schedule → Autopilot → Library', order.ok, order.seen + '  [' + (order.rows || '') + ']');
 
   const statOk = await page.evaluate(() => {
     const t = document.body.innerText;
