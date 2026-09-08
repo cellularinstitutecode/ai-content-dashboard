@@ -68,6 +68,13 @@ export const REQUIRED_SCHEMA: SchemaProbe[] = [
     file: 'supabase/schema.sql',
     breaks: 'the advertising-notice setting in Brand Brain',
   },
+  {
+    table: 'brand_profiles',
+    column: 'visual',
+    kind: 'column',
+    file: 'supabase/schema.sql',
+    breaks: 'the visual identity (palette, photography direction) in Brand Brain — images fall back to the brand-guide defaults',
+  },
 ];
 
 /** Does this PostgREST error code mean the schema is behind the code? */

@@ -124,6 +124,33 @@ function check(name, ok, detail) {
   });
   check('panels read in workflow order: Create → Images → Repurpose → Schedule → Library', order.ok, order.seen + '  [' + (order.rows || '') + ']');
 
+  // ---- 1c: Image Studio → Brand cards. Open the first gallery image, draw a
+  // carousel from the draft's caption through the real route, and see the strip.
+  // Image Studio is a drawer, shut by default; the same event the "How this
+  // works" cards use opens it so the gallery is in the document.
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('section:open', { detail: 'section-images' })));
+  const galleryBtn = page.locator('#section-images button[title]').first();
+  await galleryBtn.waitFor({ state: 'visible', timeout: 15000 });
+  await galleryBtn.click();
+  await page.waitForSelector('#brand-cards', { timeout: 10000 });
+  const cardUi = await page.evaluate(() => {
+    const el = document.getElementById('brand-cards');
+    const buttons = [...el.querySelectorAll('button')].map((b) => b.innerText.trim());
+    const grounds = [...el.querySelectorAll('select[aria-label="Card colour"] option')].map((o) => o.value);
+    return { text: el.innerText, buttons, grounds };
+  });
+  check('the lightbox offers brand cards in every palette colour plus a photo cover', cardUi.buttons.includes('Make carousel from the caption') && cardUi.buttons.includes('Cover card as post image') && ['paper', 'pearl', 'rust', 'cocoa', 'seal', 'black', 'photo'].every((g) => cardUi.grounds.includes(g)), JSON.stringify(cardUi.grounds));
+  const cardRes = page.waitForResponse((r) => r.url().includes('/api/drafts/card'), { timeout: 60000 });
+  await page.locator('#brand-cards').getByRole('button', { name: 'Make carousel from the caption' }).click();
+  const cardR = await cardRes;
+  check('drawing a carousel calls the card route and succeeds', cardR.ok(), String(cardR.status()));
+  await page.waitForFunction(() => document.querySelectorAll('#brand-cards a img').length > 0, null, { timeout: 15000 });
+  const strip = await page.evaluate(() => ({ n: document.querySelectorAll('#brand-cards a img').length, note: (document.querySelector('#brand-cards [role="status"]') || {}).innerText || '' }));
+  check('the cards appear as a strip under the image, and the stand-in type is disclosed', strip.n >= 1 && /stand-in type/.test(strip.note), JSON.stringify(strip));
+  await page.keyboard.press('Escape').catch(() => undefined);
+  await page.locator('#brand-cards').locator('..').locator('..').getByRole('button', { name: 'Close' }).click().catch(() => undefined);
+  await page.waitForLoadState('networkidle').catch(() => undefined);
+
   // The overview (/) keeps the stats, the queue, Autopilot and SEO — and no composer.
   const overviewPage = await ctx.newPage();
   await overviewPage.goto(BASE + '/', { waitUntil: 'networkidle', timeout: 60000 });
@@ -259,6 +286,16 @@ function check(name, ok, detail) {
     check(path + ' page renders', !page.url().includes('sign-in') && t.toLowerCase().includes(String(needle).toLowerCase()), page.url());
   }
   await page.screenshot({ path: '/tmp/e2e-brand.png', fullPage: false });
+  // Brand Brain carries the visual identity the image pipeline reads: the five
+  // guide colours as swatches, the materials and photography direction.
+  await page.goto(BASE + '/brand', { waitUntil: 'networkidle', timeout: 60000 });
+  await page.waitForFunction(() => /Visual identity/.test(document.body.innerText), null, { timeout: 20000 }).catch(() => undefined);
+  const brandVisual = await page.evaluate(() => {
+    const t = document.body.innerText;
+    const swatches = document.querySelectorAll('[aria-label="palette preview"] > div');
+    return { section: /Visual identity/.test(t), swatches: swatches.length, hexes: [...swatches].map((s) => s.innerText.trim()), photography: /Photography direction/.test(t), materials: /Materials & light/.test(t) };
+  });
+  check('Brand Brain shows the visual identity: five palette swatches with their hex codes, materials and photography direction', brandVisual.section && brandVisual.swatches === 5 && brandVisual.hexes.includes('#9F4D27') && brandVisual.hexes.includes('#E0D2B7') && brandVisual.photography && brandVisual.materials, JSON.stringify(brandVisual));
 
   // ---- 5a: Sources reads the team's documents and hands a video to the composer
   // Put the Google documents back to their seeded state first. The API suite

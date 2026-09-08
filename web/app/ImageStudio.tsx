@@ -37,12 +37,19 @@ type PackImage = {
   model?: string;
   variant?: number;
   verification?: Verification;
+  source?: 'generated' | 'brand-card';
 };
+
+// Brand cards: the typographic slides painted by /api/drafts/card from the
+// pack's own words, in the Brand Brain palette. One draft can hold a carousel.
+type StoredCard = { url: string; index: number; headline: string; body?: string; kicker?: string; ground: string; width: number; height: number };
+type PackCards = { createdAt: string; size: string; ground: string; standIn: boolean; slides: StoredCard[] };
+type CardGround = 'paper' | 'pearl' | 'rust' | 'cocoa' | 'seal' | 'black' | 'photo';
 
 type DraftLite = {
   id: string;
   topic?: string;
-  pack?: { kind?: string; _image?: PackImage } & Record<string, unknown>;
+  pack?: { kind?: string; _image?: PackImage; _cards?: PackCards } & Record<string, unknown>;
 };
 
 function VerifyBadge({ v, size = 'sm' }: { v?: Verification; size?: 'sm' | 'lg' }) {
@@ -92,6 +99,11 @@ export default function ImageStudio() {
   const [err, setErr] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<DraftLite | null>(null);
+  // Brand cards for the draft open in the lightbox.
+  const [cardGround, setCardGround] = useState<CardGround>('paper');
+  const [cardSize, setCardSize] = useState<'portrait' | 'square' | 'landscape'>('portrait');
+  const [cardBusy, setCardBusy] = useState<'carousel' | 'hero' | null>(null);
+  const [cardNote, setCardNote] = useState<string | null>(null);
   const [proc, setProc] = useState<ProcessStep[] | null>(null);
   const procTimers = useRef<any[]>([]);
   function clearProcTimers() { procTimers.current.forEach((t) => clearTimeout(t)); procTimers.current = []; }
@@ -182,6 +194,29 @@ export default function ImageStudio() {
 
   // Standalone creation: type an idea → an image-only draft is created and
   // sent through the same generate + verify pipeline as everything else.
+  // Paint brand cards from the draft's words. 'carousel' makes one card per
+  // paragraph; 'hero' makes a single cover card and sets it as the post image.
+  async function makeCards(d: DraftLite, mode: 'carousel' | 'hero') {
+    setCardBusy(mode); setErr(null); setCardNote(null);
+    try {
+      const body: Record<string, unknown> = { id: d.id, ground: cardGround, size: cardSize };
+      if (mode === 'hero') { body.setHero = true; body.slides = [{ kicker: 'Cellular Institute', headline: String(d.topic || 'Cellular Institute') }]; }
+      const r = await fetch('/api/drafts/card', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(friendlyError(j?.message || j?.error || 'We could not draw the cards.', 'We could not draw the cards.')); return; }
+      const nextPack = { ...(d.pack || {}), _cards: j.cards, ...(j.hero ? { _image: j.hero } : {}) };
+      setDrafts((prev) => prev.map((x) => (x.id === d.id ? { ...x, pack: nextPack } : x)));
+      setLightbox((lb) => (lb && lb.id === d.id ? { ...lb, pack: nextPack } : lb));
+      if (j.note) setCardNote(String(j.note));
+      else if (j.cards?.standIn) setCardNote('Drawn with stand-in type — add the Canela and Nexa files to public/fonts/brand for the final typefaces.');
+      announce('drafts');
+    } catch {
+      setErr('We could not draw the cards just now.');
+    } finally {
+      setCardBusy(null);
+    }
+  }
+
   async function quickCreate() {
     const topic = quickTopic.trim();
     if (!topic || quickBusy || busyId) return;
@@ -299,7 +334,10 @@ export default function ImageStudio() {
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={img.url} alt={img.alt || ''} className="aspect-square w-full object-cover transition group-hover:scale-[1.02]" />
-                  <div className="absolute left-2 top-2"><VerifyBadge v={img.verification} /></div>
+                  <div className="absolute left-2 top-2 flex items-center gap-1">
+                    <VerifyBadge v={img.verification} />
+                    {img.source === 'brand-card' && <span className="rounded-full bg-[#9F4D27] px-2 py-0.5 text-[10px] font-semibold text-[#E0D2B7]">card</span>}
+                  </div>
                   <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-2.5 pb-2 pt-6">
                     <div className="truncate text-[11px] font-medium text-white">{String(d.topic || 'AI image')}</div>
                   </div>
@@ -345,6 +383,46 @@ export default function ImageStudio() {
               )}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={lbImage.url} alt={lbImage.alt || ''} className="max-h-[70vh] w-full object-contain" />
+            </div>
+            {/* Brand cards — the gallery's typographic slides, from this draft's own words. */}
+            <div id="brand-cards" className="border-t border-line px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[12px] font-semibold text-ink">Brand cards</span>
+                <select aria-label="Card colour" value={cardGround} onChange={(e) => setCardGround(e.target.value as CardGround)} className="rounded-full bg-subtle px-3 py-1 text-[12px] text-ink ring-1 ring-line">
+                  <option value="paper">Paper</option>
+                  <option value="pearl">Pearl</option>
+                  <option value="rust">Rust</option>
+                  <option value="cocoa">Cocoa</option>
+                  <option value="seal">Seal brown</option>
+                  <option value="black">Eerie black</option>
+                  <option value="photo">Photo cover (this image)</option>
+                </select>
+                <select aria-label="Card size" value={cardSize} onChange={(e) => setCardSize(e.target.value as 'portrait' | 'square' | 'landscape')} className="rounded-full bg-subtle px-3 py-1 text-[12px] text-ink ring-1 ring-line">
+                  <option value="portrait">1080×1350 · Instagram</option>
+                  <option value="square">1080×1080 · Square</option>
+                  <option value="landscape">1200×630 · LinkedIn</option>
+                </select>
+                <button type="button" onClick={() => void makeCards(lightbox, 'carousel')} disabled={Boolean(cardBusy) || busyId === lightbox.id}
+                  className="rounded-full bg-[#9F4D27] px-3.5 py-1.5 text-[12px] font-medium text-[#E0D2B7] transition hover:opacity-90 disabled:opacity-50">
+                  {cardBusy === 'carousel' ? 'Drawing…' : 'Make carousel from the caption'}
+                </button>
+                <button type="button" onClick={() => void makeCards(lightbox, 'hero')} disabled={Boolean(cardBusy) || busyId === lightbox.id}
+                  className="rounded-full px-3.5 py-1.5 text-[12px] font-medium text-ink ring-1 ring-line transition hover:bg-subtle disabled:opacity-50">
+                  {cardBusy === 'hero' ? 'Drawing…' : 'Cover card as post image'}
+                </button>
+                <span className="text-[11px] text-ink-faint">Words set by the dashboard in the brand palette — never drawn by the AI.</span>
+              </div>
+              {cardNote && <div role="status" className="mt-2 text-[11px] text-amber-700">{cardNote}</div>}
+              {lightbox.pack?._cards?.slides?.length ? (
+                <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+                  {lightbox.pack._cards.slides.map((c) => (
+                    <a key={c.index} href={c.url} target="_blank" rel="noopener noreferrer" title={c.headline} className="shrink-0 overflow-hidden rounded-lg ring-1 ring-line">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={c.url} alt={c.headline} className="h-28 w-auto object-cover" />
+                    </a>
+                  ))}
+                </div>
+              ) : null}
             </div>
             <div className="flex flex-wrap items-center gap-2 border-t border-line px-4 py-3">
               <VerifyBadge v={lbImage.verification} size="lg" />

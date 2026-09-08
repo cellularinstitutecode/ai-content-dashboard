@@ -62,6 +62,11 @@ clinic's account:
   mock writer with REF + AVISO, saved as a video draft, and sent to Metricool
   as a LinkedIn draft. A network cell holding the published YouTube URL still
   reads as "on YouTube".
+- Brand Brain stores a visual identity (palette normalized, roles inferred) and
+  the brand-card route paints real 1080×1350 / 1080×1080 PNGs from a draft's
+  caption (cover on the strong colour, body slides on paper; REF/AVISO/hashtag
+  lines never become slides), refuses a text-flagged hero as a photo cover, and
+  can set the cover as the post image marked `source: 'brand-card'`.
 - Keyword research over Semrush's MCP server (`e2e/mock-semrush-mcp.cjs`): a
   v4 key is routed through MCP with the app's v3 vocabulary translated to MCP
   parameter names (the mock rejects v3 codes like the real server), one

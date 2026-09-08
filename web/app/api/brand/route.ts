@@ -1,5 +1,6 @@
 // web/app/api/brand/route.ts
 import { NextRequest, NextResponse } from 'next/server';
+import { normalizeVisual } from '@/lib/brand-visual';
 import { supabaseServer } from '@/lib/supabase';
 
 export const runtime = 'nodejs';
@@ -28,7 +29,7 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));
-  const { name, mission, voice, audience, keywords, guidelines, aviso_publicidad } = body || {};
+  const { name, mission, voice, audience, keywords, guidelines, aviso_publicidad, visual } = body || {};
 
   const payload = {
     user_id: user.id,
@@ -40,14 +41,27 @@ export async function POST(req: NextRequest) {
     guidelines: (guidelines ?? '').toString(),
     // Permit numbers are letters and digits only; anything else is a typo.
     aviso_publicidad: (aviso_publicidad ?? '').toString().replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 40),
+    // Stored normalized: bad colours dropped, blanks filled from the brand
+    // guide, lengths capped — so what the image pipeline reads is always whole.
+    visual: normalizeVisual(visual),
     updated_at: new Date().toISOString(),
   };
 
-  const { data, error } = await sb
+  let { data, error } = await sb
     .from('brand_profiles')
     .upsert(payload, { onConflict: 'user_id' })
     .select()
     .maybeSingle();
+  // A database that has not run the `visual` migration (supabase/schema.sql)
+  // must still save the rest of the profile; the images then use the guide's
+  // defaults and /api/health reports the pending migration.
+  let warning: string | null = null;
+  if (error && /visual/i.test(error.message || '')) {
+    const { visual: _dropped, ...withoutVisual } = payload;
+    void _dropped;
+    ({ data, error } = await sb.from('brand_profiles').upsert(withoutVisual, { onConflict: 'user_id' }).select().maybeSingle());
+    warning = 'Saved without the visual identity: run supabase/schema.sql to add the brand_profiles.visual column.';
+  }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ brand: data });
+  return NextResponse.json({ brand: data, warning });
 }

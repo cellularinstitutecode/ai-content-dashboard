@@ -70,6 +70,11 @@ const nextConfig = {
   poweredByHeader: false,
   // Next 16 promoted this out of `experimental`.
   typedRoutes: true,
+  // The brand-card route reads font files from disk at request time (the
+  // licensed brand faces when present, the open stand-ins otherwise). File
+  // tracing only follows imports, so the fonts are named here or the deployed
+  // function would have no type to set the cards in.
+  outputFileTracingIncludes: { '/api/drafts/card': ['./public/fonts/**/*'] },
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];
   },

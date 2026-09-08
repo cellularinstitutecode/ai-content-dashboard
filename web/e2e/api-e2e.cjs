@@ -663,6 +663,44 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
   const sendLi = await app('/api/metricool/schedule', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ network: 'linkedin', text: okBody.linkedin, publishAt: new Date(Date.now() + 86400000).toISOString().slice(0, 16), draftId: okBody.draftId }) });
   check('the LinkedIn copy goes to Metricool for review (draft, never auto-published)', sendLi.ok, String(sendLi.status) + ' ' + JSON.stringify(await jsonOf(sendLi)).slice(0, 200));
 
+  // ------------------------------------------------ Brand Brain: visual identity
+  // The palette and photography direction are data the image pipeline reads.
+  // A bad colour is dropped and the guide's palette stands in; a good one is kept.
+  const brandBefore = await jsonOf(await app('/api/brand'));
+  const visualSave = await app('/api/brand', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...(brandBefore?.brand || {}), visual: { palette: [{ name: 'Ink', hex: '#101010' }, { name: 'Sand', hex: '#F1E7D0' }, { name: 'bad', hex: 'red' }], materials: 'walnut and cream', never: ['blue light'] } }) });
+  const visualSaved = await jsonOf(visualSave);
+  check('Brand Brain stores a visual identity, normalized (bad colours dropped, roles inferred)', visualSave.ok && visualSaved?.brand?.visual?.palette?.length === 2 && visualSaved.brand.visual.palette[0].role === 'dark' && visualSaved.brand.visual.palette[1].role === 'light' && visualSaved.brand.visual.materials === 'walnut and cream', String(visualSave.status) + ' ' + JSON.stringify(visualSaved?.brand?.visual).slice(0, 200));
+  const visualBack = await jsonOf(await app('/api/brand'));
+  check('and reads it back', visualBack?.brand?.visual?.palette?.[0]?.hex === '#101010', JSON.stringify(visualBack?.brand?.visual?.palette));
+  // Restore the guide palette so the cards below are painted in it.
+  await app('/api/brand', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...(brandBefore?.brand || {}), visual: {} }) });
+
+  // ------------------------------------------------------- Brand cards
+  // The gallery's typographic slides, painted from the draft's own words in
+  // the brand palette and marks; the AI draws nothing here. The route stores
+  // real PNGs and records them on the draft.
+  const card = (b) => app('/api/drafts/card', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) });
+  check('a card request without a draft id is refused (400)', (await card({})).status === 400);
+  check('a card for a draft that is not yours is not found (404)', (await card({ id: 'someone-elses-draft' })).status === 404);
+  const carousel = await card({ id: 'draft-1', ground: 'paper' });
+  const carouselBody = await jsonOf(carousel);
+  const cs = carouselBody?.cards?.slides || [];
+  check('a carousel is one card per idea in the caption: the topic cover plus the caption line — never the REF, AVISO or hashtag lines', carousel.ok && cs.length === 2 && cs[0].headline === 'Exosome therapy for joint recovery' && /changing recovery timelines/.test(cs[1].headline) && !JSON.stringify(cs).includes('REF:') && !JSON.stringify(cs).includes('AVISO'), String(carousel.status) + ' ' + JSON.stringify(cs).slice(0, 300));
+  check('cards are 1080×1350 PNGs stored under a URL, the cover on the strong colour and the rest on paper', cs.length === 2 && cs.every((c) => c.width === 1080 && c.height === 1350 && /^https?:/.test(c.url)) && cs[0].ground === 'rust' && cs[1].ground === 'paper', JSON.stringify(cs.map((c) => [c.ground, c.width, c.height])));
+  check('without licensed brand fonts the set is marked stand-in type', carouselBody?.cards?.standIn === true, JSON.stringify(carouselBody?.cards?.standIn));
+  const afterCards = await jsonOf(await app('/api/drafts?limit=50'));
+  const d1 = (Array.isArray(afterCards?.drafts) ? afterCards.drafts : Array.isArray(afterCards) ? afterCards : []).find((d) => d.id === 'draft-1');
+  check('the carousel is recorded on the draft as pack._cards', d1?.pack?._cards?.slides?.length === 2, JSON.stringify(Object.keys(d1?.pack || {})));
+  const flaggedPhoto = await card({ id: 'draft-2', ground: 'photo' });
+  const flaggedBody = await jsonOf(flaggedPhoto);
+  check('a photo cover refuses a text-flagged hero image and falls back to the brand colour, saying so', flaggedPhoto.ok && flaggedBody?.cards?.ground === 'rust' && /No verified hero image/.test(flaggedBody?.note || ''), String(flaggedPhoto.status) + ' ' + JSON.stringify({ ground: flaggedBody?.cards?.ground, note: flaggedBody?.note }));
+  const heroCard = await card({ id: 'draft-1', ground: 'photo', size: 'square', setHero: true, slides: [{ kicker: 'Basic cell biology', headline: 'What is a stem cell?', body: 'It self-renews and differentiates.' }] });
+  const heroBody = await jsonOf(heroCard);
+  check('a photo cover uses the verified hero image, is square when asked, and can become the post image', heroCard.ok && heroBody?.cards?.ground === 'photo' && heroBody.cards.slides?.[0]?.ground === 'photo' && heroBody.cards.slides[0].width === 1080 && heroBody.cards.slides[0].height === 1080 && heroBody?.hero?.source === 'brand-card' && heroBody.hero.verification?.status === 'approved', String(heroCard.status) + ' ' + JSON.stringify({ g: heroBody?.cards?.ground, hero: heroBody?.hero?.source }));
+  const afterHero = await jsonOf(await app('/api/drafts?limit=50'));
+  const d1b = (Array.isArray(afterHero?.drafts) ? afterHero.drafts : Array.isArray(afterHero) ? afterHero : []).find((d) => d.id === 'draft-1');
+  check('the draft now carries the card as its image, marked as a brand card', d1b?.pack?._image?.source === 'brand-card' && /^https?:/.test(d1b?.pack?._image?.url || ''), JSON.stringify(d1b?.pack?._image?.source));
+
   // ------------------------------------------- the migration nobody ran -----
   // Every migration here is a .sql file a human is asked to paste into the
   // Supabase SQL editor, and nothing checked that they had: Autopilot could

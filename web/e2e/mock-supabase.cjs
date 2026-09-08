@@ -297,10 +297,20 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST') {
       const body = await readBody(req);
       const list = Array.isArray(body) ? body : body ? [body] : [];
-      const inserted = list.map((r, i) => ({ id: table + '-new-' + (rows.length + i + 1), created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...r }));
-      rows.push(...inserted);
+      // Upsert: supabase-js sends ?on_conflict=<col> with Prefer: resolution=merge-duplicates.
+      // PostgREST merges into the existing row; so does this, or a second save of
+      // the brand profile would leave two rows and .maybeSingle() would keep
+      // returning the stale first one.
+      const conflictCol = url.searchParams.get('on_conflict') || (/merge-duplicates/.test(String(req.headers.prefer || '')) ? 'id' : null);
+      const out = [];
+      list.forEach((r, i) => {
+        const existing = conflictCol && r[conflictCol] != null ? rows.find((x) => x[conflictCol] === r[conflictCol]) : null;
+        if (existing) { Object.assign(existing, r, { updated_at: new Date().toISOString() }); out.push(existing); return; }
+        const row = { id: table + '-new-' + (rows.length + i + 1), created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...r };
+        rows.push(row); out.push(row);
+      });
       res.writeHead(201, { 'content-type': 'application/json' });
-      return res.end(shape(inserted));
+      return res.end(shape(out));
     }
     if (req.method === 'PATCH') {
       const body = await readBody(req);

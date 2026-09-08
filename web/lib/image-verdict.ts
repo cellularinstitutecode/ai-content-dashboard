@@ -23,6 +23,8 @@ export type ImageVerdict = {
   /** Notes worth showing a person, that do not fail the image. */
   advisory: string[];
   textDetected: boolean;
+  /** Advisory 0-100: how much the picture lives in the brand's own world. Never affects status. */
+  brandFit: number | null;
 };
 
 const TEXT_RE = /\btext\b|letter|typograph|caption|\bword|writing|lettering|number|digit|signage|\bsign\b/i;
@@ -52,6 +54,11 @@ export function classifyVerdict(raw: unknown): ImageVerdict {
   const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const score = typeof obj.score === 'number' && Number.isFinite(obj.score)
     ? Math.max(0, Math.min(100, Math.round(obj.score)))
+    : null;
+  // Brand fit is an opinion about palette, materials and camera. It rides
+  // along for the human and for ranking ties; it can never flag an image.
+  const brandFit = typeof obj.brandFit === 'number' && Number.isFinite(obj.brandFit)
+    ? Math.max(0, Math.min(100, Math.round(obj.brandFit)))
     : null;
 
   // The reviewer is asked for `blocking` and `advisory` lists. An older answer
@@ -89,5 +96,6 @@ export function classifyVerdict(raw: unknown): ImageVerdict {
     issues: flagged && vetoWithoutReason && !blocking.length ? ['reviewer declined the image without naming a defect'] : blocking,
     advisory,
     textDetected,
+    brandFit,
   };
 }

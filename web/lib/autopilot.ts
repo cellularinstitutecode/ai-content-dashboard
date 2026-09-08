@@ -569,7 +569,7 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   try {
     const { data: bp } = await db
       .from('brand_profiles')
-      .select('name, mission, voice, audience, keywords, guidelines, aviso_publicidad')
+      .select('*')
       .eq('user_id', run.user_id)
       .maybeSingle();
     if (bp) brand = bp as BrandContext;

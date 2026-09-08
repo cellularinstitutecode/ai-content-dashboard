@@ -99,6 +99,19 @@ useful for the auth behaviour it cannot check for itself.
 - **Weekly planner** (Templates): one theme per weekday, several slots a day.
   Each slot is a `fixed_topic` Autopilot template — the subject stays, the
   angle/keyword/citation change every occurrence, so nothing is copy-paste.
+- **Visual identity** (Brand Brain): the brand guide's palette (Eerie Black,
+  Seal Brown, Rust, Cocoa Brown, Pearl), materials, photography direction and
+  typefaces, stored in `brand_profiles.visual` (run `supabase/schema.sql`).
+  Every AI image is briefed with it (`lib/images.ts` → `lib/brand-visual.ts`)
+  and the vision reviewer adds an advisory **brand fit** score; blank means the
+  guide's defaults, so nothing changes until someone edits it.
+- **Brand cards** (Image Studio → open an image → Brand cards): the gallery's
+  numbered educational slides, painted by `lib/brand-card.ts` (next/og) from the
+  draft's own words in the palette and marks — the AI never renders the text.
+  A "photo" cover uses the draft's verified hero image behind a paper panel.
+  Fonts: drop the licensed **Canela** (headline) and **Nexa** or **Rische**
+  (body) `.otf/.ttf` files into `web/public/fonts/brand/` and redeploy; until
+  then cards render in an open stand-in and say so in the corner.
 - A v4 key (`semrtkn-…`, the only kind the API Keys page issues on a Pro plan)
   is routed through Semrush's MCP server automatically (`lib/semrush-transport.ts`);
   any other key shape goes to the Standard API (v3). `SEMRUSH_TRANSPORT=v3|mcp`

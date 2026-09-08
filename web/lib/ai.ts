@@ -28,6 +28,8 @@ export type BrandContext = {
   guidelines?: string;
   /** COFEPRIS advertising permit number for the AVISO DE PUBLICIDAD line. */
   aviso_publicidad?: string | null;
+  /** Visual identity for images (lib/brand-visual.ts) — raw as stored; normalizeVisual() before use. */
+  visual?: unknown;
 };
 
 /**
