@@ -8,7 +8,7 @@
 // or is expensive to get wrong.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { generatePackImage, imagesEnabled } from '@/lib/images.ts';
+import { generatePackImage, imagesEnabled, STYLE_VARIANTS } from '@/lib/images.ts';
 import { __reset, __uploads } from '@/lib/supabase-admin';
 
 // A minimal valid PNG header — enough for the byte-sniffer to classify it.
@@ -66,8 +66,13 @@ test('THE HARD RULE: text in an image forces regeneration with the next composit
   const img = await generatePackImage({ topic: 'exosome therapy', variant: 0 });
   assert.equal(img.verification.textDetected, false);
   assert.equal(img.variant, 1, 'advanced to the next composition, not a re-roll of the same prompt');
+  const first = calls.find((c) => c.label === 'gen-1');
   const second = calls.find((c) => c.label === 'gen-2');
-  assert.match(second.body.prompt, /macro scientific beauty/, 'used the variant-1 composition');
+  // The compositions are the brand's own scenes and may be reworded; what
+  // matters is that the retry moved to the NEXT one, not the same prompt again.
+  assert.ok(first.body.prompt.includes(STYLE_VARIANTS[0]), 'first try used the variant-0 composition');
+  assert.ok(second.body.prompt.includes(STYLE_VARIANTS[1]), 'used the variant-1 composition');
+  assert.ok(!second.body.prompt.includes(STYLE_VARIANTS[0]), 'and not variant 0 again');
 });
 
 test('THE HARD RULE: a text-bearing image can never win, even with a far better score', async () => {

@@ -22,6 +22,7 @@ import 'server-only';
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import type { BrandContext } from '@/lib/ai';
+import { normalizeVisual, visualPromptBlock, brandFitRubric, type BrandVisual } from '@/lib/brand-visual';
 import { classifyVerdict } from './image-verdict.ts';
 import { recordImageOutcome } from '@/lib/provider-status';
 
@@ -44,6 +45,10 @@ export type ImageVerification = {
   // and the pipeline treats it as the worst possible outcome (always
   // regenerates; a text-bearing candidate can never beat a text-free one).
   textDetected?: boolean;
+  // Advisory 0-100 from the same reviewer: does the picture live in the
+  // brand's palette, materials and camera (lib/brand-visual.ts)? Shown to the
+  // human; breaks ties between two clean candidates; never flags anything.
+  brandFit?: number | null;
   model: string | null;
   checkedAt: string;
 };
@@ -59,6 +64,9 @@ export type PackImage = {
   // re-roll of the same prompt.
   variant: number;
   verification?: ImageVerification;
+  // 'brand-card' marks a typographic card painted by lib/brand-card.ts from
+  // approved text: its words are deliberate, so the text rule does not apply.
+  source?: 'generated' | 'brand-card';
 };
 
 const BUCKET = process.env.IMAGE_BUCKET || 'content-images';
@@ -101,10 +109,13 @@ function excerptOf(pack: Record<string, unknown> | null | undefined): string {
 // Composition variants: regeneration cycles through these so every "New
 // image" is a genuinely different visual proposition, not a near-duplicate.
 export const STYLE_VARIANTS: string[] = [
-  'Composition: wide editorial hero shot — premium modern clinic interior or a calm physician-patient consultation moment; any screens are off, any signage is blank or out of focus.',
-  'Composition: macro scientific beauty — unlabeled laboratory glassware, pipettes, plain cell-culture plates, abstract luminous cellular forms; no printed labels, markings or stickers on anything.',
-  'Composition: warm lifestyle — healthy, active adults (40-70) outdoors in bright coastal light, vitality and movement; plain unbranded clothing, no signage in the scene.',
-  'Composition: minimal premium still-life — clean unlabeled medical/wellness objects on a soft neutral background, generous negative space; no packaging text or printed labels.',
+  // Each variant is a scene from the brand guide's own photography direction
+  // (8.2) and mockups (7.1): the world the pictures live in, not a generic clinic.
+  'Composition: wide editorial shot of the clinic reception — cream travertine desk, walnut panelling with warm recessed light lines, pale sage armchairs, generous negative space; any screens off, any signage blank or out of focus.',
+  'Composition: consultation moment — a clinician in plain black scrubs with a patient in a warm, calm treatment room in cream and walnut; eye-level camera, natural unposed expressions, shallow depth of field; no charts, no labels.',
+  'Composition: portrait against a plain terracotta / rust backdrop — a relaxed adult (40-70) or a small clinical team in black scrubs, warm soft light, minimal styling, natural expression, plenty of empty backdrop around them.',
+  'Composition: macro scientific beauty in the brand palette — unlabeled glassware, plain culture plates or abstract luminous cellular forms in warm amber, rust and cream tones on a soft neutral ground; no printed labels or markings.',
+  'Composition: minimal premium still-life — a few clean unlabeled wellness objects on pale stone or pearl linen, one walnut or terracotta accent, soft directional light, wide negative space; no packaging text.',
 ];
 
 export function buildImagePrompt(opts: {
@@ -116,6 +127,10 @@ export function buildImagePrompt(opts: {
   const brandName = opts.brand?.name || 'a premium regenerative medicine and longevity clinic';
   const excerpt = excerptOf(opts.pack);
   const variant = STYLE_VARIANTS[Math.abs(Math.round(opts.variant ?? 0)) % STYLE_VARIANTS.length];
+  // The brand's own palette, materials and camera — from Brand Brain, or the
+  // guide's defaults. Without this the model paints "a clinic": cool light,
+  // white and steel, someone else's brand.
+  const visual = visualPromptBlock(normalizeVisual(opts.brand?.visual));
   return [
     // The no-text mandate leads the prompt (image models weight the opening
     // heavily) and is repeated at the end. Every visual must be a pure
@@ -127,8 +142,8 @@ export function buildImagePrompt(opts: {
     `Subject: ${opts.topic}.`,
     excerpt ? `Context from the article: ${excerpt}` : '',
     variant,
-    'Style: bright, clean, modern medical-wellness aesthetic; soft natural light;',
-    'calm, hopeful, trustworthy mood; photorealistic; shallow depth of field.',
+    visual,
+    'Style: warm, quiet, premium editorial photograph; soft directional light; calm, confident, trustworthy mood; photorealistic; shallow depth of field.',
     'Strict rules (must all hold): the image contains ZERO written characters in any language or script;',
     'all packaging, screens, documents and signs in the scene are blank, turned off, or absent;',
     'no needles piercing skin, no blood, no graphic medical procedures, nothing that implies a medical claim.',
@@ -254,16 +269,17 @@ async function generateImageBytes(prompt: string): Promise<GeneratedImage> {
 // verification must never take down image generation entirely.
 // ---------------------------------------------------------------------------
 
-const VERIFY_SYSTEM = `You are a strict visual QA reviewer for a premium regenerative medicine clinic's marketing images. Every image MUST be a pure CONTENT image — a photographic scene with ZERO written characters. You will be shown ONE AI-generated image plus its intended topic. Inspect it for generation defects and brand-safety problems:
+const verifySystem = (rubric: string) => `You are a strict visual QA reviewer for a premium regenerative medicine clinic's marketing images. Every image MUST be a pure CONTENT image — a photographic scene with ZERO written characters. You will be shown ONE AI-generated image plus its intended topic. Inspect it for generation defects and brand-safety problems:
 1. TEXT CHECK (the hard rule): scan the ENTIRE image, including backgrounds, signs, screens, labels, packaging, clothing and edges, for ANY visible text, words, letters, numbers, or garbled pseudo-typography (AI text artifacts) in ANY language or script — even partial, blurry, or decorative lettering counts. Any hit is an automatic fail.
 2. Anatomical errors: wrong number of fingers, warped hands/faces/limbs, merged bodies, impossible poses.
 3. Logos, watermarks, brand marks, or recognizable trademarks (even without readable letters).
 4. Graphic or inappropriate medical content: needles piercing skin, blood, wounds, distressing imagery.
 5. Uncanny, distorted, or low-quality rendering unfit for a premium medical brand.
 6. Relevance: the scene should plausibly illustrate the given topic for a clinic audience.
-Return STRICT JSON only: {"approved": boolean, "textDetected": boolean, "score": number 0-100, "blocking": string[], "advisory": string[]}. textDetected=true whenever check 1 finds ANYTHING (when unsure, say true). "blocking" lists each DEFECT from checks 1-4 as a short phrase — these fail the image. "advisory" lists observations from checks 5-6 (rendering quality, relevance, composition) as short phrases — these are notes for a human and do NOT fail the image. approved=false only when "blocking" is non-empty. Both lists empty when the image is clean.`;
+7. ${rubric}
+Return STRICT JSON only: {"approved": boolean, "textDetected": boolean, "score": number 0-100, "brandFit": number 0-100, "blocking": string[], "advisory": string[]}. textDetected=true whenever check 1 finds ANYTHING (when unsure, say true). "blocking" lists each DEFECT from checks 1-4 as a short phrase — these fail the image. "advisory" lists observations from checks 5-7 (rendering quality, relevance, composition, brand fit) as short phrases — these are notes for a human and do NOT fail the image. "brandFit" is check 7 alone and never changes "approved". approved=false only when "blocking" is non-empty. Both lists empty when the image is clean.`;
 
-async function verifyGeneratedImage(img: GeneratedImage, topic: string): Promise<ImageVerification> {
+async function verifyGeneratedImage(img: GeneratedImage, topic: string, visual?: BrandVisual | null): Promise<ImageVerification> {
   const base: ImageVerification = {
     status: 'unchecked',
     score: null,
@@ -287,7 +303,7 @@ async function verifyGeneratedImage(img: GeneratedImage, topic: string): Promise
         max_tokens: 300,
         response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: VERIFY_SYSTEM },
+          { role: 'system', content: verifySystem(brandFitRubric(visual || normalizeVisual(null))) },
           {
             role: 'user',
             content: [
@@ -311,6 +327,7 @@ async function verifyGeneratedImage(img: GeneratedImage, topic: string): Promise
       issues: verdict.issues,
       advisory: verdict.advisory,
       textDetected: verdict.textDetected,
+      brandFit: verdict.brandFit,
       model: VISION_MODEL,
       checkedAt: new Date().toISOString(),
     };
@@ -434,13 +451,13 @@ async function generateBestPackImage(opts: {
       if (best) break;
       throw e;
     }
-    const verification = await verifyGeneratedImage(img, opts.topic);
+    const verification = await verifyGeneratedImage(img, opts.topic, normalizeVisual(opts.brand?.visual));
     const candidate = { img, prompt, variant, verification };
     // Keep the better candidate. Ranking encodes the content-image rule:
     // approved > unchecked > flagged-without-text > ANY candidate with text.
     // A text-bearing image can never beat a text-free one, whatever its score.
     const rank = (v: ImageVerification) =>
-      (v.textDetected ? 0 : v.status === 'approved' ? 600 : v.status === 'unchecked' ? 400 : 200) + (v.score ?? 0);
+      (v.textDetected ? 0 : v.status === 'approved' ? 600 : v.status === 'unchecked' ? 400 : 200) + (v.score ?? 0) + (v.brandFit ?? 0) / 200;
     if (!best || rank(verification) > rank(best.verification)) best = candidate;
     if (verification.status !== 'flagged') break; // clean (or uncheckable) — done
     // Flagged (text or other defects): retry with the next composition while
@@ -493,7 +510,7 @@ export async function ensureDraftImage(draftId: string, ownerId: string): Promis
   try {
     const { data: bp } = await db
       .from('brand_profiles')
-      .select('name, mission, voice, audience, keywords, guidelines')
+      .select('*')
       .eq('user_id', row.user_id)
       .maybeSingle();
     if (bp) brand = bp as BrandContext;

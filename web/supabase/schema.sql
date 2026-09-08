@@ -138,6 +138,11 @@ create table if not exists public.brand_profiles (
 -- "AVISO DE PUBLICIDAD" line on every Instagram/Facebook post (lib/compliance.ts).
 alter table public.brand_profiles add column if not exists aviso_publicidad text default '';
 
+-- The brand's VISUAL identity (palette, materials, photography direction,
+-- typefaces) as JSON the image pipeline reads (lib/brand-visual.ts). Empty
+-- means "use the brand guide defaults", so nothing breaks before it is filled.
+alter table public.brand_profiles add column if not exists visual jsonb default '{}'::jsonb;
+
 alter table public.brand_profiles enable row level security;
 
 do $$ begin

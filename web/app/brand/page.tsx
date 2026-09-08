@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import PageNav from '@/components/PageNav';
 import { announce, onRefresh } from '@/components/refreshBus';
+import { DEFAULT_VISUAL, normalizeVisual, textColorOn, type BrandVisual } from '@/lib/brand-visual';
 
 type Brand = {
   name?: string;
@@ -12,6 +13,7 @@ type Brand = {
   keywords?: string[];
   guidelines?: string;
   aviso_publicidad?: string;
+  visual?: BrandVisual;
 };
 
 const inputStyle: React.CSSProperties = {
@@ -39,7 +41,9 @@ export default function BrandPage() {
       if (r.ok) {
         const j = await r.json().catch(() => null);
         const b = (j && j.brand) || {};
-        setBrand(b);
+        // A profile saved before the visual identity existed shows the brand
+        // guide's defaults, which is also what the image pipeline uses for it.
+        setBrand({ ...b, visual: normalizeVisual(b.visual) });
         setKeywordsText(Array.isArray(b.keywords) ? b.keywords.join(', ') : '');
       }
     } catch {} finally {
@@ -49,6 +53,14 @@ export default function BrandPage() {
 
   function update(field: keyof Brand, value: string) {
     setBrand((prev) => ({ ...prev, [field]: value }));
+  }
+  const visual = brand.visual || DEFAULT_VISUAL;
+  function updateVisual(patch: Partial<BrandVisual>) {
+    setBrand((prev) => ({ ...prev, visual: { ...(prev.visual || DEFAULT_VISUAL), ...patch } }));
+  }
+  function updateColor(i: number, patch: Partial<BrandVisual['palette'][number]>) {
+    const palette = visual.palette.map((c, idx) => (idx === i ? { ...c, ...patch } : c));
+    updateVisual({ palette });
   }
 
   async function save() {
@@ -62,7 +74,7 @@ export default function BrandPage() {
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error((data && data.error) || ('Save failed (' + r.status + ')'));
-      setStatus('Saved');
+      setStatus(data && data.warning ? 'Saved — ' + data.warning : 'Saved');
       // Generators read the brand profile server-side on every call, so the
       // panels that show brand-derived output are told to refresh.
       announce('brand', 'insights');
@@ -112,6 +124,57 @@ export default function BrandPage() {
                 Added automatically as &quot;AVISO DE PUBLICIDAD: …&quot; on every Instagram and Facebook post. Those posts also need a REF line citing a scientific study — the app writes it and will not send a post without both.
               </span>
             </label>
+            {/* Visual identity — what every generated image and brand card is painted with.
+                Seeded from the brand guide; the image pipeline reads exactly these values. */}
+            <div id="visual-identity" style={{ borderTop: '1px solid rgba(0,0,0,0.08)', paddingTop: 16, display: 'grid', gap: 14 }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 600 }}>Visual identity</div>
+                <div style={{ fontSize: 12, opacity: .7, marginTop: 2 }}>
+                  The palette, materials and camera every AI image is briefed with, and the colours brand cards are painted in. Pre-filled from the 2026 brand guide.
+                </div>
+              </div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                <div style={{ fontSize: 13 }}>Palette</div>
+                <div style={{ display: 'flex', gap: 6 }} aria-label="palette preview">
+                  {visual.palette.map((c, i) => (
+                    <div key={i} title={c.name + ' ' + c.hex} style={{ flex: 1, height: 44, borderRadius: 8, background: c.hex, color: textColorOn(c.hex, visual.palette), fontSize: 10, display: 'flex', alignItems: 'flex-end', padding: 6, boxSizing: 'border-box', border: '1px solid rgba(0,0,0,0.08)' }}>
+                      {c.hex}
+                    </div>
+                  ))}
+                </div>
+                {visual.palette.map((c, i) => (
+                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 140px 120px', gap: 8 }}>
+                    <input aria-label={'colour ' + (i + 1) + ' name'} style={{ ...inputStyle, marginTop: 0 }} value={c.name} onChange={(e) => updateColor(i, { name: e.target.value })} placeholder="Name" />
+                    <input aria-label={'colour ' + (i + 1) + ' hex'} style={{ ...inputStyle, marginTop: 0, fontFamily: 'ui-monospace, monospace' }} value={c.hex} onChange={(e) => updateColor(i, { hex: e.target.value })} placeholder="#9F4D27" />
+                    <select aria-label={'colour ' + (i + 1) + ' role'} style={{ ...inputStyle, marginTop: 0 }} value={c.role} onChange={(e) => updateColor(i, { role: e.target.value as BrandVisual['palette'][number]['role'] })}>
+                      <option value="dark">Dark ground</option>
+                      <option value="accent">Accent</option>
+                      <option value="light">Light ground</option>
+                    </select>
+                  </div>
+                ))}
+              </div>
+              <label style={{ fontSize: 13 }}>Materials &amp; light — the world a photograph should show
+                <textarea style={{ ...inputStyle, minHeight: 90, lineHeight: 1.5 }} value={visual.materials} onChange={(e) => updateVisual({ materials: e.target.value })} />
+              </label>
+              <label style={{ fontSize: 13 }}>Photography direction — how the camera behaves
+                <textarea style={{ ...inputStyle, minHeight: 90, lineHeight: 1.5 }} value={visual.photography} onChange={(e) => updateVisual({ photography: e.target.value })} />
+              </label>
+              <label style={{ fontSize: 13 }}>Never show (one per line)
+                <textarea style={{ ...inputStyle, minHeight: 80, lineHeight: 1.5 }} value={visual.never.join('\n')} onChange={(e) => updateVisual({ never: e.target.value.split('\n') })} />
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <label style={{ fontSize: 13 }}>Headline typeface
+                  <input style={inputStyle} value={visual.fonts.headline} onChange={(e) => updateVisual({ fonts: { ...visual.fonts, headline: e.target.value } })} placeholder="Canela" />
+                </label>
+                <label style={{ fontSize: 13 }}>Body typeface
+                  <input style={inputStyle} value={visual.fonts.body} onChange={(e) => updateVisual({ fonts: { ...visual.fonts, body: e.target.value } })} placeholder="Nexa" />
+                </label>
+              </div>
+              <span style={{ fontSize: 12, opacity: .7 }}>
+                Brand cards use the licensed font files in <code>public/fonts/brand/</code> when present (Canela, Nexa, Rische); until then they render with an open stand-in and say so on the card.
+              </span>
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <button onClick={save} disabled={saving} style={{ padding: '10px 18px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', cursor: saving ? 'default' : 'pointer' }}>
                 {saving ? 'Saving...' : 'Save brand brain'}

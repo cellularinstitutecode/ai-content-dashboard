@@ -58,3 +58,15 @@ test('a clean answer is clean', () => {
   assert.equal(v.score, 91);
   assert.deepEqual(v.advisory, []);
 });
+
+test('brand fit rides along as a number and never changes the status', () => {
+  const clean = classifyVerdict({ approved: true, textDetected: false, score: 90, brandFit: 23, blocking: [], advisory: ['cool blue palette'] });
+  assert.equal(clean.status, 'approved', 'a poor brand fit is an opinion, not a defect');
+  assert.equal(clean.brandFit, 23);
+  const clamped = classifyVerdict({ approved: true, textDetected: false, score: 90, brandFit: 140, blocking: [], advisory: [] });
+  assert.equal(clamped.brandFit, 100);
+  const missing = classifyVerdict({ approved: true, textDetected: false, score: 90, blocking: [], advisory: [] });
+  assert.equal(missing.brandFit, null, 'an older reviewer answer has no brand fit');
+  const flagged = classifyVerdict({ approved: false, textDetected: true, score: 10, brandFit: 99, blocking: ['visible text'], advisory: [] });
+  assert.equal(flagged.status, 'flagged', 'a perfect brand fit cannot rescue text');
+});
