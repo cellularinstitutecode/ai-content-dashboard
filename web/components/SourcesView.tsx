@@ -219,6 +219,19 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   const workspace = useWorkspace();
   const tab: Tab = kind;
   const [status, setStatus] = useState<Status | null>(null);
+  // The embedded sheet should fill the window and keep filling it. This was
+  // read once at first render, so the frame kept its original height through
+  // any resize or full-screen — on the one page whose whole point is the size
+  // of the document.
+  const [viewportH, setViewportH] = useState(900);
+  useEffect(() => {
+    const measure = () => setViewportH(window.innerHeight);
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, []);
+  const sheetHeight = Math.max(760, viewportH - 190);
+
   // Which row has its editor open, as "tab:row".
   const [editing, setEditing] = useState<string | null>(null);
 
@@ -320,7 +333,14 @@ export default function SourcesView({ kind }: { kind: Tab }) {
         <PageNav current={SOURCE_SECTIONS.find((s) => s.id === tab)?.href || '/sources/calendar'} />
       </header>
 
-      <div style={{ maxWidth: 1200, margin: '0 auto', padding: 24, display: 'grid', gap: 20 }}>
+      {/* Sources is the one place the page's job IS the document: a
+          spreadsheet at half width is a spreadsheet you cannot read. 1200 is
+          the shell every other page uses, and here it left the sheet about
+          790px on a 1567px screen. These three sections get the room instead;
+          nothing else renders this component, so no other page moves. 2100
+          still centres on an ultrawide rather than stretching a sheet across
+          a metre of glass. */}
+      <div style={{ maxWidth: 2100, margin: '0 auto', padding: '24px 28px', display: 'grid', gap: 20 }}>
 
         {status && !status.configured && (
           <div role="alert" style={{ ...card, borderColor: '#f0c36d', background: '#fff8e6', fontSize: 13 }}>
@@ -330,9 +350,9 @@ export default function SourcesView({ kind }: { kind: Tab }) {
         {err && <div role="alert" style={{ color: '#d70015', fontSize: 13 }}>{err}</div>}
 
         {tab === 'calendar' && (
-          <div style={{ display: 'grid', gap: 20, gridTemplateColumns: 'minmax(0, 1fr) 340px' }} className="sources-grid">
+          <div style={{ display: 'grid', gap: 20, gridTemplateColumns: 'minmax(0, 4fr) minmax(300px, 1fr)' }} className="sources-grid">
             <section style={{ ...card, padding: 0, overflow: 'hidden', minHeight: 640 }}>
-              {ids && <SheetFrame id={ids.calendar} title="Cellular Institute Social Media Calendar" height={Math.max(720, typeof window !== 'undefined' ? window.innerHeight - 200 : 720)} />}
+              {ids && <SheetFrame id={ids.calendar} title="Cellular Institute Social Media Calendar" height={sheetHeight} />}
             </section>
             <aside style={{ display: 'grid', gap: 16, alignContent: 'start' }}>
               <section style={card}>
@@ -431,7 +451,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
         {tab === 'videos' && (
           <div style={{ display: 'grid', gap: 20 }}>
             <section style={{ ...card, padding: 0, overflow: 'hidden' }}>
-              {ids && <SheetFrame id={ids.videos} title="Distribución RRSS CHI" height={Math.max(640, typeof window !== 'undefined' ? window.innerHeight - 260 : 640)} />}
+              {ids && <SheetFrame id={ids.videos} title="Distribución RRSS CHI" height={sheetHeight - 60} />}
             </section>
             <section style={card}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -505,7 +525,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
               <span style={{ opacity: .7 }}>The shared Drive folder — photos and videos the team adds here show up in the dashboard.</span>
               <a href={'https://drive.google.com/drive/folders/' + ids.images} target="_blank" rel="noreferrer" style={{ ...ghost, textDecoration: 'none' }}>Open in Google Drive ↗</a>
             </div>
-            <iframe title="Images folder (Google Drive)" src={'https://drive.google.com/embeddedfolderview?id=' + ids.images + '#grid'} style={{ width: '100%', height: 420, border: 0, display: 'block' }} />
+            <iframe title="Images folder (Google Drive)" src={'https://drive.google.com/embeddedfolderview?id=' + ids.images + '#grid'} style={{ width: '100%', height: Math.max(460, Math.round(sheetHeight * 0.62)), border: 0, display: 'block' }} />
           </section>
         )}
         {tab === 'images' && (
