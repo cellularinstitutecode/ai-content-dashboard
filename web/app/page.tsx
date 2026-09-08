@@ -1238,16 +1238,26 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
     inside itself, so its halves would have been ~170px. Below that the
     panels stack full width — still wider than they were, because the shell
     no longer throws away 600px.
-    Every panel takes one column, in DOM order, so the rows read
-    create | images, repurpose | publish, autopilot | library — the workflow
-    order the guide at the top promises, with no holes. Spanning the two
-    dense panels was the first attempt; it needed dense packing to avoid
-    gaps, and dense pulled Autopilot up ahead of Publishing, which a browser
-    check caught. Their inner grids hold at half width: Publishing's three
-    explainer cards land at ~250px and its channel chips at ~150px, and the
-    draft cards in Recent Drafts at ~250px. */}
+    Panels are paired by WEIGHT, not by position in the workflow, because
+    four of them are drawers: 91-110px shut, 566-858px open. Pairing a drawer
+    with a full panel leaves a void in one state or the other, and pairing
+    strictly by workflow order left ~2550px of empty column — 802px beside
+    the Content Generator, 1277px beside Long-form to Shorts.
+
+    So the two drawers sit together (110 vs 91 shut, 566 vs 858 open — matched
+    either way), Autopilot pairs with Recent Drafts, and the two panels that
+    genuinely want width take a full row. The Content Generator loses nothing
+    by it: it already splits into input | OUTPUT inside itself, so full width
+    gives those halves ~800px each instead of 404px. Publishing is 1368px tall
+    shut and 2849 open, with a 3-column and a 5-column row inside.
+
+    Reading order still runs create → images → repurpose → publish →
+    autopilot → library, which the browser check enforces. No dense packing:
+    a full-width panel starts a fresh row by itself once the pair above it is
+    complete, and it was dense that previously pulled Autopilot ahead of
+    Publishing. */}
 <div className="2xl:grid 2xl:grid-cols-2 2xl:items-start 2xl:gap-8">
-<section id="section-create" className="relative mb-8 2xl:mb-0 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<section id="section-create" className="relative mb-8 2xl:mb-0 2xl:col-span-2 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
 <PanelLoader scope="create" />
 <div className="border-b border-line px-6 py-5 sm:px-8">
 <div className="flex items-center gap-2">
@@ -1546,7 +1556,7 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 tex
 </CollapsibleSection>
 
 {/* Publishing (Metricool) — compose, review flow, and live queue */}
-<section id="section-publish" className="relative mb-8 2xl:mb-0 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+<section id="section-publish" className="relative mb-8 2xl:mb-0 2xl:col-span-2 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
 <PanelLoader scope="publish" />
 <div className="border-b border-line px-6 py-5 sm:px-8">
 <div className="flex flex-wrap items-center justify-between gap-3">
