@@ -67,6 +67,10 @@ clinic's account:
   caption (cover on the strong colour, body slides on paper; REF/AVISO/hashtag
   lines never become slides), refuses a text-flagged hero as a photo cover, and
   can set the cover as the post image marked `source: 'brand-card'`.
+  Licensed typefaces round-trip through the mock's storage: a trial Nexa upload
+  is refused (422) with the reason, a Rische upload is stored, listed and used by
+  the next card (only the headline stays a stand-in), and removing it puts the
+  body back on the stand-in.
 - Keyword research over Semrush's MCP server (`e2e/mock-semrush-mcp.cjs`): a
   v4 key is routed through MCP with the app's v3 vocabulary translated to MCP
   parameter names (the mock rejects v3 codes like the real server), one

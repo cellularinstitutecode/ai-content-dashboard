@@ -5,6 +5,13 @@ import PageNav from '@/components/PageNav';
 import { announce, onRefresh } from '@/components/refreshBus';
 import { DEFAULT_VISUAL, normalizeVisual, textColorOn, type BrandVisual } from '@/lib/brand-visual';
 
+type FontInventory = {
+  fonts: { name: string; size: number | null; file: { family: string; role: string; weight: number; style: string } | null }[];
+  headline: string | null;
+  body: string | null;
+  standInFaces: string[];
+};
+
 type Brand = {
   name?: string;
   mission?: string;
@@ -27,6 +34,51 @@ export default function BrandPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  // Licensed typefaces, uploaded here into private storage (never the repo).
+  const [fonts, setFonts] = useState<FontInventory | null>(null);
+  const [fontBusy, setFontBusy] = useState(false);
+  const [fontMsg, setFontMsg] = useState<string | null>(null);
+
+  async function loadFonts() {
+    try {
+      const r = await fetch('/api/brand/fonts');
+      if (r.ok) setFonts(await r.json());
+    } catch {}
+  }
+  useEffect(() => { loadFonts(); }, []);
+
+  async function uploadFonts(list: FileList | null) {
+    if (!list || !list.length) return;
+    setFontBusy(true); setFontMsg(null);
+    try {
+      const fd = new FormData();
+      Array.from(list).forEach((f) => fd.append('files', f));
+      const r = await fetch('/api/brand/fonts', { method: 'POST', body: fd });
+      const j = await r.json().catch(() => ({}));
+      const refused = Array.isArray(j.refused) ? j.refused : [];
+      const parts: string[] = [];
+      if (Array.isArray(j.saved) && j.saved.length) parts.push('Stored ' + j.saved.join(', ') + '.');
+      for (const x of refused) parts.push('Refused ' + x.reason);
+      if (!parts.length) parts.push(j.message || 'Nothing was uploaded.');
+      setFontMsg(parts.join(' '));
+      if (j.fonts) setFonts(j);
+      else await loadFonts();
+    } catch {
+      setFontMsg('The upload did not go through just now.');
+    } finally {
+      setFontBusy(false);
+    }
+  }
+
+  async function removeFont(name: string) {
+    if (!window.confirm('Remove ' + name + ' from the brand font store?')) return;
+    setFontBusy(true); setFontMsg(null);
+    try {
+      const r = await fetch('/api/brand/fonts?name=' + encodeURIComponent(name), { method: 'DELETE' });
+      const j = await r.json().catch(() => ({}));
+      if (j.fonts) setFonts(j); else await loadFonts();
+    } catch {} finally { setFontBusy(false); }
+  }
 
   useEffect(() => { load(); }, []);
 
@@ -171,9 +223,34 @@ export default function BrandPage() {
                   <input style={inputStyle} value={visual.fonts.body} onChange={(e) => updateVisual({ fonts: { ...visual.fonts, body: e.target.value } })} placeholder="Nexa" />
                 </label>
               </div>
-              <span style={{ fontSize: 12, opacity: .7 }}>
-                Brand cards use the licensed font files in <code>public/fonts/brand/</code> when present (Canela, Nexa, Rische); until then they render with an open stand-in and say so on the card.
-              </span>
+              {/* Licensed typefaces: uploaded into private storage, read by the card compositor. */}
+              <div id="brand-fonts" style={{ background: '#f5f5f7', borderRadius: 10, padding: 14, display: 'grid', gap: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>Brand typeface files</div>
+                <div style={{ fontSize: 12, opacity: .7 }}>
+                  Upload the clinic&apos;s licensed <b>Canela</b> (headlines) and <b>Nexa</b> or <b>Rische</b> (body) files here — .otf, .ttf or .woff. They are kept in private storage, never in the code, and brand cards switch to them within a minute.
+                  Trial and demo builds are refused: an evaluation licence does not cover production posts.
+                </div>
+                <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12 }}>
+                  <span data-testid="font-headline">Headline: <b>{fonts ? (fonts.headline || 'stand-in (Instrument Serif) — add Canela') : '…'}</b></span>
+                  <span data-testid="font-body">Body: <b>{fonts ? (fonts.body || 'stand-in (Outfit) — add Nexa or Rische') : '…'}</b></span>
+                </div>
+                {fonts && fonts.fonts.length > 0 && (
+                  <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: 4 }}>
+                    {fonts.fonts.map((f) => (
+                      <li key={f.name} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12 }}>
+                        <span style={{ fontFamily: 'ui-monospace, monospace' }}>{f.name}</span>
+                        <span style={{ opacity: .6 }}>{f.file ? f.file.family + ' · ' + f.file.role + ' · ' + f.file.weight + (f.file.style === 'italic' ? ' italic' : '') : 'not a brand face'}</span>
+                        <button type="button" onClick={() => void removeFont(f.name)} disabled={fontBusy} style={{ marginLeft: 'auto', background: 'transparent', border: '1px solid rgba(215,0,21,0.3)', color: '#d70015', borderRadius: 999, padding: '2px 8px', fontSize: 11, cursor: 'pointer' }}>Remove</button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <input type="file" accept=".otf,.ttf,.woff,font/otf,font/ttf,font/woff" multiple disabled={fontBusy} onChange={(e) => { void uploadFonts(e.target.files); e.currentTarget.value = ''; }} aria-label="Upload brand font files" />
+                  {fontBusy && <span style={{ opacity: .6 }}>Uploading…</span>}
+                </label>
+                {fontMsg && <div role="status" style={{ fontSize: 12, color: /Refused/.test(fontMsg) ? '#8a5a00' : '#248a3d' }}>{fontMsg}</div>}
+              </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <button onClick={save} disabled={saving} style={{ padding: '10px 18px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', cursor: saving ? 'default' : 'pointer' }}>

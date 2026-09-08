@@ -109,9 +109,14 @@ useful for the auth behaviour it cannot check for itself.
   numbered educational slides, painted by `lib/brand-card.ts` (next/og) from the
   draft's own words in the palette and marks — the AI never renders the text.
   A "photo" cover uses the draft's verified hero image behind a paper panel.
-  Fonts: drop the licensed **Canela** (headline) and **Nexa** or **Rische**
-  (body) `.otf/.ttf` files into `web/public/fonts/brand/` and redeploy; until
-  then cards render in an open stand-in and say so in the corner.
+  Fonts: upload the licensed **Canela** (headline) and **Nexa** or **Rische**
+  (body) `.otf/.ttf/.woff` files in **Brand Brain → Brand typeface files**;
+  they go to the private `brand-assets` storage bucket (`BRAND_ASSET_BUCKET`
+  to rename it), never into this public repository, and cards pick them up
+  within a minute. Trial/demo builds are refused — evaluation licences do not
+  cover production. The brand kit on Drive holds a licensed Rische family;
+  its Nexa files are trials, and Canela is not in the kit, so headlines stay
+  on the open stand-in (and say so in the card corner) until Canela is bought.
 - A v4 key (`semrtkn-…`, the only kind the API Keys page issues on a Pro plan)
   is routed through Semrush's MCP server automatically (`lib/semrush-transport.ts`);
   any other key shape goes to the Standard API (v3). `SEMRUSH_TRANSPORT=v3|mcp`

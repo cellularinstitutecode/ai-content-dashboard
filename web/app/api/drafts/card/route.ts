@@ -16,7 +16,8 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { supabaseServer } from '@/lib/supabase';
 import { reportError } from '@/lib/report';
 import { storeBytes, type PackImage } from '@/lib/images';
-import { renderBrandCard } from '@/lib/brand-card';
+import { renderBrandCard, setStoredFontReader } from '@/lib/brand-card';
+import { readStoredFonts } from '@/lib/brand-fonts';
 import { normalizeVisual } from '@/lib/brand-visual';
 import { avisoNumberFor } from '@/lib/compliance';
 import {
@@ -26,8 +27,11 @@ import {
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
+// Licensed typefaces uploaded through Brand Brain live in private storage.
+setStoredFontReader(readStoredFonts);
+
 export type StoredCard = { url: string; index: number; headline: string; body?: string; kicker?: string; ground: CardGround; width: number; height: number };
-export type PackCards = { createdAt: string; size: string; ground: CardGround; standIn: boolean; slides: StoredCard[] };
+export type PackCards = { createdAt: string; size: string; ground: CardGround; standIn: boolean; standInFaces: string[]; slides: StoredCard[] };
 
 export async function POST(req: NextRequest) {
   const auth = await requireAllowlistedUser();
@@ -95,6 +99,7 @@ export async function POST(req: NextRequest) {
 
   const stored: StoredCard[] = [];
   let standIn = false;
+  let standInFaces: string[] = [];
   try {
     for (let i = 0; i < slides.length; i++) {
       const s = slides[i];
@@ -105,6 +110,7 @@ export async function POST(req: NextRequest) {
         photo: g === 'photo' ? photo : null,
       });
       standIn = out.standIn;
+      standInFaces = out.standInFaces;
       const url = await storeBytes(out.png, 'image/png', 'png', topic + '-card-' + (i + 1));
       stored.push({ url, index: i + 1, headline: s.headline, body: s.body, kicker: s.kicker, ground: g, width: out.width, height: out.height });
     }
@@ -113,7 +119,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'render_failed', message: 'The card could not be drawn just now.' }, { status: 500 });
   }
 
-  const cards: PackCards = { createdAt: new Date().toISOString(), size, ground, standIn, slides: stored };
+  const cards: PackCards = { createdAt: new Date().toISOString(), size, ground, standIn, standInFaces, slides: stored };
   const { width, height } = CARD_SIZES[size];
   // Re-read before writing: generation took a while and someone may have
   // edited the pack meanwhile. Only _cards (and _image when asked) are ours.

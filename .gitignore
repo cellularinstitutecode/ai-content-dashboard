@@ -15,3 +15,10 @@ web/next-env.d.ts
 # Misc
 .DS_Store
 npm-debug.log*
+
+# Licensed brand typefaces are uploaded through Brand Brain into private storage,
+# never committed: this repository is public.
+web/public/fonts/brand/*.otf
+web/public/fonts/brand/*.ttf
+web/public/fonts/brand/*.woff
+web/public/fonts/brand/*.woff2

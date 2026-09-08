@@ -172,6 +172,19 @@ function readBody(req) {
     req.on('end', () => { try { resolve(data ? JSON.parse(data) : null); } catch { resolve(null); } });
   });
 }
+function readRaw(req) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+  });
+}
+
+// Storage objects, per bucket: bucket -> path -> { bytes, contentType, updatedAt }.
+// Enough of the Storage API for uploads to be listed and downloaded again —
+// the brand-font store (lib/brand-fonts.ts) needs the round trip, not just a 200.
+let objects = new Map();
+function bucketOf(name) { if (!objects.has(name)) objects.set(name, new Map()); return objects.get(name); }
 
 let reqLog = [];
 let maxRows = null;
@@ -221,6 +234,7 @@ const server = http.createServer(async (req, res) => {
     maxRows = null;
     missing.clear(); // a reseed is a fresh database: fully migrated
     tables = JSON.parse(JSON.stringify(SEED));
+    objects = new Map();
     reqLog = [];
     res.writeHead(200, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ ok: true }));
@@ -241,6 +255,51 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/storage/v1/object/public/')) {
     res.writeHead(200, { 'content-type': url.pathname.endsWith('.mp4') ? 'video/mp4' : 'image/jpeg' });
     return res.end(JPEG);
+  }
+  // POST /storage/v1/object/list/{bucket} {prefix} → the objects under that prefix.
+  const listM = /^\/storage\/v1\/object\/list\/([^/]+)$/.exec(url.pathname);
+  if (listM && req.method === 'POST') {
+    const body = (await readBody(req)) || {};
+    const prefix = String(body.prefix || '').replace(/\/+$/, '');
+    const out = [];
+    for (const [path, obj] of bucketOf(listM[1])) {
+      if (prefix && !path.startsWith(prefix + '/')) continue;
+      const rest = prefix ? path.slice(prefix.length + 1) : path;
+      if (!rest || rest.includes('/')) continue;
+      out.push({ name: rest, id: path, updated_at: obj.updatedAt, created_at: obj.updatedAt, last_accessed_at: obj.updatedAt, metadata: { size: obj.bytes.length, mimetype: obj.contentType } });
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify(out));
+  }
+  // POST /storage/v1/bucket → create.
+  if (url.pathname === '/storage/v1/bucket' && req.method === 'POST') {
+    const body = (await readBody(req)) || {};
+    bucketOf(String(body.id || body.name || 'bucket'));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ name: body.name || body.id }));
+  }
+  const objM = /^\/storage\/v1\/object\/([^/]+)(?:\/(.+))?$/.exec(url.pathname);
+  if (objM) {
+    const bucket = objM[1]; const path = objM[2] ? decodeURIComponent(objM[2]) : '';
+    if ((req.method === 'POST' || req.method === 'PUT') && path) {
+      const bytes = await readRaw(req);
+      bucketOf(bucket).set(path, { bytes, contentType: String(req.headers['content-type'] || 'application/octet-stream'), updatedAt: new Date().toISOString() });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ Key: bucket + '/' + path, Id: path, publicUrl: IMG('mock.jpg') }));
+    }
+    if (req.method === 'GET' && path) {
+      const obj = bucketOf(bucket).get(path);
+      if (!obj) { res.writeHead(404, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: 'not_found', message: 'Object not found' })); }
+      res.writeHead(200, { 'content-type': obj.contentType, 'content-length': String(obj.bytes.length) });
+      return res.end(obj.bytes);
+    }
+    if (req.method === 'DELETE' && !path) {
+      const body = (await readBody(req)) || {};
+      const removed = [];
+      for (const p of Array.isArray(body.prefixes) ? body.prefixes : []) { if (bucketOf(bucket).delete(p)) removed.push({ name: p }); }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify(removed));
+    }
   }
   if (url.pathname.startsWith('/storage/v1/')) {
     res.writeHead(200, { 'content-type': 'application/json' });
