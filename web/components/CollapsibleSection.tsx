@@ -24,6 +24,7 @@ export default function CollapsibleSection({
   summary,
   defaultOpen = false,
   children,
+  className,
 }: {
   id: string;
   eyebrow?: string;
@@ -31,6 +32,9 @@ export default function CollapsibleSection({
   summary: string;
   defaultOpen?: boolean;
   children: React.ReactNode;
+  /** Extra classes for the outer section — the dashboard grid uses this to
+      make a panel span both columns, or to drop the stacked bottom margin. */
+  className?: string;
 }) {
   const storageKey = 'section-open:' + id;
   const [open, setOpen] = useState(defaultOpen);
@@ -71,7 +75,7 @@ export default function CollapsibleSection({
   }
 
   return (
-    <section id={id} className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
+    <section id={id} className={'mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60 ' + (className || '')}>
       <button
         type="button"
         onClick={toggle}
