@@ -271,6 +271,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [prepareUrl, setPrepareUrl] = useState<string | undefined>(undefined);
+  const [prepareRow, setPrepareRow] = useState<{ tab: string; row: number } | undefined>(undefined);
 
   useEffect(() => {
     fetch('/api/sources?kind=status').then((r) => (r.ok ? r.json() : null)).then((j) => j && setStatus(j)).catch(() => undefined);
@@ -319,6 +320,8 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     const link = prepareLink(v);
     if (!link) return;
     setPrepareUrl(link);
+    // Which row it came from, so the copy goes back where the link was.
+    setPrepareRow({ tab: v.tab, row: v.row });
     setTimeout(() => document.getElementById('video-prepare')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
   }
 
@@ -481,7 +484,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
 
         {tab === 'videos' && (
           <div style={{ display: 'grid', gap: 20 }}>
-            <VideoPrepare initialUrl={prepareUrl} />
+            <VideoPrepare initialUrl={prepareUrl} sheetRow={prepareRow} />
             <section style={{ ...card, padding: 0, overflow: 'hidden' }}>
               {ids && <SheetFrame id={ids.videos} title="Distribución RRSS CHI" height={sheetHeight - 60} />}
             </section>
