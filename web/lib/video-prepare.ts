@@ -19,7 +19,7 @@ import { autoKeywordBrief, generateContentPack, type BrandContext, type ContentP
 import { avisoNumberFor, checkCompliance } from '@/lib/compliance';
 import { resolveTranscript, type TranscriptOrigin } from '@/lib/video-transcript';
 import { keywordLineFrom } from '@/lib/video-row';
-import { composeCaption, topicFromTranscript, videoSubject } from '@/lib/video-copy';
+import { composeCaption, keywordGrounding, topicFromTranscript, videoSubject } from '@/lib/video-copy';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
@@ -97,6 +97,22 @@ export type PrepareInput = {
 /** Did Semrush actually answer, or is this the fallback? The retry above and
  *  the red badge on the Prepare screen must agree on what "no keyword data"
  *  means, so they ask the same question. */
+/**
+ * Above this, the filename's seed is good enough to skip the second lookup.
+ *
+ * Not a pass mark. Measured against the real case: the furniture set scored
+ * 0.25 and the on-topic set 0.33 — the right answer was BELOW any threshold
+ * that would have rejected the wrong one, because Semrush returns related
+ * terms that legitimately go beyond the transcript ("vagus", "dysregulation"
+ * are never said either). An absolute bar would have thrown away the better
+ * set along with the worse.
+ *
+ * So the decision is comparative, and this only decides whether the
+ * comparison is worth a lookup. A seed sharing half its vocabulary with the
+ * video is not the failure mode this exists for.
+ */
+const GROUNDING_FLOOR = 0.5;
+
 function hasSemrushData(stamp: SemrushStamp | null | undefined): boolean {
   return stamp?.source === 'semrush' && Boolean(stamp.primary);
 }
@@ -183,11 +199,30 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   // speaker actually repeats, but only when the first attempt found nothing:
   // a filename that names its subject is still the better seed, and this costs
   // a second lookup only on the videos that would otherwise get none.
-  if (!hasSemrushData(brief.stamp) && excerpt) {
-    const spoken = topicFromTranscript(excerpt);
-    if (spoken && spoken.toLowerCase() !== subject.toLowerCase()) {
+  //
+  // Succeeding is not the same as being right. "Reel_FloatingBedRyall" gives
+  // "floating bed", which Semrush answers confidently — with FURNITURE:
+  // "floating bed frame" at 12,100 a month, "diy floating bed frame",
+  // "floating bed frame queen". The badge went green and the copy was written
+  // to them, so a post about a nervous-system reset was headlined "Why a
+  // Floating Bed Frame Is Part of Our Regenerative Care Protocol".
+  //
+  // So the test is not "did Semrush answer" but "is this what the video is
+  // about" — measured as the share of the keyword vocabulary the speaker
+  // actually uses. Seeding from speech instead returns "vagus nerve reset"
+  // (22,200) and "how to regulate nervous system": more volume, and the people
+  // the clinic is talking to.
+  const spoken = excerpt ? topicFromTranscript(excerpt) : '';
+  const grounded = (b: typeof brief) => keywordGrounding(b.stamp.keywords || [], excerpt);
+  if (excerpt && spoken && spoken.toLowerCase() !== subject.toLowerCase()) {
+    const weak = !hasSemrushData(brief.stamp) || grounded(brief) < GROUNDING_FLOOR;
+    if (weak) {
       const retry = await autoKeywordBrief(spoken);
-      if (hasSemrushData(retry.stamp)) brief = retry;
+      // Only if it is BETTER. A second lookup that is equally off-topic is not
+      // an improvement, and the filename may still have been the truer seed.
+      if (hasSemrushData(retry.stamp) && (!hasSemrushData(brief.stamp) || grounded(retry) > grounded(brief))) {
+        brief = retry;
+      }
     }
   }
 

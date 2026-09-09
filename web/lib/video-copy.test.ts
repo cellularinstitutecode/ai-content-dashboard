@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { composeCaption, topicFromTranscript, videoSubject } from './video-copy.ts';
+import { composeCaption, keywordGrounding, topicFromTranscript, videoSubject } from './video-copy.ts';
 
 const AVISO = '2623022002A00090';
 
@@ -106,4 +106,53 @@ test('an empty or wordless transcript yields nothing rather than noise', () => {
   assert.equal(topicFromTranscript(''), '');
   assert.equal(topicFromTranscript('the a of to in on'), '');
   assert.equal(topicFromTranscript('... 123 456 ...'), '');
+});
+
+test('the furniture set is less grounded than the one the video is about', () => {
+  // Verbatim from Semrush for the seed "floating bed", and verbatim from the
+  // Prepare screen that shipped them. Every one is a real phrase with real
+  // volume — "floating bed frame" gets 12,100 searches a month — and every one
+  // is about buying a bedstead.
+  const furniture = [
+    'floating bed frame', 'floating beds', 'windbed', 'hanging bed',
+    'floating bed frame queen', 'diy floating bed frame', 'floating bedroom',
+  ];
+  const spoken =
+    'What if 20 minutes could help you shift from go-go-go to true rest and reset? ' +
+    'Our floating bed offers a 20-minute nervous system reset. The grounding sensation ' +
+    'of water helps you shift out of fight-or-flight and into deep rest.';
+  const onTopic = [
+    'vagus nerve reset', 'nervous system dysregulation', 'how to regulate nervous system',
+    'nervous system regulation', 'dysregulated nervous system',
+  ];
+  // What the pipeline decides on: which seed the video actually supports.
+  // Neither clears any absolute bar — Semrush returns related terms beyond
+  // what is said, in both sets — so an absolute threshold would have discarded
+  // the right answer with the wrong one. Measured: 0.25 against 0.33.
+  assert.ok(
+    keywordGrounding(furniture, spoken) < keywordGrounding(onTopic, spoken),
+    'frame, queen, diy and bedroom are never said; nervous, system and reset are',
+  );
+});
+
+test('a set drawn from the words themselves grounds completely', () => {
+  const spoken = 'Our floating bed offers a nervous system reset and deep rest.';
+  assert.equal(keywordGrounding(['nervous system reset', 'deep rest'], spoken), 1);
+});
+
+test('scoring is per WORD, so one shared phrase cannot carry the rest', () => {
+  // The trap: "floating bed" IS said. Matching whole phrases would pass the
+  // entire furniture set on the strength of it.
+  const spoken = 'our floating bed is a nervous system reset';
+  assert.equal(keywordGrounding(['floating bed frame queen'], spoken), 0.5, 'frame and queen are not said');
+  assert.equal(keywordGrounding(['floating bed'], spoken), 1);
+});
+
+test('plurals are the same word', () => {
+  assert.equal(keywordGrounding(['exosomes'], 'we use exosome therapy'), 1);
+});
+
+test('nothing to compare against grounds nothing', () => {
+  assert.equal(keywordGrounding(['anything'], ''), 0);
+  assert.equal(keywordGrounding([], 'a transcript with words in it'), 0);
 });

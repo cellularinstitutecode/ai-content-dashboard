@@ -62,6 +62,59 @@ const STOPWORDS = new Set([
   'before','between','through','during','while',
 ]);
 
+/**
+ * How much of a keyword set the video actually talks about, 0 to 1.
+ *
+ * A search seed can succeed and still be wrong. "Reel_FloatingBedRyall" gives
+ * Semrush "floating bed", which is a real phrase with real volume — for
+ * FURNITURE. It came back with "floating bed frame" (12,100/mo), "floating bed
+ * frame queen", "diy floating bed frame", and the copy was written to them:
+ * the headline on a nervous-system reset became "Why a Floating Bed Frame Is
+ * Part of Our Regenerative Care Protocol". Nothing failed. The badge was
+ * green. The post was aimed at people shopping for a bedstead.
+ *
+ * Seeding from what the speaker says instead returns "vagus nerve reset"
+ * (22,200/mo) and "how to regulate nervous system" — more volume AND the
+ * people the clinic is actually talking to.
+ *
+ * The tell is vocabulary the video never uses. "frame", "queen", "diy",
+ * "bedroom", "mattress" appear nowhere in a three-minute piece about
+ * parasympathetic activation, and that is measurable without knowing anything
+ * about beds or medicine — which matters, because the next mismatch will not
+ * be about beds.
+ *
+ * Words, not whole phrases: one shared word ("floating bed") would otherwise
+ * carry a set that is six-sevenths about carpentry.
+ */
+export function keywordGrounding(keywords: readonly string[], transcript: string): number {
+  const said = new Set(
+    String(transcript || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(singular),
+  );
+  if (!said.size) return 0;
+
+  const terms = new Set<string>();
+  for (const k of keywords || []) {
+    for (const w of String(k || '').toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/)) {
+      if (w.length > 2 && !STOPWORDS.has(w)) terms.add(singular(w));
+    }
+  }
+  if (!terms.size) return 0;
+
+  let hit = 0;
+  for (const t of terms) if (said.has(t)) hit++;
+  return hit / terms.size;
+}
+
+/** Crude plural folding, so "beds" and "bed" are the same word. */
+function singular(w: string): string {
+  return w.length > 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w;
+}
+
 export function topicFromTranscript(text: string): string {
   const words = String(text || '')
     .toLowerCase()
