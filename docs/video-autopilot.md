@@ -22,10 +22,42 @@ new row with LINK VIDEO, COPY empty
   → compliance      AVISO line stamped by the app; REF citation's DOI verified
   → written back    COPY, KEYWORDS, REF and ESTADO IA on that row
   → draft saved     editable in the dashboard under Recent Drafts
+  → Metricool       a post waiting in the REVIEW queue for approval
 ```
 
-**It never publishes.** It does not tick a network checkbox and does not send
-anything to Metricool. Approve is still a person, exactly as before.
+**It never publishes.** What reaches Metricool is a *draft* in the review queue
+— the same thing the "Send to Metricool" button has always produced — and it
+never ticks a network checkbox in the sheet, because a tick is a record that a
+person published something. Approve is still a person, exactly as before.
+
+### Which networks, and when
+
+- **The sheet's ticks decide.** A row ticked for LinkedIn and TikTok gets a
+  draft for each. A row with nothing ticked — most new rows — gets LinkedIn,
+  the one network whose post is complete without a video attached.
+- **LinkedIn and X** get the long, insight-led post; **TikTok, Instagram and
+  Facebook** get the short caption with the hashtags, REF and AVISO. Same split
+  the Video Library's two boxes have always had.
+- **A network that needs a video** only gets a draft when Metricool can fetch
+  one. Metricool cannot read an ordinary Drive link, so the reel is copied into
+  the app's own Drive folder and that copy is opened to anyone-with-the-link.
+  The copy is made *inside* Drive, so a 283 MB file never travels through the
+  app. Your originals' sharing is never changed.
+- **Timing:** the next free weekday at 09:00 clinic time, one post per slot.
+  Working off a backlog therefore spreads across mornings instead of stacking
+  thirty posts on one — which would read as spam on every network. Override the
+  hour with `VIDEO_AUTOPILOT_TIME` (e.g. `14:30`).
+- **Copy that fails the compliance gate is not sent at all.** Instagram and
+  Facebook posts missing the AVISO line or the REF citation stay out of the
+  queue rather than sitting somewhere one wrong click publishes them.
+
+To fill the sheet without handing anything to Metricool — worth doing for the
+first few, to read the copy before any of it reaches a posting queue:
+
+```
+curl -H "Authorization: Bearer $CRON_SECRET" \
+     "https://YOUR_DOMAIN/api/videos/watch?sheetOnly=1"
+```
 
 ## The three rules it will not break
 
@@ -198,3 +230,5 @@ transcript finishes it by hand, the same as before.
 | `web/lib/media-transcript.ts` | Speech-to-text on a Drive file |
 | `web/lib/audio-extract.ts` | Lifts the audio track out of the video first |
 | `web/app/api/videos/watch/route.ts` | The trigger: cron, Apps Script, or a person |
+| `web/lib/video-slot.ts` | Which networks, and which posting slot (unit-tested) |
+| `web/lib/video-publish.ts` | Puts one post into Metricool's review queue |

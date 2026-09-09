@@ -52,6 +52,9 @@ async function handle(req: NextRequest) {
 
   const url = req.nextUrl;
   const dryRun = url.searchParams.get('dry') === '1';
+  // Fill the sheet but hand nothing to Metricool — for a first run where you
+  // want to read the copy before any of it reaches a posting queue.
+  const skipMetricool = url.searchParams.get('sheetOnly') === '1';
   const maxParam = Number(url.searchParams.get('max'));
   // One video per request by default. Inside a 60-second function there is
   // room for exactly one download-extract-transcribe-write cycle with margin;
@@ -60,7 +63,7 @@ async function handle(req: NextRequest) {
   const maxVideos = Number.isFinite(maxParam) && maxParam > 0 ? Math.min(maxParam, 10) : 1;
 
   try {
-    const out = await sweepVideos({ userId, dryRun, maxVideos, budgetMs: 45_000 });
+    const out = await sweepVideos({ userId, dryRun, skipMetricool, maxVideos, budgetMs: 45_000 });
     if (!out.ok) {
       return NextResponse.json(
         { ok: false, error: 'not_configured', message: 'Google access is not set up, so the sheet cannot be read.' },
