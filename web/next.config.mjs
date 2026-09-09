@@ -74,6 +74,19 @@ const nextConfig = {
   // licensed brand faces when present, the open stand-ins otherwise). File
   // tracing only follows imports, so the fonts are named here or the deployed
   // function would have no type to set the cards in.
+  // ffmpeg-static must NOT be bundled into the server chunk.
+  //
+  // Its index.js computes the binary's location as path.join(__dirname,
+  // 'ffmpeg'). Bundled, __dirname becomes the chunk's own directory as it
+  // stood AT BUILD TIME, so the deployed function looked for the binary at
+  // /ROOT/web/node_modules/ffmpeg-static/ffmpeg — a path that exists on the
+  // build machine and nowhere in the Lambda. The file was traced in correctly
+  // the whole time; the code was looking in the wrong place for it.
+  //
+  // Left external, it stays a real require() out of node_modules at runtime,
+  // __dirname is the directory the file actually sits in, and the traced
+  // binary below is found.
+  serverExternalPackages: ['ffmpeg-static'],
   // File tracing follows imports, and these two are files rather than imports:
   //   the brand-card route reads font files from disk at request time (the
   //   licensed brand faces when present, the open stand-ins otherwise), and
