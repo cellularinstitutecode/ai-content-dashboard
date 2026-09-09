@@ -11,6 +11,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { friendlyErrorFromResponse } from '@/lib/friendly-error';
+import { runPrepare } from '@/lib/prepare-request';
 import { parseVideoUrl } from '@/lib/composer';
 import { isDriveUrl } from '@/lib/drive-url';
 import { fitsNetwork } from '@/lib/video-row';
@@ -112,33 +113,18 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow }: {
 
   async function prepare() {
     if (!urlOk) { setErr('Paste a YouTube or Google Drive video link first.'); return; }
-    setBusy('prepare'); setErr(null); setSent(null); setNeedPaste(null);
-    try {
-      // A long video does not fit in one request: the server stops once the
-      // transcript is safely stored rather than being killed mid-write. That
-      // is a real answer, not an error — so this asks again straight away,
-      // and the second pass finishes in seconds because the slow half is
-      // already done. Once: two of these means something else is wrong, and
-      // retrying forever would hide it.
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const r = await fetch('/api/videos/prepare', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url, transcript: pasted || undefined, tab: sheetRow?.tab, row: sheetRow?.row }) });
-        const j = await r.json().catch(() => ({}));
-        if (r.status === 422 && j?.error === 'no_transcript') { setNeedPaste(j.message || 'No captions on this video — paste the transcript.'); return; }
-        if (r.status === 202 && j?.error === 'transcript_ready' && attempt === 0) {
-          setNote(j.message || 'The transcript is done — writing the copy now.');
-          continue;
-        }
-        if (!r.ok) { setErr(await friendlyErrorFromResponse(new Response(JSON.stringify(j), { status: r.status, headers: { 'content-type': 'application/json' } }), 'We could not prepare that video.', 'Press Prepare again — the transcript is kept, so the second run skips the download and finishes quickly.')); return; }
-        setNote(null);
-        setPrepared(j); setLinkedin(j.linkedin || ''); setTiktok(j.tiktok || '');
-        return;
-      }
-    } catch {
-      setErr('We could not prepare that video just now.');
-    } finally {
-      setBusy(null);
-      setNote(null);
+    setBusy('prepare'); setErr(null); setSent(null); setNeedPaste(null); setNote(null);
+    const out = await runPrepare(
+      { url, tab: sheetRow?.tab, row: sheetRow?.row, transcript: pasted || undefined },
+      setNote,
+    );
+    setBusy(null); setNote(null);
+    if (!out.ok) {
+      if (out.kind === 'needs_transcript') setNeedPaste(out.message); else setErr(out.message);
+      return;
     }
+    const j = out.data as unknown as Prepared;
+    setPrepared(j); setLinkedin(j.linkedin || ''); setTiktok(j.tiktok || '');
   }
 
   async function send(network: 'linkedin' | 'tiktok') {
