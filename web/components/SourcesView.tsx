@@ -12,14 +12,41 @@
 // of truth. "Use in post" and "Use as hero image" hand the content to the
 // Publishing composer on the dashboard through the shared workspace.
 
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Route } from 'next';
 import PageNav from '@/components/PageNav';
 import { useWorkspace } from '@/components/workspace';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 import VideoPrepare from '@/components/VideoPrepare';
+import { runPrepare } from '@/lib/prepare-request';
 import { isDriveUrl } from '@/lib/drive-url';
+
+/** How a batched row is getting on, in words rather than a spinner. */
+const BATCH_LABEL: Record<string, string> = {
+  queued: 'Waiting…',
+  working: 'Preparing…',
+  done: '✓ Written into the sheet',
+  failed: '✗ Not done',
+  needs_transcript: 'Needs a pasted transcript',
+};
+const BATCH_COLOUR: Record<string, string> = {
+  queued: 'rgba(0,0,0,0.5)',
+  working: '#1d4ed8',
+  done: '#1d6f42',
+  failed: '#d70015',
+  needs_transcript: '#8a6d00',
+};
+
+/**
+ * The most videos one press may start.
+ *
+ * The Prepare endpoint is rate-limited to thirty an hour, and each video may
+ * take two requests, so fifteen is the point past which the batch would begin
+ * refusing its own later rows — a worse experience than being told the cap up
+ * front.
+ */
+const BATCH_MAX = 15;
 
 export type Tab = 'calendar' | 'videos' | 'images';
 
@@ -317,6 +344,70 @@ export default function SourcesView({ kind }: { kind: Tab }) {
    * returned '' for those rows and the Prepare button was simply not drawn,
    * which is why nearly every row had to be done by hand.
    */
+  /**
+   * Which rows are ticked, and how each is getting on.
+   *
+   * Keyed on tab:row rather than list position: the list re-sorts and
+   * re-filters under the selection, and an index would silently come to mean a
+   * different video — which for a button that spends money is not a cosmetic
+   * bug.
+   */
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [batch, setBatch] = useState<Record<string, { state: 'queued' | 'working' | 'done' | 'failed' | 'needs_transcript'; note?: string }>>({});
+  const [running, setRunning] = useState(false);
+  /** Set when Stop is pressed; the loop checks it between videos, never mid-video. */
+  const stopRef = useRef(false);
+
+  const rowKey = (v: VideoEntry) => v.tab + ':' + v.row;
+
+  function togglePick(v: VideoEntry) {
+    const k = rowKey(v);
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k); else next.add(k);
+      return next;
+    });
+  }
+
+  /**
+   * Prepare each ticked row, one at a time.
+   *
+   * Strictly sequential. Each video is a download, an extraction, a
+   * transcription and two model calls; firing ten at once would have them
+   * competing for the same 60-second functions and time each other out, and
+   * the rate limit is thirty an hour for all of them together.
+   */
+  async function prepareSelected(rows: VideoEntry[]) {
+    if (!rows.length || running) return;
+    setRunning(true);
+    stopRef.current = false;
+    setBatch(Object.fromEntries(rows.map((v) => [rowKey(v), { state: 'queued' as const }])));
+
+    for (const v of rows) {
+      if (stopRef.current) {
+        setBatch((b) => ({ ...b, [rowKey(v)]: { state: 'failed', note: 'Stopped before this one.' } }));
+        continue;
+      }
+      const k = rowKey(v);
+      setBatch((b) => ({ ...b, [k]: { state: 'working' } }));
+      const out = await runPrepare(
+        { url: prepareLink(v), tab: v.tab, row: v.row },
+        (note) => setBatch((b) => ({ ...b, [k]: { state: 'working', note } })),
+      );
+      if (out.ok) {
+        const wrote = (out.data as { sheet?: { error?: string } }).sheet;
+        setBatch((b) => ({ ...b, [k]: wrote?.error ? { state: 'failed', note: wrote.error } : { state: 'done' } }));
+      } else {
+        setBatch((b) => ({ ...b, [k]: { state: out.kind === 'needs_transcript' ? 'needs_transcript' : 'failed', note: out.message } }));
+      }
+    }
+
+    setRunning(false);
+    // Once, at the end. Reloading between videos would move the rows about
+    // under the person watching them.
+    await load('videos', true);
+  }
+
   function prepareLink(v: VideoEntry): string {
     const yt = youtubeOf(v);
     if (yt) return yt;
@@ -364,6 +455,23 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     return list.filter((v) => String(v.row) === needle
       || [v.title, v.copy, v.type, v.creator, v.format, v.tab].join(' ').toLowerCase().includes(needle));
   }, [videos, q]);
+
+  /**
+   * The rows the batch button acts on: visible, ticked, and in the order they
+   * appear on screen rather than the order they were clicked — a run that
+   * jumps about the list is hard to follow.
+   */
+  const pickedRows = useMemo(
+    () => filteredVideos.filter((v) => picked.has(v.tab + ':' + v.row)),
+    [filteredVideos, picked],
+  );
+  /** Visible rows that are actual work: a video to read, and no copy yet. */
+  const readyToPrepare = useMemo(
+    () => filteredVideos.filter((v) => prepareLink(v) && !String(v.copy || '').trim()),
+    [filteredVideos],
+  );
+  /** Ticked rows that already have copy — preparing them cannot write anything. */
+  const pickedWithCopy = pickedRows.filter((v) => String(v.copy || '').trim()).length;
 
   const active = TABS.find((t) => t.id === tab)!;
   const ids = status?.ids;
@@ -504,9 +612,47 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                 <h2 style={{ margin: 0, fontSize: 15 }}>Videos {videos ? '(' + videos.entries.length + ')' : ''}</h2>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search row number, title, copy, creator…" style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.12)', fontSize: 13, minWidth: 240 }} />
-                  <button type="button" style={ghost} onClick={() => load('videos', true)}>Refresh</button>
+                  <button type="button" style={ghost} disabled={running} onClick={() => load('videos', true)}>Refresh</button>
                 </div>
               </div>
+
+              {/*
+                Only when something is ticked. An empty toolbar sitting above
+                the table every time would be a permanent reminder of a feature
+                nobody is using right now.
+              */}
+              {pickedRows.length > 0 && (
+                <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 10, background: '#eef3ff', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <strong style={{ fontSize: 13 }}>{pickedRows.length} selected</strong>
+                  <button
+                    type="button"
+                    style={{ ...btn, opacity: running ? .6 : 1 }}
+                    disabled={running}
+                    onClick={() => void prepareSelected(pickedRows.slice(0, BATCH_MAX))}
+                  >
+                    {running ? 'Preparing…' : 'Prepare ' + Math.min(pickedRows.length, BATCH_MAX) + ' video' + (Math.min(pickedRows.length, BATCH_MAX) === 1 ? '' : 's')}
+                  </button>
+                  {running && (
+                    <button type="button" style={ghost} onClick={() => { stopRef.current = true; }}>
+                      Stop after this one
+                    </button>
+                  )}
+                  {!running && <button type="button" style={ghost} onClick={() => { setPicked(new Set()); setBatch({}); }}>Clear</button>}
+                  <span style={{ fontSize: 11, opacity: .75 }}>
+                    One at a time — each video is a download, a transcription and the writing, so this takes about a minute each.
+                  </span>
+                  {pickedRows.length > BATCH_MAX && (
+                    <span style={{ fontSize: 11, color: '#8a6d00' }}>
+                      The first {BATCH_MAX} only: past that the hourly limit starts refusing them. Run it again for the rest.
+                    </span>
+                  )}
+                  {pickedWithCopy > 0 && (
+                    <span style={{ fontSize: 11, color: '#8a6d00' }}>
+                      {pickedWithCopy} of these already {pickedWithCopy === 1 ? 'has' : 'have'} copy. Copy already written is never overwritten, so {pickedWithCopy === 1 ? 'it' : 'they'} will cost a run and change nothing.
+                    </span>
+                  )}
+                </div>
+              )}
               {!videos ? <p style={{ fontSize: 13, opacity: .6 }}>Reading the sheet…</p>
                 : filteredVideos.length === 0 ? <p style={{ fontSize: 13, opacity: .6 }}>No videos match.</p>
                 : (
@@ -514,6 +660,23 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                       <thead>
                         <tr style={{ textAlign: 'left', opacity: .6 }}>
+                          <th style={{ padding: '6px 8px', width: 28 }}>
+                            {/*
+                              Ticks the rows that are WORK — a link and no copy
+                              yet. Ticking everything visible would include the
+                              hundred rows a person already wrote, and preparing
+                              those spends money to produce copy that is then
+                              correctly refused, because a filled cell is never
+                              overwritten.
+                            */}
+                            <input
+                              type="checkbox"
+                              aria-label="Select every row that still needs copy"
+                              disabled={running}
+                              checked={readyToPrepare.length > 0 && readyToPrepare.every((v) => picked.has(v.tab + ':' + v.row))}
+                              onChange={(e) => setPicked(e.target.checked ? new Set(readyToPrepare.map((v) => v.tab + ':' + v.row)) : new Set())}
+                            />
+                          </th>
                           <th style={{ padding: '6px 8px' }}>Row · Title</th><th style={{ padding: '6px 8px' }}>Copy</th><th style={{ padding: '6px 8px' }}>Format</th><th style={{ padding: '6px 8px' }}>Networks</th><th style={{ padding: '6px 8px' }}>By</th><th style={{ padding: '6px 8px' }}></th>
                         </tr>
                       </thead>
@@ -521,6 +684,17 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                         {filteredVideos.map((v, i) => (
                           <Fragment key={i}>
                           <tr style={{ borderTop: '1px solid rgba(0,0,0,0.08)', verticalAlign: 'top' }}>
+                            <td style={{ padding: '8px' }}>
+                              {prepareLink(v) && (
+                                <input
+                                  type="checkbox"
+                                  aria-label={'Select row ' + v.row}
+                                  disabled={running}
+                                  checked={picked.has(v.tab + ':' + v.row)}
+                                  onChange={() => togglePick(v)}
+                                />
+                              )}
+                            </td>
                             <td style={{ padding: '8px' }}>
                               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                                 {/*
@@ -552,12 +726,18 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                                 <button type="button" style={{ ...ghost, padding: '5px 10px' }} onClick={() => setEditing(editing === v.tab + ':' + v.row ? null : v.tab + ':' + v.row)}>
                                   {editing === v.tab + ':' + v.row ? 'Close' : 'Edit'}
                                 </button>
+                                {batch[v.tab + ':' + v.row] && (
+                                  <span style={{ fontSize: 11, whiteSpace: 'normal', color: BATCH_COLOUR[batch[v.tab + ':' + v.row].state] }}>
+                                    {BATCH_LABEL[batch[v.tab + ':' + v.row].state]}
+                                    {batch[v.tab + ':' + v.row].note ? ' — ' + batch[v.tab + ':' + v.row].note : ''}
+                                  </span>
+                                )}
                               </div>
                             </td>
                           </tr>
                           {editing === v.tab + ':' + v.row && (
                             <tr>
-                              <td colSpan={6} style={{ padding: '4px 8px 14px', background: 'rgba(0,0,0,0.02)' }}>
+                              <td colSpan={7} style={{ padding: '4px 8px 14px', background: 'rgba(0,0,0,0.02)' }}>
                                 <RowEditor
                                   kind="videos" tab={v.tab} row={v.row}
                                   onSaved={() => { setEditing(null); void load('videos', true); }}
