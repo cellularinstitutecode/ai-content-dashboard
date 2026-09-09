@@ -35,6 +35,67 @@ const FILENAME_PREFIX = /^(reel|video|web|tstm|ci|clip)[\s_-]+/i;
 const TRAILING_OWNER = /[_\s-][A-Z][a-z]+$/;
 const PRESENTER = /x?ryall/gi;
 
+/**
+ * What the video is ABOUT, taken from what was said in it.
+ *
+ * The filenames carry production identity, not subject matter:
+ * "Reel_RyallCellgenicScript16_Rodrigo" reduces to "Cellgenic Script16" —
+ * a partner's name and a script number. Semrush is given that as a literal
+ * search phrase and returns nothing, and the copy is written blind. The badge
+ * on the Prepare screen said "NO keyword data" and it was right.
+ *
+ * The transcript does not have that problem: a video about culture conditions
+ * and manufacturing says "regenerative medicine" and "stem cell" out loud,
+ * repeatedly. The most frequent meaningful two-word phrase is a far better
+ * search seed than anything the filename holds.
+ *
+ * Bigram first because the clinic's real subjects are two words ("stem cell",
+ * "regenerative medicine", "hydrogen water"); a single word only when nothing
+ * is said twice.
+ */
+const STOPWORDS = new Set([
+  'the','a','an','and','or','but','if','of','to','in','on','at','for','with','from','by','as','is','are','was','were','be','been','being',
+  'this','that','these','those','it','its','you','your','we','our','us','they','their','them','i','me','my','he','she','his','her',
+  'not','no','do','does','did','have','has','had','can','could','will','would','should','may','might','must','just','about','what',
+  'when','where','which','who','how','why','all','any','more','most','some','such','than','then','there','here','so','very','really',
+  'know','get','got','make','made','made','one','two','also','because','into','out','up','down','over','under','only','other','after',
+  'before','between','through','during','while',
+]);
+
+export function topicFromTranscript(text: string): string {
+  const words = String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !STOPWORDS.has(w) && !/^\d+$/.test(w));
+  if (!words.length) return '';
+
+  const bigrams = new Map<string, number>();
+  for (let i = 0; i < words.length - 1; i++) {
+    const key = words[i] + ' ' + words[i + 1];
+    bigrams.set(key, (bigrams.get(key) || 0) + 1);
+  }
+  let best = '';
+  let bestCount = 1; // said once is not a theme
+  for (const [phrase, count] of bigrams) {
+    if (count > bestCount) { best = phrase; bestCount = count; }
+  }
+  if (best) return best;
+
+  // A single word gets the same bar as a pair: said once is not a theme, it
+  // is whatever happened to open the video. Nothing repeated means there is no
+  // signal here, and '' says so — the caller keeps the filename's subject
+  // rather than searching for a word picked at random.
+  const singles = new Map<string, number>();
+  for (const w of words) singles.set(w, (singles.get(w) || 0) + 1);
+  let word = '';
+  let wordCount = 1;
+  for (const [w, count] of singles) {
+    if (count > wordCount) { word = w; wordCount = count; }
+  }
+  return word;
+}
+
 export function videoSubject(title: string, transcript = ''): string {
   let s = String(title || '').trim();
   s = s.replace(/\.(mp4|mov|m4v|webm|mpeg)$/i, '');
