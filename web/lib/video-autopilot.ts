@@ -42,6 +42,7 @@ import { STATUS_TEXT, claimIsStale, firstLinkIn, fitsNetwork, isCandidate, prepa
 import { NEEDS_VIDEO, networksFor, nextFreeSlot } from '@/lib/video-slot';
 import { publishVideoDraft, takenSlots, type PublishOutcome } from '@/lib/video-publish';
 import { publicVideoCopy } from '@/lib/drive';
+import { cachedPublicCopy, rememberPublicCopy } from '@/lib/transcript-cache';
 import { parseDriveFileId } from '@/lib/drive-url';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
@@ -526,10 +527,23 @@ export async function handOffToMetricool(args: {
   const fileId = parseDriveFileId(videoLink);
   const wantsVideo = networksFor(networks, true).some((n) => NEEDS_VIDEO.has(n));
   let mediaUrl: string | null = null;
+  let mediaFileId: string | null = null;
   if (wantsVideo && fileId) {
     try {
-      const copied = await publicVideoCopy(fileId, title.replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 80) + '.mp4');
-      mediaUrl = copied.url;
+      // Made once per video, not once per run. This copy is opened to ANYONE with the
+      // link, and until it was recorded, re-preparing a row simply made another — a
+      // folder filling with world-readable copies of the clinic's footage, none of them
+      // traceable back to a row and none deletable.
+      const known = await cachedPublicCopy(fileId);
+      if (known) {
+        mediaFileId = known.id;
+        mediaUrl = known.url;
+      } else {
+        const made = await publicVideoCopy(fileId, title.replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 80) + '.mp4');
+        mediaFileId = made.fileId;
+        mediaUrl = made.url;
+        await rememberPublicCopy(fileId, { id: made.fileId, url: made.url });
+      }
     } catch (e) {
       // Not fatal: the networks that need a video are dropped below, and the
       // text-only ones still get their drafts.
@@ -596,6 +610,9 @@ export async function handOffToMetricool(args: {
       text,
       publicationDate: slot.toISOString(),
       mediaUrl: NEEDS_VIDEO.has(network) ? mediaUrl : null,
+      // Recorded per post, because ONE copy backs every network of a run: deleting the
+      // file when the first of them is deleted would break the rest.
+      mediaFileId: NEEDS_VIDEO.has(network) ? mediaFileId : null,
       draftId: prepared.draftId,
     }));
   }

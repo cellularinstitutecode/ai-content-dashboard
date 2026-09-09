@@ -105,6 +105,30 @@ export async function publicVideoCopy(fileId: string, filename: string): Promise
   };
 }
 
+/**
+ * Delete a file this app created in its own folder.
+ *
+ * Only ever called with an id the app RECORDED when it made the file. Never with the
+ * result of listing DRIVE_FOLDER_ID: that folder also holds the Opus clips, which are
+ * referenced only from a draft's stored pack, and a cleanup that swept the folder for
+ * anything it did not recognise would make every past clip permanently unplayable — the
+ * exact failure this module was written to prevent.
+ *
+ * Treats "already gone" as success: a file removed by hand should not make a delete look
+ * broken forever.
+ */
+export async function deleteDriveFile(fileId: string): Promise<void> {
+  const id = String(fileId || '').trim();
+  if (!id) return;
+  try {
+    await driveClient().files.delete({ fileId: id, supportsAllDrives: true });
+  } catch (e) {
+    const status = (e as { code?: number; status?: number })?.code ?? (e as { status?: number })?.status;
+    if (status === 404 || status === 410) return;
+    throw e;
+  }
+}
+
 // Shared helper: copy each finished clip's MP4 into Google Drive and swap in the
 // permanent Drive URL, so BOTH the webhook (fast path) and the /api/opus/clip poll
 // (fallback path) store durable links instead of Opus's short-lived signed CDN URLs.

@@ -164,6 +164,15 @@ end $$;
 -- A template describes what to post (text + providers) and when (weekly on
 -- chosen weekdays at a given local time). Users "apply" a template to
 -- materialize upcoming rows into public.posts.
+-- Which public Drive copy this post's media came from.
+--
+-- Nothing in a posts row said anything about the video it was made from — not a file id,
+-- not the media URL — so a copy opened to anyone with the link could never be traced back
+-- and never be deleted. It is recorded here because ONE copy backs every network of a
+-- run: deleting the file when the first of them is deleted would break the others, so
+-- the delete has to be able to ask whether anything still uses it.
+alter table public.posts add column if not exists media_drive_file_id text;
+
 create table if not exists public.schedule_templates (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,

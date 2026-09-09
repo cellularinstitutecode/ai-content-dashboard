@@ -63,6 +63,24 @@ export const REQUIRED_SCHEMA: SchemaProbe[] = [
     breaks: 'the record of which posts reached Metricool',
   },
   {
+    // The two halves of not leaving world-readable copies of the clinic's footage lying
+    // about: one to find the copy a previous run already made, one to know when nothing
+    // needs it any more. Without them the delete path is silently a no-op — which is the
+    // exact failure this probe list exists to catch.
+    table: 'video_transcripts',
+    column: 'public_copy_id',
+    kind: 'column',
+    file: 'supabase/video-autopilot.sql',
+    breaks: 'reusing a video\u2019s public copy — every run would make another one, and none could be removed',
+  },
+  {
+    table: 'posts',
+    column: 'media_drive_file_id',
+    kind: 'column',
+    file: 'supabase/schema.sql',
+    breaks: 'removing a public video copy once the last post using it is deleted',
+  },
+  {
     // An ALTER TABLE, not a CREATE: a database can have template_runs and still
     // be missing this, so the table probe above would pass while the engine
     // still could not read a template's plan.
