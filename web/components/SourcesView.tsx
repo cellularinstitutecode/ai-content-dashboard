@@ -21,6 +21,7 @@ import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 import VideoPrepare from '@/components/VideoPrepare';
 import { runPrepare } from '@/lib/prepare-request';
 import { mapLimit } from '@/lib/map-limit';
+import { mayStartBatch } from '@/lib/batch-plan';
 import { isDriveUrl, parseDriveFileId } from '@/lib/drive-url';
 
 /** How a batched row is getting on, in words rather than a spinner. */
@@ -373,6 +374,14 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   const [summary, setSummary] = useState<string | null>(null);
   /** Show only what is ticked — the way to review a basket built across many searches. */
   const [onlyPicked, setOnlyPicked] = useState(false);
+  /**
+   * Write the sheet, queue nothing.
+   *
+   * Remembered with the basket, which is the choice that was made: it starts wherever it
+   * was left. The risk of a setting from last week governing today's run is real, so the
+   * bar states plainly which mode it is in rather than relying on a tick being noticed.
+   */
+  const [sheetOnly, setSheetOnly] = useState(false);
   /** Set when Stop is pressed; the loop checks it between videos, never mid-video. */
   const stopRef = useRef(false);
 
@@ -395,8 +404,9 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     try {
       const raw = window.localStorage.getItem(BASKET_KEY);
       if (!raw) return;
-      const saved = JSON.parse(raw) as { picked?: string[]; batch?: Record<string, { state: BatchState; note?: string }> };
+      const saved = JSON.parse(raw) as { picked?: string[]; batch?: Record<string, { state: BatchState; note?: string }>; sheetOnly?: boolean };
       if (Array.isArray(saved.picked) && saved.picked.length) setPicked(new Set(saved.picked));
+      if (typeof saved.sheetOnly === 'boolean') setSheetOnly(saved.sheetOnly);
       if (saved.batch && typeof saved.batch === 'object') {
         // A row left mid-flight belongs to a page that is gone. Show it as unfinished
         // rather than as forever "Preparing…".
@@ -413,9 +423,9 @@ export default function SourcesView({ kind }: { kind: Tab }) {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(BASKET_KEY, JSON.stringify({ picked: Array.from(picked), batch }));
+      window.localStorage.setItem(BASKET_KEY, JSON.stringify({ picked: Array.from(picked), batch, sheetOnly }));
     } catch { /* storage full or blocked; the basket simply will not survive a reload */ }
-  }, [picked, batch]);
+  }, [picked, batch, sheetOnly]);
 
   function togglePick(v: VideoEntry) {
     const k = rowKey(v);
@@ -465,7 +475,18 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     setBatch(Object.fromEntries(work.map((v) => [rowKey(v), { state: 'queued' as const }])));
 
     // Settle the columns and the slots first, serially, server-side.
+    //
+    // A PRECONDITION, not a nicety — the first version read the slots, never read
+    // columnErrors, and carried on through a 429 or a dropped connection, straight into
+    // the duplicate-column race the call exists to prevent. mayStartBatch holds the rule.
+    const planRows = work.map((v) => ({
+      tab: v.tab,
+      hasAiColumns: Boolean(v.columns?.keywords && v.columns?.ref && v.columns?.aiStatus),
+    }));
+
     let slots: string[] = [];
+    let failedTabs: string[] = [];
+    let planError: string | null = null;
     try {
       const r = await fetch('/api/videos/batch', {
         method: 'POST',
@@ -473,10 +494,21 @@ export default function SourcesView({ kind }: { kind: Tab }) {
         body: JSON.stringify({ tabs: Array.from(new Set(work.map((v) => v.tab))), count: work.length }),
       });
       const j = await r.json().catch(() => ({}));
-      if (r.ok) slots = Array.isArray(j?.slots) ? j.slots : [];
+      if (!r.ok) planError = String(j?.message || 'The dashboard could not prepare the sheet for this run.');
+      else {
+        slots = Array.isArray(j?.slots) ? j.slots : [];
+        failedTabs = Array.isArray(j?.columnErrors) ? j.columnErrors : [];
+      }
     } catch {
-      // Without reserved slots each row chooses its own, exactly as a single Prepare
-      // always has. The batch loses only its guarantee of distinct mornings.
+      planError = 'The dashboard could not be reached to prepare the sheet for this run.';
+    }
+
+    const may = mayStartBatch(planRows, failedTabs, planError);
+    if (!may.ok) {
+      setBatch({});
+      setSummary(may.reason + ' Nothing was prepared — try again.');
+      setRunning(false);
+      return;
     }
 
     const outcomes = await mapLimit(work, BATCH_CONCURRENCY, async (v, i): Promise<BatchState> => {
@@ -487,7 +519,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
       }
       setBatch((b) => ({ ...b, [k]: { state: 'working' } }));
       const out = await runPrepare(
-        { url: prepareLink(v), tab: v.tab, row: v.row, publicationDate: slots[i] },
+        { url: prepareLink(v), tab: v.tab, row: v.row, publicationDate: slots[i], skipMetricool: sheetOnly },
         (note) => setBatch((b) => ({ ...b, [k]: { state: 'working', note } })),
       );
       const state: BatchState = !out.ok
@@ -781,6 +813,20 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                     </button>
                   )}
                   {!running && <button type="button" style={ghost} onClick={() => { setPicked(new Set()); setBatch({}); }}>Clear</button>}
+                  {/*
+                    Stated as a sentence, not a bare tick. This setting is remembered
+                    between visits, so the one failure mode is a choice made last week
+                    quietly governing this run — which a checkbox label does not prevent
+                    and a plain statement of what will happen does.
+                  */}
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, cursor: running ? 'default' : 'pointer' }}>
+                    <input type="checkbox" disabled={running} checked={sheetOnly} onChange={(e) => setSheetOnly(e.target.checked)} />
+                    <span style={sheetOnly ? { fontWeight: 600, color: '#1d6f42' } : undefined}>
+                      {sheetOnly
+                        ? 'Writing the sheet only — nothing will reach Metricool'
+                        : 'Write the sheet only (no Metricool drafts)'}
+                    </span>
+                  </label>
                   <span style={{ fontSize: 11, opacity: .75 }}>
                     {BATCH_CONCURRENCY} at a time — about a minute each, so roughly {Math.max(1, Math.ceil(Math.min(pickedRows.length, BATCH_MAX) / BATCH_CONCURRENCY))} minute(s) for this lot.
                   </span>

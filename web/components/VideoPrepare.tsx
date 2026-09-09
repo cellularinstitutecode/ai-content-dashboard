@@ -155,7 +155,15 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow }: {
   return (
     <section style={card} id="video-prepare">
       <h2 style={{ margin: 0, fontSize: 15 }}>Prepare a video for LinkedIn and TikTok</h2>
-      <p style={{ fontSize: 12, opacity: .65, margin: '4px 0 12px' }}>Paste a YouTube or Google Drive link (or press Prepare on a row above). The dashboard pulls the transcript — captions on YouTube, speech-to-text on a Drive file — runs the keyword brief, writes the copy from what was actually said, and lets you edit before anything reaches Metricool.</p>
+      {/*
+        This used to end "…and lets you edit before anything reaches Metricool", which is
+        not what happens. A link that matches a row in the sheet — which a pasted one now
+        does, by file id — goes through completeRow: the copy is written into column E and
+        the drafts are created BEFORE these boxes render. The panel below then says so, two
+        lines after the promise that it hadn't. Editing here changes what you send with the
+        buttons at the bottom; it does not change a draft already queued.
+      */}
+      <p style={{ fontSize: 12, opacity: .65, margin: '4px 0 12px' }}>Paste a YouTube or Google Drive link (or press Prepare on a row above). The dashboard pulls the transcript — captions on YouTube, speech-to-text on a Drive file — runs the keyword brief, and writes the copy from what was actually said. <strong>If the link matches a row in the sheet, the copy is written into that row and a Metricool draft is created straight away</strong> — the panel below says exactly what happened. Nothing publishes: a draft waits in Metricool until someone approves it.</p>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <input id="video-url" style={{ ...inputStyle, flex: 1, minWidth: 260 }} value={url} onChange={(e) => { setUrl(e.target.value); setPrepared(null); setSent(null); }} placeholder="https://www.youtube.com/watch?v=… or https://drive.google.com/file/d/…" />
         <button type="button" style={btn} disabled={busy === 'prepare' || !urlOk} onClick={() => void prepare()}>{busy === 'prepare' ? 'Preparing…' : 'Prepare'}</button>

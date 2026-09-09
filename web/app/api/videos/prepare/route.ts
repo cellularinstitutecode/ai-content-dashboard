@@ -131,6 +131,14 @@ export async function POST(req: NextRequest) {
         // Given by a batch that reserved one slot per row from a single reading of the
         // calendar. Absent for a single Prepare, which chooses its own as it always has.
         publicationDate: typeof body?.publicationDate === 'string' ? body.publicationDate : undefined,
+        // Write the sheet, queue nothing.
+        //
+        // completeRow has always supported this and the door never opened it, so there
+        // was no way to run thirty rows and read the copy before any of it reached a
+        // posting queue — and no way to avoid the public Drive copy a video-needing
+        // network requires, which nothing in this app can delete. The row's own Send
+        // buttons still work afterwards.
+        skipMetricool: body?.skipMetricool === true,
       });
     } catch (e) {
       // The copy is written and the draft is saved; only the hand-off failed.
