@@ -30,6 +30,20 @@ export const STATUS_TEXT = {
   failed: 'Error — revisar',
 } as const;
 
+/**
+ * The first real URL in a LINK VIDEO cell.
+ *
+ * The cell is not always one bare link. The real sheet has
+ * "SUBS: https://… NO SUBS: https://…" and "1. https://… 2. https://…" —
+ * a person's note, not a field. Parsing the whole cell as a URL fails on
+ * those, which silently made them ineligible; taking the first link matches
+ * what the "Use in post" button has always done with the same cells.
+ */
+export function firstLinkIn(cell: string): string {
+  const m = String(cell || '').match(/https?:\/\/\S+/);
+  return m ? m[0].replace(/[),.]+$/, '') : '';
+}
+
 export type CandidateRow = { videoLink: string; copy: string };
 
 /**
@@ -40,7 +54,7 @@ export type CandidateRow = { videoLink: string; copy: string };
  * ones, and never the ones a person has already done.
  */
 export function isCandidate(row: CandidateRow): boolean {
-  const link = String(row.videoLink || '').trim();
+  const link = firstLinkIn(row.videoLink);
   if (!link) return false;
   if (String(row.copy || '').trim()) return false;
   if (parseDriveFileId(link)) return true;

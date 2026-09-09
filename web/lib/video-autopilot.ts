@@ -35,7 +35,7 @@ import {
 } from '@/lib/google-sources';
 import { columnFor, pick, tableFromRows } from '@/lib/sheet-table';
 import { prepareVideo } from '@/lib/video-prepare';
-import { STATUS_TEXT, claimIsStale, isCandidate, rowKeyFor } from '@/lib/video-row';
+import { STATUS_TEXT, claimIsStale, firstLinkIn, isCandidate, rowKeyFor } from '@/lib/video-row';
 import { parseDriveFileId } from '@/lib/drive-url';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
@@ -118,7 +118,9 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
 
       result.scanned++;
       const title = pick(rec, 'título del video', 'titulo del video', 'title');
-      const videoLink = pick(rec, 'link video', 'link', 'video link');
+      // The cell can carry a note around the link ("SUBS: https://…", a
+      // numbered list of three takes). The first link is the one to work on.
+      const videoLink = firstLinkIn(pick(rec, 'link video', 'link', 'video link'));
       const copy = pick(rec, 'copy', 'caption');
       const youtubeLink = (String(pick(rec, 'youtube')).match(/https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/\S+/i) || [''])[0];
       if (!isCandidate({ videoLink, copy })) continue;

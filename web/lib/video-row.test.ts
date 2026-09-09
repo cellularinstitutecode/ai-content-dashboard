@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { claimIsStale, isCandidate, keywordLineFrom, rowKeyFor, STATUS_TEXT } from './video-row.ts';
+import { claimIsStale, firstLinkIn, isCandidate, keywordLineFrom, rowKeyFor, STATUS_TEXT } from './video-row.ts';
 
 const DRIVE = 'https://drive.google.com/file/d/1s0d6e44yh6hNObVAzbdkBRclx_Pe8g7N/view?usp=drive_link';
 
@@ -65,4 +65,25 @@ test('a row another sweep is working on right now is left alone', () => {
   // A row with no timestamp at all must be retryable, not locked out forever.
   assert.equal(claimIsStale(null, now), true);
   assert.equal(claimIsStale('not a date', now), true);
+});
+
+test('a link cell that carries a note around the link still works', () => {
+  const bare = 'https://drive.google.com/file/d/1s0d6e44yh6hNObVAzbdkBRcIx_Pe8g7N/view?usp=drive_link';
+  assert.equal(firstLinkIn(bare), bare);
+
+  // Both shapes are in the real sheet today.
+  assert.equal(
+    firstLinkIn('SUBS: https://drive.google.com/file/d/1PhDkCeCABiEJaIgN1T8bX5x3KOJiUtLM/view?usp=sharing NO SUBS: https://drive.google.com/file/d/12UPPGgaUiMshAr1ruRUAyOXRSUYfZ9xr/view?usp=sharing'),
+    'https://drive.google.com/file/d/1PhDkCeCABiEJaIgN1T8bX5x3KOJiUtLM/view?usp=sharing',
+  );
+  assert.equal(
+    firstLinkIn('1. https://drive.google.com/file/d/1-eCk231FQx1CnmgD6hpfI5vD2WTrvrXh/view?usp=drive_link 2. https://drive.google.com/file/d/1blfHsFULM3vFYdxhR3p-6J6DbOR-HXF8/view?usp=drive_link'),
+    'https://drive.google.com/file/d/1-eCk231FQx1CnmgD6hpfI5vD2WTrvrXh/view?usp=drive_link',
+  );
+
+  assert.equal(firstLinkIn('Unlisted'), '');
+  assert.equal(firstLinkIn(''), '');
+
+  // And such a row is now work to do, rather than silently ineligible.
+  assert.equal(isCandidate({ videoLink: 'SUBS: ' + bare, copy: '' }), true);
 });
