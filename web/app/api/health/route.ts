@@ -24,6 +24,8 @@ import { keywordCapability } from '@/lib/semrush';
 import { lastImageOutcome } from '@/lib/provider-status';
 import { resolveFfmpeg } from '@/lib/audio-extract';
 import { missingSchema } from '@/lib/schema-check';
+import { resolveOwner } from '@/lib/sweep-owner';
+import { serviceKeyVerdict } from '@/lib/supabase-key';
 import { schemaDetail } from '@/lib/schema-probe';
 
 export const runtime = 'nodejs';
@@ -59,6 +61,13 @@ export async function GET() {
   // Did anyone actually run the .sql files? Nothing checked, ever.
   const schemaGaps = await missingSchema();
 
+  // Can the automatic sweep find anybody to write as? Configuration said yes
+  // — every Supabase variable was present — while the trigger got 503 no_owner
+  // on every fire, and the message blamed a page the person had already saved.
+  // This asks the real question and reports the real answer.
+  const owner = await resolveOwner();
+  const serviceKey = serviceKeyVerdict(process.env.SUPABASE_SERVICE_ROLE_KEY);
+
   // Images: what the account last DID, not what is in the environment.
   const imagesConfigured = has('OPENAI_API_KEY') && process.env.IMAGE_GEN !== 'off';
   const lastImage = imagesConfigured ? await lastImageOutcome() : null;
@@ -83,6 +92,28 @@ export async function GET() {
       ok: has('NEXT_PUBLIC_SUPABASE_URL') && has('NEXT_PUBLIC_SUPABASE_ANON_KEY') && has('SUPABASE_SERVICE_ROLE_KEY'),
       severity: 'required',
       detail: 'Database, auth and storage.',
+    },
+    {
+      // Presence was never the question. The anon key and the service-role key
+      // are both long JWTs, sit beside each other in the Supabase dashboard,
+      // and are pasted into Vercel by hand — and holding the wrong one here
+      // breaks nothing visibly: it just makes every privileged read return
+      // zero rows, which reads as "the data was never saved".
+      name: 'supabase_service_role',
+      ok: serviceKey.ok,
+      code: serviceKey.code,
+      severity: 'required',
+      detail: serviceKey.detail,
+    },
+    {
+      // The automatic path's single point of failure, asked live.
+      name: 'sweep_owner',
+      ok: owner.ok,
+      code: owner.ok ? owner.source : owner.reason,
+      severity: 'required',
+      detail: owner.ok
+        ? owner.detail + (owner.brandProfile ? '' : ' Save Brand Brain to give the copy the clinic\u2019s voice.')
+        : owner.detail,
     },
     {
       name: 'cron_secret',

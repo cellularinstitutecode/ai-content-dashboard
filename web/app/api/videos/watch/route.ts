@@ -15,7 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { resolveSweepUser, sweepVideos } from '@/lib/video-autopilot';
+import { resolveOwner, sweepVideos } from '@/lib/video-autopilot';
 import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
@@ -31,19 +31,18 @@ async function handle(req: NextRequest) {
 
   let userId: string | null = null;
   if (isCron) {
-    userId = await resolveSweepUser();
-    if (!userId) {
+    // resolveOwner rather than resolveSweepUser: WHY there is no owner decides
+    // what a person should do about it, and the old message assumed the one
+    // cause it could not tell apart from the others — sending someone to press
+    // Save on a page they had already saved.
+    const owner = await resolveOwner();
+    if (!owner.ok) {
       return NextResponse.json(
-        {
-          ok: false,
-          error: 'no_owner',
-          message: 'Nobody to write as: there is no saved Brand Brain and no allowlisted account in the database. ' +
-            'Open Brand Brain in the dashboard and press Save — that also gives the copy the clinic’s voice instead ' +
-            'of the default one. VIDEO_AUTOPILOT_USER_ID overrides this if you need a specific account.',
-        },
+        { ok: false, error: 'no_owner', reason: owner.reason, message: owner.detail },
         { status: 503 },
       );
     }
+    userId = owner.userId;
   } else {
     // A person pressed the button. Allowlist, not merely a session: this spends
     // OpenAI, Anthropic and Semrush credit.
