@@ -26,6 +26,8 @@ export type PrepareRequest = {
    * of them has written.
    */
   publicationDate?: string;
+  /** Write the copy into the sheet, but queue nothing in Metricool. */
+  skipMetricool?: boolean;
 };
 
 export type PrepareOutcome =
@@ -47,7 +49,7 @@ export async function runPrepare(req: PrepareRequest, onProgress?: (note: string
       r = await fetch('/api/videos/prepare', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ url: req.url, transcript: req.transcript || undefined, tab: req.tab, row: req.row, publicationDate: req.publicationDate }),
+        body: JSON.stringify({ url: req.url, transcript: req.transcript || undefined, tab: req.tab, row: req.row, publicationDate: req.publicationDate, skipMetricool: req.skipMetricool }),
       });
     } catch {
       return { ok: false, kind: 'error', message: 'We could not reach the dashboard just now.' };
