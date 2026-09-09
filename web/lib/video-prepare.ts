@@ -199,16 +199,18 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   // 4) Save as a draft so it is in the library and editable.
   let draftId: string | null = null;
   if (input.saveDraft !== false) {
-    try {
-      const { data } = await supabaseAdmin()
-        .from('drafts')
-        .insert({ user_id: input.userId, topic: 'Video · ' + title, channels: ['linkedin', 'tiktok'], pack: videoPack, provider: 'anthropic' })
-        .select('id')
-        .single();
-      draftId = (data as { id?: string } | null)?.id || null;
-    } catch (e) {
-      reportError('videos:prepare-save', e);
-    }
+    // The `error` half matters: supabase-js RESOLVES a failed insert rather
+    // than throwing, so a try/catch alone catches nothing and a draft that
+    // never saved leaves no trace anywhere — the row is written, Metricool
+    // gets the post, and only the library is quietly missing it.
+    const saved = await supabaseAdmin()
+      .from('drafts')
+      .insert({ user_id: input.userId, topic: 'Video · ' + title, channels: ['linkedin', 'tiktok'], pack: videoPack, provider: 'anthropic' })
+      .select('id')
+      .single()
+      .then((r) => r, (e: unknown) => ({ data: null, error: e as { message?: string } }));
+    if (saved.error) reportError('videos:prepare-save', saved.error, { userId: input.userId });
+    draftId = (saved.data as { id?: string } | null)?.id || null;
   }
 
   return {

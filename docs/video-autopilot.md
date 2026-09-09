@@ -289,11 +289,53 @@ reasons:
 Either way, pressing **Prepare** on that row in the Video Library with a pasted
 transcript finishes it by hand, the same as before.
 
+## If the trigger reports `no_owner`
+
+The sweep needs an account to write as — the drafts belong to somebody, and the
+copy is written in somebody's brand voice. `/api/health` → **`sweep_owner`**
+runs that lookup live and reports the reason, because for one deployment the
+old message asserted a cause it could not tell from two others and sent a
+person to press Save on a page they had already saved.
+
+| `code` | What it means |
+| --- | --- |
+| `rls_blocked` | The credential cannot see past row-level security. Almost always the **anon key in `SUPABASE_SERVICE_ROLE_KEY`** — see below. |
+| `unreadable` | The query failed. A database or credential problem; the detail carries the Postgres error. Nothing can be concluded about whether a Brand Brain exists. |
+| `empty` | The query *succeeded* and there is genuinely no Brand Brain row and no allowlisted account. Sign in to the dashboard once, then save Brand Brain. |
+
+A saved Brand Brain is preferred and looked for first — it is the clinic's
+voice, not merely an owner. Its absence costs the copy its voice and nothing
+more: the sweep falls back to the first allowlisted account, because the sheet
+belongs to the workspace rather than to a person. `VIDEO_AUTOPILOT_USER_ID`
+overrides both.
+
+### The anon key in the service-role slot
+
+`brand_profiles` has row-level security: *you may read your own row and nobody
+else's*. The service role reads past that policy; the anon key does not. So
+with the wrong key in `SUPABASE_SERVICE_ROLE_KEY`:
+
+- **Saving Brand Brain works.** That write carries your own session, the policy
+  passes, and the page shows your values back on reload.
+- **Every background read of it returns zero rows.** The sweep has no session,
+  so the policy matches nothing.
+
+Saved and unsaved at the same time — and nothing anywhere said so, because the
+check that existed only asked whether the variable was *set*. It was.
+
+`/api/health` → **`supabase_service_role`** now reads the role out of the key
+itself (a Supabase key is a JWT whose payload names its role, so this needs no
+network call and the key never leaves the process). `anon_key` there is the
+whole diagnosis: copy the **service_role** key from Supabase → Project Settings
+→ API into Vercel and redeploy.
+
 ## Where the code is
 
 | File | What it does |
 | --- | --- |
 | `web/lib/video-autopilot.ts` | The sweep: which rows, in what order, written back how |
+| `web/lib/sweep-owner.ts` | Who the sweep writes as, and *why* when the answer is nobody |
+| `web/lib/supabase-key.ts` | Which Supabase key is in the service-role slot, read from the key (unit-tested) |
 | `web/lib/video-row.ts` | The per-row decisions, as pure functions (unit-tested) |
 | `web/lib/video-prepare.ts` | One video → transcript, keywords, copy, REF. Shared with the Prepare button |
 | `web/lib/video-transcript.ts` | The transcript ladder: pasted → YouTube → Drive |

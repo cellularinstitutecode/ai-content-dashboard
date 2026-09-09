@@ -442,7 +442,19 @@ export async function handOffToMetricool(args: {
   if (!chosen.length) return [];
 
   const now = new Date();
-  const taken = new Set(await takenSlots(userId, now.toISOString()));
+  // takenSlots throws rather than returning an empty list it cannot vouch for:
+  // "nothing is scheduled" and "I could not find out" choose very different
+  // slots, and treating them alike stacks every post on one instant. Caught
+  // here so it costs the HAND-OFF and not the row — by this point the copy is
+  // already in the sheet and the draft already in the dashboard.
+  let taken: Set<string>;
+  try {
+    taken = new Set(await takenSlots(userId, now.toISOString()));
+  } catch (e) {
+    reportError('video-sweep:slots', e);
+    const message = e instanceof Error ? e.message : 'The posting calendar could not be read.';
+    return chosen.map((network) => ({ network, ok: false as const, reason: 'metricool_error' as const, message }));
+  }
   const out: PublishOutcome[] = [];
   for (const network of chosen) {
     const slot = nextFreeSlot(taken, now);
