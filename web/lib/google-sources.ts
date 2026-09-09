@@ -638,11 +638,15 @@ export async function uploadFolderImage(
  * Download a VIDEO or AUDIO file from Drive, for transcription.
  *
  * Separate from downloadDriveFile above, which is the Image Library's path and
- * refuses anything that is not an image. The cap is a real constraint, not a
- * guess: OpenAI's transcription endpoint rejects uploads over 25 MB, so a file
- * above it must be reported as such rather than sent and failed.
+ * refuses anything that is not an image.
+ *
+ * The cap is on the SOURCE file, and it is about scratch space rather than the
+ * transcriber: lib/audio-extract.ts writes the download to the function's /tmp
+ * (512 MB) and pulls the audio track out of it, so what actually reaches the
+ * transcriber is a couple of megabytes whatever the video weighs. The clinic's
+ * reels run 76–283 MB, comfortably inside this.
  */
-export const TRANSCRIBE_MAX_BYTES = 25 * 1024 * 1024;
+export const MEDIA_MAX_BYTES = 450 * 1024 * 1024;
 
 export type DriveMedia = { bytes: Buffer; contentType: string; name: string; sizeBytes: number };
 
@@ -658,7 +662,7 @@ export type DriveMediaResult =
  * the video files it links to, and that is the permission most likely to be
  * missing. Finding out costs one request per row instead of a download each.
  */
-export async function probeDriveMedia(fileId: string, maxBytes = TRANSCRIBE_MAX_BYTES): Promise<
+export async function probeDriveMedia(fileId: string, maxBytes = MEDIA_MAX_BYTES): Promise<
   { ok: true; name: string; contentType: string; sizeBytes: number | null }
   | { ok: false; reason: 'not_media' | 'too_large' | 'unreachable'; message: string; name: string | null; sizeBytes: number | null }
 > {
@@ -687,7 +691,7 @@ export async function probeDriveMedia(fileId: string, maxBytes = TRANSCRIBE_MAX_
     return {
       ok: false,
       reason: 'too_large',
-      message: 'That video is ' + (size / 1024 / 1024).toFixed(0) + ' MB. Automatic transcription tops out at ' + Math.floor(maxBytes / 1024 / 1024) + ' MB.',
+      message: 'That video is ' + (size / 1024 / 1024).toFixed(0) + ' MB, past the ' + Math.floor(maxBytes / 1024 / 1024) + ' MB the dashboard can pull down in one go.',
       name: meta.name || null,
       sizeBytes: size,
     };
@@ -695,7 +699,19 @@ export async function probeDriveMedia(fileId: string, maxBytes = TRANSCRIBE_MAX_
   return { ok: true, name: meta.name, contentType: meta.mimeType, sizeBytes: size };
 }
 
-export async function downloadDriveMedia(fileId: string, maxBytes = TRANSCRIBE_MAX_BYTES): Promise<DriveMediaResult> {
+/**
+ * The same file as downloadDriveMedia, as a stream rather than a Buffer.
+ *
+ * A 283 MB Buffer is 283 MB of function memory held for the whole download;
+ * the caller here writes the body to disk as it arrives. Returns the raw
+ * Response so the caller owns the body — and with it, the choice of never
+ * holding the whole file at once.
+ */
+export async function driveMediaStream(fileId: string): Promise<Response> {
+  return gfetch(DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true', {}, 180000);
+}
+
+export async function downloadDriveMedia(fileId: string, maxBytes = MEDIA_MAX_BYTES): Promise<DriveMediaResult> {
   const probe = await probeDriveMedia(fileId, maxBytes);
   if (!probe.ok) return probe;
   const meta = { name: probe.name, mimeType: probe.contentType };
@@ -708,7 +724,7 @@ export async function downloadDriveMedia(fileId: string, maxBytes = TRANSCRIBE_M
   // A file with no size in its metadata (Drive omits it for some shortcuts)
   // still must not sail past the cap.
   if (bytes.byteLength > maxBytes) {
-    return { ok: false, reason: 'too_large', message: 'That video is larger than the ' + Math.floor(maxBytes / 1024 / 1024) + ' MB transcription limit.', name: meta.name || null, sizeBytes: bytes.byteLength };
+    return { ok: false, reason: 'too_large', message: 'That video is larger than the ' + Math.floor(maxBytes / 1024 / 1024) + ' MB the dashboard can pull down in one go.', name: meta.name || null, sizeBytes: bytes.byteLength };
   }
   return { ok: true, media: { bytes, contentType: meta.mimeType, name: meta.name, sizeBytes: bytes.byteLength } };
 }

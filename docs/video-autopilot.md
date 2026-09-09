@@ -13,7 +13,9 @@ output changes: the same voice, the same `AVISO DE PUBLICIDAD` line, the same
 ```
 new row with LINK VIDEO, COPY empty
   → transcript      YouTube captions if the YOUTUBE column has a URL,
-                    otherwise speech-to-text on the Drive .mp4
+                    otherwise speech-to-text on the Drive .mp4 — ffmpeg lifts
+                    out the audio track first, so a 194 MB reel is transcribed
+                    from about 2 MB of sound
   → keywords        Semrush brief on what the video is about (cached, usually 0 units)
   → copy            Claude writes the LinkedIn post and the TikTok caption
                     from the transcript, and only from the transcript
@@ -128,19 +130,36 @@ anyone with view access to the sheet can read the script.
 ## Costs
 
 About **two cents per video**: roughly $0.006 per minute of speech-to-text, plus
-one content pack from Claude. Semrush is cached for 30 days, so a repeated
-topic costs zero units. A YouTube-published video skips the transcription cost
-entirely.
+one content pack from Claude. Extracting the audio costs nothing but a few
+seconds of CPU. Semrush is cached for 30 days, so a repeated topic costs zero
+units. A video that is already on YouTube skips the transcription cost
+entirely, if its URL is in the YOUTUBE column.
+
+## How a 200 MB reel gets transcribed
+
+The transcription endpoint refuses anything over 25 MB, and the clinic's reels
+run 76–283 MB — so for a while the automatic path could not read a single video
+in the sheet.
+
+It does not send the video. A three-minute reel's *speech* is about two
+megabytes; the other 190 are pixels the transcriber would discard on arrival.
+So the file is streamed to the function's scratch disk, `ffmpeg` lifts out the
+audio as 16 kHz mono (the rate the transcriber resamples to anyway, so nothing
+it would have used is lost), and only that is uploaded. Both scratch files are
+deleted on every path, including failure.
+
+At that bitrate about 50 minutes of speech fits inside the ceiling, so length
+is no longer a practical limit either. The remaining cap is 450 MB on the
+*source* file, which is scratch space, not the transcriber.
 
 ## When it cannot do a video
 
 `ESTADO IA` says `Falta transcripción` and the row waits for a person. The two
 reasons:
 
-- **The file is over 25 MB.** That is the transcription upload limit. Either
-  publish the video to YouTube (its captions are then used, free) or open the
-  row in the dashboard's Video Library and paste the transcript.
 - **There is no speech in it.** A silent b-roll clip has nothing to write from.
+- **The source file is over 450 MB**, larger than the function's scratch disk.
+  Nothing in the sheet today is close.
 
 Either way, pressing **Prepare** on that row in the Video Library with a pasted
 transcript finishes it by hand, the same as before.
@@ -154,4 +173,5 @@ transcript finishes it by hand, the same as before.
 | `web/lib/video-prepare.ts` | One video → transcript, keywords, copy, REF. Shared with the Prepare button |
 | `web/lib/video-transcript.ts` | The transcript ladder: pasted → YouTube → Drive |
 | `web/lib/media-transcript.ts` | Speech-to-text on a Drive file |
+| `web/lib/audio-extract.ts` | Lifts the audio track out of the video first |
 | `web/app/api/videos/watch/route.ts` | The trigger: cron, Apps Script, or a person |

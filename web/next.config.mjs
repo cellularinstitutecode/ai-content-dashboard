@@ -74,7 +74,17 @@ const nextConfig = {
   // licensed brand faces when present, the open stand-ins otherwise). File
   // tracing only follows imports, so the fonts are named here or the deployed
   // function would have no type to set the cards in.
-  outputFileTracingIncludes: { '/api/drafts/card': ['./public/fonts/**/*'] },
+  // File tracing follows imports, and these two are files rather than imports:
+  //   the brand-card route reads font files from disk at request time (the
+  //   licensed brand faces when present, the open stand-ins otherwise), and
+  //   the video routes shell out to ffmpeg-static's binary to lift the audio
+  //   track out of a Drive video before transcribing it. Named here, or the
+  //   deployed functions would have no type to set cards in and no ffmpeg.
+  outputFileTracingIncludes: {
+    '/api/drafts/card': ['./public/fonts/**/*'],
+    '/api/videos/prepare': ['./node_modules/ffmpeg-static/ffmpeg'],
+    '/api/videos/watch': ['./node_modules/ffmpeg-static/ffmpeg'],
+  },
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];
   },

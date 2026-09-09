@@ -159,6 +159,9 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
           if (!probe.ok) {
             reach = {
               ...reach,
+              // 'too_large' now means past what can be pulled down at all, not
+              // past what can be transcribed — the audio track is what gets
+              // transcribed, and that is always small.
               state: probe.reason === 'too_large' ? 'needs_transcript' : 'failed',
               message: probe.message,
             };
