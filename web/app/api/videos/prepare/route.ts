@@ -62,7 +62,7 @@ function sheetWriteAdvice(e: unknown): string {
 export async function POST(req: NextRequest) {
   const auth = await requireAllowlistedUser();
   if (!auth.ok) return auth.response;
-  const rl = await checkRateLimit(auth.userId, 'generate');
+  const rl = await checkRateLimit(auth.userId, 'video-prepare');
   if (!rl.ok) return NextResponse.json({ error: 'rate_limited', limit: rl.limit }, { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } });
 
   let body: any = null;
@@ -126,7 +126,12 @@ export async function POST(req: NextRequest) {
 
   if (tab && Number.isInteger(row) && row >= 2) {
     try {
-      sheet = await completeRow({ userId: auth.userId, tab, row, prepared: out, videoLink: url });
+      sheet = await completeRow({
+        userId: auth.userId, tab, row, prepared: out, videoLink: url,
+        // Given by a batch that reserved one slot per row from a single reading of the
+        // calendar. Absent for a single Prepare, which chooses its own as it always has.
+        publicationDate: typeof body?.publicationDate === 'string' ? body.publicationDate : undefined,
+      });
     } catch (e) {
       // The copy is written and the draft is saved; only the hand-off failed.
       // Say so rather than losing the work behind a 500.

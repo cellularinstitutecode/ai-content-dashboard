@@ -20,7 +20,8 @@ import { useWorkspace } from '@/components/workspace';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 import VideoPrepare from '@/components/VideoPrepare';
 import { runPrepare } from '@/lib/prepare-request';
-import { isDriveUrl } from '@/lib/drive-url';
+import { mapLimit } from '@/lib/map-limit';
+import { isDriveUrl, parseDriveFileId } from '@/lib/drive-url';
 
 /** How a batched row is getting on, in words rather than a spinner. */
 const BATCH_LABEL: Record<string, string> = {
@@ -46,7 +47,20 @@ const BATCH_COLOUR: Record<string, string> = {
  * refusing its own later rows — a worse experience than being told the cap up
  * front.
  */
-const BATCH_MAX = 15;
+const BATCH_MAX = 60;
+
+/**
+ * How many prepare in parallel.
+ *
+ * Not "all of them". Semrush's unit-floor guard caches the balance per serverless
+ * instance, so callers in a wide burst each measure the same pre-spend headroom and the
+ * floor can be overshot by the size of the burst — real money, not a warning. Four is
+ * comfortably inside that and still four times faster than one at a time.
+ */
+const BATCH_CONCURRENCY = 4;
+
+/** Where one row of a batch has got to. */
+type BatchState = 'queued' | 'working' | 'done' | 'failed' | 'needs_transcript';
 
 export type Tab = 'calendar' | 'videos' | 'images';
 
@@ -353,12 +367,55 @@ export default function SourcesView({ kind }: { kind: Tab }) {
    * bug.
    */
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [batch, setBatch] = useState<Record<string, { state: 'queued' | 'working' | 'done' | 'failed' | 'needs_transcript'; note?: string }>>({});
+  const [batch, setBatch] = useState<Record<string, { state: BatchState; note?: string }>>({});
   const [running, setRunning] = useState(false);
+  /** What the finished run added up to, once it is over. */
+  const [summary, setSummary] = useState<string | null>(null);
+  /** Show only what is ticked — the way to review a basket built across many searches. */
+  const [onlyPicked, setOnlyPicked] = useState(false);
   /** Set when Stop is pressed; the loop checks it between videos, never mid-video. */
   const stopRef = useRef(false);
 
   const rowKey = (v: VideoEntry) => v.tab + ':' + v.row;
+
+  /**
+   * The basket, kept across a reload.
+   *
+   * Building one means searching a row number, ticking it, searching the next — minutes
+   * of work that a refresh, a closed laptop or a stray navigation would otherwise throw
+   * away. The per-row outcomes ride along so a run interrupted half way still shows what
+   * it managed.
+   *
+   * Only ever a convenience: every read and write is wrapped, because a private window or
+   * a browser set to block site data throws on the accessor itself, and a page that
+   * cannot remember a basket must still draw one.
+   */
+  const BASKET_KEY = 'chi.videos.basket';
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(BASKET_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as { picked?: string[]; batch?: Record<string, { state: BatchState; note?: string }> };
+      if (Array.isArray(saved.picked) && saved.picked.length) setPicked(new Set(saved.picked));
+      if (saved.batch && typeof saved.batch === 'object') {
+        // A row left mid-flight belongs to a page that is gone. Show it as unfinished
+        // rather than as forever "Preparing…".
+        const restored: Record<string, { state: BatchState; note?: string }> = {};
+        for (const [k, v] of Object.entries(saved.batch)) {
+          restored[k] = v.state === 'working' || v.state === 'queued'
+            ? { state: 'failed', note: 'Interrupted — press Prepare again; the transcript is kept, so it finishes in seconds.' }
+            : v;
+        }
+        setBatch(restored);
+      }
+    } catch { /* no stored basket, or storage is unavailable */ }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(BASKET_KEY, JSON.stringify({ picked: Array.from(picked), batch }));
+    } catch { /* storage full or blocked; the basket simply will not survive a reload */ }
+  }, [picked, batch]);
 
   function togglePick(v: VideoEntry) {
     const k = rowKey(v);
@@ -370,42 +427,98 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   }
 
   /**
-   * Prepare each ticked row, one at a time.
+   * Prepare the ticked rows, several at a time.
    *
-   * Strictly sequential. Each video is a download, an extraction, a
-   * transcription and two model calls; firing ten at once would have them
-   * competing for the same 60-second functions and time each other out, and
-   * the rate limit is thirty an hour for all of them together.
+   * They used to go one after another, on the reasoning that firing several at once would
+   * have them "competing for the same 60-second functions". That was wrong: each request
+   * is a separate serverless invocation with its own 60 seconds and they do not share
+   * CPU. Thirty-three videos at a minute each is half an hour of watching a page for no
+   * reason.
+   *
+   * What DOES break under concurrency is two things the rows must not each decide for
+   * themselves, so the plan call settles both before any of them starts:
+   *
+   *   - the tab's AI columns, which two rows appending at once would duplicate;
+   *   - the posting slots, which every row would otherwise choose by reading the same
+   *     calendar and all land on one morning.
+   *
+   * Four at a time, not everything at once: Semrush's unit-floor guard caches its balance
+   * per serverless instance, so a wide burst can overshoot the floor by its own size, and
+   * that is real money.
    */
   async function prepareSelected(rows: VideoEntry[]) {
     if (!rows.length || running) return;
+
+    // The same video ticked twice under two different searches must not be downloaded and
+    // transcribed twice — it is the single most expensive thing this does.
+    const seen = new Set<string>();
+    const work = rows.filter((v) => {
+      const id = parseDriveFileId(prepareLink(v)) || rowKey(v);
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+
     setRunning(true);
     stopRef.current = false;
-    setBatch(Object.fromEntries(rows.map((v) => [rowKey(v), { state: 'queued' as const }])));
+    setSummary(null);
+    setBatch(Object.fromEntries(work.map((v) => [rowKey(v), { state: 'queued' as const }])));
 
-    for (const v of rows) {
-      if (stopRef.current) {
-        setBatch((b) => ({ ...b, [rowKey(v)]: { state: 'failed', note: 'Stopped before this one.' } }));
-        continue;
-      }
-      const k = rowKey(v);
-      setBatch((b) => ({ ...b, [k]: { state: 'working' } }));
-      const out = await runPrepare(
-        { url: prepareLink(v), tab: v.tab, row: v.row },
-        (note) => setBatch((b) => ({ ...b, [k]: { state: 'working', note } })),
-      );
-      if (out.ok) {
-        const wrote = (out.data as { sheet?: { error?: string } }).sheet;
-        setBatch((b) => ({ ...b, [k]: wrote?.error ? { state: 'failed', note: wrote.error } : { state: 'done' } }));
-      } else {
-        setBatch((b) => ({ ...b, [k]: { state: out.kind === 'needs_transcript' ? 'needs_transcript' : 'failed', note: out.message } }));
-      }
+    // Settle the columns and the slots first, serially, server-side.
+    let slots: string[] = [];
+    try {
+      const r = await fetch('/api/videos/batch', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tabs: Array.from(new Set(work.map((v) => v.tab))), count: work.length }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) slots = Array.isArray(j?.slots) ? j.slots : [];
+    } catch {
+      // Without reserved slots each row chooses its own, exactly as a single Prepare
+      // always has. The batch loses only its guarantee of distinct mornings.
     }
 
+    const outcomes = await mapLimit(work, BATCH_CONCURRENCY, async (v, i): Promise<BatchState> => {
+      const k = rowKey(v);
+      if (stopRef.current) {
+        setBatch((b) => (b[k]?.state === 'queued' ? { ...b, [k]: { state: 'failed', note: 'Stopped before this one.' } } : b));
+        return 'failed';
+      }
+      setBatch((b) => ({ ...b, [k]: { state: 'working' } }));
+      const out = await runPrepare(
+        { url: prepareLink(v), tab: v.tab, row: v.row, publicationDate: slots[i] },
+        (note) => setBatch((b) => ({ ...b, [k]: { state: 'working', note } })),
+      );
+      const state: BatchState = !out.ok
+        ? (out.kind === 'needs_transcript' ? 'needs_transcript' : 'failed')
+        : ((out.data as { sheet?: { error?: string } }).sheet?.error ? 'failed' : 'done');
+      const note = !out.ok ? out.message : (out.data as { sheet?: { error?: string } }).sheet?.error;
+      setBatch((b) => ({ ...b, [k]: note ? { state, note } : { state } }));
+      return state;
+    });
+
     setRunning(false);
+    setSummary(summarise(outcomes));
     // Once, at the end. Reloading between videos would move the rows about
     // under the person watching them.
     await load('videos', true);
+  }
+
+  /**
+   * What the run added up to, tallied from what mapLimit RETURNED.
+   *
+   * Not read back out of the batch state: that is a React store being written from
+   * several lanes at once, and reading it inside an updater to count it is a side effect
+   * in the wrong place. The outcomes come back in input order; count those.
+   */
+  function summarise(outcomes: readonly BatchState[]): string {
+    const n = (want: BatchState) => outcomes.filter((o) => o === want).length;
+    const parts: string[] = [];
+    if (n('done')) parts.push(n('done') + ' written into the sheet');
+    if (n('needs_transcript')) parts.push(n('needs_transcript') + ' need a transcript');
+    if (n('failed')) parts.push(n('failed') + ' not done');
+    return parts.join(' · ') || 'Nothing to report.';
   }
 
   function prepareLink(v: VideoEntry): string {
@@ -456,14 +569,28 @@ export default function SourcesView({ kind }: { kind: Tab }) {
       || [v.title, v.copy, v.type, v.creator, v.format, v.tab].join(' ').toLowerCase().includes(needle));
   }, [videos, q]);
 
+  /** What the table actually shows: the search, narrowed to the basket when asked. */
+  const shownVideos = useMemo(
+    () => (onlyPicked ? filteredVideos.filter((v) => picked.has(v.tab + ':' + v.row)) : filteredVideos),
+    [filteredVideos, onlyPicked, picked],
+  );
+
   /**
    * The rows the batch button acts on: visible, ticked, and in the order they
    * appear on screen rather than the order they were clicked — a run that
    * jumps about the list is hard to follow.
    */
+  /**
+   * Everything ticked — from the WHOLE sheet, not the current search.
+   *
+   * This was derived from filteredVideos, and searching a row number is exactly how a
+   * person builds a batch here: tick 85, search 96, tick that, and the first one silently
+   * dropped out of both the count and the run. The tick was still held; only this
+   * derivation threw it away.
+   */
   const pickedRows = useMemo(
-    () => filteredVideos.filter((v) => picked.has(v.tab + ':' + v.row)),
-    [filteredVideos, picked],
+    () => (videos?.entries || []).filter((v) => picked.has(v.tab + ':' + v.row)),
+    [videos, picked],
   );
   /** Visible rows that are actual work: a video to read, and no copy yet. */
   const readyToPrepare = useMemo(
@@ -472,6 +599,8 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   );
   /** Ticked rows that already have copy — preparing them cannot write anything. */
   const pickedWithCopy = pickedRows.filter((v) => String(v.copy || '').trim()).length;
+  /** Ticked but not on screen. Left unsaid, the count above looks like a bug. */
+  const pickedOffScreen = pickedRows.length - filteredVideos.filter((v) => picked.has(v.tab + ':' + v.row)).length;
 
   const active = TABS.find((t) => t.id === tab)!;
   const ids = status?.ids;
@@ -623,7 +752,21 @@ export default function SourcesView({ kind }: { kind: Tab }) {
               */}
               {pickedRows.length > 0 && (
                 <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 10, background: '#eef3ff', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <strong style={{ fontSize: 13 }}>{pickedRows.length} selected</strong>
+                  <strong style={{ fontSize: 13 }}>
+                    {pickedRows.length} selected
+                    {pickedOffScreen > 0 && <span style={{ fontWeight: 400, opacity: .75 }}> · {pickedOffScreen} not in this view</span>}
+                  </strong>
+                  {/*
+                    A basket built by searching one row number after another is invisible
+                    by construction: every search hides what was ticked under the last
+                    one. This is how you look at the whole of it before spending money on
+                    it.
+                  */}
+                  {pickedRows.length > 0 && (
+                    <button type="button" style={ghost} onClick={() => { setOnlyPicked(!onlyPicked); if (!onlyPicked) setQ(''); }}>
+                      {onlyPicked ? 'Show all rows' : 'Show only selected'}
+                    </button>
+                  )}
                   <button
                     type="button"
                     style={{ ...btn, opacity: running ? .6 : 1 }}
@@ -639,13 +782,14 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                   )}
                   {!running && <button type="button" style={ghost} onClick={() => { setPicked(new Set()); setBatch({}); }}>Clear</button>}
                   <span style={{ fontSize: 11, opacity: .75 }}>
-                    One at a time — each video is a download, a transcription and the writing, so this takes about a minute each.
+                    {BATCH_CONCURRENCY} at a time — about a minute each, so roughly {Math.max(1, Math.ceil(Math.min(pickedRows.length, BATCH_MAX) / BATCH_CONCURRENCY))} minute(s) for this lot.
                   </span>
                   {pickedRows.length > BATCH_MAX && (
                     <span style={{ fontSize: 11, color: '#8a6d00' }}>
                       The first {BATCH_MAX} only: past that the hourly limit starts refusing them. Run it again for the rest.
                     </span>
                   )}
+                  {summary && <span style={{ fontSize: 12, fontWeight: 600 }}>{summary}</span>}
                   {pickedWithCopy > 0 && (
                     <span style={{ fontSize: 11, color: '#8a6d00' }}>
                       {pickedWithCopy} of these already {pickedWithCopy === 1 ? 'has' : 'have'} copy. Copy already written is never overwritten, so {pickedWithCopy === 1 ? 'it' : 'they'} will cost a run and change nothing.
@@ -654,7 +798,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                 </div>
               )}
               {!videos ? <p style={{ fontSize: 13, opacity: .6 }}>Reading the sheet…</p>
-                : filteredVideos.length === 0 ? <p style={{ fontSize: 13, opacity: .6 }}>No videos match.</p>
+                : shownVideos.length === 0 ? <p style={{ fontSize: 13, opacity: .6 }}>{onlyPicked ? 'Nothing selected in this view.' : 'No videos match.'}</p>
                 : (
                   <div style={{ overflowX: 'auto', marginTop: 12 }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
@@ -674,14 +818,24 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                               aria-label="Select every row that still needs copy"
                               disabled={running}
                               checked={readyToPrepare.length > 0 && readyToPrepare.every((v) => picked.has(v.tab + ':' + v.row))}
-                              onChange={(e) => setPicked(e.target.checked ? new Set(readyToPrepare.map((v) => v.tab + ':' + v.row)) : new Set())}
+                              onChange={(e) => setPicked((prev) => {
+                                // Adds and removes only what is ON SCREEN. It used to
+                                // replace the whole set, so ticking it after a search
+                                // threw away every pick made under a previous one.
+                                const next = new Set(prev);
+                                for (const v of readyToPrepare) {
+                                  const k = v.tab + ':' + v.row;
+                                  if (e.target.checked) next.add(k); else next.delete(k);
+                                }
+                                return next;
+                              })}
                             />
                           </th>
                           <th style={{ padding: '6px 8px' }}>Row · Title</th><th style={{ padding: '6px 8px' }}>Copy</th><th style={{ padding: '6px 8px' }}>Format</th><th style={{ padding: '6px 8px' }}>Networks</th><th style={{ padding: '6px 8px' }}>By</th><th style={{ padding: '6px 8px' }}></th>
                         </tr>
                       </thead>
                       <tbody>
-                        {filteredVideos.map((v, i) => (
+                        {shownVideos.map((v, i) => (
                           <Fragment key={i}>
                           <tr style={{ borderTop: '1px solid rgba(0,0,0,0.08)', verticalAlign: 'top' }}>
                             <td style={{ padding: '8px' }}>

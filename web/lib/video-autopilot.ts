@@ -384,6 +384,28 @@ export async function findRowByLink(
   return null;
 }
 
+/**
+ * Make sure a tab has the KEYWORDS / REF / ESTADO IA columns, once, on its own.
+ *
+ * ensureAiColumns reads the sheet's width, works out which columns are missing and
+ * appends them — four round-trips with no lock. Two rows of the same tab prepared at the
+ * same time both read the old width, both decide all three are missing, and both append:
+ * the tab ends up with TWO sets of those headers, and from then on half the rows write
+ * their keywords into one set and half into the other. A person has to unpick that by
+ * hand.
+ *
+ * So a batch calls this once per tab, serially, and only fans out afterwards. That
+ * removes the race rather than trying to make it safe — by the time rows run in parallel
+ * there is nothing left for them to append.
+ */
+export async function ensureTabColumns(tab: string, spreadsheetId = SOURCE_IDS.videosSheet()): Promise<void> {
+  const rows = await readTab(spreadsheetId, tab);
+  const { header, headerRow } = tableFromRows(rows, ['tipo de video', 'título del video', 'titulo del video', 'copy', 'link video', 'formato', 'title', 'video']);
+  if (!header.length) return; // not a video table; the row write will say so properly
+  const usedWidth = rows.reduce((w, r) => Math.max(w, (r || []).length), 0);
+  await ensureAiColumns(spreadsheetId, tab, headerRow, header, usedWidth);
+}
+
 export async function completeRow(opts: {
   userId: string;
   tab: string;
@@ -392,6 +414,14 @@ export async function completeRow(opts: {
   videoLink: string;
   skipMetricool?: boolean;
   spreadsheetId?: string;
+  /**
+   * The instant this row's drafts were already given, when a batch reserved them.
+   *
+   * Without it every row in a batch reads the calendar before any of them has written to
+   * it, so they all choose the same morning and stack. One reading, taken up front, and
+   * each row arrives holding the slot it owns.
+   */
+  publicationDate?: string;
 }): Promise<{ wrote: Partial<Record<VideoField, boolean>>; metricool: PublishOutcome[]; status: string }> {
   const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
   const rows = await readTab(spreadsheetId, opts.tab);
@@ -422,6 +452,7 @@ export async function completeRow(opts: {
     networks: rowNetworks,
     videoLink: opts.videoLink,
     title: opts.prepared.title,
+    publicationDate: opts.publicationDate,
   });
 
   const status = preparedStatus({
@@ -486,6 +517,8 @@ export async function handOffToMetricool(args: {
   networks: string[];
   videoLink: string;
   title: string;
+  /** A slot already reserved for this row by a batch; overrides the local search. */
+  publicationDate?: string;
 }): Promise<PublishOutcome[]> {
   const { userId, prepared, networks, videoLink, title } = args;
 
@@ -513,8 +546,16 @@ export async function handOffToMetricool(args: {
   // slots, and treating them alike stacks every post on one instant. Caught
   // here so it costs the HAND-OFF and not the row — by this point the copy is
   // already in the sheet and the draft already in the dashboard.
-  let taken: Set<string>;
-  try {
+  // A reserved slot is already distinct from every other row's in the batch, so the
+  // calendar does not need reading again — and reading it here, once per row, is exactly
+  // what made concurrent rows all agree on the same morning.
+  //
+  // Every network of a reserved row shares that one instant. Allocating a separate slot
+  // per network was an artifact of choosing them one at a time; the same video reaching
+  // LinkedIn and TikTok together is what a person would do by hand anyway, and it keeps
+  // the reservation honest — one row, one slot.
+  let taken = new Set<string>();
+  if (!args.publicationDate) try {
     taken = new Set(await takenSlots(userId, now.toISOString()));
   } catch (e) {
     reportError('video-sweep:slots', e);
@@ -522,8 +563,9 @@ export async function handOffToMetricool(args: {
     return chosen.map((network) => ({ network, ok: false as const, reason: 'metricool_error' as const, message }));
   }
   const out: PublishOutcome[] = [];
+  const reserved = args.publicationDate ? new Date(args.publicationDate) : null;
   for (const network of chosen) {
-    const slot = nextFreeSlot(taken, now);
+    const slot = reserved && Number.isFinite(reserved.getTime()) ? reserved : nextFreeSlot(taken, now);
     if (!slot) {
       out.push({ network, ok: false, reason: 'metricool_error', message: 'No free posting slot inside the scheduling horizon.' });
       continue;

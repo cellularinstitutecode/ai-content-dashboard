@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { nextFreeSlot, networksFor, NEEDS_VIDEO, POST_WEEKDAYS } from './video-slot.ts';
+import { NEEDS_VIDEO, POST_WEEKDAYS, networksFor, nextFreeSlot, reserveSlots } from './video-slot.ts';
 
 const TZ = 'America/Cancun';
 // A Wednesday, mid-afternoon in Cancun (UTC-5).
@@ -75,4 +75,26 @@ test('a network that needs a video is dropped when there is no video URL', () =>
 test('email is a sheet column, not a network Metricool posts to', () => {
   assert.deepEqual(networksFor(['linkedin', 'email'], true), ['linkedin']);
   assert.deepEqual(networksFor(['email'], true), []);
+});
+
+test('a batch reserves distinct slots in one go', () => {
+  // Each row choosing for itself reads the same calendar before any of them has written
+  // to it, so they all pick the same morning and the batch lands stacked on one instant.
+  const slots = reserveSlots(5, []);
+  assert.equal(slots.length, 5);
+  assert.equal(new Set(slots.map((d) => d.toISOString())).size, 5, 'no two rows share an instant');
+});
+
+test('reserved slots respect what the calendar already holds', () => {
+  const first = reserveSlots(1, [])[0];
+  const next = reserveSlots(2, [first.toISOString()]);
+  assert.ok(!next.some((d) => d.getTime() === first.getTime()), 'a taken slot is not handed out again');
+  assert.equal(new Set(next.map((d) => d.toISOString())).size, 2);
+});
+
+test('asking for none, or for more than the horizon holds, is not an error', () => {
+  assert.deepEqual(reserveSlots(0, []), []);
+  // Fewer than asked for means the horizon ran out, which the caller reports rather than
+  // treating as a failure.
+  assert.ok(reserveSlots(10_000, []).length < 10_000);
 });

@@ -84,7 +84,11 @@ async function fetchWithRetry(url: string, init: RequestInit, opts: { retries?: 
       const res = await fetch(url, { ...init, signal: controller.signal });
       clearTimeout(timer);
       if (RETRYABLE.has(res.status) && attempt < retries) {
-        await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+        // Jittered. Without it, requests that were rate-limited together retry together:
+      // several prepares running at once all get a 429, all wait exactly 500ms, and all
+      // hit the provider again in the same instant. The randomness is the point.
+      const backoff = 500 * 2 ** attempt;
+      await new Promise((r) => setTimeout(r, backoff + Math.random() * backoff));
         continue;
       }
       return res;

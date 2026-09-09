@@ -44,6 +44,38 @@ export function nextFreeSlot(taken: Iterable<string>, now: Date = new Date(), tz
 }
 
 /**
+ * N distinct slots, taken in one go.
+ *
+ * nextFreeSlot answers for ONE post against a calendar read a moment ago, which is
+ * correct for a single Prepare and wrong for several running at once: concurrent runs all
+ * read the calendar before any of them writes, so every one of them picks the same
+ * morning and the batch stacks on a single instant — exactly what one-post-per-slot
+ * exists to prevent, and exactly what a person then unpicks by hand in Metricool.
+ *
+ * So a batch reserves its slots before it starts, from one reading, and hands each row
+ * the slot it already owns.
+ *
+ * Returns fewer than `count` when the scheduling horizon runs out; the caller decides
+ * whether that is a reason to stop or to send the rest without a time.
+ */
+export function reserveSlots(count: number, taken: Iterable<string>, now: Date = new Date(), tz?: string): Date[] {
+  const used = new Set<string>();
+  for (const t of taken) {
+    const at = Date.parse(String(t));
+    if (Number.isFinite(at)) used.add(new Date(at).toISOString());
+  }
+  const out: Date[] = [];
+  for (let i = 0; i < count; i++) {
+    const slot = nextFreeSlot(used, now, tz);
+    if (!slot) break;
+    out.push(slot);
+    // Claim it against the rest of this batch, not merely against the calendar.
+    used.add(slot.toISOString());
+  }
+  return out;
+}
+
+/**
  * Which networks to draft for, given the row's ticks and whether the video can
  * be fetched by Metricool.
  *
