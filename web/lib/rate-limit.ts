@@ -34,6 +34,18 @@ const POLICIES: Record<string, Policy> = {
   // Each sweep can transcribe several videos and write a content pack for each
   // — the most expensive single button in the app.
   'video-sweep': { limit: 12, windowSec: 3600 },
+  // Prepare has its own allowance rather than sharing `generate`'s thirty.
+  //
+  // A long video costs TWO requests — the first banks the transcript and stops before the
+  // clock kills it — so thirty meant fifteen videos an hour, and the sheet has thirty-three
+  // rows waiting. Sharing the bucket also meant a morning of batch work locked a person
+  // out of the composer.
+  //
+  // Worth being plain about what this is: the limiter counts requests, not money. Each of
+  // these spends a Drive download, a transcription and two or three model calls, and the
+  // count is read-then-write (see below) so a burst can overshoot by the size of the burst.
+  // It is a brake, not an accountant.
+  'video-prepare': { limit: 120, windowSec: 3600 },
   'autopilot-action': { limit: 40, windowSec: 3600 },
   semrush: { limit: 120, windowSec: 3600 },
   keywords: { limit: 60, windowSec: 3600 },

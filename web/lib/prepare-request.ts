@@ -18,6 +18,14 @@ export type PrepareRequest = {
   tab?: string;
   row?: number;
   transcript?: string;
+  /**
+   * A slot this row was already given, when a batch reserved them up front.
+   *
+   * Omitted for a single Prepare, which chooses its own — reading the calendar once per
+   * row is only wrong when several rows do it at the same time and all read it before any
+   * of them has written.
+   */
+  publicationDate?: string;
 };
 
 export type PrepareOutcome =
@@ -39,7 +47,7 @@ export async function runPrepare(req: PrepareRequest, onProgress?: (note: string
       r = await fetch('/api/videos/prepare', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ url: req.url, transcript: req.transcript || undefined, tab: req.tab, row: req.row }),
+        body: JSON.stringify({ url: req.url, transcript: req.transcript || undefined, tab: req.tab, row: req.row, publicationDate: req.publicationDate }),
       });
     } catch {
       return { ok: false, kind: 'error', message: 'We could not reach the dashboard just now.' };
