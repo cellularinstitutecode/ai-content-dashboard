@@ -53,37 +53,57 @@ export function resetFfmpegBinary(): void {
   resolvedBinary = null;
 }
 
-export async function ffmpegBinary(): Promise<string | null> {
-  if (resolvedBinary) return resolvedBinary;
+export type BinaryResult =
+  | { ok: true; path: string }
+  /** Why it cannot be run — the three causes look identical from the outside. */
+  | { ok: false; reason: 'no_path' | 'absent' | 'copy_failed'; detail: string };
+
+export async function resolveFfmpeg(): Promise<BinaryResult> {
+  if (resolvedBinary) return { ok: true, path: resolvedBinary };
   // FFMPEG_PATH is the escape hatch for a deployment where the packaged binary
-  // never arrived at all — ffmpeg-static fetches it in a postinstall step, and
-  // a build that skips scripts leaves the package exporting a path to nothing.
+  // never arrived — ffmpeg-static fetches it in an install script, and a build
+  // that skips scripts leaves the package exporting a path to nothing.
   const src = process.env.FFMPEG_PATH || ffmpegStatic;
-  if (!src) return null;
+  if (!src) return { ok: false, reason: 'no_path', detail: 'ffmpeg-static resolved to no path.' };
 
   try {
     await access(src, FS.X_OK);
     resolvedBinary = src;
-    return src;
-  } catch { /* not executable where it sits — fall through to the /tmp copy */ }
+    return { ok: true, path: src };
+  } catch { /* either absent, or present without the execute bit */ }
 
   const dest = path.join(tmpdir(), 'ffmpeg-static-bin');
   try {
     // A previous invocation on this same warm instance already did the copy.
     await access(dest, FS.X_OK);
     resolvedBinary = dest;
-    return dest;
+    return { ok: true, path: dest };
   } catch { /* first time on this instance */ }
+
+  // Is the source there at all? "Present but not executable" is a bundling
+  // problem this can fix; "not there" is a BUILD problem it cannot, and
+  // reporting them the same way sent us hunting for the wrong one.
+  try {
+    await access(src, FS.F_OK);
+  } catch {
+    return { ok: false, reason: 'absent', detail: 'No file at ' + src + '. The build never fetched it — see scripts/ensure-ffmpeg.mjs.' };
+  }
 
   try {
     await copyFile(src, dest);
     await chmod(dest, 0o755);
     resolvedBinary = dest;
-    return dest;
+    return { ok: true, path: dest };
   } catch (e) {
     reportError('audio-extract:binary', e, { src, dest });
-    return null;
+    return { ok: false, reason: 'copy_failed', detail: 'Could not make a runnable copy at ' + dest + '.' };
   }
+}
+
+/** The path, or null. Kept for callers that only need "can it run". */
+export async function ffmpegBinary(): Promise<string | null> {
+  const r = await resolveFfmpeg();
+  return r.ok ? r.path : null;
 }
 
 /** What the transcription endpoint accepts. The extracted audio must fit inside it. */
@@ -139,10 +159,11 @@ export async function extractAudio(
   sourceName: string,
   opts: { timeoutMs?: number } = {},
 ): Promise<ExtractResult> {
-  const ffmpeg = await ffmpegBinary();
-  if (!ffmpeg) {
-    return { ok: false, reason: 'not_available', message: 'The audio extractor is not runnable on this deployment.' };
+  const resolved = await resolveFfmpeg();
+  if (!resolved.ok) {
+    return { ok: false, reason: 'not_available', message: 'The audio extractor is not runnable on this deployment: ' + resolved.detail };
   }
+  const ffmpeg = resolved.path;
   if (!body) {
     return { ok: false, reason: 'failed', message: 'Drive sent no data for that file.' };
   }

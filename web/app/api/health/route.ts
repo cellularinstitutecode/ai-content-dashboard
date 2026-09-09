@@ -22,6 +22,7 @@ import { requireAllowlistedUser } from '@/lib/auth';
 import { ALLOWED_EMAILS, ALLOWED_BLOG_IDS } from '@/lib/access';
 import { keywordCapability } from '@/lib/semrush';
 import { lastImageOutcome } from '@/lib/provider-status';
+import { resolveFfmpeg } from '@/lib/audio-extract';
 import { missingSchema } from '@/lib/schema-check';
 import { schemaDetail } from '@/lib/schema-probe';
 
@@ -48,6 +49,12 @@ export async function GET() {
   if (!auth.ok) return auth.response;
 
   const keywords = await keywordCapability();
+
+  // Can this deployment actually read a Drive video? ffmpeg-static fetches its
+  // binary in an install script and does not ship it in the tarball, so a
+  // build that skips lifecycle scripts installs the package and leaves nothing
+  // behind it — and the first sign of that was a person pressing Prepare.
+  const ffmpeg = await resolveFfmpeg();
 
   // Did anyone actually run the .sql files? Nothing checked, ever.
   const schemaGaps = await missingSchema();
@@ -195,6 +202,26 @@ export async function GET() {
       ok: has('OPUS_WEBHOOK_SECRET') || has('OPUS_API_KEY'),
       severity: 'optional',
       detail: 'Without a secret the webhook refuses every call with 503; the poll fallback still delivers clips.',
+    },
+    {
+      // Optional, not required: without it the Video Library asks for a pasted
+      // transcript instead of making one, which is the old manual routine
+      // rather than a broken app.
+      name: 'audio_extractor',
+      ok: ffmpeg.ok,
+      code: ffmpeg.ok ? undefined : ffmpeg.reason,
+      severity: 'optional',
+      detail: ffmpeg.ok
+        ? 'Drive videos can be transcribed: ffmpeg runs from ' + ffmpeg.path + '.'
+        : ffmpeg.reason === 'absent'
+          ? 'The ffmpeg binary was never fetched by the build. ffmpeg-static downloads it in an ' +
+            'install script and does not ship it in the package, so a build that skips lifecycle ' +
+            'scripts leaves nothing behind the path. Drive videos cannot be transcribed until this ' +
+            'is fixed; the Video Library will ask for a pasted transcript. ' + ffmpeg.detail
+          : ffmpeg.reason === 'copy_failed'
+            ? 'The binary is present but not executable, and it could not be copied somewhere it ' +
+              'would be. ' + ffmpeg.detail
+            : 'No ffmpeg path is configured at all. Set FFMPEG_PATH, or reinstall ffmpeg-static.',
     },
     {
       name: 'drive',
