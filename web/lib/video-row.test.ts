@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { claimIsStale, firstLinkIn, isCandidate, keywordLineFrom, rowKeyFor, STATUS_TEXT } from './video-row.ts';
+import { claimIsStale, firstLinkIn, fitsNetwork, isCandidate, keywordLineFrom, preparedStatus, rowKeyFor, STATUS_TEXT } from './video-row.ts';
 
 const DRIVE = 'https://drive.google.com/file/d/1s0d6e44yh6hNObVAzbdkBRclx_Pe8g7N/view?usp=drive_link';
 
@@ -86,4 +86,33 @@ test('a link cell that carries a note around the link still works', () => {
 
   // And such a row is now work to do, rather than silently ineligible.
   assert.equal(isCandidate({ videoLink: 'SUBS: ' + bare, copy: '' }), true);
+});
+
+test('a row written without keyword data does not look finished', () => {
+  // The failure this exists to catch: Semrush out of units, copy still gets
+  // written, and the row reads exactly like one the keyword brief shaped. The
+  // one thing this automation adds would stop happening, invisibly.
+  assert.equal(preparedStatus({ hasKeywords: true, overLength: false }), 'Listo para revisión');
+  assert.equal(preparedStatus({ hasKeywords: false, overLength: false }), 'Listo — SIN keywords');
+});
+
+test('copy too long for its network is flagged, not quietly sent', () => {
+  assert.equal(preparedStatus({ hasKeywords: true, overLength: true }), 'Listo — copy muy larga, acortar');
+  // Length beats keywords: it is the one that stops a post going out at all.
+  assert.equal(preparedStatus({ hasKeywords: false, overLength: true }), 'Listo — copy muy larga, acortar');
+});
+
+test('each network is measured against its own limit', () => {
+  const long = 'x'.repeat(2500);
+  assert.equal(fitsNetwork('linkedin', long).ok, true, 'LinkedIn takes 3000');
+  assert.equal(fitsNetwork('tiktok', long).ok, false, 'TikTok stops at 2200');
+  assert.equal(fitsNetwork('instagram', long).ok, false);
+  assert.equal(fitsNetwork('twitter', 'x'.repeat(300)).ok, false);
+
+  const r = fitsNetwork('tiktok', long);
+  assert.equal(r.limit, 2200);
+  assert.equal(r.length, 2500);
+
+  // A network with no known limit must not be treated as zero.
+  assert.equal(fitsNetwork('threads', long).ok, true);
 });

@@ -47,6 +47,11 @@ person published something. Approve is still a person, exactly as before.
   Working off a backlog therefore spreads across mornings instead of stacking
   thirty posts on one — which would read as spam on every network. Override the
   hour with `VIDEO_AUTOPILOT_TIME` (e.g. `14:30`).
+- **Every post carries the AVISO line and the REF citation** — LinkedIn
+  included. `lib/compliance.ts` scopes the advertising rule to Instagram and
+  Facebook, so the writer is only asked for a citation on those two; the
+  LinkedIn post reuses the same Crossref-verified citation rather than asking
+  for a second one that would need verifying again.
 - **Copy that fails the compliance gate is not sent at all.** Instagram and
   Facebook posts missing the AVISO line or the REF citation stay out of the
   queue rather than sitting somewhere one wrong click publishes them.
@@ -79,7 +84,17 @@ creating them on first run. Appended, never inserted — nothing shifts:
 | --- | --- |
 | `KEYWORDS` | `primary keyword · supporting, terms, here` |
 | `REF` | The citation the copy carries, e.g. `Author, A.B., et al. (2023). "Title." Journal…` |
-| `ESTADO IA` | `Listo para revisión` · `Falta transcripción` · `Error — revisar` |
+| `ESTADO IA` | `Listo para revisión` · `Listo — SIN keywords` · `Listo — copy muy larga, acortar` · `Falta transcripción` · `Error — revisar` |
+
+`Listo — SIN keywords` is the one to watch. The copy was written, but no
+keyword data reached the writer — Semrush unset, erroring, or below its unit
+floor. The row is usable; it just did not get the thing this automation exists
+to add. Check `/api/health` → `semrush` when you see it.
+
+`Listo — copy muy larga, acortar` means a post exceeded what its network takes
+(LinkedIn 3000, TikTok and Instagram 2200, X 280) and was NOT sent. It is never
+trimmed to fit: the REF and AVISO lines sit at the end, so trimming would cut
+exactly the two lines that must be there.
 
 If you would rather add them yourself with different names, the reader matches
 `KEYWORDS`/`PALABRAS CLAVE`, `REF`/`REFERENCIA`, and `ESTADO IA`/`AI STATUS`.
