@@ -1,13 +1,18 @@
 'use client';
 
-// Video Library → publish-ready: paste (or pick) a YouTube link, and one
-// button runs transcript → keywords → copy. What comes back is editable here,
-// then sent to Metricool as drafts for LinkedIn and TikTok. Approve on the
-// dashboard is still what publishes.
+// Video Library → publish-ready: paste (or pick) a link — a YouTube video, or
+// the Drive .mp4 the sheet holds — and one button runs transcript → keywords →
+// copy. What comes back is editable here, then sent to Metricool as drafts for
+// LinkedIn and TikTok. Approve on the dashboard is still what publishes.
+//
+// The same work runs on its own when a new link appears in the sheet
+// (lib/video-autopilot.ts); this is the manual door onto it, for a video
+// somebody wants done now.
 
 import { useEffect, useMemo, useState } from 'react';
 import { friendlyErrorFromResponse } from '@/lib/friendly-error';
 import { parseVideoUrl } from '@/lib/composer';
+import { isDriveUrl } from '@/lib/drive-url';
 
 type Prepared = {
   draftId: string | null;
@@ -15,6 +20,8 @@ type Prepared = {
   videoId: string;
   transcript: { source: string; language: string | null; chars: number; preview: string };
   keywords: { primary?: string | null; keywords?: string[]; source?: string } | null;
+  keywordLine?: string;
+  ref?: string;
   compliance: { citation?: { status?: string; title?: string | null } } | null;
   linkedin: string;
   tiktok: string;
@@ -51,7 +58,10 @@ export default function VideoPrepare({ initialUrl, blogId }: { initialUrl?: stri
   useEffect(() => { if (initialUrl) { setUrl(initialUrl); setPrepared(null); setSent(null); setErr(null); } }, [initialUrl]);
 
   const parsed = useMemo(() => parseVideoUrl(url), [url]);
-  const urlOk = parsed.ok && parsed.source === 'YouTube';
+  // A Drive .mp4 is transcribed by speech-to-text; a YouTube link uses its own
+  // caption track. Both are prepared here — the sheet holds Drive links.
+  const drive = useMemo(() => isDriveUrl(url), [url]);
+  const urlOk = (parsed.ok && parsed.source === 'YouTube') || drive;
 
   // Vertical clips already cut from this video (Long-form to Shorts) — the
   // only thing TikTok can take.
@@ -80,7 +90,7 @@ export default function VideoPrepare({ initialUrl, blogId }: { initialUrl?: stri
   }, [prepared]);
 
   async function prepare() {
-    if (!urlOk) { setErr('Paste a YouTube link first.'); return; }
+    if (!urlOk) { setErr('Paste a YouTube or Google Drive video link first.'); return; }
     setBusy('prepare'); setErr(null); setSent(null); setNeedPaste(null);
     try {
       const r = await fetch('/api/videos/prepare', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url, transcript: pasted || undefined }) });
@@ -119,12 +129,12 @@ export default function VideoPrepare({ initialUrl, blogId }: { initialUrl?: stri
   return (
     <section style={card} id="video-prepare">
       <h2 style={{ margin: 0, fontSize: 15 }}>Prepare a video for LinkedIn and TikTok</h2>
-      <p style={{ fontSize: 12, opacity: .65, margin: '4px 0 12px' }}>Paste a YouTube link (or press Prepare on a row above). The dashboard pulls the transcript, runs the keyword brief, writes the copy from what was actually said, and lets you edit before anything reaches Metricool.</p>
+      <p style={{ fontSize: 12, opacity: .65, margin: '4px 0 12px' }}>Paste a YouTube or Google Drive link (or press Prepare on a row above). The dashboard pulls the transcript — captions on YouTube, speech-to-text on a Drive file — runs the keyword brief, writes the copy from what was actually said, and lets you edit before anything reaches Metricool.</p>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <input id="video-url" style={{ ...inputStyle, flex: 1, minWidth: 260 }} value={url} onChange={(e) => { setUrl(e.target.value); setPrepared(null); setSent(null); }} placeholder="https://www.youtube.com/watch?v=…" />
+        <input id="video-url" style={{ ...inputStyle, flex: 1, minWidth: 260 }} value={url} onChange={(e) => { setUrl(e.target.value); setPrepared(null); setSent(null); }} placeholder="https://www.youtube.com/watch?v=… or https://drive.google.com/file/d/…" />
         <button type="button" style={btn} disabled={busy === 'prepare' || !urlOk} onClick={() => void prepare()}>{busy === 'prepare' ? 'Preparing…' : 'Prepare'}</button>
       </div>
-      {url && !urlOk && <div style={{ fontSize: 12, color: '#d70015', marginTop: 6 }}>{parsed.ok ? 'Only YouTube links can be prepared here.' : parsed.reason}</div>}
+      {url && !urlOk && <div style={{ fontSize: 12, color: '#d70015', marginTop: 6 }}>Paste a YouTube link or a Google Drive video link.</div>}
       {needPaste && (
         <div role="alert" style={{ marginTop: 10, background: '#fff8e6', border: '1px solid #f0c36d', borderRadius: 10, padding: 12, fontSize: 12 }}>
           <div style={{ fontWeight: 600 }}>{needPaste}</div>
@@ -136,10 +146,17 @@ export default function VideoPrepare({ initialUrl, blogId }: { initialUrl?: stri
       {prepared && (
         <div style={{ marginTop: 16, display: 'grid', gap: 14 }}>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11 }}>
-            <span style={{ background: '#eaf7ee', color: '#1f6b3a', borderRadius: 999, padding: '3px 9px' }}>✓ Transcript · {prepared.transcript.source === 'youtube' ? 'YouTube captions' : 'pasted'}{prepared.transcript.language ? ' · ' + prepared.transcript.language : ''} · {prepared.transcript.chars.toLocaleString()} chars</span>
+            <span style={{ background: '#eaf7ee', color: '#1f6b3a', borderRadius: 999, padding: '3px 9px' }}>✓ Transcript · {prepared.transcript.source === 'youtube' ? 'YouTube captions' : prepared.transcript.source === 'drive' ? 'transcribed from the video' : 'pasted'}{prepared.transcript.language ? ' · ' + prepared.transcript.language : ''} · {prepared.transcript.chars.toLocaleString()} chars</span>
             <span style={{ background: prepared.keywords?.source === 'semrush' ? '#eaf7ee' : '#f2f2f5', color: prepared.keywords?.source === 'semrush' ? '#1f6b3a' : '#555', borderRadius: 999, padding: '3px 9px' }}>{prepared.keywords?.source === 'semrush' ? '✓ Keywords · ' + (prepared.keywords?.primary || '') : 'Keywords · written without live search data'}</span>
             <span style={{ background: cite?.status === 'verified' ? '#eaf7ee' : '#fff8e6', color: cite?.status === 'verified' ? '#1f6b3a' : '#8a5a00', borderRadius: 999, padding: '3px 9px' }}>{cite?.status === 'verified' ? '✓ Citation verified' : 'Citation — check the REF line'}</span>
           </div>
+          {(prepared.keywordLine || prepared.ref) && (
+            <div style={{ fontSize: 12, background: '#f7f7f9', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 10, padding: 10, display: 'grid', gap: 6 }}>
+              {prepared.keywordLine && <div><strong>Keywords</strong> <span style={{ opacity: .8 }}>{prepared.keywordLine}</span></div>}
+              {prepared.ref && <div><strong>REF</strong> <span style={{ opacity: .8 }}>{prepared.ref}</span></div>}
+              <div style={{ opacity: .55 }}>These are what the sweep writes into the sheet’s KEYWORDS and REF columns.</div>
+            </div>
+          )}
           <details style={{ fontSize: 12 }}>
             <summary style={{ cursor: 'pointer', opacity: .7 }}>Transcript preview — “{prepared.title}”</summary>
             <p style={{ opacity: .75, whiteSpace: 'pre-wrap', marginTop: 6 }}>{prepared.transcript.preview}…</p>

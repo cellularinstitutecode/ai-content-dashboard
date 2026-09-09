@@ -19,11 +19,12 @@ import PageNav from '@/components/PageNav';
 import { useWorkspace } from '@/components/workspace';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 import VideoPrepare from '@/components/VideoPrepare';
+import { isDriveUrl } from '@/lib/drive-url';
 
 export type Tab = 'calendar' | 'videos' | 'images';
 
 type CalendarEntry = { tab: string; row: number; headerRow: number; columns: Record<string, string>; date: string | null; type: string; pillar: string; owner: string; cta: string; caption: string; fileName: string; graphicsLink: string; status: string; networks: string[] };
-type VideoEntry = { tab: string; row: number; headerRow: number; columns: Record<string, string>; creator: string; month: string; type: string; title: string; copy: string; videoLink: string; youtubeLink?: string; format: string; networks: string[]; thumbnailTitle: string; coverLink: string; notes: string };
+type VideoEntry = { tab: string; row: number; headerRow: number; columns: Record<string, string>; creator: string; month: string; type: string; title: string; copy: string; videoLink: string; youtubeLink?: string; format: string; networks: string[]; thumbnailTitle: string; coverLink: string; notes: string; keywords?: string; ref?: string; aiStatus?: string };
 type DriveImage = { id: string; name: string; mimeType: string; modifiedTime: string; size: number | null; viewUrl: string; thumbUrl: string };
 type Status = { configured: boolean; serviceAccount: string | null; ids: { calendar: string; videos: string; images: string } };
 
@@ -301,8 +302,21 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     const l = v.youtubeLink || firstLink(v);
     return /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(l) ? l : '';
   }
+  /**
+   * The link to prepare from. YouTube first — its caption track is free, exact
+   * and instant — then the Drive .mp4, which is what almost every row actually
+   * has and which speech-to-text can now read. Before Drive was supported this
+   * returned '' for those rows and the Prepare button was simply not drawn,
+   * which is why nearly every row had to be done by hand.
+   */
+  function prepareLink(v: VideoEntry): string {
+    const yt = youtubeOf(v);
+    if (yt) return yt;
+    const l = firstLink(v);
+    return isDriveUrl(l) ? l : '';
+  }
   function prepare(v: VideoEntry) {
-    const link = youtubeOf(v);
+    const link = prepareLink(v);
     if (!link) return;
     setPrepareUrl(link);
     setTimeout(() => document.getElementById('video-prepare')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
@@ -504,7 +518,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                             <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>{v.creator || '—'}</td>
                             <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>
                               <div style={{ display: 'grid', gap: 6 }}>
-                                {youtubeOf(v) && (
+                                {prepareLink(v) && (
                                   <button type="button" style={btn} onClick={() => prepare(v)} title="Transcript → keywords → LinkedIn + TikTok copy">Prepare</button>
                                 )}
                                 <button type="button" style={ghost} onClick={() => handoff([v.copy || v.title, v.videoLink ? 'Watch: ' + firstLink(v) : ''].filter(Boolean).join('\n\n'), '', '')}>Use in post</button>
