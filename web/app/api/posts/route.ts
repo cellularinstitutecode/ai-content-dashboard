@@ -5,6 +5,8 @@ import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { metricoolDeletePost, metricoolReplacePost, type Provider } from '@/lib/metricool';
 import { reportError } from '@/lib/report';
+import { deleteDriveFile } from '@/lib/drive';
+import { forgetPublicCopy } from '@/lib/transcript-cache';
 import { modeOfStatus, APPROVED_STATUS } from '@/lib/post-mode';
 
 export const runtime = 'nodejs';
@@ -213,7 +215,7 @@ export async function DELETE(req: Request) {
 
   const { data: existing, error: findErr } = await sb
     .from('posts')
-    .select('id, metricool_post_id')
+    .select('id, metricool_post_id, media_drive_file_id')
     .eq('id', id)
     .eq('user_id', user.id)
     .maybeSingle();
@@ -254,5 +256,34 @@ export async function DELETE(req: Request) {
       { status: 500 },
     );
   }
+  // The public Drive copy, once nothing needs it.
+  //
+  // A video attached to a post is copied into the app's folder and that copy is opened to
+  // ANYONE with the link. One copy backs every network of a run, so deleting it with the
+  // first post would break the others — hence the count. And deliberately AFTER the row
+  // is gone: the handler above can delete the Metricool post and then fail to delete the
+  // row, and destroying the file in that window would strand a post that still exists.
+  //
+  // Best-effort, and never fatal: an orphaned file is a tidiness problem, while a 500
+  // here would tell a person their post was not deleted when it was.
+  const copyId = (existing as { media_drive_file_id?: string | null }).media_drive_file_id;
+  if (copyId) {
+    try {
+      const { count, error: countErr } = await sb
+        .from('posts')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('media_drive_file_id', copyId);
+      // Only when the answer is a confident zero. A failed count must leave the file
+      // alone: guessing wrong here breaks a post that is still queued.
+      if (!countErr && (count ?? 1) === 0) {
+        await deleteDriveFile(String(copyId));
+        await forgetPublicCopy(String(copyId));
+      }
+    } catch (e) {
+      reportError('posts:drive-copy-delete', e);
+    }
+  }
+
   return NextResponse.json({ ok: true, id });
 }

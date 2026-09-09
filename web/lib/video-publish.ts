@@ -27,6 +27,14 @@ export type PublishOne = {
   /** UTC instant, ISO. */
   publicationDate: string;
   mediaUrl?: string | null;
+  /**
+   * The Drive file id behind mediaUrl, when that URL is a public copy this app made.
+   *
+   * Recorded so the copy can be removed once nothing needs it. One copy backs every
+   * network of a run, so the delete has to be able to ask whether any other post still
+   * uses it — which is impossible if the id is never written down.
+   */
+  mediaFileId?: string | null;
   draftId?: string | null;
 };
 
@@ -71,6 +79,10 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
         text: input.text,
         publication_date: input.publicationDate,
         metricool_post_id: metricoolPostId,
+        // The public Drive copy this post's video came from, so the copy can be removed
+        // once nothing needs it. Nothing on a posts row said anything about the video
+        // before this, so every copy ever made was untraceable and permanent.
+        media_drive_file_id: input.mediaFileId || null,
         // Metricool answers 'scheduled' for a post it is merely HOLDING for
         // review. Storing that verbatim would make our row claim a person had
         // approved something nobody has looked at.

@@ -112,3 +112,18 @@ create table if not exists public.video_transcripts (
 );
 
 alter table public.video_transcripts enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- The public copy of a video, remembered so it is made once and can be removed.
+--
+-- Metricool cannot fetch an ordinary Drive link, so a video attached to a post is copied
+-- into the app's own folder and that copy is opened to ANYONE WITH THE LINK. It was made
+-- once per hand-off run — so re-preparing a row made another one — and nothing in the app
+-- could delete any of them. A folder quietly filling with world-readable copies of a
+-- clinic's footage, with no way to tell which row each came from.
+--
+-- Keyed on the SOURCE video, so a second run finds the copy the first one made.
+alter table public.video_transcripts
+  add column if not exists public_copy_id text;
+alter table public.video_transcripts
+  add column if not exists public_copy_url text;
