@@ -16,7 +16,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import ffmpegStatic from 'ffmpeg-static';
-import { extractAudio, sourceExtension, ffmpegAvailable, AUDIO_MAX_BYTES } from '../lib/audio-extract.ts';
+import { extractAudio, sourceExtension, ffmpegAvailable, ffmpegBinary, resetFfmpegBinary, AUDIO_MAX_BYTES } from '../lib/audio-extract.ts';
 
 const run = promisify(execFile);
 let dir;
@@ -110,4 +110,55 @@ test('the source keeps an extension ffmpeg can demux from', () => {
   // Unknown or absent: assume mp4, which is what the sheet is full of.
   assert.equal(sourceExtension('Reel_PEMF'), '.mp4');
   assert.equal(sourceExtension(''), '.mp4');
+});
+
+test('a binary stripped of its execute bit is still usable', async () => {
+  // Exactly what a Vercel deployment does to the traced ffmpeg: the file is
+  // there, the execute bit is not, and the app directory is read-only. spawn
+  // then fails with EACCES before ffmpeg starts, so there is no ffmpeg stderr
+  // and the failure reads as "the audio could not be read" with nothing after
+  // it — which is precisely how this shipped broken.
+  const stripped = path.join(dir, 'ffmpeg-noexec');
+  await run('cp', [ffmpegStatic, stripped]);
+  await run('chmod', ['444', stripped]);
+
+  const before = process.env.FFMPEG_PATH;
+  process.env.FFMPEG_PATH = stripped;
+  resetFfmpegBinary();
+  try {
+    const resolved = await ffmpegBinary();
+    assert.ok(resolved, 'must resolve to something runnable');
+    assert.notEqual(resolved, stripped, 'must not hand back the unrunnable path');
+
+    const video = await makeVideo('perm.mp4', [
+      '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=30',
+      '-f', 'lavfi', '-i', 'sine=frequency=440',
+      '-t', '3', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac',
+    ]);
+    const got = await extractAudio(await bodyOf(video), 'perm.mp4');
+    assert.equal(got.ok, true, got.ok ? '' : got.message);
+    await got.audio.release();
+  } finally {
+    if (before === undefined) delete process.env.FFMPEG_PATH; else process.env.FFMPEG_PATH = before;
+    resetFfmpegBinary();
+  }
+});
+
+test('a failure that produced no stderr says why anyway', async () => {
+  // The message that cost a deployment's worth of guessing: ffmpeg never
+  // started, so stderr was empty, so the reason was simply omitted.
+  const before = process.env.FFMPEG_PATH;
+  process.env.FFMPEG_PATH = path.join(dir, 'does-not-exist');
+  resetFfmpegBinary();
+  // The previous test left a working copy in /tmp, and a warm instance is
+  // SUPPOSED to reuse it — so it has to go for this case to be reachable.
+  await rm(path.join(tmpdir(), 'ffmpeg-static-bin'), { force: true });
+  try {
+    const got = await extractAudio(await bodyOf(path.join(dir, 'perm.mp4')), 'perm.mp4');
+    assert.equal(got.ok, false);
+    assert.match(got.message, /not runnable|could not be started/i);
+  } finally {
+    if (before === undefined) delete process.env.FFMPEG_PATH; else process.env.FFMPEG_PATH = before;
+    resetFfmpegBinary();
+  }
 });
