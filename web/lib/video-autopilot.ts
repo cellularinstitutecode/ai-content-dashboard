@@ -223,6 +223,10 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
           url: videoLink,
           youtubeUrl: youtubeLink || null,
           title: title || null,
+          // Not for the copy — nobody is named in it. It is one more name the guard
+          // refuses, and the videographer's is the one most easily mistaken for
+          // somebody in the video.
+          creator: pick(rec, 'creator', 'by') || null,
           // The sweep answers to the same 60-second ceiling. Stopping with the
           // transcript stored costs one more tick; being killed mid-write
           // costs the download and the transcription again.

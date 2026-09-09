@@ -10,14 +10,38 @@
 //      false positive can't break the product. Reviewers decide what to do.
 import 'server-only';
 
+/**
+ * Nobody is named. Ever.
+ *
+ * This is here because a post went out reading "As our patient Rodrigo shares:" over a
+ * quote from a video. Rodrigo uploads the videos. He is not a patient, he did not say it
+ * as one, and no instruction anywhere told the writer not to do that — the prompt handed
+ * over the raw file name, "Reel_FloatingBedRyall_Rodrigo", and the model bridged a human
+ * name in the title to an unattributed line in the speech.
+ *
+ * A clinic inventing a patient testimonial is not a style defect. The words themselves
+ * were usually fine; the attribution was fabricated. So quoting stays and naming goes:
+ * "As one patient put it" is what the clinic's own writer has always done.
+ */
+export const NAMING_RULE =
+  ' Never name or identify any individual. Do not state or imply that any named person is' +
+  ' a patient, doctor, staff member or customer, and do not describe anyone in a way that' +
+  ' would identify them. A line spoken in the source may be quoted, but only' +
+  ' unattributed — "As one patient put it: …". Names in a file name, a title or a' +
+  ' transcript are production metadata or third parties, never subjects to write about,' +
+  ' and no name from any of them may appear in the copy.';
+
 export const MEDICAL_SAFETY_GUARDRAILS =
   ' Safety rules (health/medical context): Do not diagnose, prescribe, or give' +
   ' specific dosing or treatment instructions. Do not promise cures, guaranteed' +
-  ' outcomes, or claim a product/therapy is FDA-approved or clinically proven unless' +
-  ' that is explicitly provided in the brief. Avoid fear-based or exploitative appeals' +
+  ' outcomes, or claim a product/therapy is FDA-approved or clinically proven — not' +
+  ' even if a source says so; a speaker on a video making that claim is not a licence to' +
+  ' print it. Avoid fear-based or exploitative appeals' +
   ' toward patients or vulnerable groups. Encourage readers to consult a qualified' +
   ' healthcare professional for personal medical decisions. Keep claims general,' +
-  ' evidence-aware, and non-alarmist.';
+  ' evidence-aware, and non-alarmist.' +
+  NAMING_RULE;
+
 
 export type SafetyFlag = {
   code: string;
