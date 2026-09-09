@@ -67,6 +67,44 @@ const url =
 }
 
 
+/**
+ * A copy of a Drive video that Metricool can actually fetch.
+ *
+ * Metricool cannot read an ordinary Drive link, so a video attached to a post
+ * has to be readable by anyone holding the URL. The clinic's originals are not
+ * — and making THEM public would be a sharing change nobody asked for — so
+ * this copies the file into the app's own folder and opens the copy.
+ *
+ * The copy happens inside Drive (files.copy), so a 283 MB reel never travels
+ * through this app: no download, no upload, no function memory, a second or
+ * two of wall clock.
+ */
+export async function publicVideoCopy(fileId: string, filename: string): Promise<{ fileId: string; url: string }> {
+  const folderId = process.env.DRIVE_FOLDER_ID;
+  if (!folderId) throw new Error('DRIVE_FOLDER_ID missing');
+  const drive = driveClient();
+
+  const copied = await drive.files.copy({
+    fileId,
+    supportsAllDrives: true,
+    requestBody: { name: filename, parents: [folderId] },
+    fields: 'id, webContentLink',
+  });
+  const copyId = copied.data.id as string;
+  if (!copyId) throw new Error('drive: copy returned no id');
+
+  await drive.permissions.create({
+    supportsAllDrives: true,
+    fileId: copyId,
+    requestBody: { role: 'reader', type: 'anyone' },
+  });
+
+  return {
+    fileId: copyId,
+    url: copied.data.webContentLink || 'https://drive.google.com/uc?export=download&id=' + copyId,
+  };
+}
+
 // Shared helper: copy each finished clip's MP4 into Google Drive and swap in the
 // permanent Drive URL, so BOTH the webhook (fast path) and the /api/opus/clip poll
 // (fallback path) store durable links instead of Opus's short-lived signed CDN URLs.

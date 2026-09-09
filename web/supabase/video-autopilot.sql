@@ -37,6 +37,10 @@ create table if not exists public.video_runs (
   -- What the sweep wrote back, and what it deliberately did not (because a
   -- person had already written something there).
   wrote jsonb not null default '{}'::jsonb,
+  -- One entry per network handed to Metricool: whether a draft was created,
+  -- its Metricool post id, or why it was not sent (a compliance refusal reads
+  -- very differently from an outage, and both need to be visible afterwards).
+  metricool jsonb not null default '[]'::jsonb,
   last_error text,
   log jsonb not null default '[]'::jsonb,
 
@@ -72,3 +76,7 @@ begin
 end $$;
 
 revoke insert, update, delete on public.video_runs from authenticated;
+
+-- Added after the first version of this file: the Metricool hand-off record.
+alter table public.video_runs
+  add column if not exists metricool jsonb not null default '[]'::jsonb;

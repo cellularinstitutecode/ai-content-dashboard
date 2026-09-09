@@ -8,7 +8,8 @@
 //     → Claude writes the LinkedIn post and the TikTok caption from the
 //       transcript, with the REF citation and the AVISO line
 //     → COPY, KEYWORDS and REF written back into that row
-//     → a draft saved so the copy is editable in the dashboard.
+//     → a draft saved so the copy is editable in the dashboard
+//     → a post waiting in Metricool's REVIEW queue for someone to approve.
 //
 // Three rules hold the whole thing together:
 //
@@ -18,8 +19,10 @@
 //     existing work without anyone having to check it afterwards.
 //  2. Identity is the row's CONTENT, not its row number. Insert a row at the
 //     top of a tab and nothing below it is re-processed.
-//  3. It never ticks a network column and never sends anything to Metricool.
-//     Publishing stays a human decision.
+//  3. It never PUBLISHES. What reaches Metricool is a draft in the review
+//     queue — the same thing the "Send to Metricool" button has always made —
+//     and it never ticks a network column in the sheet, because ticking one
+//     is a record that a person published something. Approve stays a person.
 import 'server-only';
 
 import {
@@ -36,6 +39,9 @@ import {
 import { columnFor, pick, tableFromRows } from '@/lib/sheet-table';
 import { prepareVideo } from '@/lib/video-prepare';
 import { STATUS_TEXT, claimIsStale, firstLinkIn, isCandidate, rowKeyFor } from '@/lib/video-row';
+import { NEEDS_VIDEO, networksFor, nextFreeSlot } from '@/lib/video-slot';
+import { publishVideoDraft, takenSlots, type PublishOutcome } from '@/lib/video-publish';
+import { publicVideoCopy } from '@/lib/drive';
 import { parseDriveFileId } from '@/lib/drive-url';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
@@ -49,6 +55,8 @@ export type SweepOptions = {
   maxVideos?: number;
   /** Look at the sheet and report what WOULD happen, writing nothing. */
   dryRun?: boolean;
+  /** Fill the sheet but do not hand anything to Metricool. */
+  skipMetricool?: boolean;
   spreadsheetId?: string;
 };
 
@@ -60,6 +68,8 @@ export type SweepRowOutcome = {
   state: 'prepared' | 'needs_transcript' | 'failed' | 'skipped' | 'would_prepare';
   wrote?: Partial<Record<VideoField, boolean>>;
   draftId?: string | null;
+  /** One entry per network a draft was attempted for. */
+  metricool?: PublishOutcome[];
   message?: string;
 };
 
@@ -70,6 +80,8 @@ export type SweepResult = {
   prepared: number;
   needsTranscript: number;
   failed: number;
+  /** Drafts actually waiting in Metricool after this run. */
+  metricoolDrafts: number;
   rows: SweepRowOutcome[];
   stoppedEarly: boolean;
 };
@@ -83,7 +95,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
   const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
   const admin = supabaseAdmin();
 
-  const result: SweepResult = { ok: true, scanned: 0, candidates: 0, prepared: 0, needsTranscript: 0, failed: 0, rows: [], stoppedEarly: false };
+  const result: SweepResult = { ok: true, scanned: 0, candidates: 0, prepared: 0, needsTranscript: 0, failed: 0, metricoolDrafts: 0, rows: [], stoppedEarly: false };
   if (!sourcesConfigured()) {
     return { ...result, ok: false };
   }
@@ -126,6 +138,9 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
       const copy = pick(rec, 'copy', 'caption');
       const youtubeLink = (String(pick(rec, 'youtube')).match(/https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/\S+/i) || [''])[0];
       if (!isCandidate({ videoLink, copy })) continue;
+      // Where the clinic has said this video goes. Ticks only — a FALSE
+      // checkbox is Google's default, not a destination.
+      const rowNetworks = VIDEO_NETWORKS.filter(([col]) => YES_TICK.test(pick(rec, col))).map(([, n]) => n);
 
       const rowKey = rowKeyFor(title, videoLink);
 
@@ -234,6 +249,20 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
           aiStatus: STATUS_TEXT.prepared,
         });
 
+        // Then the post itself: a DRAFT in Metricool, waiting for approval.
+        // Failures here are recorded and do not undo the row — the copy is
+        // already in the sheet and the draft is in the dashboard, so a
+        // Metricool outage costs the hand-off, not the work.
+        const posted = opts.skipMetricool
+          ? []
+          : await handOffToMetricool({
+              userId: opts.userId,
+              prepared,
+              networks: rowNetworks,
+              videoLink,
+              title: prepared.title,
+            });
+
         await admin.from('video_runs').update({
           state: 'prepared',
           row_number: row,
@@ -243,12 +272,14 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
           ref: prepared.ref,
           draft_id: prepared.draftId,
           wrote,
+          metricool: posted,
           last_error: null,
           updated_at: new Date().toISOString(),
         }).eq('spreadsheet_id', spreadsheetId).eq('tab', tab.title).eq('row_key', rowKey);
 
         result.prepared++;
-        outcome = { tab: tab.title, row, rowKey, title: prepared.title, state: 'prepared', wrote, draftId: prepared.draftId };
+        result.metricoolDrafts += posted.filter((p) => p.ok).length;
+        outcome = { tab: tab.title, row, rowKey, title: prepared.title, state: 'prepared', wrote, draftId: prepared.draftId, metricool: posted };
         result.rows.push(outcome);
       } catch (e) {
         reportError('video-sweep:row', e, { tab: tab.title, row: String(row) });
@@ -262,6 +293,78 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
   }
 
   return result;
+}
+
+/** The sheet's own network columns, and what a tick in one means. */
+const VIDEO_NETWORKS: [string, string][] = [
+  ['linkedin', 'linkedin'], ['tiktok', 'tiktok'], ['x', 'twitter'],
+  ['facebook', 'facebook'], ['instagram', 'instagram'],
+];
+/** A ticked box. Never FALSE — Google writes that into every untouched checkbox. */
+const YES_TICK = /^(x|✓|✔|yes|si|sí|true|posted|done)$/i;
+
+/**
+ * Hand the finished copy to Metricool as drafts awaiting approval.
+ *
+ * LinkedIn and X take the long, insight-led post; the short caption with the
+ * hashtags, REF and AVISO is what TikTok, Instagram and Facebook get — the
+ * same split the Video Library's two boxes have always had.
+ *
+ * A network that needs a video only gets a draft when there is a URL Metricool
+ * can actually fetch, which means copying the reel into the app's own Drive
+ * folder and opening that copy. The copy is made once per video, not once per
+ * network.
+ */
+async function handOffToMetricool(args: {
+  userId: string;
+  prepared: { linkedin: string; tiktok: string; draftId: string | null };
+  networks: string[];
+  videoLink: string;
+  title: string;
+}): Promise<PublishOutcome[]> {
+  const { userId, prepared, networks, videoLink, title } = args;
+
+  // Is a video needed at all? Only pay for the copy if some network wants one.
+  const fileId = parseDriveFileId(videoLink);
+  const wantsVideo = networksFor(networks, true).some((n) => NEEDS_VIDEO.has(n));
+  let mediaUrl: string | null = null;
+  if (wantsVideo && fileId) {
+    try {
+      const copied = await publicVideoCopy(fileId, title.replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 80) + '.mp4');
+      mediaUrl = copied.url;
+    } catch (e) {
+      // Not fatal: the networks that need a video are dropped below, and the
+      // text-only ones still get their drafts.
+      reportError('video-sweep:media-copy', e);
+    }
+  }
+
+  const chosen = networksFor(networks, Boolean(mediaUrl));
+  if (!chosen.length) return [];
+
+  const now = new Date();
+  const taken = new Set(await takenSlots(userId, now.toISOString()));
+  const out: PublishOutcome[] = [];
+  for (const network of chosen) {
+    const slot = nextFreeSlot(taken, now);
+    if (!slot) {
+      out.push({ network, ok: false, reason: 'metricool_error', message: 'No free posting slot inside the scheduling horizon.' });
+      continue;
+    }
+    // Claim the slot locally too, so two networks in the same run do not both
+    // take it — takenSlots was read once, before any of this was written.
+    taken.add(slot.toISOString());
+    const text = network === 'linkedin' || network === 'twitter' ? prepared.linkedin : prepared.tiktok;
+    out.push(await publishVideoDraft({
+      userId,
+      network,
+      text,
+      publicationDate: slot.toISOString(),
+      mediaUrl: NEEDS_VIDEO.has(network) ? mediaUrl : null,
+      draftId: prepared.draftId,
+    }));
+  }
+  return out;
 }
 
 /**
