@@ -351,7 +351,11 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     const needle = q.trim().toLowerCase();
     const list = videos?.entries || [];
     if (!needle) return list;
-    return list.filter((v) => [v.title, v.copy, v.type, v.creator, v.format, v.tab].join(' ').toLowerCase().includes(needle));
+    // The row number is searchable too: it is the reference people read off the
+    // sheet and off the annotation on a screenshot, so typing "190" should find
+    // row 190 rather than every caption that happens to contain those digits.
+    return list.filter((v) => String(v.row) === needle
+      || [v.title, v.copy, v.type, v.creator, v.format, v.tab].join(' ').toLowerCase().includes(needle));
   }, [videos, q]);
 
   const active = TABS.find((t) => t.id === tab)!;
@@ -492,7 +496,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                 <h2 style={{ margin: 0, fontSize: 15 }}>Videos {videos ? '(' + videos.entries.length + ')' : ''}</h2>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search title, copy, creator…" style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.12)', fontSize: 13, minWidth: 240 }} />
+                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search row number, title, copy, creator…" style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.12)', fontSize: 13, minWidth: 240 }} />
                   <button type="button" style={ghost} onClick={() => load('videos', true)}>Refresh</button>
                 </div>
               </div>
@@ -503,7 +507,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                       <thead>
                         <tr style={{ textAlign: 'left', opacity: .6 }}>
-                          <th style={{ padding: '6px 8px' }}>Title</th><th style={{ padding: '6px 8px' }}>Copy</th><th style={{ padding: '6px 8px' }}>Format</th><th style={{ padding: '6px 8px' }}>Networks</th><th style={{ padding: '6px 8px' }}>By</th><th style={{ padding: '6px 8px' }}></th>
+                          <th style={{ padding: '6px 8px' }}>Row · Title</th><th style={{ padding: '6px 8px' }}>Copy</th><th style={{ padding: '6px 8px' }}>Format</th><th style={{ padding: '6px 8px' }}>Networks</th><th style={{ padding: '6px 8px' }}>By</th><th style={{ padding: '6px 8px' }}></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -511,7 +515,20 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                           <Fragment key={i}>
                           <tr style={{ borderTop: '1px solid rgba(0,0,0,0.08)', verticalAlign: 'top' }}>
                             <td style={{ padding: '8px' }}>
-                              <div style={{ fontWeight: 600 }}>{v.title || v.type || '—'}</div>
+                              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                                {/*
+                                  The row's number IN THE SHEET. The dashboard's
+                                  own ordering is not the sheet's, so "the third
+                                  one down" meant two different rows depending on
+                                  which window you were looking at. This is the
+                                  reference both sides share.
+                                */}
+                                <span
+                                  title={'Row ' + v.row + ' on the “' + v.tab + '” tab'}
+                                  style={{ fontVariantNumeric: 'tabular-nums', fontSize: 11, fontWeight: 700, color: '#1d4ed8', background: '#eef3ff', borderRadius: 6, padding: '1px 6px', whiteSpace: 'nowrap' }}
+                                >{v.row}</span>
+                                <span style={{ fontWeight: 600 }}>{v.title || v.type || '—'}</span>
+                              </div>
                               <div style={{ opacity: .6 }}>{[v.type, v.month, v.tab].filter(Boolean).join(' · ')}</div>
                               {v.videoLink && <a href={v.videoLink.split(/\s+/).find((x) => /^https?:/.test(x)) || v.videoLink} target="_blank" rel="noreferrer">open video ↗</a>}
                             </td>
