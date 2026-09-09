@@ -80,3 +80,35 @@ revoke insert, update, delete on public.video_runs from authenticated;
 -- Added after the first version of this file: the Metricool hand-off record.
 alter table public.video_runs
   add column if not exists metricool jsonb not null default '[]'::jsonb;
+
+-- ---------------------------------------------------------------------------
+-- Transcripts, cached by VIDEO rather than by sheet row.
+--
+-- A 149 MB reel takes most of a 60-second function just to come down from
+-- Drive, before ffmpeg or the transcriber have done anything — so the whole
+-- chain (download → extract → transcribe → keyword brief → write the copy)
+-- does not reliably fit inside one invocation on this plan, and a run that
+-- overran threw away the download AND the transcription spend, leaving the
+-- next attempt to start from nothing. Pressing Prepare again just bought the
+-- same timeout a second time.
+--
+-- Keeping the transcript makes the work RESUMABLE: the expensive half happens
+-- once, and every later attempt on that video skips straight past it and
+-- finishes in seconds. Keyed on the video's own id, not the row, so the
+-- Prepare button and the automatic sweep share one copy.
+--
+-- No RLS policies on purpose: nothing but the service role should read this,
+-- and enabling RLS with no policy is how that is said in Postgres.
+create table if not exists public.video_transcripts (
+  -- The Drive file id, or the YouTube video id.
+  video_id text primary key,
+  source text not null default 'drive',   -- 'drive' | 'youtube' | 'pasted'
+  language text,
+  title text,
+  text text not null,
+  chars integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.video_transcripts enable row level security;

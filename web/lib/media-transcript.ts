@@ -20,9 +20,13 @@ import { extractAudio, ffmpegAvailable } from '@/lib/audio-extract';
 import { driveMediaStream, probeDriveMedia, MEDIA_MAX_BYTES } from '@/lib/google-sources';
 import { redact } from '@/lib/report';
 
+/** Why a recording could not be turned into words. Named so callers that wrap
+ *  this (the transcript ladder, the cache) can pass a failure through unchanged. */
+export type MediaFailure = 'not_configured' | 'not_media' | 'too_large' | 'unreachable' | 'empty' | 'failed';
+
 export type MediaTranscript =
   | { ok: true; text: string; language: string | null; source: 'drive'; name: string; sizeBytes: number }
-  | { ok: false; reason: 'not_configured' | 'not_media' | 'too_large' | 'unreachable' | 'empty' | 'failed'; message: string };
+  | { ok: false; reason: MediaFailure; message: string };
 
 /** whisper-1 takes verbose_json (and so reports the language it heard); the gpt-4o transcribers do not. */
 const MODEL = () => process.env.OPENAI_TRANSCRIBE_MODEL || 'whisper-1';

@@ -16,7 +16,8 @@ import 'server-only';
 import { parseVideoUrl } from '@/lib/composer';
 import { parseDriveFileId } from '@/lib/drive-url';
 import { fetchYouTubeTranscript } from '@/lib/youtube-transcript';
-import { transcribeDriveMedia } from '@/lib/media-transcript';
+import { transcribeDriveMedia, type MediaFailure } from '@/lib/media-transcript';
+import { cacheTranscript, cachedTranscript } from '@/lib/transcript-cache';
 
 export type TranscriptOrigin = 'pasted' | 'youtube' | 'drive';
 
@@ -34,6 +35,31 @@ export type TranscriptInput = {
 };
 
 const MIN_CHARS = 40;
+
+/**
+ * A video's transcript, from the cache when it has been paid for before.
+ *
+ * The cache is checked before the DOWNLOAD, not merely before the
+ * transcription: on a 149 MB reel the download is the expensive part, and
+ * skipping it is what turns a second attempt from a repeat of the first
+ * timeout into a run that finishes in seconds.
+ */
+async function transcribeOrRecall(fileId: string): Promise<
+  { ok: true; text: string; language: string | null; name: string; cached: boolean }
+  | { ok: false; reason: MediaFailure; message: string }
+> {
+  const hit = await cachedTranscript(fileId);
+  if (hit) {
+    return { ok: true, text: hit.text, language: hit.language, name: hit.title || '', cached: true };
+  }
+  const t = await transcribeDriveMedia(fileId);
+  if (!t.ok) return t;
+  // Stored before anything else is attempted. What follows this — the keyword
+  // brief and the copy — is what usually runs the function out of time, and
+  // storing afterwards would be storing it never.
+  await cacheTranscript(fileId, { text: t.text, source: 'drive', language: t.language ?? null, title: t.name || null });
+  return { ok: true, text: t.text, language: t.language ?? null, name: t.name, cached: false };
+}
 
 export async function resolveTranscript(input: TranscriptInput): Promise<ResolvedTranscript> {
   const pasted = String(input.pasted || '').replace(/\s+/g, ' ').trim();
@@ -68,7 +94,7 @@ export async function resolveTranscript(input: TranscriptInput): Promise<Resolve
   // 3) The Drive recording.
   const fileId = parseDriveFileId(url);
   if (fileId) {
-    const t = await transcribeDriveMedia(fileId);
+    const t = await transcribeOrRecall(fileId);
     if (t.ok) {
       const text = t.text.trim();
       if (text.length < MIN_CHARS) {

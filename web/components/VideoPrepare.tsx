@@ -115,7 +115,7 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow }: {
       const r = await fetch('/api/videos/prepare', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url, transcript: pasted || undefined, tab: sheetRow?.tab, row: sheetRow?.row }) });
       const j = await r.json().catch(() => ({}));
       if (r.status === 422 && j?.error === 'no_transcript') { setNeedPaste(j.message || 'No captions on this video — paste the transcript.'); return; }
-      if (!r.ok) { setErr(await friendlyErrorFromResponse(new Response(JSON.stringify(j), { status: r.status, headers: { 'content-type': 'application/json' } }), 'We could not prepare that video.')); return; }
+      if (!r.ok) { setErr(await friendlyErrorFromResponse(new Response(JSON.stringify(j), { status: r.status, headers: { 'content-type': 'application/json' } }), 'We could not prepare that video.', 'Press Prepare again — the transcript is kept, so the second run skips the download and finishes quickly.')); return; }
       setPrepared(j); setLinkedin(j.linkedin || ''); setTiktok(j.tiktok || '');
     } catch {
       setErr('We could not prepare that video just now.');

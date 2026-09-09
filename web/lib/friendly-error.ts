@@ -92,9 +92,19 @@ export function friendlyError(input: unknown, fallback: string = GENERIC_FAILURE
 export async function friendlyErrorFromResponse(
   res: Response,
   fallback: string = GENERIC_FAILURE,
+  /**
+   * What to tell the person to do about a TIMEOUT specifically.
+   *
+   * The generic advice — "try a shorter piece" — is wrong wherever the length
+   * is not the caller's to change, and actively misleading for video, where
+   * retrying is now the right move because the transcript survives the
+   * timeout. So the one caller that knows says so, and everyone else keeps
+   * the neutral sentence.
+   */
+  timeoutHint?: string,
 ): Promise<string> {
   if (res.status === 504 || res.status === 408) {
-    return 'That took too long and the server stopped it. Try again — if it keeps happening, try a shorter piece.';
+    return 'That took too long and the server stopped it. ' + (timeoutHint || 'Try again — if it keeps happening, try a shorter piece.');
   }
   let body: unknown = null;
   try {
