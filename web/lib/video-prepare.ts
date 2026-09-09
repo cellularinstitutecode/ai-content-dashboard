@@ -82,6 +82,16 @@ export type PrepareInput = {
   title?: string | null;
   /** Save a draft row. The sweep does; a dry run does not. */
   saveDraft?: boolean;
+  /**
+   * How long there is before the platform kills the function.
+   *
+   * Not a timeout on any one step — a decision point. Once the transcript is
+   * safely stored, starting the copy generation with only seconds left buys
+   * nothing: the request dies mid-generation, the person sees a timeout, and
+   * the work that IS done is invisible to them. Better to stop and say the
+   * expensive half is finished.
+   */
+  budgetMs?: number;
 };
 
 /** Did Semrush actually answer, or is this the fallback? The retry above and
@@ -93,6 +103,7 @@ function hasSemrushData(stamp: SemrushStamp | null | undefined): boolean {
 
 export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | PrepareFail> {
   const url = String(input.url || '').trim();
+  const startedAt = Date.now();
 
   // 1) The words.
   const t = await resolveTranscript({ url, youtubeUrl: input.youtubeUrl, pasted: input.pasted });
@@ -140,6 +151,26 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   // account sat on 48,000 unspent units — the keyword research this pipeline
   // exists for had never once run. The brief is built here from two or three
   // words naming the video, and handed over so the auto-lookup does not fire.
+  // Enough time left to write the copy?
+  //
+  // A 149 MB reel can spend most of a 60-second function just arriving from
+  // Drive. Pressing on into the keyword brief and the writing with seconds
+  // left produces one thing reliably: a killed request, and a person told to
+  // try again with no sign that anything was accomplished. The transcript is
+  // stored by now, so stopping here is not a failure — it is the expensive
+  // half finished, and the next attempt starts from it and takes seconds.
+  const budgetMs = input.budgetMs ?? 0;
+  if (budgetMs > 0 && Date.now() - startedAt > budgetMs) {
+    return {
+      ok: false,
+      status: 202,
+      error: 'transcript_ready',
+      message: 'The transcript is done and saved — that was the slow part. Press Prepare again to write the copy; it will take a few seconds now.',
+      needsPaste: false,
+      title,
+    };
+  }
+
   const subject = videoSubject(title, excerpt);
   let brief = await autoKeywordBrief(subject);
 

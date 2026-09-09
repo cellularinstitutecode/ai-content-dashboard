@@ -31,6 +31,8 @@ export const STATUS_TEXT = {
   /** Copy is longer than a network accepts, so it was not sent. */
   too_long: 'Listo — copy muy larga, acortar',
   needs_transcript: 'Falta transcripción',
+  // Not an error: the slow half succeeded and the next pass writes the copy.
+  transcript_ready: 'Transcripción lista — copy pendiente',
   failed: 'Error — revisar',
 } as const;
 

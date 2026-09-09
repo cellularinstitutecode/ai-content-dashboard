@@ -87,6 +87,10 @@ export async function POST(req: NextRequest) {
     youtubeUrl: typeof body?.youtubeUrl === 'string' ? body.youtubeUrl : null,
     pasted,
     title: typeof body?.title === 'string' ? body.title : null,
+    // maxDuration is 60 and the platform kills the request at it, so the
+    // decision to stop has to be made with room to answer. Writing the copy
+    // takes roughly fifteen seconds; anything past this point cannot finish.
+    budgetMs: 32_000,
   });
 
   if (!out.ok) {
