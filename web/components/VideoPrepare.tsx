@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { friendlyErrorFromResponse } from '@/lib/friendly-error';
 import { parseVideoUrl } from '@/lib/composer';
 import { isDriveUrl } from '@/lib/drive-url';
+import { fitsNetwork } from '@/lib/video-row';
 
 type Prepared = {
   draftId: string | null;
@@ -22,6 +23,7 @@ type Prepared = {
   keywords: { primary?: string | null; keywords?: string[]; source?: string } | null;
   keywordLine?: string;
   ref?: string;
+  hasKeywords?: boolean;
   compliance: { citation?: { status?: string; title?: string | null } } | null;
   linkedin: string;
   tiktok: string;
@@ -33,6 +35,16 @@ const card: React.CSSProperties = { background: '#fff', border: '1px solid rgba(
 const inputStyle: React.CSSProperties = { width: '100%', padding: 9, borderRadius: 8, background: '#f5f5f7', border: '1px solid rgba(0,0,0,0.1)', color: '#1d1d1f', boxSizing: 'border-box', fontSize: 13 };
 const btn: React.CSSProperties = { background: '#0071e3', color: '#fff', border: 'none', borderRadius: 999, padding: '8px 14px', cursor: 'pointer', fontSize: 12, fontWeight: 600 };
 const ghost: React.CSSProperties = { ...btn, background: 'transparent', color: '#0071e3', border: '1px solid rgba(0,113,227,0.35)' };
+
+/** Characters used against what the network accepts — red once it will be refused. */
+function Counter({ network, text }: { network: string; text: string }) {
+  const fit = fitsNetwork(network, text);
+  return (
+    <span style={{ fontWeight: 400, opacity: fit.ok ? .55 : 1, color: fit.ok ? undefined : '#d70015' }}>
+      · {fit.length}/{fit.limit}{fit.ok ? '' : ' — too long to send'}
+    </span>
+  );
+}
 
 function defaultWhen(): string {
   const d = new Date(Date.now() + 24 * 3600e3);
@@ -108,6 +120,10 @@ export default function VideoPrepare({ initialUrl, blogId }: { initialUrl?: stri
   async function send(network: 'linkedin' | 'tiktok') {
     const text = network === 'linkedin' ? linkedin : tiktok;
     if (!text.trim()) { setErr('Write the ' + network + ' copy first.'); return; }
+    // Metricool would refuse it anyway, and the REF and AVISO lines are at the
+    // end — so this is shortened by a person, never trimmed by the app.
+    const fit = fitsNetwork(network, text);
+    if (!fit.ok) { setErr('That copy is ' + fit.length + ' characters and ' + network + ' accepts ' + fit.limit + '. Shorten it first.'); return; }
     if (network === 'tiktok' && !clipUrl) { setErr('TikTok needs a vertical clip — pick one, or cut clips first under Draft → Long-form to Shorts.'); return; }
     setBusy('send'); setErr(null);
     try {
@@ -147,7 +163,7 @@ export default function VideoPrepare({ initialUrl, blogId }: { initialUrl?: stri
         <div style={{ marginTop: 16, display: 'grid', gap: 14 }}>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11 }}>
             <span style={{ background: '#eaf7ee', color: '#1f6b3a', borderRadius: 999, padding: '3px 9px' }}>✓ Transcript · {prepared.transcript.source === 'youtube' ? 'YouTube captions' : prepared.transcript.source === 'drive' ? 'transcribed from the video' : 'pasted'}{prepared.transcript.language ? ' · ' + prepared.transcript.language : ''} · {prepared.transcript.chars.toLocaleString()} chars</span>
-            <span style={{ background: prepared.keywords?.source === 'semrush' ? '#eaf7ee' : '#f2f2f5', color: prepared.keywords?.source === 'semrush' ? '#1f6b3a' : '#555', borderRadius: 999, padding: '3px 9px' }}>{prepared.keywords?.source === 'semrush' ? '✓ Keywords · ' + (prepared.keywords?.primary || '') : 'Keywords · written without live search data'}</span>
+            <span style={{ background: prepared.hasKeywords ? '#eaf7ee' : '#fff2f2', color: prepared.hasKeywords ? '#1f6b3a' : '#a1252b', borderRadius: 999, padding: '3px 9px' }}>{prepared.hasKeywords ? '✓ Keywords · ' + (prepared.keywords?.primary || '') : '⚠ NO keyword data — this copy was written without it'}</span>
             <span style={{ background: cite?.status === 'verified' ? '#eaf7ee' : '#fff8e6', color: cite?.status === 'verified' ? '#1f6b3a' : '#8a5a00', borderRadius: 999, padding: '3px 9px' }}>{cite?.status === 'verified' ? '✓ Citation verified' : 'Citation — check the REF line'}</span>
           </div>
           {(prepared.keywordLine || prepared.ref) && (
@@ -162,10 +178,10 @@ export default function VideoPrepare({ initialUrl, blogId }: { initialUrl?: stri
             <p style={{ opacity: .75, whiteSpace: 'pre-wrap', marginTop: 6 }}>{prepared.transcript.preview}…</p>
           </details>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
-            <label style={{ fontSize: 12, fontWeight: 600 }}>LinkedIn post
+            <label style={{ fontSize: 12, fontWeight: 600 }}>LinkedIn post <Counter network="linkedin" text={linkedin} />
               <textarea id="video-linkedin" style={{ ...inputStyle, marginTop: 6, minHeight: 220, fontWeight: 400, lineHeight: 1.45 }} value={linkedin} onChange={(e) => setLinkedin(e.target.value)} />
             </label>
-            <label style={{ fontSize: 12, fontWeight: 600 }}>TikTok caption
+            <label style={{ fontSize: 12, fontWeight: 600 }}>TikTok caption <Counter network="tiktok" text={tiktok} />
               <textarea id="video-tiktok" style={{ ...inputStyle, marginTop: 6, minHeight: 220, fontWeight: 400, lineHeight: 1.45 }} value={tiktok} onChange={(e) => setTiktok(e.target.value)} />
             </label>
           </div>

@@ -26,9 +26,56 @@ export function rowKeyFor(fileName: string, link: string): string {
 /** What the sweep writes into ESTADO IA, so its state is legible in the sheet itself. */
 export const STATUS_TEXT = {
   prepared: 'Listo para revisión',
+  /** Copy was written, but with no keyword data behind it. */
+  no_keywords: 'Listo — SIN keywords',
+  /** Copy is longer than a network accepts, so it was not sent. */
+  too_long: 'Listo — copy muy larga, acortar',
   needs_transcript: 'Falta transcripción',
   failed: 'Error — revisar',
 } as const;
+
+/**
+ * What a row's ESTADO IA should say once the copy is written.
+ *
+ * A prepared row is not automatically a GOOD row. Copy written without keyword
+ * data is the ordinary output of a Semrush outage or an exhausted unit
+ * balance, and it looked identical in the sheet to copy the keyword brief
+ * actually shaped — so the one thing this automation exists to add could stop
+ * happening and nobody would see it. It says so now.
+ */
+export function preparedStatus(opts: { hasKeywords: boolean; overLength: boolean }): string {
+  if (opts.overLength) return STATUS_TEXT.too_long;
+  if (!opts.hasKeywords) return STATUS_TEXT.no_keywords;
+  return STATUS_TEXT.prepared;
+}
+
+/**
+ * How much text each network accepts. Mirrors lib/composer.ts's NETWORK_LIMITS,
+ * which the manual composer shows a counter against; nothing enforced it on
+ * the automatic path, so an over-long post reached Metricool and was rejected
+ * there — after the row had already been marked ready.
+ */
+export const NETWORK_LIMIT: Record<string, number> = {
+  linkedin: 3000,
+  instagram: 2200,
+  tiktok: 2200,
+  facebook: 5000,
+  twitter: 280,
+};
+
+/**
+ * Does this copy fit?
+ *
+ * Deliberately reports rather than trims. The REF citation and the AVISO line
+ * live at the END of a caption, so truncating to fit would cut exactly the two
+ * lines that are legally required — a silently non-compliant post is far worse
+ * than one a person is asked to shorten.
+ */
+export function fitsNetwork(network: string, text: string): { ok: boolean; limit: number; length: number } {
+  const limit = NETWORK_LIMIT[String(network || '').toLowerCase()] ?? Infinity;
+  const length = String(text || '').length;
+  return { ok: length <= limit, limit, length };
+}
 
 /**
  * The first real URL in a LINK VIDEO cell.

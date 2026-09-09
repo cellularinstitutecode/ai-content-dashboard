@@ -16,7 +16,7 @@
 import 'server-only';
 
 import { generateContentPack, type BrandContext, type ContentPack, type SemrushStamp } from '@/lib/ai';
-import { checkCompliance } from '@/lib/compliance';
+import { avisoNumberFor, checkCompliance, ensureAviso } from '@/lib/compliance';
 import { resolveTranscript, type TranscriptOrigin } from '@/lib/video-transcript';
 import { keywordLineFrom } from '@/lib/video-row';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -45,6 +45,14 @@ export type PrepareOk = {
   keywords: SemrushStamp | null;
   /** The keyword brief flattened for a spreadsheet cell: "primary · a, b, c". */
   keywordLine: string;
+  /**
+   * Did real keyword data reach the writer?
+   *
+   * False whenever Semrush was unset, errored, or below its unit floor — in
+   * which case the copy is ordinary good copy that no keyword brief shaped,
+   * and the row must not look the same as one that got the full treatment.
+   */
+  hasKeywords: boolean;
   /** The REF citation the writer produced, without the label, or ''. */
   ref: string;
   compliance: unknown;
@@ -134,8 +142,24 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
 
   // The Instagram-style caption (short, hashtags, REF + AVISO) is the TikTok
   // caption; LinkedIn gets the longer, insight-led post plus the video link.
-  const linkedin = String(pack.linkedin || '').trim() + '\n\nWatch: ' + url;
   const tiktok = String(pack.instagram || '').trim();
+
+  // The citation the compliance pass verified, taken from whichever variant
+  // the writer put it on.
+  const ref = checkCompliance(tiktok).ref || checkCompliance(String(pack.facebook || '')).ref || '';
+
+  // LinkedIn carries the notice and the citation too.
+  //
+  // lib/compliance.ts scopes the advertising rule to Instagram and Facebook,
+  // so the writer is only ever asked for a REF line on those two and the AVISO
+  // is only stamped there — which left the LinkedIn post going out with
+  // neither. The same post, the same claims, the same clinic: it gets the same
+  // two lines, reusing the citation already verified against Crossref rather
+  // than asking for a second one that would need verifying again.
+  const aviso = avisoNumberFor(brand?.aviso_publicidad);
+  let linkedin = String(pack.linkedin || '').trim() + '\n\nWatch: ' + url;
+  if (ref && !checkCompliance(linkedin).ref) linkedin += '\n\nREF: ' + ref;
+  linkedin = ensureAviso(linkedin, aviso);
   const videoPack: VideoPack = {
     ...pack,
     kind: 'video',
@@ -164,10 +188,6 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     }
   }
 
-  // The citation the compliance pass verified, pulled back out so it can go in
-  // the sheet's own REF column beside the copy.
-  const ref = checkCompliance(tiktok).ref || checkCompliance(String(pack.facebook || '')).ref || '';
-
   return {
     ok: true,
     draftId,
@@ -176,6 +196,7 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     transcript: { source: t.origin, language: t.language, chars: transcript.length, preview: transcript.slice(0, 600), full: transcript },
     keywords: semrush,
     keywordLine: keywordLineFrom(semrush),
+    hasKeywords: semrush?.source === 'semrush' && Boolean(semrush.primary),
     ref,
     compliance: (pack as ContentPack & { _compliance?: unknown })._compliance ?? null,
     linkedin,

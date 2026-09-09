@@ -69,6 +69,7 @@ export async function POST(req: NextRequest) {
     transcript: { source: out.transcript.source, language: out.transcript.language, chars: out.transcript.chars, preview: out.transcript.preview },
     keywords: out.keywords,
     keywordLine: out.keywordLine,
+    hasKeywords: out.hasKeywords,
     ref: out.ref,
     compliance: out.compliance,
     linkedin: out.linkedin,

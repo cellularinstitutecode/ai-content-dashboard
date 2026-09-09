@@ -38,7 +38,7 @@ import {
 } from '@/lib/google-sources';
 import { columnFor, pick, tableFromRows } from '@/lib/sheet-table';
 import { prepareVideo } from '@/lib/video-prepare';
-import { STATUS_TEXT, claimIsStale, firstLinkIn, isCandidate, rowKeyFor } from '@/lib/video-row';
+import { STATUS_TEXT, claimIsStale, firstLinkIn, fitsNetwork, isCandidate, preparedStatus, rowKeyFor } from '@/lib/video-row';
 import { NEEDS_VIDEO, networksFor, nextFreeSlot } from '@/lib/video-slot';
 import { publishVideoDraft, takenSlots, type PublishOutcome } from '@/lib/video-publish';
 import { publicVideoCopy } from '@/lib/drive';
@@ -246,7 +246,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
           copy: prepared.tiktok,
           keywords: prepared.keywordLine,
           ref: prepared.ref,
-          aiStatus: STATUS_TEXT.prepared,
+          aiStatus: STATUS_TEXT.prepared, // replaced below once the hand-off is known
         });
 
         // Then the post itself: a DRAFT in Metricool, waiting for approval.
@@ -262,6 +262,17 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
               videoLink,
               title: prepared.title,
             });
+
+        // ESTADO IA last, once both the keyword coverage and the hand-off are
+        // known: a row that got no keyword data, or whose copy was too long to
+        // send, must not read the same as one that got everything.
+        const status = preparedStatus({
+          hasKeywords: prepared.hasKeywords,
+          overLength: posted.some((p) => p.reason === 'too_long'),
+        });
+        if (status !== STATUS_TEXT.prepared) {
+          await writeStatus(spreadsheetId, tab.title, row, columns, status);
+        }
 
         await admin.from('video_runs').update({
           state: 'prepared',
@@ -355,6 +366,22 @@ async function handOffToMetricool(args: {
     // take it — takenSlots was read once, before any of this was written.
     taken.add(slot.toISOString());
     const text = network === 'linkedin' || network === 'twitter' ? prepared.linkedin : prepared.tiktok;
+
+    // Too long for this network? Say so instead of sending it. Metricool would
+    // reject it anyway, and trimming to fit would cut the REF and AVISO lines,
+    // which sit at the end — a silently non-compliant post is worse than one a
+    // person is asked to shorten.
+    const fit = fitsNetwork(network, text);
+    if (!fit.ok) {
+      out.push({
+        network,
+        ok: false,
+        reason: 'too_long',
+        message: 'The copy is ' + fit.length + ' characters; ' + network + ' accepts ' + fit.limit + '. Shorten it and send from the Video Library.',
+      });
+      continue;
+    }
+
     out.push(await publishVideoDraft({
       userId,
       network,
