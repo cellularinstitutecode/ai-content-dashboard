@@ -237,6 +237,23 @@ At that bitrate about 50 minutes of speech fits inside the ceiling, so length
 is no longer a practical limit either. The remaining cap is 450 MB on the
 *source* file, which is scratch space, not the transcriber.
 
+## If transcription stops working
+
+`/api/health` → `audio_extractor` answers it without anyone pressing Prepare.
+The three causes need different fixes and used to look identical:
+
+| `code` | What it means |
+| --- | --- |
+| `absent` | The build never fetched the binary, **or** the path is a build-time one baked into a bundled chunk. `serverExternalPackages` in `next.config.mjs` prevents the second; `scripts/ensure-ffmpeg.mjs` the first. |
+| `copy_failed` | Present but not executable, and not copyable to `/tmp`. |
+| `no_path` | Nothing configured at all — set `FFMPEG_BIN` or reinstall `ffmpeg-static`. |
+
+`ffmpeg-static` computes its binary's location as `path.join(__dirname,
+'ffmpeg')`. If Next bundles the package into a server chunk, `__dirname`
+becomes the chunk's directory **as it stood at build time**, so the deployed
+function looks somewhere that only exists on the build machine. Keeping it in
+`serverExternalPackages` is what stops that.
+
 ## When it cannot do a video
 
 `ESTADO IA` says `Falta transcripción` and the row waits for a person. The two
