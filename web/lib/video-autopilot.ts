@@ -43,7 +43,6 @@ import { NEEDS_VIDEO, networksFor, nextFreeSlot } from '@/lib/video-slot';
 import { publishVideoDraft, takenSlots, type PublishOutcome } from '@/lib/video-publish';
 import { publicVideoCopy } from '@/lib/drive';
 import { parseDriveFileId } from '@/lib/drive-url';
-import { isAllowedEmail } from '@/lib/access';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
@@ -532,49 +531,7 @@ async function writeStatus(
   }
 }
 
-/**
- * Whose account the sweep runs as.
- *
- * The sheet belongs to the clinic, not to a person, but a draft needs an owner
- * and the writer needs a brand profile to speak in. Explicit setting first;
- * otherwise the oldest brand profile, which is the workspace's own.
- */
-export async function resolveSweepUser(): Promise<string | null> {
-  const explicit = process.env.VIDEO_AUTOPILOT_USER_ID;
-  if (explicit) return explicit;
-
-  // A saved Brand Brain is the best answer: it is the voice the copy should be
-  // written in as well as an owner for the drafts.
-  try {
-    const { data } = await supabaseAdmin()
-      .from('brand_profiles')
-      .select('user_id')
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    const owner = (data as { user_id?: string } | null)?.user_id;
-    if (owner) return owner;
-  } catch (e) {
-    reportError('video-sweep:user', e);
-  }
-
-  // No Brand Brain saved yet. That is a real gap — the copy will use the
-  // default voice — but it is not a reason to refuse the whole sweep, which is
-  // what it did: the trigger fired correctly, reached the dashboard, and got
-  // 503 no_owner, so a working end-to-end setup looked broken over a page
-  // nobody had pressed Save on.
-  //
-  // The sheet belongs to the workspace, and lib/access.ts already says who the
-  // workspace is. Fall back to the first allowlisted account that exists.
-  try {
-    const { data } = await supabaseAdmin().auth.admin.listUsers({ page: 1, perPage: 200 });
-    const users = (data?.users || []) as { id: string; email?: string | null; created_at?: string }[];
-    const allowed = users
-      .filter((u) => isAllowedEmail(u.email ?? null))
-      .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
-    return allowed[0]?.id || null;
-  } catch (e) {
-    reportError('video-sweep:user-fallback', e);
-    return null;
-  }
-}
+// Whose account the sweep runs as, and what to say when the answer is nobody,
+// now lives in lib/sweep-owner.ts — it grew a diagnostic that /api/health needs
+// too, and health should not have to import the whole sweep to ask it.
+export { resolveOwner, resolveSweepUser, type OwnerResult, type OwnerSource } from '@/lib/sweep-owner';
