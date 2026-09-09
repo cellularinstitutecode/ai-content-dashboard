@@ -708,7 +708,7 @@ export async function probeDriveMedia(fileId: string, maxBytes = MEDIA_MAX_BYTES
  * holding the whole file at once.
  */
 export async function driveMediaStream(fileId: string): Promise<Response> {
-  return gfetch(DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true', {}, 180000);
+  return gfetch(DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true', {}, 40000);
 }
 
 export async function downloadDriveMedia(fileId: string, maxBytes = MEDIA_MAX_BYTES): Promise<DriveMediaResult> {

@@ -19,9 +19,10 @@ import { prepareVideo } from '@/lib/video-prepare';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
-// Speech-to-text on a Drive file is the slow step: the download and the
-// transcription together can take well over the default 15s on a long video.
-export const maxDuration = 300;
+// Speech-to-text on a Drive file is the slow step: the download, the audio
+// extraction and the transcription together run well past the default. 60 is
+// the Hobby plan's ceiling and a deployment asking for more is rejected.
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   const auth = await requireAllowlistedUser();

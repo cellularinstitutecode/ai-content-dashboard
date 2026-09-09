@@ -76,8 +76,10 @@ export type SweepResult = {
 
 export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
   const started = Date.now();
-  const budgetMs = opts.budgetMs ?? 240_000;
-  const maxVideos = opts.maxVideos ?? 3;
+  // Sized for a 60-second function (the Hobby ceiling): stop STARTING work at
+  // 45s so the video already in flight has time to finish and write back.
+  const budgetMs = opts.budgetMs ?? 45_000;
+  const maxVideos = opts.maxVideos ?? 1;
   const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
   const admin = supabaseAdmin();
 

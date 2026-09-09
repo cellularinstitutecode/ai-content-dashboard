@@ -85,12 +85,35 @@ If you would rather add them yourself with different names, the reader matches
 
    Check that list before letting it write.
 
-The hourly Vercel cron (`vercel.json`) then picks up new rows on its own,
-three at a time.
+The daily Vercel cron (`vercel.json`, 07:00 UTC) then picks up new rows on its
+own, one per run.
 
-> **Plan note.** The hourly cron and the 300-second function timeout need a
-> Vercel **Pro** plan. On Hobby, change the schedule in `vercel.json` to daily
-> (`0 7 * * *`) and let the Apps Script trigger below carry the live load.
+> **Plan note.** This deployment is on Vercel **Hobby**, which allows only
+> once-a-day cron jobs — a more frequent schedule is rejected at deploy time,
+> not silently ignored — and kills any function at 60 seconds. So the cron is
+> daily and each run does one video.
+>
+> That makes the Apps Script trigger below the thing that actually keeps up:
+> it fires per edit, so every new link gets its own 60-second run. **Set it up
+> — on Hobby the cron alone is a backstop, not the mechanism.**
+>
+> On Pro, raise the cron to hourly and `maxVideos` past 1, and the cron alone
+> is enough.
+
+### Clearing the backlog
+
+There are about 33 rows with a video and no copy. At one per daily run that is
+a month, so work them off directly instead — each call does one and returns:
+
+```
+for i in $(seq 1 33); do
+  curl -s -H "Authorization: Bearer $CRON_SECRET" \
+       "https://YOUR_DOMAIN/api/videos/watch" | head -c 200; echo
+done
+```
+
+Runs are idempotent, so stopping and restarting this costs nothing: a row
+already prepared is skipped on sight.
 
 ## Making it instant
 

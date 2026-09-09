@@ -71,7 +71,7 @@ export async function transcribeDriveMedia(fileId: string, opts: { timeoutMs?: n
   const { audio } = extracted;
   const model = MODEL();
   const ctl = new AbortController();
-  const to = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 180_000);
+  const to = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 30_000);
   try {
     const form = new FormData();
     // openAsBlob streams the file off disk rather than reading it into memory.

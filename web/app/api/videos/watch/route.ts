@@ -19,9 +19,11 @@ import { resolveSweepUser, sweepVideos } from '@/lib/video-autopilot';
 import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
-// Transcribing is slow. The sweep is given a budget below this so it stops
-// starting new videos in time to finish the one it is on.
-export const maxDuration = 300;
+// 60 seconds is the Hobby plan's ceiling, and a deployment is REJECTED for
+// asking for more — so this is the number that has to work, not a preference.
+// The sweep is given a budget below it so it stops starting new videos in time
+// to finish the one it is on.
+export const maxDuration = 60;
 
 async function handle(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -51,12 +53,14 @@ async function handle(req: NextRequest) {
   const url = req.nextUrl;
   const dryRun = url.searchParams.get('dry') === '1';
   const maxParam = Number(url.searchParams.get('max'));
-  // A cron tick does a few videos at a time and comes back for the rest; the
-  // whole backlog in one request would time out and lose the work in flight.
-  const maxVideos = Number.isFinite(maxParam) && maxParam > 0 ? Math.min(maxParam, 10) : 3;
+  // One video per request by default. Inside a 60-second function there is
+  // room for exactly one download-extract-transcribe-write cycle with margin;
+  // asking for more would time out mid-video and lose the work in flight. The
+  // sweep comes back for the rest — a run is cheap and idempotent.
+  const maxVideos = Number.isFinite(maxParam) && maxParam > 0 ? Math.min(maxParam, 10) : 1;
 
   try {
-    const out = await sweepVideos({ userId, dryRun, maxVideos, budgetMs: 240_000 });
+    const out = await sweepVideos({ userId, dryRun, maxVideos, budgetMs: 45_000 });
     if (!out.ok) {
       return NextResponse.json(
         { ok: false, error: 'not_configured', message: 'Google access is not set up, so the sheet cannot be read.' },

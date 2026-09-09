@@ -104,7 +104,7 @@ export async function extractAudio(
 
     try {
       await run(ffmpeg, FFMPEG_ARGS(source, output), {
-        timeout: opts.timeoutMs ?? 120_000,
+        timeout: opts.timeoutMs ?? 20_000,
         maxBuffer: 1024 * 1024,
       });
     } catch (e) {
