@@ -26,6 +26,7 @@ import {
   SOURCE_IDS,
   ensureAiColumns,
   listTabs,
+  probeDriveMedia,
   readTab,
   readRowCells,
   updateRowCells,
@@ -35,6 +36,7 @@ import {
 import { columnFor, pick, tableFromRows } from '@/lib/sheet-table';
 import { prepareVideo } from '@/lib/video-prepare';
 import { STATUS_TEXT, claimIsStale, isCandidate, rowKeyFor } from '@/lib/video-row';
+import { parseDriveFileId } from '@/lib/drive-url';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
@@ -142,7 +144,30 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
 
       result.candidates++;
       if (opts.dryRun) {
-        result.rows.push({ tab: tab.title, row, rowKey, title: title || videoLink, state: 'would_prepare' });
+        // Check the one thing a dry run can usefully check: whether the video
+        // itself can actually be opened. Sharing the SHEET with the service
+        // account grants nothing over the files it links to, so this is the
+        // permission most likely to be missing — and the first real run is a
+        // bad time to discover that. Metadata only: nothing is downloaded,
+        // nothing is transcribed, nothing is written.
+        const fileId = !youtubeLink ? parseDriveFileId(videoLink) : null;
+        let reach: SweepRowOutcome = { tab: tab.title, row, rowKey, title: title || videoLink, state: 'would_prepare' };
+        if (fileId) {
+          const probe = await probeDriveMedia(fileId);
+          if (!probe.ok) {
+            reach = {
+              ...reach,
+              state: probe.reason === 'too_large' ? 'needs_transcript' : 'failed',
+              message: probe.message,
+            };
+            if (probe.reason === 'too_large') result.needsTranscript++; else result.failed++;
+          } else {
+            reach.message = 'Reachable · ' + (probe.sizeBytes ? (probe.sizeBytes / 1024 / 1024).toFixed(1) + ' MB' : 'size unknown');
+          }
+        } else if (youtubeLink) {
+          reach.message = 'Published to YouTube — its captions will be used, at no cost.';
+        }
+        result.rows.push(reach);
         continue;
       }
 

@@ -650,7 +650,18 @@ export type DriveMediaResult =
   | { ok: true; media: DriveMedia }
   | { ok: false; reason: 'not_media' | 'too_large' | 'unreachable'; message: string; name: string | null; sizeBytes: number | null };
 
-export async function downloadDriveMedia(fileId: string, maxBytes = TRANSCRIBE_MAX_BYTES): Promise<DriveMediaResult> {
+/**
+ * Can this file be transcribed at all? One metadata call, no download.
+ *
+ * Separate from the download below because the dry run needs exactly this and
+ * nothing more: sharing the SHEET with the service account grants nothing over
+ * the video files it links to, and that is the permission most likely to be
+ * missing. Finding out costs one request per row instead of a download each.
+ */
+export async function probeDriveMedia(fileId: string, maxBytes = TRANSCRIBE_MAX_BYTES): Promise<
+  { ok: true; name: string; contentType: string; sizeBytes: number | null }
+  | { ok: false; reason: 'not_media' | 'too_large' | 'unreachable'; message: string; name: string | null; sizeBytes: number | null }
+> {
   let meta: { name: string; mimeType: string; size?: string };
   try {
     const metaRes = await gfetch(
@@ -658,8 +669,11 @@ export async function downloadDriveMedia(fileId: string, maxBytes = TRANSCRIBE_M
     );
     meta = await json<{ name: string; mimeType: string; size?: string }>(metaRes, 'media metadata');
   } catch (e) {
-    const detail = e instanceof GoogleSourceError && e.reason === 'not_shared'
-      ? 'The dashboard cannot open that Drive file. Share it with ' + (serviceAccountEmail() || 'the service account') + '.'
+    // Say which of these it is. "Not shared" is fixed by a person in Drive;
+    // the others are not, and telling them apart is the difference between a
+    // five-second fix and an afternoon.
+    const detail = e instanceof GoogleSourceError && (e.reason === 'not_shared' || e.reason === 'not_found')
+      ? 'The dashboard cannot open that Drive file. Share it (or the folder it is in) with ' + (serviceAccountEmail() || 'the service account') + '.'
       : 'Drive did not hand over that file just now.';
     return { ok: false, reason: 'unreachable', message: detail, name: null, sizeBytes: null };
   }
@@ -678,6 +692,14 @@ export async function downloadDriveMedia(fileId: string, maxBytes = TRANSCRIBE_M
       sizeBytes: size,
     };
   }
+  return { ok: true, name: meta.name, contentType: meta.mimeType, sizeBytes: size };
+}
+
+export async function downloadDriveMedia(fileId: string, maxBytes = TRANSCRIBE_MAX_BYTES): Promise<DriveMediaResult> {
+  const probe = await probeDriveMedia(fileId, maxBytes);
+  if (!probe.ok) return probe;
+  const meta = { name: probe.name, mimeType: probe.contentType };
+  const size = probe.sizeBytes;
   const res = await gfetch(DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true', {}, 120000);
   if (!res.ok) {
     return { ok: false, reason: 'unreachable', message: 'Drive refused the download (HTTP ' + res.status + ').', name: meta.name || null, sizeBytes: size };

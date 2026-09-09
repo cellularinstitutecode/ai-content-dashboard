@@ -54,9 +54,16 @@ If you would rather add them yourself with different names, the reader matches
 
 1. **Run the schema.** `web/supabase/video-autopilot.sql` in the Supabase SQL
    editor. Safe to re-run.
-2. **Share the sheet as Editor** with the service account
-   (`GOOGLE_SERVICE_ACCOUNT_JSON`'s `client_email`). Viewer is not enough any
-   more — the sweep writes. The Video Library page shows the address.
+2. **Share both the sheet and the videos** with the service account
+   (`GOOGLE_SERVICE_ACCOUNT_JSON`'s `client_email` — the Video Library page
+   shows the address). These are two separate permissions:
+   - the **sheet**, as Editor. Viewer is not enough any more: the sweep
+     writes. If the Edit button on a video row already works for you, this is
+     already done.
+   - the **video files** in Drive, as Viewer. Sharing the sheet grants nothing
+     over the files it links to. Sharing the folder they live in covers all of
+     them at once. This is the one most often missed — the dry run in step 4
+     checks it for every row.
 3. **Set the environment variables** (see `web/.env.example`):
    - `OPENAI_API_KEY` — already set; speech-to-text uses it.
    - `CRON_SECRET` — already set; authorizes the sweep.
@@ -69,11 +76,19 @@ If you would rather add them yourself with different names, the reader matches
         "https://YOUR_DOMAIN/api/videos/watch?dry=1"
    ```
 
-   The reply lists every row it *would* prepare. Check that list before letting
-   it write.
+   The reply lists every row it *would* prepare, and for each one whether the
+   video file can actually be opened — `Reachable · 14.2 MB`, or the reason it
+   is not. Nothing is downloaded, transcribed or written. A row that says the
+   file cannot be opened needs sharing (step 2) before the sweep can do it.
+
+   Check that list before letting it write.
 
 The hourly Vercel cron (`vercel.json`) then picks up new rows on its own,
 three at a time.
+
+> **Plan note.** The hourly cron and the 300-second function timeout need a
+> Vercel **Pro** plan. On Hobby, change the schedule in `vercel.json` to daily
+> (`0 7 * * *`) and let the Apps Script trigger below carry the live load.
 
 ## Making it instant
 
