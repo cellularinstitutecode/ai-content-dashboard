@@ -43,6 +43,7 @@ import { NEEDS_VIDEO, networksFor, nextFreeSlot } from '@/lib/video-slot';
 import { publishVideoDraft, takenSlots, type PublishOutcome } from '@/lib/video-publish';
 import { publicVideoCopy } from '@/lib/drive';
 import { parseDriveFileId } from '@/lib/drive-url';
+import { isAllowedEmail } from '@/lib/access';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
@@ -541,6 +542,9 @@ async function writeStatus(
 export async function resolveSweepUser(): Promise<string | null> {
   const explicit = process.env.VIDEO_AUTOPILOT_USER_ID;
   if (explicit) return explicit;
+
+  // A saved Brand Brain is the best answer: it is the voice the copy should be
+  // written in as well as an owner for the drafts.
   try {
     const { data } = await supabaseAdmin()
       .from('brand_profiles')
@@ -548,9 +552,29 @@ export async function resolveSweepUser(): Promise<string | null> {
       .order('created_at', { ascending: true })
       .limit(1)
       .maybeSingle();
-    return (data as { user_id?: string } | null)?.user_id || null;
+    const owner = (data as { user_id?: string } | null)?.user_id;
+    if (owner) return owner;
   } catch (e) {
     reportError('video-sweep:user', e);
+  }
+
+  // No Brand Brain saved yet. That is a real gap — the copy will use the
+  // default voice — but it is not a reason to refuse the whole sweep, which is
+  // what it did: the trigger fired correctly, reached the dashboard, and got
+  // 503 no_owner, so a working end-to-end setup looked broken over a page
+  // nobody had pressed Save on.
+  //
+  // The sheet belongs to the workspace, and lib/access.ts already says who the
+  // workspace is. Fall back to the first allowlisted account that exists.
+  try {
+    const { data } = await supabaseAdmin().auth.admin.listUsers({ page: 1, perPage: 200 });
+    const users = (data?.users || []) as { id: string; email?: string | null; created_at?: string }[];
+    const allowed = users
+      .filter((u) => isAllowedEmail(u.email ?? null))
+      .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+    return allowed[0]?.id || null;
+  } catch (e) {
+    reportError('video-sweep:user-fallback', e);
     return null;
   }
 }
