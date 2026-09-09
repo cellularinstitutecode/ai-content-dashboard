@@ -15,10 +15,11 @@
 // It never publishes and never ticks a network column. Approve is still a person.
 import 'server-only';
 
-import { generateContentPack, type BrandContext, type ContentPack, type SemrushStamp } from '@/lib/ai';
-import { avisoNumberFor, checkCompliance, ensureAviso } from '@/lib/compliance';
+import { autoKeywordBrief, generateContentPack, type BrandContext, type ContentPack, type SemrushStamp } from '@/lib/ai';
+import { avisoNumberFor, checkCompliance } from '@/lib/compliance';
 import { resolveTranscript, type TranscriptOrigin } from '@/lib/video-transcript';
 import { keywordLineFrom } from '@/lib/video-row';
+import { composeCaption, videoSubject } from '@/lib/video-copy';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
@@ -122,11 +123,25 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   const topic =
     'Write social copy for this published video titled "' + title + '". Base every claim ONLY on what is said in the transcript below — do not add ' +
     'treatments, results or numbers that are not in it. Speak as the clinic sharing its own video.\n\nTRANSCRIPT:\n' + excerpt;
+
+  // Research the SUBJECT, not the prompt.
+  //
+  // generateContentPack researches whatever `topic` it is given, and the topic
+  // above is an instruction wrapped around a twelve-thousand-character
+  // transcript. Semrush takes that as a literal search phrase, matched
+  // nothing, and every single video came back "no keyword data" while the
+  // account sat on 48,000 unspent units — the keyword research this pipeline
+  // exists for had never once run. The brief is built here from two or three
+  // words naming the video, and handed over so the auto-lookup does not fire.
+  const subject = videoSubject(title, excerpt);
+  const brief = await autoKeywordBrief(subject);
+
   let pack: ContentPack;
-  let semrush: SemrushStamp | null = null;
+  let semrush: SemrushStamp | null = brief.stamp;
   try {
     const out = await generateContentPack({
       topic,
+      keywordHint: brief.hint ?? '',
       contentType: 'social',
       channels: ['linkedin', 'instagram'],
       brand,
@@ -134,7 +149,6 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
       tone: 'clear, warm, credible',
     });
     pack = out.pack;
-    semrush = out.semrush;
   } catch (e) {
     reportError('videos:prepare-generate', e);
     return { ok: false, status: 502, error: 'generation_failed', message: 'The writer did not answer just now. Try again in a moment.', needsPaste: false, title };
@@ -142,7 +156,17 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
 
   // The Instagram-style caption (short, hashtags, REF + AVISO) is the TikTok
   // caption; LinkedIn gets the longer, insight-led post plus the video link.
-  const tiktok = String(pack.instagram || '').trim();
+  const aviso = avisoNumberFor(brand?.aviso_publicidad);
+
+  // Assembled, not trusted where the writer left it. In production the model
+  // produced "AVISO DE PUBLICIDAD COFEPRIS 2425N2SSA01827" — no colon, an
+  // extra word, and a permit number it had invented — which the matcher in
+  // lib/compliance.ts did not recognise, so the real notice was appended
+  // underneath and the post went out carrying two permit numbers, one
+  // fictional, on a medical advertisement. composeCaption strips every notice
+  // and writes exactly one, and puts the hashtags last as the clinic's own
+  // captions always have.
+  const tiktok = composeCaption(String(pack.instagram || ''), aviso);
 
   // The citation the compliance pass verified, taken from whichever variant
   // the writer put it on.
@@ -156,10 +180,9 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   // neither. The same post, the same claims, the same clinic: it gets the same
   // two lines, reusing the citation already verified against Crossref rather
   // than asking for a second one that would need verifying again.
-  const aviso = avisoNumberFor(brand?.aviso_publicidad);
   let linkedin = String(pack.linkedin || '').trim() + '\n\nWatch: ' + url;
   if (ref && !checkCompliance(linkedin).ref) linkedin += '\n\nREF: ' + ref;
-  linkedin = ensureAviso(linkedin, aviso);
+  linkedin = composeCaption(linkedin, aviso);
   const videoPack: VideoPack = {
     ...pack,
     kind: 'video',

@@ -27,6 +27,8 @@ type Prepared = {
   compliance: { citation?: { status?: string; title?: string | null } } | null;
   linkedin: string;
   tiktok: string;
+  /** What was written back to the sheet, when Prepare was pressed on a row. */
+  sheet?: { wrote?: Record<string, boolean>; metricool?: { network: string; ok: boolean; message?: string }[]; status?: string } | { error: string } | null;
 };
 
 type ClipOption = { label: string; url: string };
@@ -53,7 +55,12 @@ function defaultWhen(): string {
   return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
 }
 
-export default function VideoPrepare({ initialUrl, blogId }: { initialUrl?: string; blogId?: string }) {
+export default function VideoPrepare({ initialUrl, blogId, sheetRow }: {
+  initialUrl?: string;
+  blogId?: string;
+  /** The row this was pressed from, so the copy goes back where the link was. */
+  sheetRow?: { tab: string; row: number };
+}) {
   const [url, setUrl] = useState(initialUrl || '');
   const [pasted, setPasted] = useState('');
   const [needPaste, setNeedPaste] = useState<string | null>(null);
@@ -105,7 +112,7 @@ export default function VideoPrepare({ initialUrl, blogId }: { initialUrl?: stri
     if (!urlOk) { setErr('Paste a YouTube or Google Drive video link first.'); return; }
     setBusy('prepare'); setErr(null); setSent(null); setNeedPaste(null);
     try {
-      const r = await fetch('/api/videos/prepare', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url, transcript: pasted || undefined }) });
+      const r = await fetch('/api/videos/prepare', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url, transcript: pasted || undefined, tab: sheetRow?.tab, row: sheetRow?.row }) });
       const j = await r.json().catch(() => ({}));
       if (r.status === 422 && j?.error === 'no_transcript') { setNeedPaste(j.message || 'No captions on this video — paste the transcript.'); return; }
       if (!r.ok) { setErr(await friendlyErrorFromResponse(new Response(JSON.stringify(j), { status: r.status, headers: { 'content-type': 'application/json' } }), 'We could not prepare that video.')); return; }
@@ -166,6 +173,27 @@ export default function VideoPrepare({ initialUrl, blogId }: { initialUrl?: stri
             <span style={{ background: prepared.hasKeywords ? '#eaf7ee' : '#fff2f2', color: prepared.hasKeywords ? '#1f6b3a' : '#a1252b', borderRadius: 999, padding: '3px 9px' }}>{prepared.hasKeywords ? '✓ Keywords · ' + (prepared.keywords?.primary || '') : '⚠ NO keyword data — this copy was written without it'}</span>
             <span style={{ background: cite?.status === 'verified' ? '#eaf7ee' : '#fff8e6', color: cite?.status === 'verified' ? '#1f6b3a' : '#8a5a00', borderRadius: 999, padding: '3px 9px' }}>{cite?.status === 'verified' ? '✓ Citation verified' : 'Citation — check the REF line'}</span>
           </div>
+          {prepared.sheet && 'error' in (prepared.sheet as object) && (
+            <div role="alert" style={{ fontSize: 12, background: '#fff2f2', border: '1px solid #f2c2c2', borderRadius: 10, padding: 10, color: '#a1252b' }}>
+              The copy is written and saved as a draft, but the sheet row could not be updated: {(prepared.sheet as { error: string }).error}
+            </div>
+          )}
+          {prepared.sheet && !('error' in (prepared.sheet as object)) && (
+            <div style={{ fontSize: 12, background: '#eaf7ee', border: '1px solid #bfe3cb', borderRadius: 10, padding: 10, color: '#1f6b3a' }}>
+              ✓ Written into the sheet ({(prepared.sheet as { status?: string }).status || 'ready'}).{' '}
+              {(() => {
+                const posted = ((prepared.sheet as { metricool?: { network: string; ok: boolean; message?: string }[] }).metricool || []);
+                const ok = posted.filter((p) => p.ok).map((p) => p.network);
+                const bad = posted.filter((p) => !p.ok);
+                return (
+                  <>
+                    {ok.length ? 'Drafts waiting in Metricool for ' + ok.join(', ') + '. ' : 'No Metricool draft was created. '}
+                    {bad.map((b) => <span key={b.network} style={{ display: 'block', color: '#8a5a00' }}>{b.network}: {b.message}</span>)}
+                  </>
+                );
+              })()}
+            </div>
+          )}
           {(prepared.keywordLine || prepared.ref) && (
             <div style={{ fontSize: 12, background: '#f7f7f9', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 10, padding: 10, display: 'grid', gap: 6 }}>
               {prepared.keywordLine && <div><strong>Keywords</strong> <span style={{ opacity: .8 }}>{prepared.keywordLine}</span></div>}

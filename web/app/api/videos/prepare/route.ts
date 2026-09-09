@@ -16,6 +16,8 @@ import { requireAllowlistedUser } from '@/lib/auth';
 import { isDriveUrl } from '@/lib/drive-url';
 import { parseVideoUrl } from '@/lib/composer';
 import { prepareVideo } from '@/lib/video-prepare';
+import { completeRow } from '@/lib/video-autopilot';
+import { reportError } from '@/lib/report';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -61,8 +63,28 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Pressed from a row in the Video Library? Then finish that row the way the
+  // sweep finishes one: copy into column E, keywords and REF beside it, and
+  // the drafts into Metricool. Without this the button produced copy and
+  // stopped, so the same video handled by hand and handled automatically
+  // ended up in two different states.
+  let sheet: unknown = null;
+  const tab = typeof body?.tab === 'string' ? body.tab : '';
+  const row = Number(body?.row);
+  if (tab && Number.isInteger(row) && row >= 2) {
+    try {
+      sheet = await completeRow({ userId: auth.userId, tab, row, prepared: out, videoLink: url });
+    } catch (e) {
+      // The copy is written and the draft is saved; only the hand-off failed.
+      // Say so rather than losing the work behind a 500.
+      reportError('videos:prepare-complete', e, { tab, row: String(row) });
+      sheet = { error: e instanceof Error ? e.message : 'Could not write that row.' };
+    }
+  }
+
   return NextResponse.json({
     ok: true,
+    sheet,
     draftId: out.draftId,
     title: out.title,
     videoId: out.videoId,

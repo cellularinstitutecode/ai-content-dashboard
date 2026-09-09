@@ -37,7 +37,7 @@ import {
   type VideoField,
 } from '@/lib/google-sources';
 import { columnFor, pick, tableFromRows } from '@/lib/sheet-table';
-import { prepareVideo } from '@/lib/video-prepare';
+import { prepareVideo, type PrepareOk } from '@/lib/video-prepare';
 import { STATUS_TEXT, claimIsStale, firstLinkIn, fitsNetwork, isCandidate, preparedStatus, rowKeyFor } from '@/lib/video-row';
 import { NEEDS_VIDEO, networksFor, nextFreeSlot } from '@/lib/video-slot';
 import { publishVideoDraft, takenSlots, type PublishOutcome } from '@/lib/video-publish';
@@ -306,6 +306,94 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
   return result;
 }
 
+/**
+ * Finish ONE row the same way the sweep finishes one.
+ *
+ * The "Prepare" button in the Video Library produced copy and then stopped:
+ * nothing reached column E and nothing reached Metricool, so pressing it left
+ * the row looking untouched while the automatic path on the identical video
+ * would have completed it. Two behaviours for one operation.
+ *
+ * The rules live in the helpers this calls — never overwrite what a person
+ * wrote, one post per slot, drafts only — so the button and the sweep cannot
+ * disagree about them.
+ */
+export async function completeRow(opts: {
+  userId: string;
+  tab: string;
+  row: number;
+  prepared: PrepareOk;
+  videoLink: string;
+  skipMetricool?: boolean;
+  spreadsheetId?: string;
+}): Promise<{ wrote: Partial<Record<VideoField, boolean>>; metricool: PublishOutcome[]; status: string }> {
+  const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
+  const rows = await readTab(spreadsheetId, opts.tab);
+  const { header, headerRow, records } = tableFromRows(rows, ['tipo de video', 'título del video', 'titulo del video', 'copy', 'link video', 'formato', 'title', 'video']);
+  if (!header.length) throw new Error('That tab has no video table.');
+
+  const found = records.find((r) => r.row === opts.row);
+  if (!found) throw new Error('Row ' + opts.row + ' is not a data row on ' + opts.tab + '.');
+
+  const usedWidth = rows.reduce((w, r) => Math.max(w, (r || []).length), 0);
+  const columns = await ensureAiColumns(spreadsheetId, opts.tab, headerRow, header, usedWidth);
+  const copyCol = columnFor(header, 'copy', 'caption');
+  const rowNetworks = VIDEO_NETWORKS.filter(([col]) => YES_TICK.test(pick(found.rec, col))).map(([, n]) => n);
+
+  const wrote = await writeRowBack(spreadsheetId, opts.tab, opts.row, {
+    ...columns,
+    ...(copyCol ? { copy: copyCol } : {}),
+  }, {
+    copy: opts.prepared.tiktok,
+    keywords: opts.prepared.keywordLine,
+    ref: opts.prepared.ref,
+    aiStatus: STATUS_TEXT.prepared,
+  });
+
+  const metricool = opts.skipMetricool ? [] : await handOffToMetricool({
+    userId: opts.userId,
+    prepared: opts.prepared,
+    networks: rowNetworks,
+    videoLink: opts.videoLink,
+    title: opts.prepared.title,
+  });
+
+  const status = preparedStatus({
+    hasKeywords: opts.prepared.hasKeywords,
+    overLength: metricool.some((m) => m.reason === 'too_long'),
+  });
+  if (status !== STATUS_TEXT.prepared) {
+    await writeStatus(spreadsheetId, opts.tab, opts.row, columns, status);
+  }
+
+  // Record it, so the sweep sees this row as done rather than doing it again.
+  const rowKey = rowKeyFor(pick(found.rec, 'título del video', 'titulo del video', 'title'), opts.videoLink);
+  try {
+    await supabaseAdmin().from('video_runs').upsert({
+      user_id: opts.userId,
+      spreadsheet_id: spreadsheetId,
+      tab: opts.tab,
+      row_key: rowKey,
+      row_number: opts.row,
+      video_title: opts.prepared.title || null,
+      video_link: opts.videoLink || null,
+      state: 'prepared',
+      transcript_source: opts.prepared.transcript.source,
+      transcript_chars: opts.prepared.transcript.chars,
+      keywords: opts.prepared.keywordLine,
+      ref: opts.prepared.ref,
+      draft_id: opts.prepared.draftId,
+      wrote,
+      metricool,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'spreadsheet_id,tab,row_key' });
+  } catch (e) {
+    reportError('video-complete:run', e);
+  }
+
+  return { wrote, metricool, status };
+}
+
 /** The sheet's own network columns, and what a tick in one means. */
 const VIDEO_NETWORKS: [string, string][] = [
   ['linkedin', 'linkedin'], ['tiktok', 'tiktok'], ['x', 'twitter'],
@@ -326,7 +414,7 @@ const YES_TICK = /^(x|✓|✔|yes|si|sí|true|posted|done)$/i;
  * folder and opening that copy. The copy is made once per video, not once per
  * network.
  */
-async function handOffToMetricool(args: {
+export async function handOffToMetricool(args: {
   userId: string;
   prepared: { linkedin: string; tiktok: string; draftId: string | null };
   networks: string[];
@@ -402,7 +490,7 @@ async function handOffToMetricool(args: {
  * same time, and the gap between deciding to write and writing is measured in
  * minutes here, not milliseconds.
  */
-async function writeRowBack(
+export async function writeRowBack(
   spreadsheetId: string,
   tab: string,
   row: number,
