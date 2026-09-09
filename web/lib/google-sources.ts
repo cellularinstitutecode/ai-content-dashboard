@@ -137,6 +137,63 @@ async function json<T>(res: Response, what: string): Promise<T> {
 
 type SheetMeta = { title: string; sheetId: number; index: number; columnCount: number };
 
+/**
+ * Can this deployment's credential actually EDIT the videos sheet?
+ *
+ * Asked of Google rather than inferred, because every cheaper way of asking
+ * has been wrong at least once. The Share dialog's General access row says
+ * "anyone with the link", which makes a sheet look configured while the
+ * service account is on the permission list nowhere at all — reads succeed,
+ * and the first write returns 403 after the transcription has been paid for.
+ * Reading the permission list is no better: a caller who is not the owner is
+ * not always shown every entry.
+ *
+ * `capabilities.canEdit` is Google answering for THIS credential on THIS file.
+ * It writes nothing, so it is safe to run on every health check.
+ */
+export type SheetAccess =
+  | { ok: true; canEdit: boolean; name: string; detail: string }
+  | { ok: false; reason: GoogleFailure | 'not_configured'; detail: string };
+
+export async function sheetWriteAccess(spreadsheetId = SOURCE_IDS.videosSheet()): Promise<SheetAccess> {
+  const who = serviceAccountEmail();
+  if (!sourcesConfigured()) {
+    return { ok: false, reason: 'not_configured', detail: 'No Google credential is configured, so the sheet cannot be read or written.' };
+  }
+  const url = DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(spreadsheetId) +
+    '?supportsAllDrives=true&fields=name,capabilities(canEdit)';
+  let res: Response;
+  try {
+    res = await gfetch(url);
+  } catch (e) {
+    return { ok: false, reason: 'unknown', detail: 'Google could not be reached: ' + (e instanceof Error ? e.message : 'error') };
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    const { reason, detail } = classifyGoogleError(res.status, body);
+    return {
+      ok: false,
+      reason,
+      detail: res.status === 404
+        ? 'The sheet is not visible to ' + (who || 'this credential') + ' at all. Share it with that address, or check SOURCES_VIDEOS_SHEET_ID.'
+        : detail || ('Google refused with HTTP ' + res.status + '.'),
+    };
+  }
+  const data = (await res.json().catch(() => ({}))) as { name?: string; capabilities?: { canEdit?: boolean } };
+  const canEdit = Boolean(data.capabilities?.canEdit);
+  return {
+    ok: true,
+    canEdit,
+    name: String(data.name || ''),
+    detail: canEdit
+      ? 'Google confirms ' + (who || 'this credential') + ' can edit “' + String(data.name || spreadsheetId) + '”, so the copy can be written back into column E.'
+      : 'Google says ' + (who || 'this credential') + ' can READ “' + String(data.name || spreadsheetId) + '” but not edit it. ' +
+        'Every write returns 403, after the transcription has already been paid for. ' +
+        'The file\u2019s OWNER must add that exact address as an Editor — a link-sharing setting does not cover it, ' +
+        'and on a managed domain an admin may have to permit sharing outside the organisation first.',
+  };
+}
+
 export async function listTabs(spreadsheetId: string): Promise<SheetMeta[]> {
   const res = await gfetch(SHEETS_BASE() + '/v4/spreadsheets/' + encodeURIComponent(spreadsheetId) + '?fields=sheets.properties');
   const j = await json<{ sheets?: { properties: { title: string; sheetId: number; index: number; gridProperties?: { columnCount?: number } } }[] }>(res, 'sheet metadata');

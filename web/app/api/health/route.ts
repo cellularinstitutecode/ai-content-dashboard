@@ -25,6 +25,7 @@ import { lastImageOutcome } from '@/lib/provider-status';
 import { resolveFfmpeg } from '@/lib/audio-extract';
 import { missingSchema } from '@/lib/schema-check';
 import { resolveOwner } from '@/lib/sweep-owner';
+import { sheetWriteAccess } from '@/lib/google-sources';
 import { serviceKeyVerdict } from '@/lib/supabase-key';
 import { schemaDetail } from '@/lib/schema-probe';
 
@@ -66,6 +67,13 @@ export async function GET() {
   // on every fire, and the message blamed a page the person had already saved.
   // This asks the real question and reports the real answer.
   const owner = await resolveOwner();
+
+  // Can the credential actually WRITE the sheet? "The Edit button works for
+  // you" was taken as evidence once and was the wrong inference: the sheet was
+  // open to anyone-with-the-link as a READER, the service account was on the
+  // permission list nowhere, and the first write returned 403 — after the
+  // transcription had been paid for. Google is asked directly here.
+  const sheet = await sheetWriteAccess();
   const serviceKey = serviceKeyVerdict(process.env.SUPABASE_SERVICE_ROLE_KEY);
 
   // Images: what the account last DID, not what is in the environment.
@@ -104,6 +112,14 @@ export async function GET() {
       code: serviceKey.code,
       severity: 'required',
       detail: serviceKey.detail,
+    },
+    {
+      // The other end of the automatic path: somewhere to PUT the result.
+      name: 'sheet_write',
+      ok: sheet.ok && sheet.canEdit,
+      code: sheet.ok ? (sheet.canEdit ? undefined : 'read_only') : sheet.reason,
+      severity: 'required',
+      detail: sheet.detail,
     },
     {
       // The automatic path's single point of failure, asked live.
