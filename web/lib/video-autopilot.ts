@@ -318,6 +318,46 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
  * wrote, one post per slot, drafts only — so the button and the sweep cannot
  * disagree about them.
  */
+/**
+ * The sheet row a pasted link came from.
+ *
+ * Prepare writes column E only when it is given a tab and a row — which is
+ * true of the button on a row, and false of the box at the top of the page.
+ * So pasting a link produced perfect copy and put it nowhere, which is the
+ * one step of this whole job that was being automated.
+ *
+ * The link is matched by Drive FILE ID rather than by string: the same file
+ * appears as /file/d/<id>/view, /open?id=<id> and /uc?export=download&id=<id>,
+ * and the sheet does not always hold the form that was pasted.
+ *
+ * Returns null when the link is not in the sheet at all — a video being
+ * prepared ad hoc is a legitimate thing to do, and it simply has nowhere to
+ * be written back to.
+ */
+export async function findRowByLink(
+  link: string,
+  spreadsheetId = SOURCE_IDS.videosSheet(),
+): Promise<{ tab: string; row: number } | null> {
+  const wanted = parseDriveFileId(link);
+  if (!wanted) return null;
+  const tabs = await listTabs(spreadsheetId);
+  for (const t of tabs) {
+    let rows: string[][];
+    try {
+      rows = await readTab(spreadsheetId, t.title);
+    } catch {
+      continue; // a tab that cannot be read is not the answer; the others might be
+    }
+    const { header, records } = tableFromRows(rows, ['copy', 'link video', 'título del video', 'titulo del video']);
+    if (!header.length) continue;
+    for (const { rec, row } of records) {
+      const found = firstLinkIn(pick(rec, 'link video', 'video', 'link'));
+      if (found && parseDriveFileId(found) === wanted) return { tab: t.title, row };
+    }
+  }
+  return null;
+}
+
 export async function completeRow(opts: {
   userId: string;
   tab: string;

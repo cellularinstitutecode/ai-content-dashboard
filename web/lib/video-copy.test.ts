@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { composeCaption, videoSubject } from './video-copy.ts';
+import { composeCaption, topicFromTranscript, videoSubject } from './video-copy.ts';
 
 const AVISO = '2623022002A00090';
 
@@ -80,4 +80,30 @@ test('copy with no notice at all still gets exactly one', () => {
   const out = composeCaption('Just a body.\n\n#Tag', AVISO);
   assert.equal((out.match(/AVISO DE PUBLICIDAD/gi) || []).length, 1);
   assert.ok(out.trim().endsWith('#Tag'));
+});
+
+test('the topic comes from what was said, not what the file was called', () => {
+  // The real case: "Reel_RyallCellgenicScript16_Rodrigo" reduces to a partner's
+  // name and a script number, Semrush has no such phrase, and the Prepare
+  // screen showed "NO keyword data" over copy written blind.
+  const spoken =
+    'Quality in regenerative medicine is not just about the cells. At Cellular Institute we work with ' +
+    'Cellgenic, where cellular products are cultured under controlled conditions. Serious manufacturing ' +
+    'in regenerative medicine means documenting every step, and patients deserve transparency.';
+  assert.equal(topicFromTranscript(spoken), 'regenerative medicine');
+});
+
+test('a phrase said once is not a theme', () => {
+  // Otherwise the seed is whatever happened to open the video.
+  assert.equal(topicFromTranscript('the patient walked into the clinic today'), '');
+});
+
+test('a single repeated word is used when nothing is said twice as a pair', () => {
+  assert.equal(topicFromTranscript('exosomes matter. exosomes again. something else entirely.'), 'exosomes');
+});
+
+test('an empty or wordless transcript yields nothing rather than noise', () => {
+  assert.equal(topicFromTranscript(''), '');
+  assert.equal(topicFromTranscript('the a of to in on'), '');
+  assert.equal(topicFromTranscript('... 123 456 ...'), '');
 });

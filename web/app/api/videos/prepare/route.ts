@@ -16,7 +16,7 @@ import { requireAllowlistedUser } from '@/lib/auth';
 import { isDriveUrl } from '@/lib/drive-url';
 import { parseVideoUrl } from '@/lib/composer';
 import { prepareVideo } from '@/lib/video-prepare';
-import { completeRow } from '@/lib/video-autopilot';
+import { completeRow, findRowByLink } from '@/lib/video-autopilot';
 import { GoogleSourceError, serviceAccountEmail } from '@/lib/google-sources';
 import { reportError } from '@/lib/report';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -102,8 +102,24 @@ export async function POST(req: NextRequest) {
   // stopped, so the same video handled by hand and handled automatically
   // ended up in two different states.
   let sheet: unknown = null;
-  const tab = typeof body?.tab === 'string' ? body.tab : '';
-  const row = Number(body?.row);
+  let tab = typeof body?.tab === 'string' ? body.tab : '';
+  let row = Number(body?.row);
+
+  // A link PASTED into the box carries no row, and until now that meant the
+  // copy was written perfectly and put nowhere — the one step of this job that
+  // was being automated. The link itself says which row it came from, so look
+  // it up rather than making the person press the button on the right line.
+  if (!(tab && Number.isInteger(row) && row >= 2)) {
+    try {
+      const found = await findRowByLink(url);
+      if (found) { tab = found.tab; row = found.row; }
+    } catch (e) {
+      // Not being able to find the row is not a reason to lose the copy; the
+      // response still carries it, and the panel says it was not written.
+      reportError('videos:prepare-locate', e);
+    }
+  }
+
   if (tab && Number.isInteger(row) && row >= 2) {
     try {
       sheet = await completeRow({ userId: auth.userId, tab, row, prepared: out, videoLink: url });
@@ -113,6 +129,8 @@ export async function POST(req: NextRequest) {
       reportError('videos:prepare-complete', e, { tab, row: String(row) });
       sheet = { error: sheetWriteAdvice(e) };
     }
+  } else {
+    sheet = { error: 'That link is not in the sheet, so there is no row to write the copy into. Press Prepare on the row itself to have it written back.' };
   }
 
   return NextResponse.json({

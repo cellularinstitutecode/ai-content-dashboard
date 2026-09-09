@@ -19,7 +19,7 @@ import { autoKeywordBrief, generateContentPack, type BrandContext, type ContentP
 import { avisoNumberFor, checkCompliance } from '@/lib/compliance';
 import { resolveTranscript, type TranscriptOrigin } from '@/lib/video-transcript';
 import { keywordLineFrom } from '@/lib/video-row';
-import { composeCaption, videoSubject } from '@/lib/video-copy';
+import { composeCaption, topicFromTranscript, videoSubject } from '@/lib/video-copy';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
@@ -84,6 +84,13 @@ export type PrepareInput = {
   saveDraft?: boolean;
 };
 
+/** Did Semrush actually answer, or is this the fallback? The retry above and
+ *  the red badge on the Prepare screen must agree on what "no keyword data"
+ *  means, so they ask the same question. */
+function hasSemrushData(stamp: SemrushStamp | null | undefined): boolean {
+  return stamp?.source === 'semrush' && Boolean(stamp.primary);
+}
+
 export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | PrepareFail> {
   const url = String(input.url || '').trim();
 
@@ -134,7 +141,24 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   // exists for had never once run. The brief is built here from two or three
   // words naming the video, and handed over so the auto-lookup does not fire.
   const subject = videoSubject(title, excerpt);
-  const brief = await autoKeywordBrief(subject);
+  let brief = await autoKeywordBrief(subject);
+
+  // The filename is not always about anything. "Reel_RyallCellgenicScript16"
+  // reduces to a partner's name and a script number, Semrush has no such
+  // phrase, and the copy is written blind — which is exactly what the red "NO
+  // keyword data" badge was reporting.
+  //
+  // What the video is about is in the video. Ask again with the phrase the
+  // speaker actually repeats, but only when the first attempt found nothing:
+  // a filename that names its subject is still the better seed, and this costs
+  // a second lookup only on the videos that would otherwise get none.
+  if (!hasSemrushData(brief.stamp) && excerpt) {
+    const spoken = topicFromTranscript(excerpt);
+    if (spoken && spoken.toLowerCase() !== subject.toLowerCase()) {
+      const retry = await autoKeywordBrief(spoken);
+      if (hasSemrushData(retry.stamp)) brief = retry;
+    }
+  }
 
   let pack: ContentPack;
   let semrush: SemrushStamp | null = brief.stamp;
@@ -221,7 +245,7 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     transcript: { source: t.origin, language: t.language, chars: transcript.length, preview: transcript.slice(0, 600), full: transcript },
     keywords: semrush,
     keywordLine: keywordLineFrom(semrush),
-    hasKeywords: semrush?.source === 'semrush' && Boolean(semrush.primary),
+    hasKeywords: hasSemrushData(semrush),
     ref,
     compliance: (pack as ContentPack & { _compliance?: unknown })._compliance ?? null,
     linkedin,
