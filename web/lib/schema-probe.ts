@@ -45,6 +45,24 @@ export const REQUIRED_SCHEMA: SchemaProbe[] = [
     breaks: 'Autopilot',
   },
   {
+    table: 'video_runs',
+    column: 'id',
+    kind: 'table',
+    file: 'supabase/video-autopilot.sql',
+    breaks: 'the video sweep — every row would be re-transcribed and re-paid for on every run',
+  },
+  {
+    // An ALTER TABLE at the foot of the same file, added after the first
+    // version shipped: a database can have video_runs and still be missing
+    // this, so the table probe above would pass while every Metricool hand-off
+    // failed to record what it had done.
+    table: 'video_runs',
+    column: 'metricool',
+    kind: 'column',
+    file: 'supabase/video-autopilot.sql',
+    breaks: 'the record of which posts reached Metricool',
+  },
+  {
     // An ALTER TABLE, not a CREATE: a database can have template_runs and still
     // be missing this, so the table probe above would pass while the engine
     // still could not read a template's plan.
