@@ -65,16 +65,23 @@ function SheetFrame({ id, title, height }: { id: string; title: string; height: 
   // cookie setting as much as on Google. Rather than guess for everyone, offer
   // the swap: if the editor loads for you, type in it; if it comes up blank,
   // switch back and use the fields beside it, which write to the same sheet.
-  const [tryEditor, setTryEditor] = useState(false);
+  // Open in Google's own editor, not the read-only preview.
+  //
+  // The preview renders the values but not the GRID — no column letters, no
+  // row numbers — and those are the coordinates every conversation about this
+  // sheet uses ("column E", "row 190"). Starting read-only meant pressing a
+  // button before the sheet could be read the way people actually talk about
+  // it. The toggle stays, for the case where the embed comes up blank.
+  const [tryEditor, setTryEditor] = useState(true);
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.08)', fontSize: 12, flexWrap: 'wrap' }}>
         <span style={{ opacity: .7 }}>
-          {title} — {tryEditor ? 'Google’s editor, embedded. If this panel is blank, switch back to read-only.' : 'the live sheet, read-only here. Edit with the fields beside it, or open it in Google.'}
+          {title} — {tryEditor ? 'Google’s editor, embedded — column letters and row numbers as they are in the sheet. If this panel is blank, switch to the read-only view.' : 'the live sheet, read-only. Edit with the fields beside it, or open it in Google.'}
         </span>
         <span style={{ display: 'flex', gap: 8 }}>
           <button type="button" style={ghost} onClick={() => setTryEditor(!tryEditor)}>
-            {tryEditor ? 'Back to read-only' : 'Try editing here'}
+            {tryEditor ? 'Read-only view' : 'Edit here'}
           </button>
           <a href={sheetOpen(id)} target="_blank" rel="noreferrer" style={{ ...ghost, textDecoration: 'none' }}>Open in Google Sheets ↗</a>
         </span>
