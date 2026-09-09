@@ -34,7 +34,13 @@ async function handle(req: NextRequest) {
     userId = await resolveSweepUser();
     if (!userId) {
       return NextResponse.json(
-        { ok: false, error: 'no_owner', message: 'No brand profile to write as. Set VIDEO_AUTOPILOT_USER_ID, or save the Brand Brain once.' },
+        {
+          ok: false,
+          error: 'no_owner',
+          message: 'Nobody to write as: there is no saved Brand Brain and no allowlisted account in the database. ' +
+            'Open Brand Brain in the dashboard and press Save — that also gives the copy the clinic’s voice instead ' +
+            'of the default one. VIDEO_AUTOPILOT_USER_ID overrides this if you need a specific account.',
+        },
         { status: 503 },
       );
     }
