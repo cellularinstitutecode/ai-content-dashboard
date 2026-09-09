@@ -17,8 +17,16 @@
 
 export const DEFAULT_AVISO_NUMBER = '2623022002A00090';
 
-/** Networks the rule applies to. Metricool's ids and the app's ids both appear. */
-const SOCIAL_NETWORKS = new Set(['instagram', 'facebook', 'ig', 'fb']);
+/**
+ * Networks the rule applies to. Metricool's ids and the app's ids both appear.
+ *
+ * LinkedIn and TikTok were missing, so complianceGate answered "does not apply" for the
+ * two networks the video pipeline actually publishes to — the gate that exists to stop an
+ * uncited medical claim reaching a queue was never consulted for them. The rule is about
+ * advertising a clinic's therapies in Mexico, which does not stop being true because the
+ * post is on LinkedIn.
+ */
+const SOCIAL_NETWORKS = new Set(['instagram', 'facebook', 'ig', 'fb', 'linkedin', 'tiktok']);
 
 export function appliesTo(providers: readonly string[] | string | null | undefined): boolean {
   const list = Array.isArray(providers) ? providers : providers ? [providers] : [];
@@ -45,6 +53,10 @@ export function avisoLine(avisoNumber: string | null | undefined): string {
 const AVISO_RE = /AVISO\s+DE\s+PUBLICIDAD\s*[:：]\s*([A-Z0-9]{8,})/i;
 // "REF:" (or "REF." / "Ref:") followed by something that looks like a citation:
 // at least a handful of characters, not just the label.
+//
+// Shape only, deliberately — the DOI is what makes it checkable, and that is tested
+// separately below so a citation can be REPORTED as present-but-unverifiable rather than
+// silently accepted. verifyDoi only ever sees citations that carry one.
 const REF_RE = /(^|\n)[ \t]*REF(?:ERENCIA)?[ \t]*[.:：][ \t]*(\S[^\n]{15,})/i;
 const DOI_RE = /\b(10\.\d{4,9}\/[^\s"'<>)\]]+)/i;
 
@@ -77,8 +89,12 @@ export function checkCompliance(text: string, expectedAviso?: string | null): Co
   if (!avisoFound || avisoMismatch) missing.push('aviso');
   const rf = REF_RE.exec(t);
   const ref = rf ? rf[2].trim() : null;
-  if (!ref) missing.push('ref');
   const doi = ref ? (DOI_RE.exec(ref)?.[1] ?? null) : null;
+  // A citation with no DOI is not a citation this app can stand behind. Only a DOI
+  // reaches Crossref, so a plausible-looking reference without one was passing every
+  // check while nothing had ever confirmed the study exists — the exact failure the
+  // "never invent a citation" instruction is there to prevent, with no way to catch it.
+  if (!ref || !doi) missing.push('ref');
   return { ok: missing.length === 0, missing, avisoFound, avisoMismatch, ref, doi: doi ? doi.replace(/[.,;]+$/, '') : null };
 }
 
@@ -113,8 +129,10 @@ export function complianceMessage(check: ComplianceCheck): string {
 
 /** The instruction handed to the writer for Instagram / Facebook copy. */
 export const REF_INSTRUCTION =
-  ' Compliance (Mexican health-advertising rules for this clinic): the "instagram" and "facebook" values MUST end with' +
+  ' Compliance (Mexican health-advertising rules for this clinic): the "instagram" and "facebook" values MUST each end with' +
   ' a line that starts with "REF: " citing ONE real, peer-reviewed study that supports the post\'s main claim, in the form' +
   ' Author, A.B., et al. (Year). "Title." Journal, volume(issue), pages. DOI: 10.xxxx/xxxxx — only cite a study you are' +
-  ' confident exists, with its real DOI; never invent a citation. Put the REF line after the hashtags. Do NOT write an' +
-  ' "AVISO DE PUBLICIDAD" line yourself; the app adds it.';
+  ' confident exists, and it MUST carry its real DOI, because the DOI is checked against Crossref and a citation without' +
+  ' one is rejected; never invent a citation. The same citation also carries the LinkedIn and TikTok versions of this post,' +
+  ' so it has to support what all of them claim. Put the REF line last, after the hashtags — the app moves it into its' +
+  ' final position. Do NOT write an "AVISO DE PUBLICIDAD" line yourself; the app adds it.';

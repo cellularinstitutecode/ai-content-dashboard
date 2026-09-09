@@ -63,6 +63,90 @@ const STOPWORDS = new Set([
 ]);
 
 /**
+ * The clinic's own house style, measured rather than imagined.
+ *
+ * Taken from the 112 posts the clinic's writer produced in the sheet: a median body of
+ * about 830 characters, 10–11 lowercase hashtags (exactly ONE of 1,082 was CamelCase),
+ * #cellularinstitute on 92 of them, and a question opener on only 19.
+ *
+ * The reason this exists is the thinness. The shared social instruction says "max ~150
+ * words", which at ~900 characters has to hold the REF, the AVISO and eleven hashtags
+ * too — leaving no room to say anything specific. So the generated copy reached for
+ * "designed to help regulate your central nervous system" where the clinic's writer had
+ * written "GMP-quality reagents, monitored biosafety cabinets, careful cell selection".
+ * Same length, a fraction of the substance.
+ *
+ * The substance rule is the one that matters. Length alone just produces more filler.
+ */
+export const HOUSE_TAGS = [
+  'cellularinstitute', 'healthoptimization', 'cellularhealth', 'regenerativemedicine',
+  'advancedwellness', 'personalizedmedicine', 'stemcelltherapy', 'regenerativewellness',
+  'advancedmedicine', 'longevitymedicine', 'wellnessjourney', 'wellnessclinic',
+] as const;
+
+export function houseStyleHint(): string {
+  return [
+    'HOUSE STYLE (this clinic writes to a settled pattern — follow it over any general length guidance above):',
+    '- Length: 800-1,100 characters of BODY for both instagram and linkedin, before the REF line, the AVISO line and the hashtags. This overrides the word counts given earlier.',
+    '- Open with a declarative line that reframes the subject — "Safety in regenerative medicine starts long before a therapy reaches the patient." Do not open with a question.',
+    '- Then 3-4 short paragraphs, one idea each, separated by a blank line.',
+    '- SUBSTANCE, the most important rule: name at least three concrete things the speaker actually said — a step in the protocol, a material, a piece of equipment, a named therapy, a measurement, a condition being controlled for. Specifics are what make the post worth reading.',
+    '- Never pad with wellness filler. Phrases like "designed to help", "supports your wellness", "reconnect with yourself", "holistic approach" say nothing; if the transcript does not say it, do not write it.',
+    '- Close with a short values line, then a soft invitation — the clinic uses "See if you are a candidate."',
+    '- Hashtags: 10-11, all lowercase, no CamelCase and no spaces. Draw most from: #' + HOUSE_TAGS.join(' #') + '. Add at most two specific to this video. Always include #cellularinstitute.',
+  ].join('\n');
+}
+
+/**
+ * Any forbidden name that survived into the copy.
+ *
+ * The last line of defence, and the only one that does not depend on the model doing as
+ * it is told. A post went out reading "As our patient Rodrigo shares:" over a quote from
+ * a video; Rodrigo uploads the videos. The prompt now says not to, and the file name is
+ * no longer handed over — but a clinic publishing a testimonial from a patient who does
+ * not exist is not a thing to leave resting on a prompt.
+ *
+ * Word boundaries, case-insensitive: "Rodrigo's" and "RODRIGO" are the same leak, while
+ * a name that happens to sit inside a longer word is not one.
+ */
+export function namesLeaked(copy: string, forbidden: readonly string[]): string[] {
+  const text = String(copy || '');
+  if (!text) return [];
+  const hits: string[] = [];
+  for (const raw of forbidden || []) {
+    const name = String(raw || '').trim();
+    // Two characters is not a name, and a one-letter "name" would match everything.
+    if (name.length < 3) continue;
+    const re = new RegExp('\\b' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i');
+    if (re.test(text)) hits.push(name);
+  }
+  return Array.from(new Set(hits));
+}
+
+/**
+ * The names this video must never mention: the owner suffix on the file, the presenter
+ * tag, and whoever the sheet records as the creator.
+ *
+ * Drawn from the same conventions videoSubject already strips, so the two cannot drift
+ * apart: whatever is cleaned out of the subject is exactly what must not reappear.
+ */
+export function forbiddenNames(title: string, creator?: string | null): string[] {
+  const out: string[] = [];
+  const base = String(title || '').replace(/\.(mp4|mov|m4v|webm|mpeg)$/i, '');
+  // Only a FILE name carries an owner suffix. The sheet's titles are a mix — some are
+  // "Reel_FloatingBedRyall_Rodrigo", some are "Safety Matters" — and reading the last
+  // word of the second kind as a person would ban "Matters" from the copy and fail a
+  // perfectly good row. The underscore is what distinguishes the convention from a
+  // sentence somebody typed.
+  const owner = base.includes('_') ? TRAILING_OWNER.exec(base) : null;
+  if (owner) out.push(owner[0].replace(/^[_\s-]+/, ''));
+  if (/x?ryall/i.test(String(title || ''))) out.push('Ryall');
+  const by = String(creator || '').trim();
+  if (by) out.push(by);
+  return Array.from(new Set(out.filter((n) => n.length >= 3)));
+}
+
+/**
  * How much of a keyword set the video actually talks about, 0 to 1.
  *
  * A search seed can succeed and still be wrong. "Reel_FloatingBedRyall" gives
@@ -113,6 +197,24 @@ export function keywordGrounding(keywords: readonly string[], transcript: string
 /** Crude plural folding, so "beds" and "bed" are the same word. */
 function singular(w: string): string {
   return w.length > 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w;
+}
+
+/**
+ * The transcript, cut to fit, at a sentence boundary and saying so.
+ *
+ * It used to be a bare slice(0, 12000): mid-word, no marker, and no way for the writer to
+ * tell a whole transcript from half of one — so a long video could be summarised
+ * confidently from a sentence that stopped in the middle.
+ */
+export function transcriptExcerpt(text: string, maxChars: number): string {
+  const t = String(text || '').trim();
+  if (t.length <= maxChars) return t;
+  const cut = t.slice(0, maxChars);
+  // Back up to the last sentence that finished. Only if one did reasonably near the end —
+  // a transcript with no punctuation at all should still be cut rather than discarded.
+  const lastStop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  const body = lastStop > maxChars * 0.6 ? cut.slice(0, lastStop + 1) : cut;
+  return body.trim() + '\n\n[Transcript truncated here — the video continues.]';
 }
 
 export function topicFromTranscript(text: string): string {

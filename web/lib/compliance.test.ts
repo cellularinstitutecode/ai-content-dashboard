@@ -17,11 +17,16 @@ const GOOD =
   'REF: Djuricic, I., & Calder, P.C. (2021). "Beneficial Outcomes of Omega-6 and Omega-3 Polyunsaturated Fatty Acids on Human Health." Nutrients, 13(7), 2421. DOI: 10.3390/nu13072421\n\n' +
   'AVISO DE PUBLICIDAD: 2623022002A00090';
 
-test('the rule applies to Instagram and Facebook only', () => {
+test('the rule applies to every network the clinic advertises on', () => {
   assert.equal(appliesTo(['instagram']), true);
   assert.equal(appliesTo(['facebook', 'linkedin']), true);
   assert.equal(appliesTo('instagram'), true);
-  assert.equal(appliesTo(['linkedin', 'twitter', 'blog']), false);
+  // LinkedIn and TikTok were outside this set, so the gate answered "does not apply" for
+  // the two networks the video pipeline actually publishes to. Advertising a clinic's
+  // therapies in Mexico does not stop being advertising because the post is on LinkedIn.
+  assert.equal(appliesTo(['linkedin']), true);
+  assert.equal(appliesTo(['tiktok']), true);
+  assert.equal(appliesTo(['twitter', 'blog']), false);
   assert.equal(appliesTo([]), false);
   assert.equal(appliesTo(null), false);
 });
@@ -77,6 +82,8 @@ test('the permit number resolves Brand Brain → environment → default', () =>
 });
 
 test('the AVISO line is recognised with a full-width colon and extra spaces', () => {
-  const c = checkCompliance('x\n\nREF: A real study (2021). Journal, 1(1), 1. DOI: 10.1/abc\nAVISO  DE  PUBLICIDAD： 2623022002A00090');
+  // A DOI-shaped DOI: '10.1/abc' never matched DOI_RE (which wants 4-9 digits after the
+  // '10.'), so this fixture only passed while a REF without a usable DOI still counted.
+  const c = checkCompliance('x\n\nREF: A real study (2021). Journal, 1(1), 1. DOI: 10.1080/00332747.1974.11023785\nAVISO  DE  PUBLICIDAD： 2623022002A00090');
   assert.equal(c.ok, true);
 });

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { composeCaption, keywordGrounding, topicFromTranscript, videoSubject } from './video-copy.ts';
+import { composeCaption, forbiddenNames, houseStyleHint, keywordGrounding, namesLeaked, topicFromTranscript, transcriptExcerpt, videoSubject } from './video-copy.ts';
 
 const AVISO = '2623022002A00090';
 
@@ -155,4 +155,48 @@ test('plurals are the same word', () => {
 test('nothing to compare against grounds nothing', () => {
   assert.equal(keywordGrounding(['anything'], ''), 0);
   assert.equal(keywordGrounding([], 'a transcript with words in it'), 0);
+});
+
+test('the copy may never name the person the file belongs to', () => {
+  // Verbatim from the post that shipped. Rodrigo uploads the videos; the clinic
+  // published a testimonial from a patient who does not exist.
+  const shipped = 'As our patient Rodrigo shares: "It\'s nice to press pause…"';
+  assert.deepEqual(namesLeaked(shipped, ['Rodrigo', 'Ryall']), ['Rodrigo']);
+  // What the clinic's own writer does, and what the prompt now asks for.
+  assert.deepEqual(namesLeaked('As one patient put it: "It\'s nice to press pause…"', ['Rodrigo', 'Ryall']), []);
+});
+
+test('a name is caught however it is cased or possessive, but not inside another word', () => {
+  assert.deepEqual(namesLeaked('RODRIGO said so', ['Rodrigo']), ['Rodrigo']);
+  assert.deepEqual(namesLeaked("Rodrigo's session", ['Rodrigo']), ['Rodrigo']);
+  // "Ryall" must not fire on "Ryalls­tone"-style words, nor "Ana" on "analysis".
+  assert.deepEqual(namesLeaked('a full analysis of the sample', ['Ana']), []);
+});
+
+test('the forbidden names come from the same conventions the subject strips', () => {
+  assert.deepEqual(forbiddenNames('Reel_FloatingBedRyall_Rodrigo').sort(), ['Rodrigo', 'Ryall']);
+  assert.deepEqual(forbiddenNames('CI_HyperbaricOxygenTherapy_Sebas'), ['Sebas']);
+  // A title with no owner suffix forbids nothing, and the creator column can add one.
+  assert.deepEqual(forbiddenNames('Safety Matters'), []);
+  assert.deepEqual(forbiddenNames('Safety Matters', 'Teresa'), ['Teresa']);
+});
+
+test('a transcript is cut at a sentence, and says that it was cut', () => {
+  const long = 'One sentence here. Two sentences here. And a third that runs on and on and on.';
+  const cut = transcriptExcerpt(long, 45);
+  assert.ok(cut.startsWith('One sentence here. Two sentences here.'), cut);
+  assert.ok(!/here\s+Two/.test(cut), 'the sentence boundary is kept');
+  assert.match(cut, /Transcript truncated here/);
+  // Short enough to fit is returned whole, with no marker bolted on.
+  assert.equal(transcriptExcerpt('Short.', 500), 'Short.');
+});
+
+test('the house style states the numbers measured from the real posts', () => {
+  const h = houseStyleHint();
+  assert.match(h, /800-1,100 characters/);
+  assert.match(h, /10-11, all lowercase/);
+  assert.match(h, /#cellularinstitute/);
+  assert.match(h, /Do not open with a question/);
+  // The rule the thinness actually turns on.
+  assert.match(h, /name at least three concrete things the speaker actually said/);
 });

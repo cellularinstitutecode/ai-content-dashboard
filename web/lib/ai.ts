@@ -59,6 +59,16 @@ export type GenerateInput = {
   // Optional Semrush keyword hint (search volume + difficulty) so the model
   // writes with real keyword data. Injected by the generate route.
   keywordHint?: string;
+  /**
+   * House rules for this particular job — length, shape, what must be named.
+   *
+   * TYPE_INSTRUCTIONS is shared with every caller, and its social entry says "max ~150
+   * words", which is why the video copy read thin: at ~900 characters, with the REF, the
+   * AVISO and eleven hashtags to fit inside them, there is no room left to name a
+   * mechanism. Rather than loosen that for everyone, a caller that knows its own house
+   * style says so here, and this is placed last so it wins.
+   */
+  styleHint?: string;
 };
 
 // Retryable transient statuses: 408 timeout, 409 conflict, 429 rate limit, 5xx overloaded/errors
@@ -93,7 +103,7 @@ function maxTokensFor(type: ContentType): number {
   return type === 'blog' || type === 'email' ? 4000 : 2000;
 }
 
-const DEFAULT_VOICE = `You are an expert marketing content writer. You write in a warm, clear, credible voice: helpful and specific, never hype. When a brand profile is provided below, follow it exactly and let it override these defaults.`;
+const DEFAULT_VOICE = `You are an expert marketing content writer. You write in a warm, clear, credible voice: helpful and specific, never hype. When a brand profile is provided, follow it exactly and let it override these defaults.`;
 
 // Each content type keeps the SAME four JSON keys (instagram, facebook, linkedin, blog)
 // so drafts + the dashboard renderer never break. The MEANING of each key is adapted
@@ -111,13 +121,18 @@ function systemPrompt(type: ContentType, brand?: BrandContext) {
   return `${voice} You always return STRICT JSON with exactly the keys: instagram, facebook, linkedin, blog. Each value is a finished, ready-to-use string. ${TYPE_INSTRUCTIONS[type]}${MEDICAL_SAFETY_GUARDRAILS}${REF_INSTRUCTION} Return strict JSON only. No prose, no markdown fences.`;
 }
 
+/**
+ * The brand profile, minus what the prompt already says elsewhere.
+ *
+ * `voice` opens the system prompt and `audience` has its own "Target audience:" line, so
+ * repeating both here said everything twice — and an instruction stated twice in two
+ * wordings is an invitation to follow whichever is nearer.
+ */
 function brandBlock(brand?: BrandContext): string {
   if (!brand) return '';
   const parts: string[] = [];
   if (brand.name) parts.push(`Brand name: ${brand.name}`);
   if (brand.mission) parts.push(`Mission: ${brand.mission}`);
-  if (brand.voice) parts.push(`Voice & tone: ${brand.voice}`);
-  if (brand.audience) parts.push(`Primary audience: ${brand.audience}`);
   if (brand.keywords && brand.keywords.length) parts.push(`Preferred keywords: ${brand.keywords.join(', ')}`);
   if (brand.guidelines) parts.push(`Guidelines (must follow): ${brand.guidelines}`);
   if (!parts.length) return '';
@@ -131,7 +146,7 @@ function buildUserPrompt(input: GenerateInput) {
 Target audience: ${input.audience || brand?.audience || 'a general audience'}
 Tone: ${input.tone || 'professional, friendly'}
 Channels to produce: ${channels}
-${input.keywordHint ? input.keywordHint + '\nWork these real, data-backed keywords into the copy naturally (headings, body, hashtags) without keyword-stuffing.\n' : ''}${input.performanceHint ? input.performanceHint + '\n' : ''}Return strict JSON only. No prose, no markdown fences.`;
+${input.keywordHint ? input.keywordHint + '\nWork these keywords in naturally — headings, body, hashtags.\n' : ''}${input.performanceHint ? input.performanceHint + '\n' : ''}${input.styleHint ? input.styleHint + '\n' : ''}Return strict JSON only. No prose, no markdown fences.`;
 }
 
 async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
@@ -149,6 +164,10 @@ async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
     body: JSON.stringify({
       model,
       max_tokens: maxTokensFor(type),
+      // Stated rather than left to the provider's default. This writes to a fixed house
+      // style against a transcript it must not depart from; the room to be inventive is
+      // in which specifics it picks, not in how far it wanders.
+      temperature: 0.4,
       system: systemPrompt(type, input.brand),
       messages: [{ role: 'user', content: buildUserPrompt(input) }],
     }),
@@ -174,6 +193,10 @@ async function callOpenAI(input: GenerateInput): Promise<ContentPack> {
       model,
       response_format: { type: 'json_object' },
       max_tokens: maxTokensFor(type),
+      // Stated rather than left to the provider's default. This writes to a fixed house
+      // style against a transcript it must not depart from; the room to be inventive is
+      // in which specifics it picks, not in how far it wanders.
+      temperature: 0.4,
       messages: [
         { role: 'system', content: systemPrompt(type, input.brand) },
         { role: 'user', content: buildUserPrompt(input) },
@@ -200,12 +223,20 @@ function parseJsonStrict(text: string): ContentPack {
   let obj: any;
   try { obj = JSON.parse(cleaned); }
   catch { throw new Error('AI returned malformed JSON; please try again.'); }
-  return {
+  const pack = {
     instagram: String(obj.instagram ?? ''),
     facebook: String(obj.facebook ?? ''),
     linkedin: String(obj.linkedin ?? ''),
     blog: String(obj.blog ?? ''),
   };
+  // A half-answered pack used to pass silently: a missing key became '', and the first
+  // anyone knew of it was an empty caption box, or an empty cell written into the sheet.
+  // The two the app actually publishes have to be there.
+  const empty = (['instagram', 'linkedin'] as const).filter((k) => !pack[k].trim());
+  if (empty.length) {
+    throw new Error('AI returned no ' + empty.join(' or ') + ' copy; please try again.');
+  }
+  return pack;
 }
 
 // ---------------------------------------------------------------------------
