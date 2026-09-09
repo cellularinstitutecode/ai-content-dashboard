@@ -156,26 +156,41 @@ pasted, add this to the sheet: **Extensions → Apps Script**, paste, then
 ```javascript
 // Distribución RRSS CHI → the dashboard, when a video link is pasted.
 // Script properties (Project Settings → Script properties):
-//   DASHBOARD_URL  https://YOUR_DOMAIN
-//   CRON_SECRET    the same value as the dashboard's CRON_SECRET
+//   DASHBOARD_URL  https://YOUR_DOMAIN      (no trailing slash)
+//   CRON_SECRET    the same secret the dashboard uses
 function onSheetEdit(e) {
   if (!e || !e.range) return;
-  var edited = String(e.value || '');
-  // Only a Drive or YouTube link is worth waking the dashboard for.
-  if (!/^https:\/\/(drive\.google\.com|www\.youtube\.com|youtu\.be)\//.test(edited)) return;
-
   var props = PropertiesService.getScriptProperties();
   var url = props.getProperty('DASHBOARD_URL');
   var secret = props.getProperty('CRON_SECRET');
   if (!url || !secret) return;
 
+  // Read the RANGE, not e.value. e.value is only set for a single-cell edit,
+  // so a pasted row or a dragged fill — which is how rows actually get added —
+  // would never fire the sweep.
+  var values = e.range.getValues();
+  var found = false;
+  for (var r = 0; r < values.length && !found; r++) {
+    for (var c = 0; c < values[r].length; c++) {
+      if (/^https:\/\/(drive\.google\.com|www\.youtube\.com|youtu\.be)\//.test(String(values[r][c] || ''))) {
+        found = true; break;
+      }
+    }
+  }
+  if (!found) return;
+
   // Fire and forget: the sweep is idempotent, so a duplicate call is harmless
-  // and a dropped one is caught by the hourly cron.
-  UrlFetchApp.fetch(url + '/api/videos/watch', {
+  // and a dropped one is caught by the daily cron.
+  var res = UrlFetchApp.fetch(url + '/api/videos/watch', {
     method: 'post',
     headers: { Authorization: 'Bearer ' + secret },
     muteHttpExceptions: true,
   });
+  // Say so in the execution log rather than failing silently forever — a wrong
+  // URL or a mismatched secret looks exactly like "nothing was pasted".
+  if (res.getResponseCode() >= 300) {
+    Logger.log('sweep failed: ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200));
+  }
 }
 ```
 
