@@ -87,18 +87,23 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
 
 /** Instants already spoken for, so the slot chooser does not stack posts. */
 export async function takenSlots(userId: string, fromIso: string): Promise<string[]> {
-  try {
-    const { data } = await supabaseAdmin()
-      .from('posts')
-      .select('publication_date')
-      .eq('user_id', userId)
-      .gte('publication_date', fromIso)
-      .limit(500);
-    return ((data as { publication_date?: string }[] | null) || [])
-      .map((r) => String(r.publication_date || ''))
-      .filter(Boolean);
-  } catch (e) {
-    reportError('video-publish:taken-slots', e);
-    return [];
+  // A failure here is worse than it looks. Returning [] does not mean "no
+  // slots taken", it means "I could not find out" — and the slot chooser reads
+  // the two the same way, so every post in the run lands on the same instant.
+  // supabase-js RESOLVES a failed query, so the try/catch this had never fired
+  // and the error was discarded unread.
+  const r = await supabaseAdmin()
+    .from('posts')
+    .select('publication_date')
+    .eq('user_id', userId)
+    .gte('publication_date', fromIso)
+    .limit(500)
+    .then((x) => x, (e: unknown) => ({ data: null, error: e as { message?: string } }));
+  if (r.error) {
+    reportError('video-publish:taken-slots', r.error, { userId });
+    throw new Error('Could not read the posting calendar, so a free slot cannot be chosen safely: ' + (r.error.message || 'unknown error'));
   }
+  return ((r.data as { publication_date?: string }[] | null) || [])
+    .map((x) => String(x.publication_date || ''))
+    .filter(Boolean);
 }
