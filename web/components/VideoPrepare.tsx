@@ -66,6 +66,8 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow }: {
   const [needPaste, setNeedPaste] = useState<string | null>(null);
   const [busy, setBusy] = useState<'prepare' | 'send' | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  /** Progress, not failure: the transcript landed and the copy is being written. */
+  const [note, setNote] = useState<string | null>(null);
   const [prepared, setPrepared] = useState<Prepared | null>(null);
   const [linkedin, setLinkedin] = useState('');
   const [tiktok, setTiktok] = useState('');
@@ -112,15 +114,30 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow }: {
     if (!urlOk) { setErr('Paste a YouTube or Google Drive video link first.'); return; }
     setBusy('prepare'); setErr(null); setSent(null); setNeedPaste(null);
     try {
-      const r = await fetch('/api/videos/prepare', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url, transcript: pasted || undefined, tab: sheetRow?.tab, row: sheetRow?.row }) });
-      const j = await r.json().catch(() => ({}));
-      if (r.status === 422 && j?.error === 'no_transcript') { setNeedPaste(j.message || 'No captions on this video — paste the transcript.'); return; }
-      if (!r.ok) { setErr(await friendlyErrorFromResponse(new Response(JSON.stringify(j), { status: r.status, headers: { 'content-type': 'application/json' } }), 'We could not prepare that video.', 'Press Prepare again — the transcript is kept, so the second run skips the download and finishes quickly.')); return; }
-      setPrepared(j); setLinkedin(j.linkedin || ''); setTiktok(j.tiktok || '');
+      // A long video does not fit in one request: the server stops once the
+      // transcript is safely stored rather than being killed mid-write. That
+      // is a real answer, not an error — so this asks again straight away,
+      // and the second pass finishes in seconds because the slow half is
+      // already done. Once: two of these means something else is wrong, and
+      // retrying forever would hide it.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const r = await fetch('/api/videos/prepare', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url, transcript: pasted || undefined, tab: sheetRow?.tab, row: sheetRow?.row }) });
+        const j = await r.json().catch(() => ({}));
+        if (r.status === 422 && j?.error === 'no_transcript') { setNeedPaste(j.message || 'No captions on this video — paste the transcript.'); return; }
+        if (r.status === 202 && j?.error === 'transcript_ready' && attempt === 0) {
+          setNote(j.message || 'The transcript is done — writing the copy now.');
+          continue;
+        }
+        if (!r.ok) { setErr(await friendlyErrorFromResponse(new Response(JSON.stringify(j), { status: r.status, headers: { 'content-type': 'application/json' } }), 'We could not prepare that video.', 'Press Prepare again — the transcript is kept, so the second run skips the download and finishes quickly.')); return; }
+        setNote(null);
+        setPrepared(j); setLinkedin(j.linkedin || ''); setTiktok(j.tiktok || '');
+        return;
+      }
     } catch {
       setErr('We could not prepare that video just now.');
     } finally {
       setBusy(null);
+      setNote(null);
     }
   }
 
@@ -165,6 +182,7 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow }: {
         </div>
       )}
       {err && <div role="alert" style={{ color: '#d70015', fontSize: 12, marginTop: 8 }}>{err}</div>}
+      {note && <div role="status" style={{ color: '#1d6f42', fontSize: 12, marginTop: 8 }}>{note}</div>}
 
       {prepared && (
         <div style={{ marginTop: 16, display: 'grid', gap: 14 }}>

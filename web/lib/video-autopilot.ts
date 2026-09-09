@@ -65,7 +65,7 @@ export type SweepRowOutcome = {
   row: number;
   rowKey: string;
   title: string;
-  state: 'prepared' | 'needs_transcript' | 'failed' | 'skipped' | 'would_prepare';
+  state: 'prepared' | 'needs_transcript' | 'transcript_ready' | 'failed' | 'skipped' | 'would_prepare';
   wrote?: Partial<Record<VideoField, boolean>>;
   draftId?: string | null;
   /** One entry per network a draft was attempted for. */
@@ -223,7 +223,29 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
           url: videoLink,
           youtubeUrl: youtubeLink || null,
           title: title || null,
+          // The sweep answers to the same 60-second ceiling. Stopping with the
+          // transcript stored costs one more tick; being killed mid-write
+          // costs the download and the transcription again.
+          budgetMs: 32_000,
         });
+
+        // Out of time, with the transcript stored. That is half the job done,
+        // not a failure — so the row keeps its place in the queue and the next
+        // pass finishes it in seconds instead of starting the download again.
+        // Filing it as an error would put "Error — revisar" in front of a
+        // person for a row that needs nothing from them.
+        if (!prepared.ok && prepared.error === 'transcript_ready') {
+          await writeStatus(spreadsheetId, tab.title, row, columns, STATUS_TEXT.transcript_ready);
+          await admin.from('video_runs').update({
+            state: 'discovered',
+            transcript_source: 'drive',
+            last_error: null,
+            updated_at: new Date().toISOString(),
+          }).eq('spreadsheet_id', spreadsheetId).eq('tab', tab.title).eq('row_key', rowKey);
+          outcome = { tab: tab.title, row, rowKey, title: title || videoLink, state: 'transcript_ready', message: prepared.message };
+          result.rows.push(outcome);
+          continue;
+        }
 
         if (!prepared.ok) {
           const state = prepared.needsPaste ? 'needs_transcript' : 'failed';
