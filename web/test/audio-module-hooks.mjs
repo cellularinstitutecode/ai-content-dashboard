@@ -10,7 +10,7 @@
 // into the other.
 const STUBS = {
   'server-only': 'export {};',
-  '@/lib/report': 'export function redact(s) { return String(s); }',
+  '@/lib/report': 'export function redact(s) { return String(s); }\nexport function reportError() {}',
 };
 
 const WEB_ROOT = new URL('../', import.meta.url);
