@@ -16,14 +16,27 @@ new row with LINK VIDEO, COPY empty
                     otherwise speech-to-text on the Drive .mp4 — ffmpeg lifts
                     out the audio track first, so a 194 MB reel is transcribed
                     from about 2 MB of sound
-  → keywords        Semrush brief on what the video is about (cached, usually 0 units)
+  → keywords        Semrush brief on the video's SUBJECT — two or three words
+                    taken from the file name (Reel_MolecularHydrogenRyall_
+                    Rodrigo.mp4 → "Molecular Hydrogen"), not the transcript.
+                    Handing Semrush the whole prompt matches nothing at all.
   → copy            Claude writes the LinkedIn post and the TikTok caption
                     from the transcript, and only from the transcript
-  → compliance      AVISO line stamped by the app; REF citation's DOI verified
+  → compliance      the caption is ASSEMBLED — every AVISO line stripped and
+                    exactly one written with the clinic's own permit number,
+                    the REF citation's DOI verified against Crossref, and the
+                    hashtags last. The writer has invented a permit number in
+                    a shape the matcher did not recognise; nothing it writes
+                    is trusted where it left it.
   → written back    COPY, KEYWORDS, REF and ESTADO IA on that row
   → draft saved     editable in the dashboard under Recent Drafts
   → Metricool       a post waiting in the REVIEW queue for approval
 ```
+
+The **Prepare** button in the Video Library does all of the above for one row,
+through the same code — so a video handled by hand and a video handled
+automatically end in the same state. Each row there shows its number in the
+sheet, and that number is searchable.
 
 **It never publishes.** What reaches Metricool is a *draft* in the review queue
 — the same thing the "Send to Metricool" button has always produced — and it
@@ -103,16 +116,26 @@ If you would rather add them yourself with different names, the reader matches
 
 1. **Run the schema.** `web/supabase/video-autopilot.sql` in the Supabase SQL
    editor. Safe to re-run.
-2. **Share both the sheet and the videos** with the service account
-   (`GOOGLE_SERVICE_ACCOUNT_JSON`'s `client_email` — the Video Library page
-   shows the address). These are two separate permissions:
-   - the **sheet**, as Editor. Viewer is not enough any more: the sweep
-     writes. If the Edit button on a video row already works for you, this is
-     already done.
-   - the **video files** in Drive, as Viewer. Sharing the sheet grants nothing
-     over the files it links to. Sharing the folder they live in covers all of
-     them at once. This is the one most often missed — the dry run in step 4
-     checks it for every row.
+2. **Share both the sheet and the videos** with the service account, *by
+   address*. Get it from `/api/sources?kind=status` → `serviceAccount`, or the
+   Video Library page. These are two separate permissions:
+   - the **sheet**, shared with that address as **Editor**.
+   - the **video files** in Drive, as Viewer at least. Sharing the sheet grants
+     nothing over the files it links to; sharing the folder they live in covers
+     all of them at once.
+
+   > **"Anyone with the link" is not enough, and it is worse than nothing,**
+   > because it hides the problem. A sheet set to *anyone with the link →
+   > Viewer* lets the service account READ every row, so the Video Library
+   > fills, the dry run passes, and everything looks configured — right up
+   > until the first write, which comes back `403`. That is exactly how this
+   > deployment was set up, and the fault only surfaced the first time a
+   > prepared row tried to reach column E.
+   >
+   > Verify by opening the sheet's **Share** dialog and looking for the
+   > `…iam.gserviceaccount.com` address under *People with access*, set to
+   > **Editor**. If it is not listed there by name, it is not shared with it,
+   > whatever the General access row says.
 3. **Set the environment variables** (see `web/.env.example`):
    - `OPENAI_API_KEY` — already set; speech-to-text uses it.
    - `CRON_SECRET` — already set; authorizes the sweep.
