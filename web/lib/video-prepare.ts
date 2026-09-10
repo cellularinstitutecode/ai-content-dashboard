@@ -23,6 +23,7 @@ import { composeCaption, forbiddenNames, houseStyleHint, keywordGrounding, names
 import { draftDefect, type DraftDefect } from '@/lib/draft-defect';
 import { canWriteCopy, remainingMs } from '@/lib/prepare-budget';
 import { shouldReseed } from '@/lib/reseed';
+import { writerFailure } from '@/lib/writer-failure';
 import { openingLineOf, repeatsOpening } from '@/lib/opening-line';
 import { recentOpenings } from '@/lib/recent-openers';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -357,6 +358,12 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
         topic: defect ? topic + '\n\n' + defect.corrective : topic,
         keywordHint: brief.hint ?? '',
         contentType: 'social',
+        // The clock, not a constant. Three fixed 30s tries is ~92s of attempts
+        // inside the 60s canWriteCopy reserves for this whole step, so on any
+        // request where the download was slow the writer ran off the end and
+        // the person was told "the writer did not answer" over a transcript
+        // that had already been paid for. See lib/ai-attempts.ts.
+        budgetMs: budgetMs > 0 ? remainingMs(startedAt, budgetMs, Date.now()) : undefined,
         styleHint,
         channels: ['linkedin', 'instagram'],
         brand,
@@ -371,7 +378,23 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
       // did not answer" about a writer that answered once already.
       if (pack) break;
       reportError('videos:prepare-generate', e);
-      return { ok: false, status: 502, error: 'generation_failed', message: 'The writer did not answer just now. Try again in a moment.', needsPaste: false, title };
+      // Say which failure this was.
+      //
+      // callAnthropic throws "anthropic 429: {...}" and callOpenAI the same —
+      // messages that name the provider, the status and the reason — and this
+      // line used to discard all of it for a sentence that fits a bad API key,
+      // an empty account, a rate limit, an overlong prompt and a timeout
+      // equally well, which is to say fits none of them. The third time in
+      // this codebase the answer was computed and thrown away at the edge.
+      return {
+        ok: false,
+        status: 502,
+        error: 'generation_failed',
+        message: 'The writer did not answer just now: ' + writerFailure(e) + '.' +
+          (t.banked ? ' The transcript is saved, so pressing Prepare again picks up from there.' : ' Try again in a moment.'),
+        needsPaste: false,
+        title,
+      };
     }
 
     // Assembled, not trusted where the writer left it. In production the model
