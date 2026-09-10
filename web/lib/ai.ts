@@ -8,6 +8,7 @@ import { REF_INSTRUCTION, avisoNumberFor, checkCompliance, ensureAviso, type Com
 import { verifyDoi, type CitationCheck } from '@/lib/citation';
 import { researchBundle, briefPromptFrom, type KeywordBrief } from '@/lib/semrush';
 import { attemptPlan } from '@/lib/ai-attempts';
+import { readAnthropicStream } from '@/lib/sse-stream';
 
 export type Provider = 'anthropic' | 'openai';
 
@@ -82,7 +83,34 @@ export type GenerateInput = {
 
 // Retryable transient statuses: 408 timeout, 409 conflict, 429 rate limit, 5xx overloaded/errors
 const RETRYABLE = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
-async function fetchWithRetry(url: string, init: RequestInit, opts: { retries?: number; timeoutMs?: number } = {}): Promise<Response> {
+/**
+ * A failure that must NOT be retried — a 400, a rejected key.
+ *
+ * Needed once `handle` began running inside the retry loop: a throw from there
+ * is indistinguishable from a dropped socket, so a malformed request would be
+ * sent three times and reported as a network problem.
+ */
+class HardError extends Error {}
+
+/**
+ * The retry loop, with the response handled INSIDE the guarded window.
+ *
+ * The timer used to be cleared the moment the headers landed, which is right
+ * for a call whose body is a paragraph of JSON and wrong for one that streams:
+ * every byte after the first was unguarded, so a stalled stream ran until the
+ * platform killed the function. lib/google-sources.ts carries the same note
+ * about a 149 MB download, for the same reason.
+ *
+ * `handle` therefore runs before clearTimeout, and whatever it returns is what
+ * the caller gets. fetchWithRetry below is this with a handler that returns the
+ * response untouched — the previous behaviour, body and all.
+ */
+async function withRetry<T>(
+  url: string,
+  init: RequestInit,
+  opts: { retries?: number; timeoutMs?: number },
+  handle: (res: Response) => Promise<T>,
+): Promise<T> {
   const retries = opts.retries ?? 2;
   const timeoutMs = opts.timeoutMs ?? 30000;
   let lastErr: unknown;
@@ -91,18 +119,21 @@ async function fetchWithRetry(url: string, init: RequestInit, opts: { retries?: 
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(url, { ...init, signal: controller.signal });
-      clearTimeout(timer);
       if (RETRYABLE.has(res.status) && attempt < retries) {
+        clearTimeout(timer);
         // Jittered. Without it, requests that were rate-limited together retry together:
-      // several prepares running at once all get a 429, all wait exactly 500ms, and all
-      // hit the provider again in the same instant. The randomness is the point.
-      const backoff = 500 * 2 ** attempt;
-      await new Promise((r) => setTimeout(r, backoff + Math.random() * backoff));
+        // several prepares running at once all get a 429, all wait exactly 500ms, and all
+        // hit the provider again in the same instant. The randomness is the point.
+        const backoff = 500 * 2 ** attempt;
+        await new Promise((r) => setTimeout(r, backoff + Math.random() * backoff));
         continue;
       }
-      return res;
+      const value = await handle(res);
+      clearTimeout(timer);
+      return value;
     } catch (e) {
       clearTimeout(timer);
+      if (e instanceof HardError) throw e;
       lastErr = e;
       if (attempt < retries) {
         await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
@@ -111,6 +142,10 @@ async function fetchWithRetry(url: string, init: RequestInit, opts: { retries?: 
     }
   }
   throw new Error(`request to ${url} failed after ${retries + 1} attempts: ${(lastErr as any)?.message || 'network/timeout error'}`);
+}
+
+async function fetchWithRetry(url: string, init: RequestInit, opts: { retries?: number; timeoutMs?: number } = {}): Promise<Response> {
+  return withRetry(url, init, opts, async (res) => res);
 }
 function maxTokensFor(type: ContentType): number {
   return type === 'blog' || type === 'email' ? 4000 : 2000;
@@ -165,30 +200,59 @@ ${input.keywordHint ? input.keywordHint + '\nWork these keywords in naturally �
 async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('ANTHROPIC_API_KEY missing');
-  const model = input.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
+  const model = input.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
   const type = input.contentType || 'social';
   const plan = input.budgetMs != null ? attemptPlan(input.budgetMs) : null;
-  const res = await fetchWithRetry((process.env.ANTHROPIC_API_BASE || 'https://api.anthropic.com').replace(/\/$/, '') + '/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': key,
-      'anthropic-version': '2023-06-01',
+  const text = await withRetry(
+    (process.env.ANTHROPIC_API_BASE || 'https://api.anthropic.com').replace(/\/$/, '') + '/v1/messages',
+    {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokensFor(type),
+        // Stated rather than left to the provider's default. This writes to a fixed house
+        // style against a transcript it must not depart from; the room to be inventive is
+        // in which specifics it picks, not in how far it wanders.
+        temperature: 0.4,
+        // Cached, because it is the one part that never changes.
+        //
+        // Caching is a PREFIX match and the render order is tools, system,
+        // messages — so the system prompt is the only stable thing to anchor
+        // on here; the user prompt carries the transcript and differs every
+        // time. Per video that saves the input cost of re-reading the voice
+        // and the brand profile, and a little of the time to first token.
+        //
+        // Silently a no-op when the prefix is below the model's minimum
+        // cacheable length, which is the correct failure: nothing breaks, the
+        // saving simply does not appear.
+        system: [{ type: 'text', text: systemPrompt(type, input.brand), cache_control: { type: 'ephemeral' } }],
+        messages: [{ role: 'user', content: buildUserPrompt(input) }],
+        // Streamed. A non-streaming request holds the socket silent until the
+        // whole answer is composed, which for two 800-1100 character posts is
+        // exactly the shape that trips a request timeout. Streaming keeps the
+        // connection producing, so the only thing that can end it is the
+        // deadline the caller actually set.
+        stream: true,
+      }),
     },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokensFor(type),
-      // Stated rather than left to the provider's default. This writes to a fixed house
-      // style against a transcript it must not depart from; the room to be inventive is
-      // in which specifics it picks, not in how far it wanders.
-      temperature: 0.4,
-      system: systemPrompt(type, input.brand),
-      messages: [{ role: 'user', content: buildUserPrompt(input) }],
-    }),
-  }, plan ? { retries: plan.attempts - 1, timeoutMs: plan.timeoutMs } : {});
-  if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  const text = data?.content?.[0]?.text ?? '';
+    plan ? { retries: plan.attempts - 1, timeoutMs: plan.timeoutMs } : {},
+    async (res) => {
+      if (!res.ok) {
+        const body = await res.text();
+        const err = new Error(`anthropic ${res.status}: ${body}`);
+        // A 4xx that is not in RETRYABLE is the request being wrong, not the
+        // network being unlucky. Sending it twice more buys the same refusal
+        // and reports it as "failed after 3 attempts".
+        throw res.status < 500 ? Object.assign(new HardError(err.message), { cause: err }) : err;
+      }
+      return readAnthropicStream(res);
+    },
+  );
   return parseJsonStrict(text);
 }
 
@@ -413,7 +477,7 @@ export async function chatAssistant(
     const res = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 1024, system: ASSISTANT_SYSTEM, messages: trimmed }),
+      body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 1024, system: ASSISTANT_SYSTEM, messages: trimmed }),
     });
     if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
     const data = await res.json();
@@ -588,7 +652,7 @@ export type ToolMessage = { role: "user" | "assistant"; content: any };
 export async function chatWithTools(messages: ToolMessage[], systemExtra?: string): Promise<ToolTurn> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error("ANTHROPIC_API_KEY missing");
-  const model = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
+  const model = process.env.ANTHROPIC_MODEL || "claude-sonnet-5";
   const res = await fetchWithRetry("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -702,7 +766,7 @@ export async function researchTopic(
     const res = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 2048, system: RESEARCH_SYSTEM, messages: [{ role: 'user', content: userPrompt }] }),
+      body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 2048, system: RESEARCH_SYSTEM, messages: [{ role: 'user', content: userPrompt }] }),
     }, { retries: 0, timeoutMs: 50000 });
     if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
     const data = await res.json();
