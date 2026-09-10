@@ -19,12 +19,12 @@ import { isAllowedEmail } from "@/lib/access";
 import { parseVideoUrl } from "@/lib/composer";
 import { boundToolMessages } from "@/lib/tool-transcript";
 import { normalizePublishAt, METRICOOL_TIMEZONE } from "@/lib/metricool-time";
-import { greetingFor, plainReason, renderSnapshot, situationOf, summarise } from "@/lib/assistant-context";
+import { greetingFor, plainReason, renderSnapshot, situationOf, summarise, type HealthNote } from "@/lib/assistant-context";
 import { listRuns, rearmRun, recordRunFailure } from "@/lib/video-runs";
 import { prepareVideo } from "@/lib/video-prepare";
 import { completeRow } from "@/lib/video-autopilot";
 import { canWriteCopy } from "@/lib/prepare-budget";
-import { plainFor } from "@/lib/health-plain";
+import { schemaDetail, type SchemaProbe } from "@/lib/schema-probe";
 import { loadBrandContext } from "@/lib/brand-context";
 import { missingSchemaCached } from "@/lib/schema-check";
 
@@ -346,6 +346,36 @@ async function doSchedule(userId: string, p: PendingSchedule) {
 // Run the agentic tool loop. Executes generate/save immediately; gates schedule
 // behind confirmation by stashing a pendingSchedule and returning to the user.
 /**
+ * A missing migration, said precisely, and separated by whether it stops the
+ * videos.
+ *
+ * Two things were wrong with flattening this to plainFor("database_schema").
+ *
+ * The probe already knows exactly which file is missing and what breaks until
+ * it is run — schemaDetail composes that sentence — and replacing it with "ask
+ * whoever set this up to run the migration" throws away the only part a person
+ * can act on.
+ *
+ * And the probe spans three migration files. `template_runs` and
+ * `schedule_templates.strategy` belong to the Autopilot templates queue and
+ * have nothing to do with video, yet an undistinguished failure made the
+ * greeting open with a database warning and never mention a video at all.
+ */
+function schemaNotes(missing: SchemaProbe[]): HealthNote[] {
+  if (!missing.length) return [];
+  // The video migration, plus the one video dependency that lives outside it.
+  const blocksVideo = (p: SchemaProbe) =>
+    p.file === "supabase/video-autopilot.sql" || p.table.startsWith("video_") || p.column === "media_drive_file_id";
+
+  const notes: HealthNote[] = [];
+  const blocking = missing.filter(blocksVideo);
+  const rest = missing.filter((p) => !blocksVideo(p));
+  if (blocking.length) notes.push({ down: schemaDetail(blocking), blocksVideos: true });
+  if (rest.length) notes.push({ down: schemaDetail(rest), blocksVideos: false });
+  return notes;
+}
+
+/**
  * Everything the assistant is told about this workspace, gathered once.
  *
  * Never fatal. A snapshot that cannot be built is a quieter assistant, not a
@@ -357,8 +387,8 @@ async function liveSituation(userId: string): Promise<{ snapshot: ReturnType<typ
   const [runs, health, brand] = await Promise.all([
     listRuns(userId, 80).catch(() => []),
     missingSchemaCached()
-      .then((missing) => (missing.length ? [plainFor("database_schema")] : []))
-      .catch(() => [] as { down: string; stillWorks?: string }[]),
+      .then(schemaNotes)
+      .catch(() => [] as HealthNote[]),
     // Promise.resolve(): the Supabase query builder is a thenable, not a
     // Promise, so it has no .catch of its own. Defaults to "there is one" —
     // an unreadable profile must not make the assistant announce that the

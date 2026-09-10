@@ -51,6 +51,26 @@ export type ProblemRow = {
   plain: string;
 };
 
+export type HealthNote = {
+  /** What has stopped working, in the words of the person reading it. */
+  down: string;
+  /** What carries on regardless. */
+  stillWorks?: string;
+  /**
+   * Does this stop the VIDEO pipeline, or is it something else that happens to
+   * be degraded?
+   *
+   * The distinction earns its place. The greeting reports a broken dependency
+   * first and stops there — correct when the videos genuinely cannot run, and
+   * badly wrong otherwise. The health probe spans three migration files, and
+   * two of the tables it checks belong to the Autopilot templates queue. Left
+   * undistinguished, a missing templates table opened the chat with a generic
+   * database warning and never mentioned a single video: the exact silence the
+   * situation block was built to end.
+   */
+  blocksVideos: boolean;
+};
+
 export type Snapshot = {
   counts: Record<Situation, number>;
   /** The problems worth naming out loud, already capped. */
@@ -58,7 +78,7 @@ export type Snapshot = {
   /** What the overnight pass handed back to the queue, when it did anything. */
   recovery?: { revived: number; released: number } | null;
   /** Failing health checks, already in plain words. */
-  health: { down: string; stillWorks?: string }[];
+  health: HealthNote[];
   hasBrandProfile: boolean;
   /** True when nothing has ever been swept — a different message from "all clear". */
   everRun: boolean;
@@ -122,7 +142,7 @@ const EMPTY_COUNTS = (): Record<Situation, number> =>
 export function summarise(
   rows: RunRow[],
   now: number,
-  extra: { recovery?: { revived: number; released: number } | null; health?: { down: string; stillWorks?: string }[]; hasBrandProfile?: boolean } = {},
+  extra: { recovery?: { revived: number; released: number } | null; health?: HealthNote[]; hasBrandProfile?: boolean } = {},
 ): Snapshot {
   const counts = EMPTY_COUNTS();
   const problems: ProblemRow[] = [];
@@ -191,8 +211,11 @@ export function renderSnapshot(s: Snapshot): string {
     lines.push('- Since the last pass: ' + bits.join(', ') + '.');
   }
 
+  // Labelled distinctly, so the model does not tell somebody their videos are
+  // broken when what is missing is a templates table for a different feature.
   for (const h of s.health) {
-    lines.push('- Not working: ' + h.down + (h.stillWorks ? ' ' + h.stillWorks : ''));
+    const what = h.blocksVideos ? '- Stopping the video pipeline: ' : '- Degraded elsewhere (does NOT affect video): ';
+    lines.push(what + h.down + (h.stillWorks ? ' ' + h.stillWorks : ''));
   }
 
   if (!s.hasBrandProfile) {
@@ -213,21 +236,32 @@ export function renderSnapshot(s: Snapshot): string {
 export function greetingFor(s: Snapshot): { message: string; chips: string[] } {
   const chips: string[] = [];
 
-  // Something is down. Say that before offering anything that cannot work.
-  if (s.health.length) {
-    const h = s.health[0];
+  // Something the videos DEPEND ON is down. Say that before offering anything
+  // that cannot work.
+  //
+  // Only that. This used to fire on any failing check at all, and the health
+  // probe covers three migration files — so a missing Autopilot templates table
+  // opened the chat with a database warning and never mentioned a video.
+  const blocking = s.health.find((h) => h.blocksVideos);
+  if (blocking) {
     return {
-      message: h.down + (h.stillWorks ? ' ' + h.stillWorks : '') + ' Ask me anything meanwhile — I will tell you if what you want needs the part that is down.',
+      message: blocking.down + (blocking.stillWorks ? ' ' + blocking.stillWorks : '') + ' Ask me anything meanwhile — I will tell you if what you want needs the part that is down.',
       chips: ['What still works?'],
     };
   }
+
+  // Anything else degraded is real, but it is a footnote on the video report
+  // rather than a replacement for it.
+  const aside = s.health.length
+    ? '\n\nSeparately: ' + s.health[0].down
+    : '';
 
   const needsPerson = s.counts.needs_you + s.counts.blocked;
   const retryable = s.counts.retryable;
 
   if (!s.everRun) {
     return {
-      message: 'Nothing has been through the video pipeline yet. Add a video link to the sheet and press Prepare, or ask me to write something.',
+      message: 'Nothing has been through the video pipeline yet. Add a video link to the sheet and press Prepare, or ask me to write something.' + aside,
       chips: ['Write a post about NK cell therapy'],
     };
   }
@@ -237,7 +271,7 @@ export function greetingFor(s: Snapshot): { message: string; chips: string[] } {
       ? ' Since the last pass I retried ' + (s.recovery.revived + s.recovery.released) + ' and they are moving again.'
       : '';
     return {
-      message: 'Everything in the video pipeline is either done or moving.' + recovered + ' What would you like to work on?',
+      message: 'Everything in the video pipeline is either done or moving.' + recovered + ' What would you like to work on?' + aside,
       chips: ['Show me the video pipeline', 'Write a post'],
     };
   }
@@ -250,7 +284,8 @@ export function greetingFor(s: Snapshot): { message: string; chips: string[] } {
   const message =
     parts.join(', and ') + '.' +
     (named.length ? '\n\n' + named.join('\n') : '') +
-    (retryable ? '\n\nI can retry the temporary ones now — nothing goes to Metricool without you saying so.' : '');
+    (retryable ? '\n\nI can retry the temporary ones now — nothing goes to Metricool without you saying so.' : '') +
+    aside;
 
   if (retryable === 1) chips.push('Retry that one');
   else if (retryable > 1) chips.push('Retry everything that is stuck');
