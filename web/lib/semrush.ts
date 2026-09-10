@@ -23,6 +23,7 @@
 // available, so the spend guard works from the account's monthly allowance
 // minus what this app has logged in semrush_usage this month.
 
+import { pickPrimary, withoutShopping } from '@/lib/keyword-brief';
 import { reportError } from '@/lib/report';
 import { decideSpend, applyCharge, type SpendDecision } from '@/lib/semrush-budget';
 import { reasonForCode, reasonForHttpStatus, type SemrushReason } from '@/lib/semrush-reason';
@@ -603,13 +604,14 @@ export function opportunityScore(k: SemKeyword): number {
 }
 
 export function selectBrief(topic: string, related: SemKeyword[], questions: SemKeyword[]): Omit<KeywordBrief, 'source' | 'fromCache' | 'unitsSpent'> {
-  const scored = related
-    .filter((k) => (k.volume ?? 0) > 0)
+  const scored = withoutShopping(related.filter((k) => (k.volume ?? 0) > 0))
     .map((k) => ({ k, s: opportunityScore(k) }))
     .sort((a, b) => b.s - a.s);
-  // Primary: best opportunity with KD <= 60 if one exists, else best overall.
-  const easyFirst = scored.filter((x) => (x.k.difficulty ?? 100) <= 60);
-  const primary = (easyFirst[0] || scored[0])?.k ?? null;
+  // Primary: the best opportunity that a person would actually SAY, preferring
+  // KD <= 60. See lib/keyword-brief.ts — ranking on volume and difficulty alone
+  // floats "<thing> near me" and "<thing> cost" to the top, and those are
+  // queries, not sentences.
+  const primary = pickPrimary(scored.map((x) => x.k));
   const supporting = scored
     .map((x) => x.k)
     .filter((k) => k !== primary)
@@ -651,24 +653,11 @@ export async function buildKeywordBrief(topic: string, opts: { database?: string
   return (await researchBundle(topic, opts)).brief;
 }
 
-// The prompt contract injected before every draft. Firm, but anti-stuffing.
-export function briefPromptFrom(brief: KeywordBrief): string {
-  if (brief.source !== 'semrush' || !brief.primary) return '';
-  const fmt = (k: SemKeyword) =>
-    k.keyword + ' (' + (k.volume != null ? k.volume + '/mo' : 'n/a') + ', KD ' + (k.difficulty != null ? k.difficulty : '?') + ')';
-  const lines: string[] = [];
-  lines.push('SEMRUSH KEYWORD BRIEF (real search data — follow this contract):');
-  lines.push('- PRIMARY keyword: ' + fmt(brief.primary) + '. Use it in the headline/hook and naturally 1-2 more times.');
-  if (brief.supporting.length) {
-    lines.push('- SUPPORTING terms (work each in once where natural): ' + brief.supporting.map(fmt).join('; '));
-  }
-  if (brief.questions.length) {
-    lines.push('- Answer at least one of these real searcher questions in the body: ' + brief.questions.map((q) => '"' + q.keyword + '"').join(', '));
-  }
-  lines.push('- Searcher intent is mostly ' + brief.intentSummary + ' — match the angle to it.');
-  lines.push('- Never keyword-stuff; keep medical claims compliant and non-exaggerated.');
-  return lines.join('\n');
-}
+// The prompt contract injected before every draft. Firm, but anti-stuffing —
+// and silent about the opening line, deliberately. The wording lives in
+// lib/keyword-brief.ts so it can be tested; this file cannot be loaded by the
+// test runner.
+export { briefPromptFrom } from '@/lib/keyword-brief';
 
 // ---------------------------------------------------------------------------
 // Learnings: record which keywords each draft used (joined later with

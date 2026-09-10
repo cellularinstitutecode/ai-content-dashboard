@@ -18,7 +18,7 @@
 // rather than the text, so the compliance and naming regexes stay in the one
 // place each already lives.
 
-export type DefectKind = 'no_citation' | 'named_a_person';
+export type DefectKind = 'no_citation' | 'named_a_person' | 'repeats_opening';
 
 export type DraftDefect = {
   /**
@@ -26,10 +26,28 @@ export type DraftDefect = {
    *
    * A leaked name outranks a missing citation: a clinic appearing to quote a
    * patient who never spoke is the worse of the two to publish.
+   *
+   * 'repeats_opening' is the exception and does NOT become a refusal. A caption
+   * that opens like last week's is worth one more attempt and nothing more —
+   * refusing the video over it would hold back a perfectly publishable post
+   * over a matter of style, and leave the row waiting on a person who never
+   * asked to be involved. See `blocking` below and its use in
+   * lib/video-prepare.ts.
    */
   kind: DefectKind;
   /** Appended to the writer's brief on the next attempt. */
   corrective: string;
+  /**
+   * Should the video be REFUSED if the last attempt still has this defect?
+   *
+   * Explicit rather than derived from `kind`, because the refusal in
+   * lib/video-prepare.ts used to read "if (defect) ... else no_citation" — an
+   * else-branch that turns any future defect kind into a bogus "no verifiable
+   * citation" message. Adding a third kind without this flag would have
+   * refused a repeated opening line by telling the clinic its citation was
+   * missing.
+   */
+  blocking: boolean;
 };
 
 /**
@@ -68,6 +86,26 @@ function nameCorrective(count: number): string {
 }
 
 /**
+ * Deliberately does NOT quote the offending sentence back.
+ *
+ * The same reasoning as nameCorrective above, for the same reason it was
+ * learned: handing a model a sentence and telling it not to write that sentence
+ * is a well-known way to get that sentence back, lightly reworded — which is
+ * precisely the failure being corrected, since "the same sentence with the
+ * nouns swapped" is what the clinic was already seeing.
+ *
+ * So this names the SHAPE that failed and demands a different anchor. The
+ * writer does not need to know which opening it echoed; it needs to be told to
+ * start from something in this video that no other video contains.
+ */
+const OPENING_CORRECTIVE =
+  'IMPORTANT: your previous draft opened almost exactly like a post this clinic has already published. ' +
+  'Do not adjust that sentence — throw it away and write a different one. Open instead on something ' +
+  'CONCRETE that appears only in THIS video: a number the speaker says, a piece of equipment they name, ' +
+  'a material, a setting, a step they physically perform. Do not open on a general statement about ' +
+  'regenerative medicine, safety, wellness or the field — that is the shape that repeated.';
+
+/**
  * Is this draft publishable, and if not, what should the writer be told?
  *
  * Both problems are reported together when both are present, so one more
@@ -75,14 +113,23 @@ function nameCorrective(count: number): string {
  *
  * @param ref the citation extracted from the composed copy; empty means none
  * @param leaked names the guard found in the copy
+ * @param repeatsOpening lib/opening-line.ts found this opening in a recent post
  */
-export function draftDefect(ref: string, leaked: readonly string[]): DraftDefect | null {
+export function draftDefect(
+  ref: string,
+  leaked: readonly string[],
+  repeatsOpening = false,
+): DraftDefect | null {
   const correctives: string[] = [];
   if (leaked.length) correctives.push(nameCorrective(leaked.length));
   if (!String(ref || '').trim()) correctives.push(REF_CORRECTIVE);
+  if (repeatsOpening) correctives.push(OPENING_CORRECTIVE);
   if (!correctives.length) return null;
+
+  const blocking = Boolean(leaked.length) || !String(ref || '').trim();
   return {
-    kind: leaked.length ? 'named_a_person' : 'no_citation',
+    kind: leaked.length ? 'named_a_person' : (blocking ? 'no_citation' : 'repeats_opening'),
     corrective: correctives.join('\n\n'),
+    blocking,
   };
 }

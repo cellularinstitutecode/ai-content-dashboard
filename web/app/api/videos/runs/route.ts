@@ -42,6 +42,13 @@ export async function GET(req: NextRequest) {
           tab: r.tab,
           row: r.row_number,
           title: r.video_title,
+          // Which video this row was actually prepared FROM, and where its words
+          // came from. Both were already read by listRuns and dropped here — so
+          // when a caption did not match the link, nothing on any screen could
+          // say whether the wrong video had been transcribed or the right one
+          // written into the wrong row. That question cost a full audit.
+          videoLink: r.video_link,
+          transcriptSource: r.transcript_source,
           state: r.state,
           attempts: r.attempts,
           lastError: r.last_error,

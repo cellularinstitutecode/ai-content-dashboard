@@ -22,6 +22,9 @@ import { keywordLineFrom } from '@/lib/video-row';
 import { composeCaption, forbiddenNames, houseStyleHint, keywordGrounding, namesLeaked, topicFromTranscript, transcriptExcerpt, videoSubject } from '@/lib/video-copy';
 import { draftDefect, type DraftDefect } from '@/lib/draft-defect';
 import { canWriteCopy, remainingMs } from '@/lib/prepare-budget';
+import { shouldReseed } from '@/lib/reseed';
+import { openingLineOf, repeatsOpening } from '@/lib/opening-line';
+import { recentOpenings } from '@/lib/recent-openers';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
@@ -292,15 +295,23 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   // actually uses. Seeding from speech instead returns "vagus nerve reset"
   // (22,200) and "how to regulate nervous system": more volume, and the people
   // the clinic is talking to.
-  const spoken = excerpt ? topicFromTranscript(excerpt) : '';
+  // Seeded with the SUBJECT as well as the transcript. Without it the rule is
+  // "whatever the speaker repeats most", and on row 183 that was "red light" —
+  // a step inside the Oxygen Circuit — so a post about the clinic's oxygen
+  // protocol was researched as one about consumer red-light gear.
+  const spoken = excerpt ? topicFromTranscript(excerpt, subject) : '';
   const grounded = (b: typeof brief) => keywordGrounding(b.stamp.keywords || [], excerpt);
+  const asReseed = (b: typeof brief) => ({ hasData: hasSemrushData(b.stamp), grounding: grounded(b) });
   if (excerpt && spoken && spoken.toLowerCase() !== subject.toLowerCase()) {
     const weak = !hasSemrushData(brief.stamp) || grounded(brief) < GROUNDING_FLOOR;
     if (weak) {
       const retry = await autoKeywordBrief(spoken);
-      // Only if it is BETTER. A second lookup that is equally off-topic is not
-      // an improvement, and the filename may still have been the truer seed.
-      if (hasSemrushData(retry.stamp) && (!hasSemrushData(brief.stamp) || grounded(retry) > grounded(brief))) {
+      // Better AND about this video. The second half used to be skipped
+      // entirely when the first brief had no data — the `||` short-circuited
+      // before grounding was ever measured — so any phrase Semrush recognised
+      // was accepted however unrelated. lib/reseed.ts holds the rule and the
+      // reason it is a floor rather than a comparison.
+      if (shouldReseed(asReseed(brief), asReseed(retry), GROUNDING_FLOOR).accept) {
         brief = retry;
       }
     }
@@ -317,6 +328,12 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   let ref = '';
   let defect: DraftDefect | null = null;
   const banned = forbiddenNames(title, input.creator);
+
+  // What this account has already published, so this post can avoid opening
+  // like it. Fail-open by construction (see lib/recent-openers.ts): an empty
+  // list simply switches the check off rather than holding up the video.
+  const priorOpenings = await recentOpenings(input.userId);
+  const styleHint = houseStyleHint(priorOpenings);
 
   // Ask again rather than refuse.
   //
@@ -340,7 +357,7 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
         topic: defect ? topic + '\n\n' + defect.corrective : topic,
         keywordHint: brief.hint ?? '',
         contentType: 'social',
-        styleHint: houseStyleHint(),
+        styleHint,
         channels: ['linkedin', 'instagram'],
         brand,
         audience: brand?.audience,
@@ -390,8 +407,19 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     // resting on the model doing as it is told. This is the check that does not.
     const leaked = Array.from(new Set([...namesLeaked(tiktok, banned), ...namesLeaked(linkedin, banned)]));
 
-    defect = draftDefect(ref, leaked);
+    // Does it open like something already published?
+    //
+    // Measured, not requested. The style hint above asks for a different
+    // opening and the ask is worth making, but the clinic's complaint was
+    // precisely that asking had not worked: every post still started the same
+    // way. This is the half that does not depend on the writer complying.
+    const repeat = repeatsOpening(openingLineOf(tiktok), priorOpenings);
+
+    defect = draftDefect(ref, leaked, Boolean(repeat));
     if (!defect) break;
+    if (repeat) {
+      reportError('videos:opening-repeat', new Error('opening repeats a recent post (' + repeat.by + ', ' + repeat.score.toFixed(2) + ')'), { title });
+    }
 
     // Worth another draft? Only with attempts left AND room to finish one.
     // Starting a generation the clock cannot cover is how a banked transcript
@@ -408,8 +436,14 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     return { ok: false, status: 502, error: 'generation_failed', message: 'The writer did not answer just now. Try again in a moment.', needsPaste: false, title };
   }
 
-  // Both drafts carried the same defect. Now it is worth refusing.
-  if (defect) {
+  // Both drafts carried the same defect. Now it is worth refusing — unless the
+  // only thing wrong is that it opens like a previous post, which is a matter
+  // of style and never a reason to hold a publishable video. `blocking` is
+  // explicit on the defect rather than inferred from `kind` here, because the
+  // else-branch below turns anything it does not recognise into "no verifiable
+  // citation" — so a repeated opening would otherwise have been refused with a
+  // message about a citation that was present all along.
+  if (defect && defect.blocking) {
     if (defect.kind === 'named_a_person') {
       const leaked = Array.from(new Set([...namesLeaked(tiktok, banned), ...namesLeaked(linkedin, banned)]));
       reportError('videos:name-leak', new Error('generated copy named ' + leaked.join(', ')), { title });

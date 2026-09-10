@@ -5,6 +5,7 @@
 // Both existed as bugs before they existed as functions, and both were
 // invisible from inside the code — they only showed up in the output.
 import { avisoLine } from './compliance.ts';
+import { pickSeed } from './topic-seed.ts';
 
 // ---------------------------------------------------------------------------
 // What to research
@@ -84,17 +85,57 @@ export const HOUSE_TAGS = [
   'advancedmedicine', 'longevitymedicine', 'wellnessjourney', 'wellnessclinic',
 ] as const;
 
-export function houseStyleHint(): string {
-  return [
+/**
+ * Openings that are structurally DIFFERENT from one another.
+ *
+ * There used to be exactly one example here, and one example in a prompt is not
+ * an illustration — it is a template. Every caption came back as a variation on
+ * "Safety in regenerative medicine starts long before a therapy reaches the
+ * patient": abstract noun, "in regenerative medicine", temporal claim. The
+ * clinic's complaint was that the posts "started very similarly" and read like
+ * duplicates of each other when the videos were nothing alike.
+ *
+ * Four shapes rather than one, each anchored on a different KIND of concrete
+ * thing — a measurement, an action, a correction, a decision — so that there is
+ * no single sentence to fill in and the transcript decides which fits.
+ */
+const OPENING_SHAPES = [
+  'a measurement or setting the speaker names — "The chamber holds 1.3 atmospheres for sixty minutes."',
+  'something being physically done — "Ozone runs through the dialyser before the blood goes back in."',
+  'a correction of what people assume — "Most people think the cold is the point. It is the recovery afterwards."',
+  'a decision the clinic makes and why — "We screen every donor line twice before a single cell is expanded."',
+];
+
+export function houseStyleHint(recentOpenings: readonly string[] = []): string {
+  const lines = [
     'HOUSE STYLE (this clinic writes to a settled pattern — follow it over any general length guidance above):',
     '- Length: 800-1,100 characters of BODY for both instagram and linkedin, before the REF line, the AVISO line and the hashtags. This overrides the word counts given earlier.',
-    '- Open with a declarative line that reframes the subject — "Safety in regenerative medicine starts long before a therapy reaches the patient." Do not open with a question.',
-    '- Then 3-4 short paragraphs, one idea each, separated by a blank line.',
+    '- OPENING LINE, and this is the rule that matters most for variety: open on something CONCRETE and specific to THIS video — a measurement, a material, a piece of equipment, a step, something the speaker physically does. Never open on a general statement about the field, and never on a keyword or a search phrase. If a keyword brief above disagrees with the transcript about what this video is about, the transcript is right. Do not open with a question.',
+    '- Vary the SHAPE of that opening between posts. Any of these is good, and they are examples to choose between, not a template to fill in:\n  * ' + OPENING_SHAPES.join('\n  * '),
+    '- Vary how the middle is built too. Usually 3-4 short paragraphs, one idea each, separated by a blank line — but not every post is four even paragraphs: some are best as a short sequence of steps in the order the speaker does them, some as one idea developed across two longer paragraphs, some as a claim followed by the evidence for it. Let the video decide, and do not build two posts the same way in a row.',
     '- SUBSTANCE, the most important rule: name at least three concrete things the speaker actually said — a step in the protocol, a material, a piece of equipment, a named therapy, a measurement, a condition being controlled for. Specifics are what make the post worth reading.',
     '- Never pad with wellness filler. Phrases like "designed to help", "supports your wellness", "reconnect with yourself", "holistic approach" say nothing; if the transcript does not say it, do not write it.',
     '- Close with a short values line, then a soft invitation — the clinic uses "See if you are a candidate."',
     '- Hashtags: 10-11, all lowercase, no CamelCase and no spaces. Draw most from: #' + HOUSE_TAGS.join(' #') + '. Add at most two specific to this video. Always include #cellularinstitute.',
-  ].join('\n');
+  ];
+
+  // What the clinic has already published, so this post can avoid repeating it.
+  //
+  // Shown rather than summarised, and paired with the positive rule above: a
+  // model handed a list to avoid, and nothing to reach for instead, writes the
+  // list. The real guarantee is not this paragraph — it is lib/opening-line.ts
+  // measuring the result and lib/draft-defect.ts sending it back. This only
+  // makes the first attempt likely to be right.
+  const used = recentOpenings.map((o) => String(o || '').trim()).filter(Boolean).slice(0, 10);
+  if (used.length) {
+    lines.push(
+      '- ALREADY USED. These are the opening lines of the clinic\u2019s most recent posts. Yours must not repeat any of them, ' +
+      'must not reuse their opening words, and must not be the same sentence with the nouns swapped:\n  * ' +
+      used.map((o) => '"' + o + '"').join('\n  * '),
+    );
+  }
+
+  return lines.join('\n');
 }
 
 /**
@@ -217,38 +258,27 @@ export function transcriptExcerpt(text: string, maxChars: number): string {
   return body.trim() + '\n\n[Transcript truncated here — the video continues.]';
 }
 
-export function topicFromTranscript(text: string): string {
-  const words = String(text || '')
+function significantWords(text: string): string[] {
+  return String(text || '')
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, ' ')
     .split(/\s+/)
     .filter((w) => w.length > 2 && !STOPWORDS.has(w) && !/^\d+$/.test(w));
-  if (!words.length) return '';
+}
 
-  const bigrams = new Map<string, number>();
-  for (let i = 0; i < words.length - 1; i++) {
-    const key = words[i] + ' ' + words[i + 1];
-    bigrams.set(key, (bigrams.get(key) || 0) + 1);
-  }
-  let best = '';
-  let bestCount = 1; // said once is not a theme
-  for (const [phrase, count] of bigrams) {
-    if (count > bestCount) { best = phrase; bestCount = count; }
-  }
-  if (best) return best;
-
-  // A single word gets the same bar as a pair: said once is not a theme, it
-  // is whatever happened to open the video. Nothing repeated means there is no
-  // signal here, and '' says so — the caller keeps the filename's subject
-  // rather than searching for a word picked at random.
-  const singles = new Map<string, number>();
-  for (const w of words) singles.set(w, (singles.get(w) || 0) + 1);
-  let word = '';
-  let wordCount = 1;
-  for (const [w, count] of singles) {
-    if (count > wordCount) { word = w; wordCount = count; }
-  }
-  return word;
+/**
+ * The phrase worth searching, from what the speaker actually repeats.
+ *
+ * `subject` is the file name's own answer to what the video is about, and
+ * passing it is what stops a DETAIL displacing the SUBJECT. On
+ * "Reel_RyallOxygenCircuit_Rodrigo" the speaker says "red light" more often
+ * than "hyperbaric oxygen", so the unanchored rule researched consumer
+ * red-light gear for a post about the clinic's oxygen protocol. See
+ * lib/topic-seed.ts for the whole story; omitting `subject` keeps the old
+ * most-frequent-phrase behaviour exactly.
+ */
+export function topicFromTranscript(text: string, subject = ''): string {
+  return pickSeed(significantWords(text), significantWords(subject));
 }
 
 export function videoSubject(title: string, transcript = ''): string {
