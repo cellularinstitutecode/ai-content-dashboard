@@ -26,7 +26,7 @@ import { completeRow } from "@/lib/video-autopilot";
 import { canWriteCopy } from "@/lib/prepare-budget";
 import { plainFor } from "@/lib/health-plain";
 import { loadBrandContext } from "@/lib/brand-context";
-import { missingSchema } from "@/lib/schema-check";
+import { missingSchemaCached } from "@/lib/schema-check";
 
 // Compact, chat-friendly rendering of Semrush keyword rows.
 function fmtKw(k: SemKeyword): string {
@@ -356,7 +356,7 @@ async function doSchedule(userId: string, p: PendingSchedule) {
 async function liveSituation(userId: string): Promise<{ snapshot: ReturnType<typeof summarise>; prompt: string; brand?: BrandContext }> {
   const [runs, health, brand] = await Promise.all([
     listRuns(userId, 80).catch(() => []),
-    missingSchema()
+    missingSchemaCached()
       .then((missing) => (missing.length ? [plainFor("database_schema")] : []))
       .catch(() => [] as { down: string; stillWorks?: string }[]),
     // Promise.resolve(): the Supabase query builder is a thenable, not a
