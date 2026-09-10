@@ -45,6 +45,20 @@ export function downloadBudgetMs(remaining: number): number {
  * transcription that runs far past 60 seconds is stuck, and letting it eat the
  * copy's share turns one slow video into a request that returns nothing.
  */
+/**
+ * The budget for reading audio straight off a URL.
+ *
+ * downloadBudgetMs holds back time for BOTH the transfer and a separate
+ * extraction step, because the disk path does them one after the other. The
+ * streaming path does them in the same ffmpeg process — the bytes are decoded
+ * as they arrive — so reserving for a second step that never happens takes 25
+ * seconds off the one path that needs every second it can get. It is only ever
+ * used by files too big to stage, which are by definition the slow ones.
+ */
+export function streamExtractBudgetMs(remaining: number): number {
+  return remaining - RESERVE_MS.transcribe;
+}
+
 export function transcribeBudgetMs(remaining: number): number {
   const usable = remaining - RESERVE_MS.copy;
   return Math.max(0, Math.min(RESERVE_MS.transcribe, usable));

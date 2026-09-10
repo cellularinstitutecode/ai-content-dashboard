@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RESERVE_MS, remainingMs, downloadBudgetMs, transcribeBudgetMs, canWriteCopy } from './prepare-budget.ts';
+import { RESERVE_MS, remainingMs, downloadBudgetMs, transcribeBudgetMs, canWriteCopy, streamExtractBudgetMs } from './prepare-budget.ts';
 
 test('remaining counts down from the start of the request', () => {
   assert.equal(remainingMs(1_000, 300_000, 1_000), 300_000);
@@ -41,4 +41,14 @@ test('copy is written only when its whole reserve is still there', () => {
   assert.equal(canWriteCopy(RESERVE_MS.copy), true);
   assert.equal(canWriteCopy(RESERVE_MS.copy - 1), false);
   assert.equal(canWriteCopy(-1), false);
+});
+
+test('streaming straight off a URL is not charged for an extraction it never does', () => {
+  // The disk path transfers, then extracts; the streaming path decodes as the
+  // bytes arrive. Reserving for both took 25 seconds off the only path that is
+  // ever used by files big enough to need them.
+  const remaining = 200_000;
+  assert.equal(streamExtractBudgetMs(remaining), remaining - RESERVE_MS.transcribe);
+  assert.ok(streamExtractBudgetMs(remaining) > downloadBudgetMs(remaining));
+  assert.equal(streamExtractBudgetMs(remaining) - downloadBudgetMs(remaining), RESERVE_MS.extract);
 });

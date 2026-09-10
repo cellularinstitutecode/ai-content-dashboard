@@ -119,6 +119,73 @@ export const AUDIO_MAX_BYTES = 25 * 1024 * 1024;
  * fits about 50 minutes of speech inside the 25 MB ceiling; the longest thing
  * in the sheet is a few minutes.
  */
+/**
+ * Reading the source over HTTP instead of from disk.
+ *
+ * The flags that matter, none of them optional:
+ *
+ *  -headers            the Bearer token. Drive will not serve alt=media without
+ *                      it, and ffmpeg has no other way to carry one. Must end
+ *                      in CRLF or ffmpeg appends the next header to this line.
+ *  -seekable 1         the whole point. An MP4 exported without faststart keeps
+ *                      its moov index at the END, and ffmpeg has to range-
+ *                      request backwards to find it. Without this the same file
+ *                      that works from disk fails from a URL, which would have
+ *                      made this path work only for the files that needed it
+ *                      least.
+ *  -multiple_requests  keep the connection alive between those range requests
+ *                      instead of a fresh TLS handshake for each one.
+ *  -protocol_whitelist alt=media answers with a redirect to a storage host, so
+ *                      the chain has to be permitted explicitly.
+ *  -reconnect*         a two-minute read of a gigabyte-plus file over a link
+ *                      that hiccups once should not start again from nothing.
+ *
+ * There is deliberately no -follow_redirects here: it is not an option in the
+ * build ffmpeg-static ships (redirects are followed by default), and passing it
+ * makes ffmpeg exit before it opens anything — "Unrecognized option". The
+ * integration test in test/audio-extract.test.mjs serves a redirect for exactly
+ * this reason, because the failure is invisible until something real is on the
+ * other end of the socket.
+ *
+ * The token appears in argv, which is visible to anything that can read the
+ * process table on this machine. That is the cost of ffmpeg having no other way
+ * to pass a header, and it is bounded: the token is a 50-minute service-account
+ * credential, the machine is a single-tenant serverless sandbox, and stripToken
+ * below keeps it out of every message that leaves this function.
+ */
+export const FFMPEG_URL_ARGS = (url: string, token: string, output: string): string[] => [
+  '-nostdin',
+  '-loglevel', 'error',
+  '-y',
+  '-headers', 'Authorization: Bearer ' + token + '\r\n',
+  '-seekable', '1',
+  '-multiple_requests', '1',
+  '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
+  '-reconnect', '1',
+  '-reconnect_on_network_error', '1',
+  '-reconnect_delay_max', '10',
+  '-i', url,
+  '-vn',
+  '-ac', '1',
+  '-ar', '16000',
+  '-c:a', 'libmp3lame',
+  '-b:a', '64k',
+  output,
+];
+
+/**
+ * Remove the credential from anything on its way to a log or a screen.
+ *
+ * lib/report.ts's redact() matches known secret shapes; a Google access token
+ * is not one of them, and ffmpeg echoes its input URL — and sometimes its
+ * headers — into stderr on failure. This is the belt to that braces: the exact
+ * token we just passed, struck out by value, before redact() runs.
+ */
+export function stripToken(text: string, token: string): string {
+  if (!token) return text;
+  return text.split(token).join('[token]');
+}
+
 export const FFMPEG_ARGS = (input: string, output: string): string[] => [
   '-nostdin',
   '-loglevel', 'error',
@@ -146,6 +213,76 @@ export type ExtractResult =
 
 export function ffmpegAvailable(): boolean {
   return Boolean(ffmpegStatic);
+}
+
+/**
+ * Pull the audio out of a video WITHOUT ever staging the video.
+ *
+ * ffmpeg opens the Drive URL itself and range-requests its way through the
+ * container, writing only the mp3. Nothing but the audio touches the scratch
+ * disk, so the size ceiling that produced "that video is 1722 MB, past the
+ * 450 MB the dashboard can pull down in one go" simply does not apply here.
+ *
+ * Used only above DISK_SAFE_BYTES (see lib/media-route.ts). Everything the
+ * clinic normally posts keeps the older, proven path below — a new route that
+ * runs only where the old one refused outright cannot regress anything.
+ *
+ * @param url    the Drive alt=media URL
+ * @param token  the Bearer credential for it; never appears in any return value
+ */
+export async function extractAudioFromUrl(
+  url: string,
+  token: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<ExtractResult> {
+  const resolved = await resolveFfmpeg();
+  if (!resolved.ok) {
+    return { ok: false, reason: 'not_available', message: 'The audio extractor is not runnable on this deployment: ' + resolved.detail };
+  }
+
+  const dir = await mkdtemp(path.join(tmpdir(), 'chi-audio-'));
+  const release = async () => { await rm(dir, { recursive: true, force: true }).catch(() => undefined); };
+  const output = path.join(dir, 'audio.mp3');
+
+  try {
+    await run(resolved.path, FFMPEG_URL_ARGS(url, token, output), {
+      // Longer than the disk path's 20s: this one is doing the transfer as
+      // well as the decode, and it is only ever reached by files big enough
+      // that the transfer is the slow part.
+      timeout: opts.timeoutMs ?? 120_000,
+      maxBuffer: 1024 * 1024,
+    });
+  } catch (e) {
+    const err = e as { stderr?: string; code?: string | number; killed?: boolean; message?: string };
+    const stderr = stripToken(String(err?.stderr || ''), token);
+    if (/does not contain any stream|Output file (#0 )?does not contain/i.test(stderr)) {
+      await release();
+      return { ok: false, reason: 'no_audio', message: 'That video has no sound to transcribe.' };
+    }
+    await release();
+    const why = stderr.trim()
+      ? redact(stderr.slice(0, 200))
+      : err?.killed
+        ? 'reading it from Drive took too long and was stopped'
+        : 'the extractor could not be started (' + String(err?.code || err?.message || 'unknown') + ')';
+    reportError('audio-extract:ffmpeg-url', new Error(stripToken(String(err?.message || 'ffmpeg url failed'), token)), { binary: resolved.path });
+    return { ok: false, reason: 'failed', message: 'The audio could not be read out of that video: ' + why + '.' };
+  }
+
+  const info = await stat(output).catch(() => null);
+  if (!info || info.size === 0) {
+    await release();
+    return { ok: false, reason: 'no_audio', message: 'That video has no sound to transcribe.' };
+  }
+  if (info.size > AUDIO_MAX_BYTES) {
+    await release();
+    return {
+      ok: false,
+      reason: 'too_long',
+      message: 'That recording is too long to transcribe in one piece (over ' + Math.floor(AUDIO_MAX_BYTES / 1024 / 1024) + ' MB of audio).',
+    };
+  }
+  return { ok: true, audio: { path: output, sizeBytes: info.size, release } };
 }
 
 /**
