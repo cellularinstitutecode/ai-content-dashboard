@@ -54,3 +54,19 @@ test('an unrecognised failure admits that rather than inventing a cause', () => 
   assert.ok(writerFailure('a string').length > 0);
   assert.ok(writerFailure(null).length > 0);
 });
+
+test('running out of room is not the same as garbled output', () => {
+  // Collapsing these is what made "unusable twice running" cover both a ceiling
+  // somebody can raise and a prompt that is not being followed.
+  const cut = describeWriterFailure(new Error('anthropic: the answer was cut off at max_tokens after 7891 characters'));
+  assert.match(cut.said, /ran out of room/);
+  assert.equal(cut.retryable, false, 'the same ceiling truncates the same way next time');
+
+  const garbled = describeWriterFailure(new Error('AI returned malformed JSON; please try again.'));
+  assert.match(garbled.said, /incomplete or garbled/);
+  assert.equal(garbled.retryable, true);
+
+  const empty = describeWriterFailure(new Error('AI returned no instagram or linkedin copy; please try again.'));
+  assert.match(empty.said, /left the instagram or linkedin copy empty/);
+  assert.equal(empty.retryable, true);
+});

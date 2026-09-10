@@ -73,3 +73,30 @@ test('a response with no body at all is reported rather than read as empty', asy
   // costs one clear error instead of a second paid attempt.
   await assert.rejects(() => readAnthropicStream(new Response(null, { status: 200 })), /no stream/);
 });
+
+const stopWith = (reason: string) =>
+  'event: message_delta\ndata: ' +
+  JSON.stringify({ type: 'message_delta', delta: { stop_reason: reason } }) +
+  '\n\n';
+
+test('a truncated answer says it was cut off, rather than looking malformed', async () => {
+  // The failure this whole file was reread for. stop_reason: max_tokens means
+  // the answer is incomplete; returning it lets parseJsonStrict call it
+  // malformed JSON, and generateContentPack then re-rolls at full price to
+  // reproduce the identical truncation.
+  await assert.rejects(
+    () => readAnthropicStream(streamOf([delta('{"instagram":"half a pos'), stopWith('max_tokens')])),
+    /cut off at max_tokens/,
+  );
+});
+
+test('a normal completion is unaffected by the new check', async () => {
+  const got = await readAnthropicStream(streamOf([delta('{"instagram":"done"}'), stopWith('end_turn')]));
+  assert.equal(got, '{"instagram":"done"}');
+});
+
+test('a stream that never reports a stop reason still returns its text', async () => {
+  // Not every producer sends message_delta. Absent evidence of truncation is
+  // not evidence of truncation.
+  assert.equal(await readAnthropicStream(streamOf([delta('ok')])), 'ok');
+});
