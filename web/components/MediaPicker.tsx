@@ -1,21 +1,24 @@
 'use client';
 
-// Attach a video (or show the image already attached) to a post being written
-// by hand — in the dashboard composer and in the Calendar page's scheduler.
+// The attachment panel: what is going out with this post, shown as itself.
 //
-// Why it is a component and not markup in the composer: the Calendar page had
-// the same four channel chips and NO way to attach media at all, so a video
-// channel there could only ever produce a draft Metricool refuses. Both pages
-// now mount this, so "what can I attach?" has one answer and one look.
+// It used to be a film-strip emoji and the sentence "This video will be
+// attached to the post." That is a claim, not evidence — a correctly attached
+// video and an empty string with a label beside it looked identical, and the
+// honest reaction to that was the one we got: "I still don't see it."
 //
-// What it lists is deliberately narrow: videos that ALREADY have a public
-// Drive copy (/api/media). Browsing must never create a world-readable copy of
-// the clinic's footage — pressing Prepare on a row in the Video Library is the
-// one action that does that, and this picker cannot.
+// So the attached state is now the video, playing, at the size of a phone
+// screen. If you can watch it here, it is attached. If the box is empty, it is
+// not. Nothing about the post's media is left to a caption any more.
+//
+// Mounted in the dashboard composer AND the Calendar scheduler, which had no
+// media control at all — so a video channel there could only ever produce a
+// draft Metricool refuses.
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { friendlyErrorFromResponse } from '@/lib/friendly-error';
+import { drivePreviewUrl, previewKindOf } from '@/lib/media-preview';
 
 export type ShareableVideo = { videoId: string; title: string; url: string; source: string; updatedAt: string };
 
@@ -34,9 +37,69 @@ export async function fetchShareableVideos(): Promise<{ videos: ShareableVideo[]
   }
 }
 
-/** Is this attachment a still image rather than a video? Label first, then the URL. */
-export function looksLikeImage(url: string, label: string): boolean {
-  return /image|photo|foto/i.test(label) || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url);
+/**
+ * Make one video attachable and return the URL a post can carry.
+ *
+ * The Drive original is private, so a network handed that link gets a
+ * permission wall. This asks the server for the world-readable copy, making it
+ * if there is none. Exported so the Video Library's "Use in post" can use the
+ * same one call rather than growing its own.
+ */
+export async function ensureVideoAttachable(videoLink: string, title?: string): Promise<{ url: string; error: string | null }> {
+  try {
+    const r = await fetch('/api/media', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ videoLink, title: title || '' }),
+    });
+    if (!r.ok) return { url: '', error: await friendlyErrorFromResponse(r, 'We could not prepare that video for posting.') };
+    const j = await r.json();
+    return { url: String(j?.url || ''), error: null };
+  } catch {
+    return { url: '', error: 'We could not reach the video library just now.' };
+  }
+}
+
+/**
+ * The attachment, rendered as the thing it is.
+ *
+ * Three cases, because one element does not cover them: a Drive video needs
+ * Drive's iframe player (its download URL in a <video> tag is a black box — see
+ * lib/media-preview.ts), an Opus clip is a direct file a <video> tag plays, and
+ * an image is an image.
+ */
+export function MediaPreview({ url, label, tall }: { url: string; label?: string; tall?: boolean }) {
+  const kind = previewKindOf(url, label);
+  const frame = 'w-full overflow-hidden rounded-xl bg-black ' + (tall ? 'aspect-[9/16] max-h-[420px]' : 'aspect-video');
+  if (kind === 'drive') {
+    return (
+      <div className={frame}>
+        <iframe
+          src={drivePreviewUrl(url)}
+          title={label || 'Attached video'}
+          allow="autoplay"
+          className="h-full w-full border-0"
+        />
+      </div>
+    );
+  }
+  if (kind === 'video') {
+    return (
+      <div className={frame}>
+        {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+        <video src={url} controls preload="metadata" className="h-full w-full object-contain" />
+      </div>
+    );
+  }
+  if (kind === 'image') {
+    return (
+      <div className={frame}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={url} alt={label || 'Attached image'} className="h-full w-full object-contain" />
+      </div>
+    );
+  }
+  return null;
 }
 
 export default function MediaPicker({ value, label, onChange, hint }: {
@@ -65,23 +128,7 @@ export default function MediaPicker({ value, label, onChange, hint }: {
   // and a state update after unmount is a no-op in React 18+, so nothing needs
   // cancelling.
   const started = useRef(false);
-  useEffect(() => {
-    if (!open || started.current) return;
-    started.current = true;
-    setLoading(true);
-    void fetchShareableVideos().then((out) => {
-      setVideos(out.videos);
-      setErr(out.error);
-      setLoading(false);
-    });
-  }, [open]);
-
-  /** Try again after a failure — the one case where a second fetch is right. */
-  function retry() {
-    started.current = false;
-    setVideos(null);
-    setErr(null);
-    setOpen(true);
+  function load() {
     started.current = true;
     setLoading(true);
     void fetchShareableVideos().then((out) => {
@@ -90,23 +137,43 @@ export default function MediaPicker({ value, label, onChange, hint }: {
       setLoading(false);
     });
   }
+  useEffect(() => {
+    if (!open || started.current) return;
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  /** Try again after a failure — the one case where a second fetch is right. */
+  function retry() {
+    setVideos(null);
+    setErr(null);
+    setOpen(true);
+    load();
+  }
 
   if (value) {
-    const isImage = looksLikeImage(value, label);
+    const isImage = previewKindOf(value, label) === 'image';
     return (
-      <div className="mt-2 flex items-center justify-between gap-2 rounded-2xl bg-subtle p-2.5 ring-1 ring-line">
-        <div className="flex min-w-0 items-center gap-2">
-          <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">{isImage ? '\u{1F5BC}' : '\u{1F3AC}'}</span>
-          <div className="min-w-0">
-            <div className="truncate text-[13px] font-medium text-ink">{label || (isImage ? 'Image attached' : 'Video attached')}</div>
-            <div className="text-[11px] text-ink-faint">{isImage ? 'This image will be attached to the post.' : 'This video will be attached to the post.'}</div>
+      <div className="mt-2 rounded-2xl bg-subtle p-2.5 ring-1 ring-line">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span aria-hidden className="text-[13px]">{isImage ? '\u{1F5BC}' : '✅'}</span>
+            <span className="truncate text-[13px] font-semibold text-ink">
+              {isImage ? 'Image attached' : 'Video attached'}
+              {label ? <span className="font-normal text-ink-muted"> · {label}</span> : null}
+            </span>
           </div>
+          <button
+            type="button"
+            onClick={() => { onChange('', ''); setOpen(false); }}
+            className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:ring-accent"
+          >Remove</button>
         </div>
-        <button
-          type="button"
-          onClick={() => { onChange('', ''); setOpen(false); }}
-          className="shrink-0 rounded-full px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white"
-        >Remove</button>
+        {/* The proof. Everything above this line is a label; this is the file. */}
+        <MediaPreview url={value} label={label} />
+        <p className="mt-2 text-[11px] text-ink-faint">
+          This is exactly what goes out with the post. If it plays here, it is attached.
+        </p>
       </div>
     );
   }
@@ -135,24 +202,25 @@ export default function MediaPicker({ value, label, onChange, hint }: {
             // The empty state has to name the action that fills it, or it reads
             // as "this feature is broken" rather than "nothing is ready yet".
             <div className="px-1 py-2 text-[12px] text-ink-muted">
-              <p>No videos are ready to attach yet. A video becomes attachable when its row is prepared — that is the step that makes the shareable copy a network can fetch.</p>
-              <p className="mt-1">A row prepared before this change may not have one: until recently the copy was only made when a video-only channel was going out, and rows with nothing ticked went to LinkedIn as text. Preparing the row again makes it.</p>
+              <p>No videos are ready to attach yet. In the Video Library, press <strong>Use in post · with video</strong> on a row — that makes the shareable copy a network can fetch, and brings the video straight here.</p>
               <Link href="/sources/videos" className="mt-1.5 inline-flex rounded-full bg-white px-3 py-1 font-medium text-ink no-underline ring-1 ring-line transition hover:ring-accent">Open the Video Library ↗</Link>
             </div>
           )}
           {!loading && !err && videos && videos.length > 0 && (
-            <ul className="grid max-h-64 gap-1 overflow-y-auto">
+            <ul className="grid max-h-[420px] gap-2 overflow-y-auto">
               {videos.map((v) => (
                 <li key={v.videoId}>
                   <button
                     type="button"
                     onClick={() => { onChange(v.url, v.title); setOpen(false); }}
-                    className="flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition hover:bg-white"
+                    className="w-full rounded-xl p-1.5 text-left ring-1 ring-transparent transition hover:bg-white hover:ring-line"
                   >
-                    <span aria-hidden className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">{'\u{1F3AC}'}</span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-[13px] font-medium text-ink">{v.title}</span>
-                      <span className="block text-[11px] text-ink-faint">{v.source === 'youtube' ? 'From YouTube' : 'From Drive'}</span>
+                    <span className="flex items-center gap-2">
+                      <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">{'\u{1F3AC}'}</span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-[13px] font-medium text-ink">{v.title}</span>
+                        <span className="block text-[11px] text-ink-faint">{v.source === 'youtube' ? 'From YouTube' : 'From Drive'} · click to attach</span>
+                      </span>
                     </span>
                   </button>
                 </li>

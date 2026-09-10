@@ -7,13 +7,18 @@
 // recorded against the source video in video_transcripts.public_copy_url
 // (lib/transcript-cache.ts).
 //
-// So this module answers one question: which videos already have such a copy?
-// It only ever READS. Browsing the picker must never create a public copy of a
-// clinic's footage — pressing Prepare on a row is the single action that does
-// that, and it stays that way.
+// Two questions, and the difference between them matters:
+//
+//   listShareableVideos  — which videos ALREADY have such a copy? Read-only.
+//                          Browsing the picker never creates one.
+//   ensureShareableVideo — make one for this video if it has none. A real side
+//                          effect, reached only from a button that says so.
 import 'server-only';
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
+import { publicVideoCopy } from '@/lib/drive';
+import { cachedPublicCopy, rememberPublicCopy } from '@/lib/transcript-cache';
+import { parseDriveFileId } from '@/lib/drive-url';
 import { reportError } from '@/lib/report';
 
 export type ShareableVideo = {
@@ -71,4 +76,52 @@ export async function listShareableVideos(limit = 40): Promise<{ videos: Shareab
     });
   }
   return { videos, failed: false };
+}
+
+/**
+ * Make sure this video CAN be attached, and say where it lives.
+ *
+ * "Use in post" used to hand over the caption and an empty media slot whenever
+ * the row had never been prepared, which from the outside looks exactly like a
+ * broken button: the text arrives, the video does not, and nothing says why.
+ * The missing thing is the world-readable Drive copy — the clinic's own file is
+ * private, so no network can fetch it.
+ *
+ * So this makes the copy when it is missing. That is a real side effect and the
+ * button that calls it says so in as many words before it runs; it is not done
+ * on a page load, a hover, or the picker merely being opened. The copy is made
+ * once per source video and remembered, so pressing the button twice costs one
+ * database read.
+ */
+export async function ensureShareableVideo(videoLink: string, title?: string | null): Promise<
+  | { ok: true; url: string; fileId: string; created: boolean }
+  | { ok: false; reason: 'not_drive' | 'failed'; message: string }
+> {
+  const fileId = parseDriveFileId(String(videoLink || ''));
+  if (!fileId) {
+    return {
+      ok: false,
+      reason: 'not_drive',
+      message: 'That row has no Google Drive video, so there is nothing to attach.',
+    };
+  }
+
+  const known = await cachedPublicCopy(fileId);
+  if (known?.url) return { ok: true, url: known.url, fileId: known.id, created: false };
+
+  try {
+    const name = String(title || 'video').replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 80) + '.mp4';
+    const made = await publicVideoCopy(fileId, name);
+    // Remembered immediately: without this, the next press makes ANOTHER
+    // world-readable copy of the clinic's footage, and nothing here can delete one.
+    await rememberPublicCopy(fileId, { id: made.fileId, url: made.url });
+    return { ok: true, url: made.url, fileId: made.fileId, created: true };
+  } catch (e) {
+    reportError('media-library:ensure-copy', e, { fileId });
+    return {
+      ok: false,
+      reason: 'failed',
+      message: 'We could not make a shareable copy of that video just now. Try again, or press Prepare on the row.',
+    };
+  }
 }
