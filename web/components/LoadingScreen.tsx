@@ -19,6 +19,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   installFetchProgress, subscribe, snapshot, scopedSnapshot, type Snapshot,
 } from './progressBus';
+import MobiusProgress from './MobiusProgress';
 
 const SHOW_AFTER_MS = 220;   // don't flash for a request that finishes instantly
 
@@ -54,24 +55,6 @@ function useProgress(read: () => Snapshot): Snapshot {
   return snap;
 }
 
-function Ring({ percent, size = 176 }: { percent: number; size?: number }) {
-  const R = size * 0.42;
-  const C = 2 * Math.PI * R;
-  const offset = C * (1 - Math.max(0, Math.min(100, percent)) / 100);
-  const mid = size / 2;
-  return (
-    <svg viewBox={`0 0 ${size} ${size}`} className="h-full w-full -rotate-90" aria-hidden="true">
-      <circle cx={mid} cy={mid} r={R} fill="none" stroke="rgba(0,0,0,0.07)" strokeWidth="8" />
-      <circle
-        cx={mid} cy={mid} r={R} fill="none"
-        stroke="var(--accent, #0071e3)" strokeWidth="8" strokeLinecap="round"
-        strokeDasharray={C} strokeDashoffset={offset}
-        style={{ transition: 'stroke-dashoffset 220ms cubic-bezier(0.28,0.11,0.32,1)' }}
-      />
-    </svg>
-  );
-}
-
 // Covers exactly one panel while that panel is drafting or generating images.
 // Drop it inside any container with `position: relative`; it fills the
 // container, matches its rounded corners, and disappears when the work ends.
@@ -104,7 +87,7 @@ export function PanelLoader({ scope, rounded = 'rounded-3xl' }: { scope: string;
     >
       <div className="mx-4 w-full max-w-xs p-4 text-center">
         <div className="relative mx-auto flex h-28 w-28 items-center justify-center">
-          <Ring percent={snap.percent} size={112} />
+          <MobiusProgress percent={snap.percent} size={112} showNumber={false} />
           <div className="absolute inset-0 flex items-center justify-center">
             <div
               className="font-display text-[30px] font-bold leading-none tabular-nums text-ink"
@@ -153,21 +136,17 @@ export function TopProgressBar() {
   const busy = snap.running.length > 0;
   if (!busy) return null;
   return (
-    <div className="pointer-events-none fixed inset-x-0 top-0 z-[90]" role="status" aria-live="polite">
-      <div className="h-0.5 w-full bg-transparent">
-        <div
-          className="h-0.5 bg-accent/70"
-          style={{ width: snap.percent + '%', transition: 'width 220ms cubic-bezier(0.28,0.11,0.32,1)' }}
-        />
-      </div>
-      <div className="flex justify-end px-3 pt-1">
-        <span
-          className="rounded-full bg-white/85 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-ink-muted shadow-soft ring-1 ring-line backdrop-blur"
-          data-testid="top-progress-percent"
-        >
-          {snap.percent}%
-        </span>
-      </div>
+    <div className="pointer-events-none fixed right-4 top-4 z-[90]" role="status" aria-live="polite">
+      {/* The 2px hairline and the 10px chip that used to live here are gone.
+          Both were present and neither was noticeable, which is the whole
+          reason this changed — one visible thing beats two invisible ones. */}
+      <span
+        className="flex items-center justify-center rounded-full bg-white/85 p-1 text-ink-muted shadow-soft ring-1 ring-line backdrop-blur"
+        data-testid="top-progress-percent"
+        data-percent={snap.percent}
+      >
+        <MobiusProgress percent={snap.percent} size={48} />
+      </span>
       <span className="sr-only">Update {snap.percent} percent complete</span>
     </div>
   );

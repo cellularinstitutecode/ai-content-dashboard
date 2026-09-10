@@ -316,8 +316,18 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [q, setQ] = useState('');
-  const [prepareUrl, setPrepareUrl] = useState<string | undefined>(undefined);
-  const [prepareRow, setPrepareRow] = useState<{ tab: string; row: number } | undefined>(undefined);
+  // No prepareUrl/prepareRow any more.
+  //
+  // They existed so the row button could load a link into the panel above and
+  // scroll there. Now the row prepares itself, nothing writes them, and keeping
+  // them would leave two pieces of permanently-undefined state feeding a panel.
+  //
+  // Removing sheetRow also closes a real bug rather than merely tidying: the
+  // panel held onto the row it was last given while letting the URL box be
+  // retyped, so preparing row 183 and then pasting row 181's link wrote 181's
+  // copy into 183. With no row supplied, /api/videos/prepare falls back to
+  // findRowByLink(), which matches on the parsed Drive file id — the link now
+  // always decides its own row.
 
   useEffect(() => {
     fetch('/api/sources?kind=status').then((r) => (r.ok ? r.json() : null)).then((j) => j && setStatus(j)).catch(() => undefined);
@@ -485,11 +495,13 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     setRunning(true);
     stopRef.current = false;
     setSummary(null);
-    // Up to where the news is. The single-row Prepare button has always done this
-    // (see prepare() below); the batch did not, and the batch bar sits about a thousand
-    // pixels down past a seven-hundred-pixel embedded sheet — so a person pressed it,
-    // saw nothing move, and concluded nothing had happened.
-    setTimeout(() => document.getElementById('video-prepare')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+    // No scrolling. This used to jump to the prepare panel because a person
+    // pressed the button, saw nothing move, and concluded nothing had happened
+    // — the panel sits above a seven-hundred-pixel embedded sheet, so from the
+    // gallery it is always off-screen. But moving the viewport was the wrong
+    // answer to "there is no feedback": every row below reports its own state
+    // as it goes, so the news is already where the person is looking, and
+    // being hauled to the top made working down a list impossible.
     setBatch(Object.fromEntries(work.map((v) => [rowKey(v), { state: 'queued' as const }])));
 
     // Settle the columns and the slots first, serially, server-side.
@@ -577,13 +589,23 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     const l = firstLink(v);
     return isDriveUrl(l) ? l : '';
   }
+  /**
+   * Prepare ONE row, where the person is already standing.
+   *
+   * This used to load the link into the panel at the top of the page and
+   * scroll there — so the button did not prepare anything, it navigated, and
+   * the viewport jumped a thousand pixels to a form the person then had to
+   * press again.
+   *
+   * Running it through prepareSelected instead reuses the whole proven path:
+   * the batch plan call that settles the AI columns and the posting slot, the
+   * per-row `working` state with its live note, the outcome, the tally and the
+   * single reload at the end. One row is a batch of one, and nothing about
+   * that path assumed otherwise.
+   */
   function prepare(v: VideoEntry) {
-    const link = prepareLink(v);
-    if (!link) return;
-    setPrepareUrl(link);
-    // Which row it came from, so the copy goes back where the link was.
-    setPrepareRow({ tab: v.tab, row: v.row });
-    setTimeout(() => document.getElementById('video-prepare')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+    if (!prepareLink(v)) return;
+    void prepareSelected([v]);
   }
 
   function handoff(text: string, media: string, mediaLabel: string) {
@@ -782,7 +804,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
 
         {tab === 'videos' && (
           <div style={{ display: 'grid', gap: 20 }}>
-            <VideoPrepare initialUrl={prepareUrl} sheetRow={prepareRow} batch={liveTally} batchReasons={liveReasons} batchRunning={running} />
+            <VideoPrepare batch={liveTally} batchReasons={liveReasons} batchRunning={running} />
             <section style={{ ...card, padding: 0, overflow: 'hidden' }}>
               {ids && <SheetFrame id={ids.videos} title="Distribución RRSS CHI" height={sheetHeight - 60} />}
             </section>
