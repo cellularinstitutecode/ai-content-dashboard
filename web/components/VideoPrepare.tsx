@@ -17,7 +17,7 @@ import { isDriveUrl } from '@/lib/drive-url';
 import { fitsNetwork } from '@/lib/video-row';
 import type { BatchReasons } from '@/lib/batch-plan';
 
-type Prepared = {
+export type Prepared = {
   draftId: string | null;
   title: string;
   videoId: string;
@@ -65,9 +65,22 @@ export type BatchTally = {
   pending: number;
 };
 
-export default function VideoPrepare({ initialUrl, blogId, sheetRow, batch, batchReasons, batchRunning }: {
+export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, batch, batchReasons, batchRunning }: {
   initialUrl?: string;
   blogId?: string;
+  /**
+   * A result produced somewhere ELSE — a row in the gallery below preparing
+   * itself — for this panel to display.
+   *
+   * The gallery's Prepare button used to load a link up here and scroll, so
+   * the panel did the work and showed the outcome. It now runs the work on the
+   * row instead, and without this the whole outcome (transcript, keywords,
+   * REF, sheet status, both drafts, the Metricool buttons) was replaced by a
+   * one-line label. The response shapes already agree — runPrepare returns
+   * exactly what this panel sets its own state from — so the result only ever
+   * needed handing over.
+   */
+  result?: Prepared | null;
   /** The row this was pressed from, so the copy goes back where the link was. */
   sheetRow?: { tab: string; row: number };
   /**
@@ -104,6 +117,24 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, batch, batc
   const [sent, setSent] = useState<string | null>(null);
 
   useEffect(() => { if (initialUrl) { setUrl(initialUrl); setPrepared(null); setSent(null); setErr(null); } }, [initialUrl]);
+
+  // Show a result prepared elsewhere — a row in the gallery below.
+  //
+  // Adjusted during render rather than in an effect. This is the pattern React
+  // documents for "reset state when a prop changes": an effect would render
+  // once with the previous result, then set state, then render again, and the
+  // person would see the last video's copy flash before this one's. Comparing
+  // against the result already shown makes it a single render, and it is why
+  // `shownResult` exists rather than a `useEffect` dependency array.
+  const [shownResult, setShownResult] = useState<Prepared | null>(null);
+  if (result && result !== shownResult) {
+    setShownResult(result);
+    setPrepared(result);
+    setLinkedin(result.linkedin || '');
+    setTiktok(result.tiktok || '');
+    setSent(null);
+    setErr(null);
+  }
 
   const parsed = useMemo(() => parseVideoUrl(url), [url]);
   // A Drive .mp4 is transcribed by speech-to-text; a YouTube link uses its own
