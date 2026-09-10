@@ -13,11 +13,12 @@
 // step from the Video Library, and Approve is still a person.
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
-import { isDriveUrl } from '@/lib/drive-url';
+import { isDriveUrl, parseDriveFileId } from '@/lib/drive-url';
 import { parseVideoUrl } from '@/lib/composer';
 import { prepareVideo } from '@/lib/video-prepare';
 import { completeRow, findRowByLink } from '@/lib/video-autopilot';
 import { recordRowFailure } from '@/lib/video-runs';
+import { cachedPublicCopy } from '@/lib/transcript-cache';
 import { GoogleSourceError, serviceAccountEmail } from '@/lib/google-sources';
 import { reportError } from '@/lib/report';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -185,9 +186,25 @@ export async function POST(req: NextRequest) {
     sheet = { error: 'That link is not in the sheet, so there is no row to write the copy into. Press Prepare on the row itself to have it written back.' };
   }
 
+  // The panel's own Send buttons attach the video, and the only URL a network
+  // can actually open is the world-readable copy completeRow makes in Drive —
+  // the source file is private. It is cached per Drive file id, so reading it
+  // back here costs a lookup and never a second copy. Null when the row was
+  // prepared with skipMetricool (no copy was made) or when the source is a
+  // YouTube link, which needs none.
+  let mediaUrl: string | null = null;
+  try {
+    const fileId = parseDriveFileId(url);
+    if (fileId) mediaUrl = (await cachedPublicCopy(fileId))?.url || null;
+  } catch (e) {
+    // Bookkeeping: without it the buttons send text, which is the old behaviour.
+    reportError('videos:prepare-media', e);
+  }
+
   return NextResponse.json({
     ok: true,
     sheet,
+    mediaUrl,
     draftId: out.draftId,
     title: out.title,
     videoId: out.videoId,

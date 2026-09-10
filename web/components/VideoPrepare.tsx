@@ -3,7 +3,8 @@
 // Video Library → publish-ready: paste (or pick) a link — a YouTube video, or
 // the Drive .mp4 the sheet holds — and one button runs transcript → keywords →
 // copy. What comes back is editable here, then sent to Metricool as drafts for
-// LinkedIn and TikTok. Approve on the dashboard is still what publishes.
+// YouTube, LinkedIn and TikTok — each carrying the video itself, not a link to
+// a private Drive file. Approve on the dashboard is still what publishes.
 //
 // The same work runs on its own when a new link appears in the sheet
 // (lib/video-autopilot.ts); this is the manual door onto it, for a video
@@ -29,11 +30,25 @@ export type Prepared = {
   compliance: { citation?: { status?: string; title?: string | null } } | null;
   linkedin: string;
   tiktok: string;
+  /**
+   * A world-readable copy of the video, made once per Drive file when the row
+   * was completed. It is what the Send buttons attach: the source file in the
+   * clinic's Drive is private, so a network handed that link gets nothing.
+   * Null for a YouTube source, or when the row was prepared without a hand-off.
+   */
+  mediaUrl?: string | null;
   /** What was written back to the sheet, when Prepare was pressed on a row. */
   sheet?: { wrote?: Record<string, boolean>; metricool?: { network: string; ok: boolean; message?: string }[]; status?: string } | { error: string } | null;
 };
 
 type ClipOption = { label: string; url: string };
+
+/** The three feeds a finished video goes to, matching lib/video-slot.ts's default. */
+type VideoNetwork = 'youtube' | 'linkedin' | 'tiktok';
+const VIDEO_NETWORKS: VideoNetwork[] = ['youtube', 'linkedin', 'tiktok'];
+const LABEL: Record<VideoNetwork, string> = { youtube: 'YouTube', linkedin: 'LinkedIn', tiktok: 'TikTok' };
+/** Feeds that will not take a text-only post. LinkedIn will, so it is not here. */
+const NEEDS_MEDIA = new Set<VideoNetwork>(['youtube', 'tiktok']);
 
 const card: React.CSSProperties = { background: '#fff', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 12, padding: 20 };
 const inputStyle: React.CSSProperties = { width: '100%', padding: 9, borderRadius: 8, background: '#f5f5f7', border: '1px solid rgba(0,0,0,0.1)', color: '#1d1d1f', boxSizing: 'border-box', fontSize: 13 };
@@ -184,22 +199,36 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, bat
     setPrepared(j); setLinkedin(j.linkedin || ''); setTiktok(j.tiktok || '');
   }
 
-  async function send(network: 'linkedin' | 'tiktok') {
-    const text = network === 'linkedin' ? linkedin : tiktok;
-    if (!text.trim()) { setErr('Write the ' + network + ' copy first.'); return; }
+  // The video goes with the copy, to every network.
+  //
+  // Only TikTok used to carry it, and only from a hand-cut clip — so a LinkedIn
+  // draft went out as text and YouTube had no button at all. The clip picker is
+  // now an OVERRIDE: pick one and that is what is sent; leave it empty and the
+  // public copy the row already made is sent instead.
+  const media = clipUrl || prepared?.mediaUrl || '';
+
+  async function send(network: VideoNetwork) {
+    // YouTube carries the long-form wording; TikTok the short caption.
+    const text = network === 'tiktok' ? tiktok : linkedin;
+    if (!text.trim()) { setErr('Write the ' + LABEL[network] + ' copy first.'); return; }
     // Metricool would refuse it anyway, and the REF and AVISO lines are at the
     // end — so this is shortened by a person, never trimmed by the app.
     const fit = fitsNetwork(network, text);
-    if (!fit.ok) { setErr('That copy is ' + fit.length + ' characters and ' + network + ' accepts ' + fit.limit + '. Shorten it first.'); return; }
-    if (network === 'tiktok' && !clipUrl) { setErr('TikTok needs a vertical clip — pick one, or cut clips first under Draft → Long-form to Shorts.'); return; }
+    if (!fit.ok) { setErr('That copy is ' + fit.length + ' characters and ' + LABEL[network] + ' accepts ' + fit.limit + '. Shorten it first.'); return; }
+    // A video feed with no video is a draft that fails at Metricool rather than
+    // here, which is a worse place to find out.
+    if (NEEDS_MEDIA.has(network) && !media) {
+      setErr(LABEL[network] + ' needs the video. Prepare the row first so the shareable copy is made, or pick a vertical clip below.');
+      return;
+    }
     setBusy('send'); setErr(null);
     try {
       const r = await fetch('/api/metricool/schedule', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ network, text, publishAt: when, blogId, mediaUrl: network === 'tiktok' ? clipUrl : undefined, draftId: prepared?.draftId || undefined }),
+        body: JSON.stringify({ network, text, publishAt: when, blogId, mediaUrl: media || undefined, draftId: prepared?.draftId || undefined }),
       });
       if (!r.ok) { setErr(await friendlyErrorFromResponse(r, 'Metricool did not accept that post.')); return; }
-      setSent((s) => (s ? s + ' · ' : '') + (network === 'linkedin' ? 'LinkedIn' : 'TikTok') + ' saved as a draft in your queue — press Approve there to publish.');
+      setSent((s) => (s ? s + ' · ' : '') + LABEL[network] + ' saved as a draft in your queue — press Approve there to publish.');
     } catch {
       setErr('We could not reach Metricool just now.');
     } finally {
@@ -211,7 +240,7 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, bat
 
   return (
     <section style={card} id="video-prepare">
-      <h2 style={{ margin: 0, fontSize: 15 }}>Prepare a video for LinkedIn and TikTok</h2>
+      <h2 style={{ margin: 0, fontSize: 15 }}>Prepare a video for YouTube, LinkedIn and TikTok</h2>
       {/*
         This used to end "…and lets you edit before anything reaches Metricool", which is
         not what happens. A link that matches a row in the sheet — which a pasted one now
@@ -311,7 +340,7 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, bat
             <label style={{ fontSize: 12 }}>When (clinic time)
               <input type="datetime-local" style={{ ...inputStyle, marginTop: 6 }} value={when} onChange={(e) => setWhen(e.target.value)} />
             </label>
-            <label style={{ fontSize: 12 }}>Vertical clip for TikTok
+            <label style={{ fontSize: 12 }}>Vertical clip (optional — overrides the video)
               <select style={{ ...inputStyle, marginTop: 6 }} value={clipUrl} onChange={(e) => setClipUrl(e.target.value)}>
                 <option value="">{clips.length ? 'Pick a clip…' : 'No clips yet — cut some under Draft → Long-form to Shorts'}</option>
                 {clips.map((c) => <option key={c.url} value={c.url}>{c.label}</option>)}
@@ -319,12 +348,27 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, bat
             </label>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <button type="button" style={btn} disabled={busy === 'send'} onClick={() => void send('linkedin')}>Send LinkedIn to Metricool for review</button>
-            <button type="button" style={btn} disabled={busy === 'send' || !clipUrl} title={clipUrl ? undefined : 'Pick a vertical clip first'} onClick={() => void send('tiktok')}>Send TikTok to Metricool for review</button>
+            {VIDEO_NETWORKS.map((n) => {
+              const blocked = NEEDS_MEDIA.has(n) && !media;
+              return (
+                <button
+                  key={n}
+                  type="button"
+                  style={btn}
+                  disabled={busy === 'send' || blocked}
+                  title={blocked ? 'Prepare the row first, or pick a vertical clip — ' + LABEL[n] + ' needs the video' : undefined}
+                  onClick={() => void send(n)}
+                >
+                  Send {LABEL[n]} to Metricool for review
+                </button>
+              );
+            })}
             <a href="/draft#section-repurpose" style={{ ...ghost, textDecoration: 'none' }}>Cut clips from this video ↗</a>
           </div>
           {sent && <div role="status" style={{ fontSize: 12, color: '#1f6b3a' }}>{sent}</div>}
-          <p style={{ fontSize: 11, opacity: .6, margin: 0 }}>Both land as drafts in your publishing queue. Nothing publishes until you press Approve. The copy is also saved under Recent Drafts.</p>
+          <p style={{ fontSize: 11, opacity: .6, margin: 0 }}>
+            All three land as drafts in your publishing queue, each carrying the video{media ? '' : ' once the row has been prepared'}. Nothing publishes until you press Approve. The copy is also saved under Recent Drafts.
+          </p>
         </div>
       )}
     </section>

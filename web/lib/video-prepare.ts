@@ -472,7 +472,15 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     // neither. The same post, the same claims, the same clinic: it gets the same
     // two lines, reusing the citation already verified against Crossref rather
     // than asking for a second one that would need verifying again.
-    linkedin = String(pack.linkedin || '').trim() + '\n\nWatch: ' + url;
+    // "Watch: <url>" only when the link is one a reader can actually open.
+    //
+    // It was appended unconditionally, and for a Drive file that publishes a
+    // private URL to a public audience: the video is not shared with them, so
+    // the line is at best noise and at worst an invitation to a permission
+    // wall. The video itself is attached to the post now. A YouTube link is a
+    // different thing — public, and worth having.
+    const watchable = /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(url);
+    linkedin = String(pack.linkedin || '').trim() + (watchable ? '\n\nWatch: ' + url : '');
     if (ref && !checkCompliance(linkedin).ref) linkedin += '\n\nREF: ' + ref;
     linkedin = composeCaption(linkedin, aviso);
 

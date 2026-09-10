@@ -416,6 +416,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
               networks: rowNetworks,
               videoLink,
               title: prepared.title,
+              format: pick(rec, 'formato', 'format'),
             });
 
         // ESTADO IA last, once both the keyword coverage and the hand-off are
@@ -589,6 +590,7 @@ export async function completeRow(opts: {
     networks: rowNetworks,
     videoLink: opts.videoLink,
     title: opts.prepared.title,
+    format: pick(found.rec, 'formato', 'format'),
     publicationDate: opts.publicationDate,
   });
 
@@ -664,14 +666,21 @@ export async function handOffToMetricool(args: {
   networks: string[];
   videoLink: string;
   title: string;
+  /** The sheet's FORMATO cell, so a landscape video is kept off a vertical feed. */
+  format?: string | null;
   /** A slot already reserved for this row by a batch; overrides the local search. */
   publicationDate?: string;
 }): Promise<PublishOutcome[]> {
-  const { userId, prepared, networks, videoLink, title } = args;
+  const { userId, prepared, networks, videoLink, title, format } = args;
 
-  // Is a video needed at all? Only pay for the copy if some network wants one.
+  // Make the copy whenever any network is going out and there is a file.
+  //
+  // This used to ask whether some network REQUIRED a video, which quietly meant
+  // "not for LinkedIn" — so a LinkedIn post went out as text ending in a Drive
+  // link that is not public and most readers cannot open. Every network that
+  // can carry the video now does.
   const fileId = parseDriveFileId(videoLink);
-  const wantsVideo = networksFor(networks, true).some((n) => NEEDS_VIDEO.has(n));
+  const wantsVideo = networksFor(networks, true, format).length > 0;
   let mediaUrl: string | null = null;
   let mediaFileId: string | null = null;
   if (wantsVideo && fileId) {
@@ -697,7 +706,7 @@ export async function handOffToMetricool(args: {
     }
   }
 
-  const chosen = networksFor(networks, Boolean(mediaUrl));
+  const chosen = networksFor(networks, Boolean(mediaUrl), format);
   if (!chosen.length) return [];
 
   const now = new Date();
@@ -755,10 +764,13 @@ export async function handOffToMetricool(args: {
       network,
       text,
       publicationDate: slot.toISOString(),
-      mediaUrl: NEEDS_VIDEO.has(network) ? mediaUrl : null,
+      // Every network, not only the ones that cannot post without it. Whether a
+      // network REQUIRES a video and whether it should CARRY one are different
+      // questions, and NEEDS_VIDEO was being asked both.
+      mediaUrl,
       // Recorded per post, because ONE copy backs every network of a run: deleting the
       // file when the first of them is deleted would break the rest.
-      mediaFileId: NEEDS_VIDEO.has(network) ? mediaFileId : null,
+      mediaFileId,
       draftId: prepared.draftId,
     }));
   }
