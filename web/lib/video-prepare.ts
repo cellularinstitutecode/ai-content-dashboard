@@ -20,6 +20,7 @@ import { avisoNumberFor, checkCompliance } from '@/lib/compliance';
 import { resolveTranscript, type TranscriptOrigin } from '@/lib/video-transcript';
 import { keywordLineFrom } from '@/lib/video-row';
 import { composeCaption, forbiddenNames, houseStyleHint, keywordGrounding, namesLeaked, topicFromTranscript, transcriptExcerpt, videoSubject } from '@/lib/video-copy';
+import { draftDefect, type DraftDefect } from '@/lib/draft-defect';
 import { canWriteCopy, remainingMs } from '@/lib/prepare-budget';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
@@ -121,6 +122,16 @@ export type PrepareInput = {
  * video is not the failure mode this exists for.
  */
 const GROUNDING_FLOOR = 0.5;
+
+/**
+ * How many drafts one Prepare may ask for.
+ *
+ * Two, because generateContentPack already spends up to two model calls of its
+ * own — one retry on malformed JSON, one regeneration when Crossref does not
+ * know the DOI — and an outer loop stacks on top of those. Four calls to write
+ * one caption is where "ask again" stops being cheaper than "tell somebody".
+ */
+const MAX_DRAFTS = 2;
 
 /**
  * What to tell somebody after a refusal that a re-run might fix.
@@ -295,87 +306,134 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     }
   }
 
-  let pack: ContentPack;
-  let semrush: SemrushStamp | null = brief.stamp;
-  try {
-    const out = await generateContentPack({
-      topic,
-      keywordHint: brief.hint ?? '',
-      contentType: 'social',
-      styleHint: houseStyleHint(),
-      channels: ['linkedin', 'instagram'],
-      brand,
-      audience: brand?.audience,
-      tone: 'clear, warm, credible',
-    });
-    pack = out.pack;
-  } catch (e) {
-    reportError('videos:prepare-generate', e);
-    return { ok: false, status: 502, error: 'generation_failed', message: 'The writer did not answer just now. Try again in a moment.', needsPaste: false, title };
-  }
-
   // The Instagram-style caption (short, hashtags, REF + AVISO) is the TikTok
   // caption; LinkedIn gets the longer, insight-led post plus the video link.
   const aviso = avisoNumberFor(brand?.aviso_publicidad);
 
-  // Assembled, not trusted where the writer left it. In production the model
-  // produced "AVISO DE PUBLICIDAD COFEPRIS 2425N2SSA01827" — no colon, an
-  // extra word, and a permit number it had invented — which the matcher in
-  // lib/compliance.ts did not recognise, so the real notice was appended
-  // underneath and the post went out carrying two permit numbers, one
-  // fictional, on a medical advertisement. composeCaption strips every notice
-  // and writes exactly one, and puts the hashtags last as the clinic's own
-  // captions always have.
-  const tiktok = composeCaption(String(pack.instagram || ''), aviso);
+  let semrush: SemrushStamp | null = brief.stamp;
+  let pack: ContentPack | null = null;
+  let tiktok = '';
+  let linkedin = '';
+  let ref = '';
+  let defect: DraftDefect | null = null;
+  const banned = forbiddenNames(title, input.creator);
 
-  // The citation the compliance pass verified, taken from whichever variant
-  // the writer put it on.
-  const ref = checkCompliance(tiktok).ref || checkCompliance(String(pack.facebook || '')).ref || '';
-
-  // No citation anywhere, on a post advertising a clinic's therapies.
+  // Ask again rather than refuse.
   //
-  // This used to pass in silence: the back-fill below is guarded on `ref`, so an empty
-  // one simply skipped it and LinkedIn and TikTok went out carrying an AVISO and no
-  // study at all — the one combination that looks compliant and is not.
-  if (!ref) {
+  // This block used to run exactly once, and a single unusable draft ended the
+  // video: no REF line, or the uploader's name in the copy. Neither is a fact
+  // about the video — the prompt is identical either way, the temperature is
+  // 0.4, and both refusals are classified TERMINAL, so nothing ever came back
+  // to that row. A person had to notice.
+  //
+  // The transcript is banked by the time we get here, so a second draft costs
+  // one model call rather than another download and transcription. Two
+  // attempts, not more: generateContentPack already spends up to two calls of
+  // its own (the malformed-JSON retry and the Crossref regeneration), and an
+  // unbounded loop here stacks on top of those.
+  for (let attempt = 0; attempt < MAX_DRAFTS; attempt++) {
+    try {
+      const out = await generateContentPack({
+        // The corrective rides on the topic, which is how generateContentPack's
+        // own regeneration passes one (lib/ai.ts `call(extra)`). No new
+        // parameter for the same idea.
+        topic: defect ? topic + '\n\n' + defect.corrective : topic,
+        keywordHint: brief.hint ?? '',
+        contentType: 'social',
+        styleHint: houseStyleHint(),
+        channels: ['linkedin', 'instagram'],
+        brand,
+        audience: brand?.audience,
+        tone: 'clear, warm, credible',
+      });
+      pack = out.pack;
+    } catch (e) {
+      // A throw on the SECOND attempt is not a failure to generate — a draft
+      // already exists, it was simply defective. Stop asking and refuse below
+      // with what is actually wrong with it, rather than reporting "the writer
+      // did not answer" about a writer that answered once already.
+      if (pack) break;
+      reportError('videos:prepare-generate', e);
+      return { ok: false, status: 502, error: 'generation_failed', message: 'The writer did not answer just now. Try again in a moment.', needsPaste: false, title };
+    }
+
+    // Assembled, not trusted where the writer left it. In production the model
+    // produced "AVISO DE PUBLICIDAD COFEPRIS 2425N2SSA01827" — no colon, an
+    // extra word, and a permit number it had invented — which the matcher in
+    // lib/compliance.ts did not recognise, so the real notice was appended
+    // underneath and the post went out carrying two permit numbers, one
+    // fictional, on a medical advertisement. composeCaption strips every notice
+    // and writes exactly one, and puts the hashtags last as the clinic's own
+    // captions always have.
+    tiktok = composeCaption(String(pack.instagram || ''), aviso);
+
+    // The citation the compliance pass verified, taken from whichever variant
+    // the writer put it on.
+    ref = checkCompliance(tiktok).ref || checkCompliance(String(pack.facebook || '')).ref || '';
+
+    // LinkedIn carries the notice and the citation too.
+    //
+    // lib/compliance.ts scopes the advertising rule to Instagram and Facebook,
+    // so the writer is only ever asked for a REF line on those two and the AVISO
+    // is only stamped there — which left the LinkedIn post going out with
+    // neither. The same post, the same claims, the same clinic: it gets the same
+    // two lines, reusing the citation already verified against Crossref rather
+    // than asking for a second one that would need verifying again.
+    linkedin = String(pack.linkedin || '').trim() + '\n\nWatch: ' + url;
+    if (ref && !checkCompliance(linkedin).ref) linkedin += '\n\nREF: ' + ref;
+    linkedin = composeCaption(linkedin, aviso);
+
+    // Did a name survive anyway?
+    //
+    // The prompt forbids it and the file name is no longer handed over, but a clinic
+    // publishing a testimonial from a patient who does not exist is not something to leave
+    // resting on the model doing as it is told. This is the check that does not.
+    const leaked = Array.from(new Set([...namesLeaked(tiktok, banned), ...namesLeaked(linkedin, banned)]));
+
+    defect = draftDefect(ref, leaked);
+    if (!defect) break;
+
+    // Worth another draft? Only with attempts left AND room to finish one.
+    // Starting a generation the clock cannot cover is how a banked transcript
+    // and a killed request end up telling somebody nothing at all.
+    if (attempt + 1 >= MAX_DRAFTS) break;
+    if (budgetMs > 0 && !canWriteCopy(remainingMs(startedAt, budgetMs, Date.now()))) break;
+  }
+
+  // Unreachable: the first attempt either sets `pack` or returns above. Kept
+  // so the compiler can narrow, and so that if the loop above is ever changed
+  // into one that can fall through, it says so instead of publishing nothing.
+  if (!pack) {
+    reportError('videos:prepare-no-pack', new Error('generation loop produced no draft'), { title });
+    return { ok: false, status: 502, error: 'generation_failed', message: 'The writer did not answer just now. Try again in a moment.', needsPaste: false, title };
+  }
+
+  // Both drafts carried the same defect. Now it is worth refusing.
+  if (defect) {
+    if (defect.kind === 'named_a_person') {
+      const leaked = Array.from(new Set([...namesLeaked(tiktok, banned), ...namesLeaked(linkedin, banned)]));
+      reportError('videos:name-leak', new Error('generated copy named ' + leaked.join(', ')), { title });
+      return {
+        ok: false,
+        status: 422,
+        error: 'named_a_person',
+        message: 'The copy named ' + leaked.join(' and ') +
+          ' — that is the file\u2019s owner, not somebody in the video, and a clinic must not appear to quote a patient who did not speak. ' +
+          retryAdvice(t.banked),
+        needsPaste: false,
+        title,
+      };
+    }
+    // No citation anywhere, on a post advertising a clinic's therapies.
+    //
+    // This used to pass in silence: the back-fill above is guarded on `ref`, so an empty
+    // one simply skipped it and LinkedIn and TikTok went out carrying an AVISO and no
+    // study at all — the one combination that looks compliant and is not.
     return {
       ok: false,
       status: 422,
       error: 'no_citation',
       message: 'The writer produced no verifiable citation for this one — a REF line with a real DOI is required before it can be advertised. ' +
-        retryAdvice(t.banked),
-      needsPaste: false,
-      title,
-    };
-  }
-
-  // LinkedIn carries the notice and the citation too.
-  //
-  // lib/compliance.ts scopes the advertising rule to Instagram and Facebook,
-  // so the writer is only ever asked for a REF line on those two and the AVISO
-  // is only stamped there — which left the LinkedIn post going out with
-  // neither. The same post, the same claims, the same clinic: it gets the same
-  // two lines, reusing the citation already verified against Crossref rather
-  // than asking for a second one that would need verifying again.
-  let linkedin = String(pack.linkedin || '').trim() + '\n\nWatch: ' + url;
-  if (ref && !checkCompliance(linkedin).ref) linkedin += '\n\nREF: ' + ref;
-  linkedin = composeCaption(linkedin, aviso);
-
-  // Did a name survive anyway?
-  //
-  // The prompt forbids it and the file name is no longer handed over, but a clinic
-  // publishing a testimonial from a patient who does not exist is not something to leave
-  // resting on the model doing as it is told. This is the check that does not.
-  const banned = forbiddenNames(title, input.creator);
-  const leaked = Array.from(new Set([...namesLeaked(tiktok, banned), ...namesLeaked(linkedin, banned)]));
-  if (leaked.length) {
-    reportError('videos:name-leak', new Error('generated copy named ' + leaked.join(', ')), { title });
-    return {
-      ok: false,
-      status: 422,
-      error: 'named_a_person',
-      message: 'The copy named ' + leaked.join(' and ') +
-        ' — that is the file\u2019s owner, not somebody in the video, and a clinic must not appear to quote a patient who did not speak. ' +
         retryAdvice(t.banked),
       needsPaste: false,
       title,
