@@ -17,6 +17,7 @@ import 'server-only';
 
 import { complianceGate } from '@/lib/compliance-gate';
 import { metricoolConfigured, metricoolSchedulePost, readPostId, type Provider } from '@/lib/metricool';
+import { youtubeDataFor } from '@/lib/youtube-meta';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
@@ -36,6 +37,12 @@ export type PublishOne = {
    */
   mediaFileId?: string | null;
   draftId?: string | null;
+  /** The video's title, for YouTube's own title field. */
+  title?: string | null;
+  /** The sheet's FORMATO cell, so a vertical clip is uploaded as a Short. */
+  format?: string | null;
+  /** The sheet's YOUTUBE cell — sometimes the word "Unlisted" rather than a link. */
+  sheetYoutube?: string | null;
 };
 
 export type PublishOutcome = {
@@ -66,6 +73,18 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
       providers: [network as Provider],
       publicationDate: input.publicationDate,
       media: input.mediaUrl ? [{ url: input.mediaUrl }] : [],
+      // YouTube refuses to save a draft with no title and no stated audience,
+      // so a YouTube post that omits these is not a draft anybody can approve
+      // — it is four fields of homework left on someone's desk.
+      youtubeData: network === 'youtube'
+        ? youtubeDataFor({
+            title: input.title,
+            body: input.text,
+            format: input.format,
+            sheetYoutube: input.sheetYoutube,
+            defaultPrivacy: process.env.YOUTUBE_DEFAULT_PRIVACY,
+          })
+        : null,
     }, 'review');
     const metricoolPostId = readPostId(created);
 

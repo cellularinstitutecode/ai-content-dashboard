@@ -417,6 +417,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
               videoLink,
               title: prepared.title,
               format: pick(rec, 'formato', 'format'),
+              sheetYoutube: pick(rec, 'youtube'),
             });
 
         // ESTADO IA last, once both the keyword coverage and the hand-off are
@@ -591,6 +592,7 @@ export async function completeRow(opts: {
     videoLink: opts.videoLink,
     title: opts.prepared.title,
     format: pick(found.rec, 'formato', 'format'),
+    sheetYoutube: pick(found.rec, 'youtube'),
     publicationDate: opts.publicationDate,
   });
 
@@ -668,10 +670,12 @@ export async function handOffToMetricool(args: {
   title: string;
   /** The sheet's FORMATO cell, so a landscape video is kept off a vertical feed. */
   format?: string | null;
+  /** The sheet's YOUTUBE cell. Sometimes a link, sometimes the word "Unlisted". */
+  sheetYoutube?: string | null;
   /** A slot already reserved for this row by a batch; overrides the local search. */
   publicationDate?: string;
 }): Promise<PublishOutcome[]> {
-  const { userId, prepared, networks, videoLink, title, format } = args;
+  const { userId, prepared, networks, videoLink, title, format, sheetYoutube } = args;
 
   // Make the copy whenever any network is going out and there is a file.
   //
@@ -772,6 +776,11 @@ export async function handOffToMetricool(args: {
       // file when the first of them is deleted would break the rest.
       mediaFileId,
       draftId: prepared.draftId,
+      // YouTube's own fields. Everywhere else these are meaningless; there, a
+      // draft without them cannot be saved at all.
+      title,
+      format,
+      sheetYoutube,
     }));
   }
   return out;

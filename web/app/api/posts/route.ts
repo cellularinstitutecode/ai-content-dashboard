@@ -3,7 +3,9 @@ import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
 import { recordApproval } from '@/lib/approval-log';
 import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
-import { metricoolDeletePost, metricoolReplacePost, type Provider } from '@/lib/metricool';
+import { metricoolDeletePost, metricoolReplacePost, normalizeMediaList, type Provider } from '@/lib/metricool';
+import { youtubeDataFor } from '@/lib/youtube-meta';
+import { cachedPublicCopy } from '@/lib/transcript-cache';
 import { reportError } from '@/lib/report';
 import { deleteDriveFile } from '@/lib/drive';
 import { forgetPublicCopy } from '@/lib/transcript-cache';
@@ -88,22 +90,46 @@ export async function PATCH(req: Request) {
 
   const { data: existing, error: findErr } = await sb
     .from('posts')
-    .select('id, metricool_post_id, text, providers, publication_date, status, draft_id')
+    .select('id, metricool_post_id, text, providers, publication_date, status, draft_id, media_drive_file_id')
     .eq('id', id)
     .eq('user_id', user.id)
     .maybeSingle();
   if (findErr) return NextResponse.json({ error: findErr.message }, { status: 500 });
   if (!existing) return NextResponse.json({ error: 'post not found' }, { status: 404 });
 
-  // The picture travels with every replace. It lives on the linked draft.
-  let media: { url: string }[] = [];
+  // The media travels with every replace, because a replace REPLACES: whatever
+  // is not sent is removed from the post.
+  //
+  // Only the linked draft's IMAGE was ever looked up here, so approving a video
+  // post stripped the video — the one thing the post existed to carry. The
+  // video's world-readable copy is recoverable from the row's own
+  // media_drive_file_id, which video-publish writes for exactly this reason.
+  let media: string[] = [];
   if (existing.draft_id) {
     const { data: d } = await sb
       .from('drafts').select('pack').eq('id', existing.draft_id).eq('user_id', user.id).maybeSingle();
     const url = (d as any)?.pack?._image?.url;
     const textInImage = (d as any)?.pack?._image?.verification?.textDetected === true;
-    if (typeof url === 'string' && url && !textInImage) media = [{ url }];
+    if (typeof url === 'string' && url && !textInImage) media = [url];
   }
+  if (!media.length && existing.media_drive_file_id) {
+    try {
+      const copy = await cachedPublicCopy(String(existing.media_drive_file_id));
+      if (copy?.url) media = [copy.url];
+    } catch (e) {
+      // Losing the video on an approve is bad; failing the approve is worse.
+      reportError('posts:media-lookup', e);
+    }
+  }
+  // Metricool discards a media URL it has not normalised, silently and with a
+  // 200 — so a list that skipped this step is the same as no list at all.
+  if (media.length) media = await normalizeMediaList(media);
+
+  // YouTube's own fields have to be re-sent for the same reason the media does.
+  const isYoutube = ((existing.providers || []) as string[]).some((p) => String(p).toLowerCase() === 'youtube');
+  const youtubeData = isYoutube
+    ? youtubeDataFor({ body: String(existing.text || ''), defaultPrivacy: process.env.YOUTUBE_DEFAULT_PRIVACY })
+    : null;
 
   // What the post will look like after this call.
   let nextDate: string = String(existing.publication_date || '');
@@ -151,6 +177,7 @@ export async function PATCH(req: Request) {
         publicationDate: nextDate,
         media,
         mode,
+        youtubeData,
       });
     } catch (e) {
       reportError(action === 'reschedule' ? 'posts:metricool-reschedule' : 'posts:metricool-approve', e);
@@ -190,7 +217,7 @@ export async function PATCH(req: Request) {
       publishDate: nextDate,
       networks: (existing.providers || []) as string[],
       caption: String(existing.text || ''),
-      mediaUrl: media[0]?.url || '',
+      mediaUrl: media[0] || '',
       source: action === 'publish_now' ? 'Dashboard · publish now' : 'Dashboard · approve',
       postId: id,
     });

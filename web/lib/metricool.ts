@@ -4,6 +4,7 @@
 
 import { formatForMetricool, SCHEDULE_TZ } from '@/lib/timezone';
 import { modeFlags, replacePostBody, type PostMode, type ReplacePostInput } from '@/lib/metricool-post';
+import type { YoutubeData } from '@/lib/youtube-meta';
 export { modeFlags, replacePostBody, type PostMode, type ReplacePostInput };
 
 export type Provider =
@@ -19,6 +20,8 @@ export interface SchedulePostInput {
   publicationDate: string;
   firstCommentText?: string;
   media?: { url: string }[];
+  /** YouTube's own fields — title, Short-or-video, visibility, audience. */
+  youtubeData?: YoutubeData | null;
 }
 
 // Overridable so the end-to-end harness can point the client at a local mock.
@@ -78,6 +81,70 @@ async function metricoolFetch(
   }
 }
 
+/**
+ * Hand Metricool a media URL it will actually keep.
+ *
+ * THIS STEP WAS MISSING ENTIRELY, and it is why no post this app has ever sent
+ * arrived with its picture or its video. Metricool does not attach a raw URL
+ * from the `media` array: the URL has to be normalised first — the file is
+ * pulled onto Metricool's own storage and a usable reference comes back — and
+ * a post whose media was not normalised is, in their own words, "scheduled
+ * without media". Silently. With a 200. So every image and every video we sent
+ * was dropped on the floor, and the first anyone knew of it was Metricool's
+ * own editor refusing to save the draft with "Add at least 1 video."
+ *
+ * The response shape is not pinned down in the public documentation, so this
+ * accepts the handful it could reasonably be — a bare string, {url}, {data:{url}},
+ * {mediaId}, {id} — and reports anything it cannot read rather than guessing.
+ * A shape we do not recognise is logged WITH its body, so the first real run
+ * says what the contract actually is instead of failing the same way twice.
+ *
+ * Returns the URL to put in the post. Never throws: losing the picture is bad,
+ * losing the post is worse — the caller sends what it has and the draft still
+ * lands for a person to look at.
+ */
+export async function normalizeMedia(rawUrl: string): Promise<string> {
+  const url = String(rawUrl || '').trim();
+  if (!url) return '';
+  try {
+    const res = await metricoolFetch('/actions/normalize/image/url?url=' + encodeURIComponent(url));
+    if (!res.ok) {
+      console.warn('metricool:normalize-media non-ok', res.status);
+      return url;
+    }
+    const raw = await res.text();
+    let data: unknown = null;
+    try { data = JSON.parse(raw); } catch { data = raw; }
+
+    // A bare URL, quoted or not.
+    if (typeof data === 'string') {
+      const t = data.trim().replace(/^"|"$/g, '');
+      return /^https?:\/\//i.test(t) ? t : url;
+    }
+    const obj = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
+    const inner = (obj.data && typeof obj.data === 'object' ? obj.data : obj) as Record<string, unknown>;
+    for (const key of ['url', 'normalizedUrl', 'mediaUrl', 'mediaId', 'id']) {
+      const v = inner[key];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+    console.warn('metricool:normalize-media unrecognised response', raw.slice(0, 300));
+    return url;
+  } catch (e) {
+    console.warn('metricool:normalize-media failed', e instanceof Error ? e.message : String(e));
+    return url;
+  }
+}
+
+/** Normalise every attachment, in order, dropping the ones that come back empty. */
+export async function normalizeMediaList(urls: readonly string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const u of urls) {
+    const n = await normalizeMedia(u);
+    if (n) out.push(n);
+  }
+  return out;
+}
+
 // Metricool wants a wall-clock "YYYY-MM-DDTHH:MM:SS" plus an IANA timezone —
 // it rejects/misreads full ISO strings with 'Z' or milliseconds. Convert the
 // UTC instant we store internally into the clinic timezone's wall clock so the
@@ -88,6 +155,11 @@ function wallClock(publicationDate: string): string {
 }
 
 export async function metricoolSchedulePost(input: SchedulePostInput, mode: PostMode = 'review') {
+  // Normalised before the post is built, never after: an un-normalised URL is
+  // accepted and then discarded, so "media sent" and "media attached" are two
+  // different things and only this call makes them the same one.
+  const media = await normalizeMediaList((input.media || []).map((m) => m.url).filter(Boolean));
+
   const body = {
     text: input.text,
     // Metricool's scheduler expects provider OBJECTS ({ network }), not bare
@@ -96,7 +168,12 @@ export async function metricoolSchedulePost(input: SchedulePostInput, mode: Post
     providers: input.providers.map((network) => ({ network })),
     publicationDate: { dateTime: wallClock(input.publicationDate), timezone: SCHEDULE_TZ },
     firstCommentText: input.firstCommentText,
-    media: input.media || [],
+    // An array of URLs. This was an array of {url} OBJECTS, which is the shape
+    // Metricool ANSWERS with, not the one it accepts.
+    media,
+    // Only sent for a YouTube post, and only when there is a real title:
+    // Metricool refuses to save a YouTube draft without one.
+    ...(input.youtubeData && input.providers.includes('youtube') ? { youtubeData: input.youtubeData } : {}),
     // Publishing is a human decision. The default lands the post in Metricool's
     // review queue; only an explicit `mode: 'scheduled'` — which every caller
     // reaches through a person pressing Approve in the dashboard — puts it in
@@ -168,7 +245,7 @@ export async function metricoolReplacePost(postId: string, post: ReplacePostInpu
 export async function metricoolUpdatePostDate(
   postId: string,
   publicationDate: string,
-  post: { text: string; providers: Provider[]; media?: { url: string }[]; mode?: PostMode },
+  post: { text: string; providers: Provider[]; media?: string[]; mode?: PostMode },
 ): Promise<void> {
   await metricoolReplacePost(postId, {
     text: post.text,
