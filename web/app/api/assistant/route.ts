@@ -20,7 +20,7 @@ import { parseVideoUrl } from "@/lib/composer";
 import { boundToolMessages } from "@/lib/tool-transcript";
 import { normalizePublishAt, METRICOOL_TIMEZONE } from "@/lib/metricool-time";
 import { greetingFor, plainReason, renderSnapshot, situationOf, summarise } from "@/lib/assistant-context";
-import { listRuns, rearmRun } from "@/lib/video-runs";
+import { listRuns, rearmRun, recordRunFailure } from "@/lib/video-runs";
 import { prepareVideo } from "@/lib/video-prepare";
 import { completeRow } from "@/lib/video-autopilot";
 import { canWriteCopy } from "@/lib/prepare-budget";
@@ -446,6 +446,11 @@ async function retryVideos(
     });
 
     if (!prepared.ok) {
+      // Put the failure back. re-arming cleared it, and a retry that failed
+      // must not leave the row looking as though it had never been tried —
+      // that erases it from the situation block and buys the whole download
+      // again on the next sweep.
+      await recordRunFailure(userId, run.id, prepared.message, prepared.error, prepared.needsPaste);
       notes.push('"' + (run.video_title || "Untitled") + '" — ' + prepared.message);
       continue;
     }

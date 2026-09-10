@@ -16,16 +16,15 @@ import 'server-only';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
-/**
- * Every column, rather than a list.
- *
- * `last_error_code` and `revivals` arrived after the first version of this
- * table. Naming a column the database does not have refuses the WHOLE query,
- * and supabase-js RESOLVES a refused query — so a deployment that had not run
- * the migration would read "no rows" and the assistant would cheerfully report
- * an empty, healthy pipeline. Reading a column too many is harmless; reading
- * nothing and calling it good is not.
- */
+// Every read below selects '*' rather than a column list. `last_error_code`
+// and `revivals` arrived after the first version of this table, and naming a
+// column the database does not have refuses the WHOLE query — while
+// supabase-js RESOLVES a refused query. A deployment that had not run the
+// migration would therefore read "no rows" and the assistant would cheerfully
+// report an empty, healthy pipeline. Reading one column too many is harmless;
+// reading nothing and calling it good is not.
+
+/** How far back "recent" reaches for the first half of the merge below. */
 const RECENT_MS = 24 * 60 * 60 * 1000;
 
 /** The states that mean somebody or something still owes this row work. */
@@ -127,4 +126,37 @@ export async function rearmRun(userId: string, id: string): Promise<boolean> {
   const { error: retry } = await admin.from('video_runs').update(fallback).eq('user_id', userId).eq('id', id);
   if (retry) { reportError('video-runs:rearm', retry, { id }); return false; }
   return true;
+}
+
+/**
+ * Put the failure back after a retry that did not work.
+ *
+ * `rearmRun` clears `last_error` and the attempt count — that is its job. But
+ * a retry that then fails would leave the row looking brand new: the evidence
+ * erased, the assistant reporting nothing wrong, and the next sweep starting
+ * the whole download again as though it had never been tried. The clearing
+ * only stands if the retry succeeds.
+ */
+export async function recordRunFailure(
+  userId: string,
+  id: string,
+  message: string,
+  code: string,
+  needsPaste: boolean,
+): Promise<void> {
+  const admin = supabaseAdmin();
+  const patch: Record<string, unknown> = {
+    state: needsPaste ? 'needs_transcript' : 'failed',
+    attempts: 1,
+    last_error: message,
+    last_error_code: code,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await admin.from('video_runs').update(patch).eq('user_id', userId).eq('id', id);
+  if (!error) return;
+  const fallback = { ...patch };
+  delete fallback.last_error_code;
+  const { error: retry } = await admin.from('video_runs').update(fallback).eq('user_id', userId).eq('id', id);
+  if (retry) reportError('video-runs:record-failure', retry, { id });
 }
