@@ -339,8 +339,15 @@ export async function generateContentPack(
   try {
     pack = await call();
   } catch (e) {
-    // One retry: a malformed-JSON parse is often transient, so regenerate once.
-    if (e instanceof Error && /malformed JSON/i.test(e.message)) {
+    // One retry, for the two failures that are the model having a bad moment
+    // rather than anything being wrong with the request.
+    //
+    // This used to test for malformed JSON alone, which left the throw above —
+    // "AI returned no instagram or linkedin copy" — going straight out to the
+    // caller as a hard failure. That is the most obviously re-rollable outcome
+    // in this file: the request was fine, the model just returned an empty
+    // field, and asking once more almost always fills it.
+    if (e instanceof Error && /malformed JSON|returned no /i.test(e.message)) {
       pack = await call();
     } else {
       throw e;

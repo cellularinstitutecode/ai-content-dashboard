@@ -156,24 +156,33 @@ If you would rather add them yourself with different names, the reader matches
    Check that list before letting it write.
 
 The daily Vercel cron (`vercel.json`, 07:00 UTC) then picks up new rows on its
-own, one per run.
+own, up to five per run (`?max=N` raises it, ceiling ten).
 
-> **Plan note.** This deployment is on Vercel **Hobby**, which allows only
-> once-a-day cron jobs — a more frequent schedule is rejected at deploy time,
-> not silently ignored — and kills any function at 60 seconds. So the cron is
-> daily and each run does one video.
+> **Plan note.** This deployment is on Vercel **Hobby**.
 >
-> That makes the Apps Script trigger below the thing that actually keeps up:
-> it fires per edit, so every new link gets its own 60-second run. **Set it up
-> — on Hobby the cron alone is a backstop, not the mechanism.**
+> **Cron frequency: proven.** Hobby allows only once-a-day cron jobs, and a
+> more frequent schedule is rejected at deploy time rather than silently
+> ignored — the deployment failed with "Hobby accounts are limited to daily
+> cron jobs." So the cron is daily, at 07:00 UTC.
 >
-> On Pro, raise the cron to hourly and `maxVideos` past 1, and the cron alone
-> is enough.
+> **Function duration: was wrong here, now 300.** This note used to say Hobby
+> "kills any function at 60 seconds", and the routes were sized for that. Vercel
+> now documents Hobby functions running **Fluid compute** (the default) as
+> allowed up to 300 seconds, and `/api/videos/prepare` and this route both
+> declare 300 and deploy. If a long video is ever killed at about a minute
+> again, that is the signal that Fluid is off on this project — and the budgets
+> in `lib/prepare-budget.ts` and the routes must come back down with it, because
+> a budget larger than the real ceiling is worse than a small one: the
+> stop-and-bank check never fires and the request dies with nothing kept.
+>
+> That still makes the Apps Script trigger below the thing that keeps up: it
+> fires per edit, so every new link gets its own run within a minute. **Set it
+> up — the daily cron alone is a backstop, not the mechanism.**
 
 ### Clearing the backlog
 
-There are about 33 rows with a video and no copy. At one per daily run that is
-a month, so work them off directly instead — each call does one and returns:
+There are about 33 rows with a video and no copy. The daily run takes five, so
+work them off directly instead — each call takes another five and returns:
 
 ```
 for i in $(seq 1 33); do
