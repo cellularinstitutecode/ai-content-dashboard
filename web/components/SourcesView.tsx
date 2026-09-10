@@ -18,7 +18,7 @@ import type { Route } from 'next';
 import PageNav from '@/components/PageNav';
 import { useWorkspace } from '@/components/workspace';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
-import VideoPrepare from '@/components/VideoPrepare';
+import VideoPrepare, { type Prepared } from '@/components/VideoPrepare';
 import { runPrepare } from '@/lib/prepare-request';
 import { mapLimit } from '@/lib/map-limit';
 import { mayStartBatch, reasons, tally, type BatchReasons, type BatchState } from '@/lib/batch-plan';
@@ -316,6 +316,24 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [q, setQ] = useState('');
+  /**
+   * Every finished row's full result, and which one the panel is showing.
+   *
+   * runPrepare has always returned the whole response; prepareSelected read
+   * `sheet?.error` out of it and dropped the rest, so a row that prepared
+   * perfectly reported "✓ Written into the sheet" and threw away the
+   * transcript, the keyword line, the REF, the Metricool state and both
+   * drafts. Keeping it costs one assignment.
+   */
+  const [results, setResults] = useState<Record<string, Prepared>>({});
+  const [shown, setShown] = useState<string | null>(null);
+
+  /** Take the person to the panel — only ever because they asked, or because a run FINISHED. */
+  function showResult(key: string) {
+    setShown(key);
+    setTimeout(() => document.getElementById('video-prepare')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  }
+
   // No prepareUrl/prepareRow any more.
   //
   // They existed so the row button could load a link into the panel above and
@@ -557,11 +575,23 @@ export default function SourcesView({ kind }: { kind: Tab }) {
         : ((out.data as { sheet?: { error?: string } }).sheet?.error ? 'failed' : 'done');
       const note = !out.ok ? out.message : (out.data as { sheet?: { error?: string } }).sheet?.error;
       setBatch((b) => ({ ...b, [k]: note ? { state, note } : { state } }));
+      // The panel above can show all of this; keep it rather than reading one
+      // field and discarding the response.
+      if (out.ok) setResults((r) => ({ ...r, [k]: out.data as unknown as Prepared }));
       return state;
     });
 
     setRunning(false);
     setSummary(summarise(outcomes));
+
+    // One row, pressed deliberately: take them to the finished result.
+    //
+    // This is the scroll coming back, minus what was wrong with it. The old
+    // one fired the INSTANT the button was clicked and landed on an empty
+    // form that had to be pressed again. This one fires when the work is done
+    // and lands on the outcome. A batch never moves the page — each finished
+    // row offers its own link instead.
+    if (work.length === 1 && outcomes[0] === 'done') showResult(rowKey(work[0]));
     // Once, at the end. Reloading between videos would move the rows about
     // under the person watching them.
     await load('videos', true);
@@ -804,7 +834,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
 
         {tab === 'videos' && (
           <div style={{ display: 'grid', gap: 20 }}>
-            <VideoPrepare batch={liveTally} batchReasons={liveReasons} batchRunning={running} />
+            <VideoPrepare result={shown ? results[shown] ?? null : null} batch={liveTally} batchReasons={liveReasons} batchRunning={running} />
             <section style={{ ...card, padding: 0, overflow: 'hidden' }}>
               {ids && <SheetFrame id={ids.videos} title="Distribución RRSS CHI" height={sheetHeight - 60} />}
             </section>
@@ -970,6 +1000,20 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                                   <span style={{ fontSize: 11, whiteSpace: 'normal', color: BATCH_COLOUR[batch[v.tab + ':' + v.row].state] }}>
                                     {BATCH_LABEL[batch[v.tab + ':' + v.row].state]}
                                     {batch[v.tab + ':' + v.row].note ? ' — ' + batch[v.tab + ':' + v.row].note : ''}
+                                    {/* Stepping through a finished batch, one row at a time — the page
+                                        moves because the person asked it to, not on its own. */}
+                                    {results[v.tab + ':' + v.row] && (
+                                      <>
+                                        {' '}
+                                        <button
+                                          type="button"
+                                          onClick={() => showResult(v.tab + ':' + v.row)}
+                                          style={{ background: 'none', border: 'none', padding: 0, font: 'inherit', color: '#0071e3', cursor: 'pointer', textDecoration: 'underline' }}
+                                        >
+                                          See full result ↑
+                                        </button>
+                                      </>
+                                    )}
                                   </span>
                                 )}
                               </div>
