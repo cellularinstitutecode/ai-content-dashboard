@@ -46,3 +46,40 @@ test('both problems are corrected in one attempt, not traded for each other', ()
   assert.match(String(d?.corrective), /named a person/);
   assert.match(String(d?.corrective), /no REF line/);
 });
+
+test('a repeated opening asks for another draft but never refuses the video', () => {
+  const d = draftDefect('Smith 2020 doi:10/x', [], true);
+  assert.equal(d?.kind, 'repeats_opening');
+  // The whole point: one more attempt, and publish either way. A caption that
+  // opens like last week's is a matter of style, not a reason to hold a video.
+  assert.equal(d?.blocking, false);
+  assert.match(String(d?.corrective), /throw it away/i);
+});
+
+test('the opening corrective never quotes the sentence it is correcting', () => {
+  // Same lesson as nameCorrective: handing a model a sentence and saying "not
+  // that one" is how you get that one back with the nouns swapped — which is
+  // the exact failure being corrected.
+  const d = draftDefect('Smith 2020 doi:10/x', [], true);
+  assert.ok(!/safety in regenerative medicine/i.test(String(d?.corrective)));
+  assert.match(String(d?.corrective), /CONCRETE/);
+});
+
+test('a real defect alongside a repeated opening still blocks, and fixes both', () => {
+  const d = draftDefect('', [], true);
+  assert.equal(d?.kind, 'no_citation');
+  assert.equal(d?.blocking, true);
+  // Both correctives ride along, so one more attempt can fix both rather than
+  // trading one for the other.
+  assert.match(String(d?.corrective), /REF/);
+  assert.match(String(d?.corrective), /throw it away/i);
+
+  const named = draftDefect('Smith 2020 doi:10/x', ['Rodrigo'], true);
+  assert.equal(named?.kind, 'named_a_person');
+  assert.equal(named?.blocking, true);
+});
+
+test('a clean draft is still clean when nothing repeats', () => {
+  assert.equal(draftDefect('Smith 2020 doi:10/x', [], false), null);
+  assert.equal(draftDefect('Smith 2020 doi:10/x', []), null, 'the third argument is optional');
+});

@@ -23,6 +23,8 @@ import { composeCaption, forbiddenNames, houseStyleHint, keywordGrounding, names
 import { draftDefect, type DraftDefect } from '@/lib/draft-defect';
 import { canWriteCopy, remainingMs } from '@/lib/prepare-budget';
 import { shouldReseed } from '@/lib/reseed';
+import { openingLineOf, repeatsOpening } from '@/lib/opening-line';
+import { recentOpenings } from '@/lib/recent-openers';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
@@ -323,6 +325,12 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   let defect: DraftDefect | null = null;
   const banned = forbiddenNames(title, input.creator);
 
+  // What this account has already published, so this post can avoid opening
+  // like it. Fail-open by construction (see lib/recent-openers.ts): an empty
+  // list simply switches the check off rather than holding up the video.
+  const priorOpenings = await recentOpenings(input.userId);
+  const styleHint = houseStyleHint(priorOpenings);
+
   // Ask again rather than refuse.
   //
   // This block used to run exactly once, and a single unusable draft ended the
@@ -345,7 +353,7 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
         topic: defect ? topic + '\n\n' + defect.corrective : topic,
         keywordHint: brief.hint ?? '',
         contentType: 'social',
-        styleHint: houseStyleHint(),
+        styleHint,
         channels: ['linkedin', 'instagram'],
         brand,
         audience: brand?.audience,
@@ -395,8 +403,19 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     // resting on the model doing as it is told. This is the check that does not.
     const leaked = Array.from(new Set([...namesLeaked(tiktok, banned), ...namesLeaked(linkedin, banned)]));
 
-    defect = draftDefect(ref, leaked);
+    // Does it open like something already published?
+    //
+    // Measured, not requested. The style hint above asks for a different
+    // opening and the ask is worth making, but the clinic's complaint was
+    // precisely that asking had not worked: every post still started the same
+    // way. This is the half that does not depend on the writer complying.
+    const repeat = repeatsOpening(openingLineOf(tiktok), priorOpenings);
+
+    defect = draftDefect(ref, leaked, Boolean(repeat));
     if (!defect) break;
+    if (repeat) {
+      reportError('videos:opening-repeat', new Error('opening repeats a recent post (' + repeat.by + ', ' + repeat.score.toFixed(2) + ')'), { title });
+    }
 
     // Worth another draft? Only with attempts left AND room to finish one.
     // Starting a generation the clock cannot cover is how a banked transcript
@@ -413,8 +432,14 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     return { ok: false, status: 502, error: 'generation_failed', message: 'The writer did not answer just now. Try again in a moment.', needsPaste: false, title };
   }
 
-  // Both drafts carried the same defect. Now it is worth refusing.
-  if (defect) {
+  // Both drafts carried the same defect. Now it is worth refusing — unless the
+  // only thing wrong is that it opens like a previous post, which is a matter
+  // of style and never a reason to hold a publishable video. `blocking` is
+  // explicit on the defect rather than inferred from `kind` here, because the
+  // else-branch below turns anything it does not recognise into "no verifiable
+  // citation" — so a repeated opening would otherwise have been refused with a
+  // message about a citation that was present all along.
+  if (defect && defect.blocking) {
     if (defect.kind === 'named_a_person') {
       const leaked = Array.from(new Set([...namesLeaked(tiktok, banned), ...namesLeaked(linkedin, banned)]));
       reportError('videos:name-leak', new Error('generated copy named ' + leaked.join(', ')), { title });
