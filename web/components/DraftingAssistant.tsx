@@ -117,7 +117,12 @@ export default function DraftingAssistant() {
           </header>
 
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
-{msgs.every((m) => m.role !== "user") && (
+{/* Generic openers, shown ONLY when the greeting had nothing specific to
+                offer. The greeting now names what is stuck and carries its own
+                buttons; rendering both put four suggestions about writing blog
+                posts ABOVE "Retry that one", which buries the one thing the
+                person actually opened the panel to do. */}
+            {msgs.every((m) => m.role !== "user") && !msgs.some((m) => m.role === "assistant" && m.options?.length) && (
               <div className="space-y-1.5">
                 <p className="text-[11px] font-medium uppercase tracking-wide text-ink/40">Try asking</p>
                 <div className="flex flex-wrap gap-2">
