@@ -19,7 +19,7 @@ import PageNav from '@/components/PageNav';
 import { useWorkspace } from '@/components/workspace';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 import VideoPrepare, { type Prepared } from '@/components/VideoPrepare';
-import { fetchShareableVideos } from '@/components/MediaPicker';
+import { ensureVideoAttachable, fetchShareableVideos } from '@/components/MediaPicker';
 import { runPrepare } from '@/lib/prepare-request';
 import { mapLimit } from '@/lib/map-limit';
 import { mayStartBatch, reasons, tally, type BatchReasons, type BatchState } from '@/lib/batch-plan';
@@ -325,6 +325,8 @@ export default function SourcesView({ kind }: { kind: Tab }) {
    * what to press to make one.
    */
   const [shareable, setShareable] = useState<Record<string, string>>({});
+  /** Which row is having its shareable copy made right now, so its button can say so. */
+  const [attaching, setAttaching] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [q, setQ] = useState('');
@@ -385,6 +387,34 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   function shareableFor(v: VideoEntry): string {
     const id = parseDriveFileId(firstLink(v));
     return (id && shareable[id]) || '';
+  }
+
+  /**
+   * Send this row's caption AND its video to the composer.
+   *
+   * The video is the point of the row, so it is never quietly left behind: if
+   * no shareable copy exists yet, one is made here and remembered, and the
+   * button says "Attaching the video…" while that happens. A row with no Drive
+   * video at all still hands over its caption — that is a text post, not a
+   * failure.
+   */
+  async function sendToComposer(v: VideoEntry, youtubeUrl: string) {
+    const link = firstLink(v);
+    let media = shareableFor(v);
+    if (!media && parseDriveFileId(link)) {
+      setAttaching(rowKey(v));
+      setErr(null);
+      const out = await ensureVideoAttachable(link, v.title || 'video');
+      setAttaching(null);
+      if (out.error) { setErr(out.error); return; }
+      media = out.url;
+      const id = parseDriveFileId(link);
+      if (id && media) setShareable((prev) => ({ ...prev, [id]: media }));
+    }
+    // A YouTube source is public and genuinely worth linking; a private Drive
+    // link in the body is not, and the video is attached natively now anyway.
+    const text = [v.copy || v.title, media || !youtubeUrl ? '' : 'Watch: ' + youtubeUrl].filter(Boolean).join('\n\n');
+    handoff(text, media, media ? v.title || 'Video' : '');
   }
 
   async function load(kind: Tab, fresh: boolean) {
@@ -1028,17 +1058,27 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     private — so the post shipped a link most readers cannot open. Now it
     either attaches the video or says plainly what makes one. */}
 {(() => {
-  const media = shareableFor(v);
+  // "Use in post" used to hand over the caption and an EMPTY media slot on any
+  // row that had never been prepared. From the outside that is a broken button:
+  // the text arrives, the video does not, nothing says why. It now makes the
+  // shareable copy on the spot — the label says so before you press it, and the
+  // copy is made once per video and remembered.
+  const ready = Boolean(shareableFor(v));
+  const hasDriveVideo = Boolean(parseDriveFileId(firstLink(v)));
+  const working = attaching === rowKey(v);
   const yt = youtubeOf(v);
-  // A YouTube source is public and genuinely worth linking; a Drive one is not.
-  const text = [v.copy || v.title, media || !yt ? '' : 'Watch: ' + yt].filter(Boolean).join('\n\n');
   return (
     <button
       type="button"
-      style={ghost}
-      title={media ? 'Brings the caption and the video' : 'Brings the caption. Press Prepare to make the shareable copy a network can fetch.'}
-      onClick={() => handoff(text, media, media ? v.title || 'Video' : '')}
-    >{media ? 'Use in post · with video' : 'Use in post'}</button>
+      style={{ ...ghost, opacity: working ? .6 : 1 }}
+      disabled={working}
+      title={
+        !hasDriveVideo ? 'This row has no Drive video, so the post goes out as text'
+          : ready ? 'Brings the caption and the video into the composer'
+          : 'Makes a shareable copy of the video, then brings both into the composer'
+      }
+      onClick={() => void sendToComposer(v, yt)}
+    >{working ? 'Attaching the video…' : hasDriveVideo ? 'Use in post · with video' : 'Use in post'}</button>
   );
 })()}
                                 <button type="button" style={{ ...ghost, padding: '5px 10px' }} onClick={() => setEditing(editing === v.tab + ':' + v.row ? null : v.tab + ':' + v.row)}>

@@ -52,6 +52,9 @@ const POLICIES: Record<string, Policy> = {
   // One database read, no third party, no spend — but a picker that opens on
   // every composer visit should still not be the one uncapped door.
   'media-list': { limit: 240, windowSec: 3600 },
+  // Copies a file inside the clinic's Drive and opens it to anyone with the
+  // link. Cheap in time, permanent in effect — nothing in this app deletes one.
+  'media-copy': { limit: 40, windowSec: 3600 },
   // The research copilot runs a Semrush pre-filter AND an LLM call, so it is
   // at least as expensive as `generate`. Without an entry here it silently
   // took DEFAULT_POLICY — double the cap of the cheaper operation.

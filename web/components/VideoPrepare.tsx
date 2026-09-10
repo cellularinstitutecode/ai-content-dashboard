@@ -16,6 +16,7 @@ import { runPrepare } from '@/lib/prepare-request';
 import { parseVideoUrl } from '@/lib/composer';
 import { isDriveUrl } from '@/lib/drive-url';
 import { fitsNetwork } from '@/lib/video-row';
+import { MediaPreview } from '@/components/MediaPicker';
 import type { BatchReasons } from '@/lib/batch-plan';
 
 export type Prepared = {
@@ -322,6 +323,23 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, bat
               {prepared.keywordLine && <div><strong>Keywords</strong> <span style={{ opacity: .8 }}>{prepared.keywordLine}</span></div>}
               {prepared.ref && <div><strong>REF</strong> <span style={{ opacity: .8 }}>{prepared.ref}</span></div>}
               <div style={{ opacity: .55 }}>These are what the sweep writes into the sheet’s KEYWORDS and REF columns.</div>
+            </div>
+          )}
+          {/* The video itself, above the copy that goes with it.
+              The panel used to describe the attachment in words and show
+              nothing, so a video that WAS attached and one that was not looked
+              exactly alike. If it plays here, it ships with the post. */}
+          {media ? (
+            <div style={{ display: 'grid', gap: 6 }}>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>
+                ✅ Video attached — this goes out with the copy below
+              </div>
+              <MediaPreview url={media} label={prepared.title} />
+            </div>
+          ) : (
+            <div role="status" style={{ fontSize: 12, background: '#fff8e6', border: '1px solid #f0c36d', borderRadius: 10, padding: 10, color: '#8a5a00' }}>
+              No video is attached to this post yet, so YouTube and TikTok cannot take it.
+              Pick a vertical clip below, or press <strong>Use in post · with video</strong> on the row in the table beneath — that makes the shareable copy.
             </div>
           )}
           <details style={{ fontSize: 12 }}>
