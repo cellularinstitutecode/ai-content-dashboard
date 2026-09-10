@@ -143,6 +143,22 @@ alter table public.brand_profiles add column if not exists aviso_publicidad text
 -- means "use the brand guide defaults", so nothing breaks before it is filled.
 alter table public.brand_profiles add column if not exists visual jsonb default '{}'::jsonb;
 
+-- created_at and updated_at are declared in the CREATE TABLE above, which is
+-- exactly why they can be missing.
+--
+-- `create table if not exists` does nothing at all when the table is already
+-- there, so a column added to that block later never reaches a database that
+-- was set up before it. This deployment had brand_profiles WITHOUT created_at,
+-- and lib/sweep-owner.ts ordered by it — so Postgres answered "column
+-- brand_profiles.created_at does not exist" to every call, resolveOwner
+-- failed every time, and both automatic triggers answered 503 no_owner for as
+-- long as that shipped. Every video had to be prepared by hand.
+--
+-- Stated as ALTERs, like aviso_publicidad and visual above, because that is
+-- the only form that reaches a table which already exists.
+alter table public.brand_profiles add column if not exists created_at timestamptz default now();
+alter table public.brand_profiles add column if not exists updated_at timestamptz default now();
+
 alter table public.brand_profiles enable row level security;
 
 do $$ begin

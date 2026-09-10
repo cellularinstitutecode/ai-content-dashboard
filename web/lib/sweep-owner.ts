@@ -18,6 +18,7 @@ import 'server-only';
 import { isAllowedEmail } from '@/lib/access';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { keyRole } from '@/lib/supabase-key';
+import { isMissingSchema } from '@/lib/schema-probe';
 import { reportError } from '@/lib/report';
 
 export type OwnerSource = 'env' | 'brand_profile' | 'allowlist';
@@ -52,12 +53,7 @@ export async function resolveOwner(): Promise<OwnerResult> {
   const sb = supabaseAdmin();
   const anonKey = keyRole(process.env.SUPABASE_SERVICE_ROLE_KEY) === 'anon';
 
-  const brand = await sb
-    .from('brand_profiles')
-    .select('user_id')
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle();
+  const brand = await firstBrandOwner(sb);
 
   const owner = (brand.data as { user_id?: string } | null)?.user_id;
   if (owner) {
@@ -116,6 +112,37 @@ export async function resolveOwner(): Promise<OwnerResult> {
     reason: 'empty',
     detail: 'There is genuinely no Brand Brain row and no allowlisted account in this database. Sign in to the dashboard once, then save Brand Brain.',
   };
+}
+
+/**
+ * The oldest brand_profiles row — without making the ORDER a hard dependency.
+ *
+ * This ordered by created_at, and on this deployment that column does not
+ * exist: brand_profiles was created before the column was added to
+ * supabase/schema.sql, and the column lives inside `create table if not
+ * exists`, so re-running the file never adds it to a table that is already
+ * there. Postgres answered "column brand_profiles.created_at does not exist"
+ * to every single call.
+ *
+ * The cost was the whole automatic pipeline. resolveOwner is what
+ * /api/videos/watch checks on its cron path before doing anything, so both the
+ * nightly pass and the sheet's own Apps Script trigger answered 503 no_owner
+ * for as long as this has been shipped — and the module written to stop the
+ * cause being misreported was itself the cause.
+ *
+ * The migration adds the column. This makes it not matter: the ordering is a
+ * tie-break between rows of a table whose user_id is UNIQUE, so on a single
+ * clinic it decides nothing at all, and it is not worth failing over.
+ */
+async function firstBrandOwner(sb: ReturnType<typeof supabaseAdmin>) {
+  const ordered = await sb
+    .from('brand_profiles')
+    .select('user_id')
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (!ordered.error || !isMissingSchema(ordered.error.code)) return ordered;
+  return sb.from('brand_profiles').select('user_id').limit(1).maybeSingle();
 }
 
 function brandUnreadableByAnon(message: string | null): string {
