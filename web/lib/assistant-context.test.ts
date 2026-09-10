@@ -63,13 +63,48 @@ test('the failure’s own sentence is preferred over the category', () => {
   assert.equal(s.problems[0].plain, 'Only a few words could be heard.');
 });
 
-test('a broken dependency is said first, and nothing impossible is offered', () => {
+test('a dependency the videos need is said first, and nothing impossible is offered', () => {
   const s = summarise([{ state: 'failed', last_error_code: 'out_of_time' }], NOW, {
-    health: [{ down: 'Writing is unavailable — no AI is connected.' }],
+    health: [{ down: 'Writing is unavailable — no AI is connected.', blocksVideos: true }],
   });
   const g = greetingFor(s);
   assert.match(g.message, /no AI is connected/);
   assert.ok(!g.chips.some((c) => /retry/i.test(c)));
+});
+
+test('something degraded ELSEWHERE does not blank the video report', () => {
+  // The case this split exists for: the health probe spans three migration
+  // files, and a missing Autopilot templates table used to open the chat with
+  // a database warning that never mentioned a single video.
+  const s = summarise([
+    { state: 'failed', video_title: 'Hydrogen reel', row_number: 180, last_error_code: 'out_of_time', last_error: 'Ran out of time.' },
+  ], NOW, {
+    health: [{ down: 'Run supabase/autopilot.sql. Until then this breaks Autopilot.', blocksVideos: false }],
+  });
+  const g = greetingFor(s);
+  assert.match(g.message, /Hydrogen reel/);
+  assert.deepEqual(g.chips[0], 'Retry that one');
+  // Still said — as a footnote, and naming the actual file.
+  assert.match(g.message, /Separately: .*autopilot\.sql/);
+});
+
+test('a non-blocking failure is reported on the all-clear greeting too', () => {
+  const g = greetingFor(summarise([{ state: 'prepared' }], NOW, {
+    health: [{ down: 'Keyword research is paused.', blocksVideos: false }],
+  }));
+  assert.match(g.message, /done or moving/);
+  assert.match(g.message, /Separately: Keyword research is paused/);
+});
+
+test('the prompt block says which failures touch video and which do not', () => {
+  const out = renderSnapshot(summarise([{ state: 'prepared' }], NOW, {
+    health: [
+      { down: 'The transcript store is missing.', blocksVideos: true },
+      { down: 'Autopilot templates are missing.', blocksVideos: false },
+    ],
+  }));
+  assert.match(out, /Stopping the video pipeline: The transcript store/);
+  assert.match(out, /does NOT affect video.*Autopilot templates/);
 });
 
 test('the greeting names what is stuck and offers to fix it', () => {
