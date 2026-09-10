@@ -26,6 +26,8 @@ import { shouldReseed } from '@/lib/reseed';
 import { writerFailure } from '@/lib/writer-failure';
 import { findEvidence } from '@/lib/evidence';
 import { evidenceBriefFrom } from '@/lib/evidence-brief';
+import { serpLandscapeFrom } from '@/lib/serp-landscape';
+import { serpCompetitors } from '@/lib/semrush';
 import { openingLineOf, repeatsOpening } from '@/lib/opening-line';
 import { recentOpenings } from '@/lib/recent-openers';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -352,6 +354,29 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     await findEvidence(subject, brief.stamp?.keywords || []),
   );
 
+  // Who the reader is comparing this clinic against.
+  //
+  // serpCompetitors has been here all along — cached, budget-guarded — and only
+  // the manual research screen ever called it, so the pipeline cited studies
+  // nobody could argue with while having no idea who it was standing next to.
+  //
+  // Only for the PRIMARY keyword, and only when there is one: this is a paid
+  // report, and the answer is the same for every video about the same subject,
+  // which is exactly what the 30-day cache in lib/semrush.ts is for.
+  let landscapeHint = '';
+  const primary = brief.stamp?.primary || '';
+  if (primary) {
+    try {
+      const serp = await serpCompetitors(primary, { limit: 10 });
+      if (serp.ok) landscapeHint = serpLandscapeFrom(primary, serp.rows);
+    } catch (e) {
+      // Fail open, like the keyword brief and the research brief before it: a
+      // post with no competitive context is the post this pipeline wrote
+      // yesterday, not a failure.
+      reportError('videos:serp-landscape', e, { primary });
+    }
+  }
+
   // Ask again rather than refuse.
   //
   // This block used to run exactly once, and a single unusable draft ended the
@@ -374,6 +399,7 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
         topic: defect ? topic + '\n\n' + defect.corrective : topic,
         keywordHint: brief.hint ?? '',
         evidenceHint,
+        landscapeHint,
         contentType: 'social',
         // The clock, not a constant. Three fixed 30s tries is ~92s of attempts
         // inside the 60s canWriteCopy reserves for this whole step, so on any
