@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { mayStartBatch, tally } from './batch-plan.ts';
+import { mayStartBatch, reasons, tally } from './batch-plan.ts';
 
 const READY = { tab: 'Sept', hasAiColumns: true };
 const NEEDS = { tab: 'Oct', hasAiColumns: false };
@@ -61,4 +61,52 @@ test('a finished run has nothing pending', () => {
   const t = tally(['done', 'done', 'failed']);
   assert.equal(t?.pending, 0);
   assert.equal(t?.done, 2);
+});
+
+test('a clean run has nothing to explain', () => {
+  assert.deepEqual(reasons([{ state: 'done' }, { state: 'done' }]), { shown: [], more: 0 });
+});
+
+test('rows that are still going are not failures', () => {
+  assert.deepEqual(reasons([{ state: 'queued' }, { state: 'working' }]), { shown: [], more: 0 });
+});
+
+test('one cause across several rows reads as one sentence', () => {
+  // The case this exists for: two videos, one reason, said once.
+  const out = reasons([
+    { state: 'failed', note: 'The dashboard cannot open that Drive file.' },
+    { state: 'failed', note: 'The dashboard cannot open that Drive file.' },
+  ]);
+  assert.deepEqual(out.shown, ['The dashboard cannot open that Drive file.']);
+  assert.equal(out.more, 0);
+});
+
+test('different causes are both named', () => {
+  const out = reasons([
+    { state: 'failed', note: 'Drive refused the download.' },
+    { state: 'needs_transcript', note: 'Only a few words could be heard.' },
+  ]);
+  assert.equal(out.shown.length, 2);
+  assert.ok(out.shown.includes('Only a few words could be heard.'));
+});
+
+test('a big batch reports the remainder rather than listing everything', () => {
+  const out = reasons([
+    { state: 'failed', note: 'One.' },
+    { state: 'failed', note: 'Two.' },
+    { state: 'failed', note: 'Three.' },
+    { state: 'failed', note: 'Four.' },
+  ]);
+  assert.deepEqual(out.shown, ['One.', 'Two.']);
+  assert.equal(out.more, 2);
+});
+
+test('a long refusal is trimmed rather than pasted whole', () => {
+  const out = reasons([{ state: 'failed', note: 'x'.repeat(400) }]);
+  assert.ok(out.shown[0].length <= 150);
+  assert.ok(out.shown[0].endsWith('…'));
+});
+
+test('a failure with no recorded note is skipped, not shown blank', () => {
+  assert.deepEqual(reasons([{ state: 'failed' }, { state: 'failed', note: '   ' }]), { shown: [], more: 0 });
 });

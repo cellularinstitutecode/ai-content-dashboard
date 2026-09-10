@@ -81,3 +81,43 @@ export function tally(states: readonly BatchState[]): Tally | null {
     pending: n('queued') + n('working'),
   };
 }
+
+/** Beyond a couple, the panel becomes a wall of text instead of an answer. */
+const MAX_REASONS = 2;
+/** A refusal can run to two sentences. Enough to recognise, not the whole paragraph. */
+const MAX_REASON_CHARS = 150;
+
+export type BatchReasons = {
+  /** The distinct reasons, already trimmed and capped. */
+  shown: string[];
+  /** How many further DISTINCT reasons there were, beyond the ones shown. */
+  more: number;
+};
+
+/**
+ * Why the rows that did not finish did not finish.
+ *
+ * Every failed row already carries its reason — the batch stores the server's
+ * own sentence as the row's note. But the panel people actually look at showed
+ * only "✗ 2 not done" and then pointed at a table a thousand pixels further
+ * down the page, past an embedded spreadsheet. The answer was on screen and
+ * unreachable, which is a strange thing for a summary to do.
+ *
+ * Deduplicated, because that is the case that matters: when several videos stop
+ * for one cause — and they usually do — it should read as one sentence, not the
+ * same sentence repeated once per row.
+ */
+export function reasons(
+  entries: readonly { state: BatchState; note?: string }[],
+  max: number = MAX_REASONS,
+): BatchReasons {
+  const seen: string[] = [];
+  for (const e of entries) {
+    if (e.state !== 'failed' && e.state !== 'needs_transcript') continue;
+    const note = String(e.note || '').replace(/\s+/g, ' ').trim();
+    if (!note) continue;
+    const text = note.length > MAX_REASON_CHARS ? note.slice(0, MAX_REASON_CHARS - 1) + '…' : note;
+    if (!seen.includes(text)) seen.push(text);
+  }
+  return { shown: seen.slice(0, max), more: Math.max(0, seen.length - max) };
+}

@@ -15,6 +15,7 @@ import { runPrepare } from '@/lib/prepare-request';
 import { parseVideoUrl } from '@/lib/composer';
 import { isDriveUrl } from '@/lib/drive-url';
 import { fitsNetwork } from '@/lib/video-row';
+import type { BatchReasons } from '@/lib/batch-plan';
 
 type Prepared = {
   draftId: string | null;
@@ -64,7 +65,7 @@ export type BatchTally = {
   pending: number;
 };
 
-export default function VideoPrepare({ initialUrl, blogId, sheetRow, batch, batchRunning }: {
+export default function VideoPrepare({ initialUrl, blogId, sheetRow, batch, batchReasons, batchRunning }: {
   initialUrl?: string;
   blogId?: string;
   /** The row this was pressed from, so the copy goes back where the link was. */
@@ -77,6 +78,14 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, batch, batc
    * that somebody ran a batch, saw nothing change, and thought it had not started.
    */
   batch?: BatchTally | null;
+  /**
+   * Why the rows that did not finish did not finish.
+   *
+   * The counts alone sent people to the table below to find out — which is a
+   * thousand pixels down, past an embedded spreadsheet. A summary that knows
+   * the answer should say it.
+   */
+  batchReasons?: BatchReasons | null;
   batchRunning?: boolean;
 }) {
   const [url, setUrl] = useState(initialUrl || '');
@@ -202,7 +211,19 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, batch, batc
           {batch.pending > 0 && <span style={{ background: '#eef3ff', color: '#1d4ed8', borderRadius: 999, padding: '3px 9px' }}>{batch.pending} to go</span>}
           {batch.needsTranscript > 0 && <span style={{ background: '#fff8e6', color: '#8a5a00', borderRadius: 999, padding: '3px 9px' }}>{batch.needsTranscript} need a transcript</span>}
           {batch.failed > 0 && <span style={{ background: '#fff2f2', color: '#a1252b', borderRadius: 999, padding: '3px 9px' }}>✗ {batch.failed} not done</span>}
-          <span style={{ opacity: .7 }}>Row-by-row detail is in the Videos table below.</span>
+          {!batchReasons?.shown.length && (
+            <span style={{ opacity: .7 }}>Row-by-row detail is in the Videos table below.</span>
+          )}
+        </div>
+      )}
+      {batch && batch.total > 0 && Boolean(batchReasons?.shown.length) && (
+        <div style={{ marginTop: 6, display: 'grid', gap: 4, fontSize: 12, color: '#a1252b' }}>
+          {batchReasons!.shown.map((r) => (<span key={r}>· {r}</span>))}
+          {batchReasons!.more > 0 && (
+            <span style={{ opacity: .7, color: '#555' }}>
+              and {batchReasons!.more} other {batchReasons!.more === 1 ? 'reason' : 'reasons'} — the rest is in the Videos table below.
+            </span>
+          )}
         </div>
       )}
       {err && <div role="alert" style={{ color: '#d70015', fontSize: 12, marginTop: 8 }}>{err}</div>}
