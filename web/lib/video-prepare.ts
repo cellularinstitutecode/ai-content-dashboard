@@ -24,6 +24,8 @@ import { draftDefect, type DraftDefect } from '@/lib/draft-defect';
 import { canWriteCopy, remainingMs } from '@/lib/prepare-budget';
 import { shouldReseed } from '@/lib/reseed';
 import { writerFailure } from '@/lib/writer-failure';
+import { findEvidence } from '@/lib/evidence';
+import { evidenceBriefFrom } from '@/lib/evidence-brief';
 import { openingLineOf, repeatsOpening } from '@/lib/opening-line';
 import { recentOpenings } from '@/lib/recent-openers';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -336,6 +338,20 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   const priorOpenings = await recentOpenings(input.userId);
   const styleHint = houseStyleHint(priorOpenings);
 
+  // Real papers for this subject, fetched BEFORE the copy is written.
+  //
+  // The citation used to be decoration: the model recalled a study, Crossref
+  // was asked whether that DOI existed, and nothing ever read the paper — so a
+  // post could cite a landmark review and say nothing that came from it. This
+  // searches the literature for what the video is actually about and hands the
+  // abstracts over as material.
+  //
+  // Fail-open by construction (see lib/evidence.ts): no papers means the post
+  // is written exactly as it was before, never blocked.
+  const evidenceHint = evidenceBriefFrom(
+    await findEvidence(subject, brief.stamp?.keywords || []),
+  );
+
   // Ask again rather than refuse.
   //
   // This block used to run exactly once, and a single unusable draft ended the
@@ -357,6 +373,7 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
         // parameter for the same idea.
         topic: defect ? topic + '\n\n' + defect.corrective : topic,
         keywordHint: brief.hint ?? '',
+        evidenceHint,
         contentType: 'social',
         // The clock, not a constant. Three fixed 30s tries is ~92s of attempts
         // inside the 60s canWriteCopy reserves for this whole step, so on any

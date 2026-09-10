@@ -71,6 +71,14 @@ export type GenerateInput = {
    */
   budgetMs?: number;
   /**
+   * Real papers, retrieved for this subject, as source material.
+   *
+   * Built by lib/evidence-brief.ts. When present it also changes what the REF
+   * line means: the DOI is copied from a paper that was actually fetched,
+   * rather than recalled by the model and then checked after the fact.
+   */
+  evidenceHint?: string;
+  /**
    * House rules for this particular job — length, shape, what must be named.
    *
    * TYPE_INSTRUCTIONS is shared with every caller, and its social entry says "max ~150
@@ -229,7 +237,7 @@ function buildUserPrompt(input: GenerateInput) {
 Target audience: ${input.audience || brand?.audience || 'a general audience'}
 Tone: ${input.tone || 'professional, friendly'}
 Channels to produce: ${channels}
-${input.keywordHint ? input.keywordHint + '\nWork these keywords in naturally — headings, body, hashtags.\n' : ''}${input.performanceHint ? input.performanceHint + '\n' : ''}${input.styleHint ? input.styleHint + '\n' : ''}Return strict JSON only. No prose, no markdown fences.`;
+${input.keywordHint ? input.keywordHint + '\nWork these keywords in naturally — headings, body, hashtags.\n' : ''}${input.evidenceHint ? input.evidenceHint + '\n' : ''}${input.performanceHint ? input.performanceHint + '\n' : ''}${input.styleHint ? input.styleHint + '\n' : ''}Return strict JSON only. No prose, no markdown fences.`;
 }
 
 async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
