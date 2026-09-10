@@ -25,8 +25,12 @@ export const DEFAULT_AVISO_NUMBER = '2623022002A00090';
  * uncited medical claim reaching a queue was never consulted for them. The rule is about
  * advertising a clinic's therapies in Mexico, which does not stop being true because the
  * post is on LinkedIn.
+ *
+ * YouTube joined them for exactly the same reason once it became selectable in the
+ * composer. A video description making a therapeutic claim is advertising; the platform
+ * it is hosted on has never been what the rule turns on.
  */
-const SOCIAL_NETWORKS = new Set(['instagram', 'facebook', 'ig', 'fb', 'linkedin', 'tiktok']);
+const SOCIAL_NETWORKS = new Set(['instagram', 'facebook', 'ig', 'fb', 'linkedin', 'tiktok', 'youtube']);
 
 export function appliesTo(providers: readonly string[] | string | null | undefined): boolean {
   const list = Array.isArray(providers) ? providers : providers ? [providers] : [];

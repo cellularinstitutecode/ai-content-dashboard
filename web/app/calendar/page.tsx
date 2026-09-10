@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import PageNav from '@/components/PageNav';
-import { localDateKey, tightestLimit, networkLabel } from '@/lib/composer';
+import { localDateKey, tightestLimit, networkLabel, PUBLISH_NETWORKS, mediaProblem } from '@/lib/composer';
+import MediaPicker from '@/components/MediaPicker';
 import { announce, onRefresh } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
 import { PanelLoader } from '@/components/LoadingScreen';
@@ -29,12 +30,9 @@ function toArray(x: any): any[] {
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-const NETWORKS: { id: string; label: string }[] = [
-  { id: 'facebook', label: 'Facebook' },
-  { id: 'instagram', label: 'Instagram' },
-  { id: 'linkedin', label: 'LinkedIn' },
-  { id: 'twitter', label: 'X / Twitter' },
-];
+// The channel list lives in lib/composer.ts. This page held the third hardcoded
+// copy of it, which is how YouTube and TikTok stayed unpickable everywhere.
+const NETWORKS = PUBLISH_NETWORKS;
 
 // Shared with lib/composer so the rule has one home and one test.
 const dateKey = localDateKey;
@@ -84,6 +82,8 @@ export default function CalendarPage() {
   // Click-a-day scheduling panel state
   const [scheduleDay, setScheduleDay] = useState<Date | null>(null);
   const [pNetworks, setPNetworks] = useState<string[]>(['facebook']);
+  const [pMedia, setPMedia] = useState<string>('');
+  const [pMediaLabel, setPMediaLabel] = useState<string>('');
   const [pTime, setPTime] = useState('09:00');
   const [pText, setPText] = useState('');
   const [pBusy, setPBusy] = useState(false);
@@ -277,6 +277,7 @@ export default function CalendarPage() {
   function openScheduler(day: Date) {
     setScheduleDay(day);
     setPNetworks(['facebook']);
+    setPMedia(''); setPMediaLabel('');
     setPTime('09:00');
     setPText('');
     setPStatus(null);
@@ -291,6 +292,8 @@ export default function CalendarPage() {
     if (!scheduleDay) return;
     if (!pNetworks.length) { setPStatus('Pick at least one network.'); return; }
     if (!pText.trim()) { setPStatus('Add some post text.'); return; }
+    const missingMedia = mediaProblem(pNetworks, pMedia);
+    if (missingMedia) { setPStatus(missingMedia); return; }
     const overBy = pOverBy;
     if (overBy > 0) {
       setPStatus('Too long for ' + networkLabel(pLimit!.network) + ' by ' + overBy.toLocaleString() + ' character' + (overBy === 1 ? '' : 's') + '. Trim it, or unselect that channel.');
@@ -311,7 +314,7 @@ export default function CalendarPage() {
           const r = await fetch('/api/metricool/schedule', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ network, text: pText, publishAt, blogId: 4308292 }),
+            body: JSON.stringify({ network, text: pText, publishAt, blogId: 4308292, mediaUrl: pMedia || undefined }),
           });
           return { network, ok: r.ok };
         })
@@ -553,10 +556,20 @@ export default function CalendarPage() {
                     (pNetworks.includes(n.id) ? 'bg-accent text-white ring-accent' : 'bg-canvas text-ink ring-black/10 hover:ring-accent/50')
                   }
                 >
-                  {n.label}
+                  <span aria-hidden className="mr-1">{n.emoji}</span>{n.label}
                 </button>
               ))}
             </div>
+            {/* This panel had no way to attach media at all, so picking a video
+                channel here could only ever produce a draft Metricool refuses.
+                Same picker the composer uses. */}
+            <MediaPicker
+              value={pMedia}
+              label={pMediaLabel}
+              onChange={(url, lbl) => { setPMedia(url); setPMediaLabel(lbl); }}
+              hint={mediaProblem(pNetworks, '') ? 'YouTube and TikTok will not take a post without one.' : undefined}
+            />
+            <div className="mb-4" />
 
             <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink/40">Time</label>
             <input
