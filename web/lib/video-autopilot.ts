@@ -89,9 +89,9 @@ export type SweepResult = {
 
 export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
   const started = Date.now();
-  // Sized for a 60-second function (the Hobby ceiling): stop STARTING work at
-  // 45s so the video already in flight has time to finish and write back.
-  const budgetMs = opts.budgetMs ?? 45_000;
+  // Stop STARTING work here so the video already in flight has time to finish
+  // and write back. The caller sizes it against its own maxDuration.
+  const budgetMs = opts.budgetMs ?? 270_000;
   const maxVideos = opts.maxVideos ?? 1;
   const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
   const admin = supabaseAdmin();
@@ -228,10 +228,16 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
           // refuses, and the videographer's is the one most easily mistaken for
           // somebody in the video.
           creator: pick(rec, 'creator', 'by') || null,
-          // The sweep answers to the same 60-second ceiling. Stopping with the
-          // transcript stored costs one more tick; being killed mid-write
-          // costs the download and the transcription again.
-          budgetMs: 32_000,
+          // Whatever is left of the sweep's own window, not a fixed slice of
+          // it. A fixed 32s made every long video in the backlog stop with
+          // "transcript ready" forever, because no single row was ever given
+          // enough of the clock to reach the copy — and the sweep runs once a
+          // day, so forever was the literal outcome.
+          //
+          // The floor leaves room to write back and record the outcome even
+          // when the sweep is nearly out of time; below it the loop above has
+          // already stopped starting rows.
+          budgetMs: Math.max(20_000, budgetMs - (Date.now() - started)),
         });
 
         // Out of time, with the transcript stored. That is half the job done,

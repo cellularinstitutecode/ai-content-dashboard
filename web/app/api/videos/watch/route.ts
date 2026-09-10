@@ -19,11 +19,11 @@ import { resolveOwner, sweepVideos } from '@/lib/video-autopilot';
 import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
-// 60 seconds is the Hobby plan's ceiling, and a deployment is REJECTED for
-// asking for more — so this is the number that has to work, not a preference.
-// The sweep is given a budget below it so it stops starting new videos in time
-// to finish the one it is on.
-export const maxDuration = 60;
+// The sweep is given a budget below this so it stops starting new videos in
+// time to finish the one it is on. 60 was set on a mistaken reading of the
+// plan's ceiling — see /api/videos/prepare — and meant a nightly pass could
+// clear at most one short video.
+export const maxDuration = 300;
 
 async function handle(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -68,7 +68,7 @@ async function handle(req: NextRequest) {
   const maxVideos = Number.isFinite(maxParam) && maxParam > 0 ? Math.min(maxParam, 10) : 1;
 
   try {
-    const out = await sweepVideos({ userId, dryRun, skipMetricool, maxVideos, budgetMs: 45_000 });
+    const out = await sweepVideos({ userId, dryRun, skipMetricool, maxVideos, budgetMs: 270_000 });
     if (!out.ok) {
       return NextResponse.json(
         { ok: false, error: 'not_configured', message: 'Google access is not set up, so the sheet cannot be read.' },

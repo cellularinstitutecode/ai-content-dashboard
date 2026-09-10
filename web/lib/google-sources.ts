@@ -93,6 +93,15 @@ async function accessToken(): Promise<string> {
 
 async function gfetch(url: string, init: RequestInit = {}, timeoutMs = 12000): Promise<Response> {
   const token = await accessToken();
+  // A caller that brings its own signal owns the WHOLE transfer, body included.
+  //
+  // The timer below is cleared as soon as the headers land, which is right for
+  // a metadata call and badly wrong for a 149 MB download: every byte after the
+  // first was unguarded, so a slow or stalled transfer simply ran until the
+  // platform killed the function and nothing was returned to anybody.
+  if (init.signal) {
+    return fetch(url, { ...init, headers: { ...(init.headers || {}), authorization: 'Bearer ' + token } });
+  }
   const ctl = new AbortController();
   const to = setTimeout(() => ctl.abort(), timeoutMs);
   try {
@@ -764,8 +773,14 @@ export async function probeDriveMedia(fileId: string, maxBytes = MEDIA_MAX_BYTES
  * Response so the caller owns the body — and with it, the choice of never
  * holding the whole file at once.
  */
-export async function driveMediaStream(fileId: string): Promise<Response> {
-  return gfetch(DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true', {}, 40000);
+export async function driveMediaStream(fileId: string, transferMs = 40_000): Promise<Response> {
+  // AbortSignal.timeout stays armed for the whole transfer, not just the
+  // handshake, so `transferMs` is a real deadline on the download rather than
+  // on the moment Drive starts answering.
+  return gfetch(
+    DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true',
+    { signal: AbortSignal.timeout(transferMs) },
+  );
 }
 
 export async function downloadDriveMedia(fileId: string, maxBytes = MEDIA_MAX_BYTES): Promise<DriveMediaResult> {

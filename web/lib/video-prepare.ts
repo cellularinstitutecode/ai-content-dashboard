@@ -20,6 +20,7 @@ import { avisoNumberFor, checkCompliance } from '@/lib/compliance';
 import { resolveTranscript, type TranscriptOrigin } from '@/lib/video-transcript';
 import { keywordLineFrom } from '@/lib/video-row';
 import { composeCaption, forbiddenNames, houseStyleHint, keywordGrounding, namesLeaked, topicFromTranscript, transcriptExcerpt, videoSubject } from '@/lib/video-copy';
+import { canWriteCopy, remainingMs } from '@/lib/prepare-budget';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
@@ -144,8 +145,20 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   const startedAt = Date.now();
 
   // 1) The words.
-  const t = await resolveTranscript({ url, youtubeUrl: input.youtubeUrl, pasted: input.pasted });
+  // The deadline travels WITH the request, so the download can refuse itself
+  // rather than being killed halfway. budgetMs is the share of the function's
+  // clock this call may use; a caller that gives none keeps the old behaviour
+  // of running until the platform intervenes.
+  const budgetMs = input.budgetMs ?? 0;
+  const deadlineAt = budgetMs > 0 ? startedAt + budgetMs : undefined;
+  const t = await resolveTranscript({ url, youtubeUrl: input.youtubeUrl, pasted: input.pasted, deadlineAt });
   if (!t.ok) {
+    // Running out of clock is not "this video cannot be transcribed", and
+    // offering the paste box for it asks a person to type out a nine-minute
+    // reel to work around a scheduling problem. It gets its own answer.
+    if (t.reason === 'out_of_time') {
+      return { ok: false, status: 503, error: 'out_of_time', message: t.message, needsPaste: false, title: t.title };
+    }
     return {
       ok: false,
       // 422: the request was well-formed, we just cannot get a transcript from
@@ -215,8 +228,11 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   // try again with no sign that anything was accomplished. The transcript is
   // stored by now, so stopping here is not a failure — it is the expensive
   // half finished, and the next attempt starts from it and takes seconds.
-  const budgetMs = input.budgetMs ?? 0;
-  if (budgetMs > 0 && Date.now() - startedAt > budgetMs) {
+  // Enough left to write the copy IN FULL, not merely a millisecond of clock.
+  // The old test was `elapsed > budget`, which let a request with two seconds
+  // left march into Semrush and the writer and die there — the worst outcome
+  // available, because the transcript is banked and the person is told nothing.
+  if (budgetMs > 0 && !canWriteCopy(remainingMs(startedAt, budgetMs, Date.now()))) {
     // Only worth stopping for if the transcript SURVIVES the stop. Where the cache could
     // not take it, coming back costs the whole download again and the second attempt dies
     // exactly where the first one did — so say that, rather than sending somebody to
