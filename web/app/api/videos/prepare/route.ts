@@ -17,6 +17,7 @@ import { isDriveUrl } from '@/lib/drive-url';
 import { parseVideoUrl } from '@/lib/composer';
 import { prepareVideo } from '@/lib/video-prepare';
 import { completeRow, findRowByLink } from '@/lib/video-autopilot';
+import { recordRowFailure } from '@/lib/video-runs';
 import { GoogleSourceError, serviceAccountEmail } from '@/lib/google-sources';
 import { reportError } from '@/lib/report';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -98,7 +99,39 @@ export async function POST(req: NextRequest) {
     budgetMs: 280_000,
   });
 
+  // Which row is this? Needed on BOTH paths now — the success path to write it,
+  // and the failure path to record why it failed.
+  let sheet: unknown = null;
+  let tab = typeof body?.tab === 'string' ? body.tab : '';
+  let row = Number(body?.row);
+
   if (!out.ok) {
+    // Write the failure down before answering.
+    //
+    // video_runs was only ever written when a Prepare SUCCEEDED, so a failed
+    // press left no trace anywhere but that browser's local storage. The
+    // assistant then reported a healthy pipeline while videos sat broken, the
+    // overnight pass had no row to revive, and the only way to learn what went
+    // wrong was to press the button again and watch it fail.
+    //
+    // Best-effort on purpose: a bookkeeping write must never turn a 422 the
+    // caller can act on into a 500 it cannot.
+    if (tab && Number.isInteger(row) && row >= 2) {
+      try {
+        await recordRowFailure({
+          userId: auth.userId,
+          tab,
+          row,
+          videoLink: url,
+          title: out.title,
+          message: out.message,
+          code: out.error,
+          needsPaste: out.needsPaste,
+        });
+      } catch (e) {
+        reportError('videos:prepare-record-failure', e, { tab, row: String(row) });
+      }
+    }
     return NextResponse.json(
       { error: out.error, message: out.message, needsPaste: out.needsPaste, title: out.title },
       { status: out.status },
@@ -110,9 +143,6 @@ export async function POST(req: NextRequest) {
   // the drafts into Metricool. Without this the button produced copy and
   // stopped, so the same video handled by hand and handled automatically
   // ended up in two different states.
-  let sheet: unknown = null;
-  let tab = typeof body?.tab === 'string' ? body.tab : '';
-  let row = Number(body?.row);
 
   // A link PASTED into the box carries no row, and until now that meant the
   // copy was written perfectly and put nowhere — the one step of this job that
