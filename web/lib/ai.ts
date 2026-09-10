@@ -7,6 +7,7 @@ import { MEDICAL_SAFETY_GUARDRAILS } from '@/lib/safety';
 import { REF_INSTRUCTION, avisoNumberFor, checkCompliance, ensureAviso, type ComplianceCheck } from '@/lib/compliance';
 import { verifyDoi, type CitationCheck } from '@/lib/citation';
 import { researchBundle, briefPromptFrom, type KeywordBrief } from '@/lib/semrush';
+import { attemptPlan } from '@/lib/ai-attempts';
 
 export type Provider = 'anthropic' | 'openai';
 
@@ -59,6 +60,14 @@ export type GenerateInput = {
   // Optional Semrush keyword hint (search volume + difficulty) so the model
   // writes with real keyword data. Injected by the generate route.
   keywordHint?: string;
+  /**
+   * Milliseconds left on the caller's clock for the whole writing step.
+   *
+   * Given one, the retry plan is sized to fit it (lib/ai-attempts.ts) instead
+   * of spending a fixed 3 x 30s that the caller may not have. prepareVideo
+   * reserves 60s for this step; the fixed plan wanted about 92.
+   */
+  budgetMs?: number;
   /**
    * House rules for this particular job — length, shape, what must be named.
    *
@@ -158,6 +167,7 @@ async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
   if (!key) throw new Error('ANTHROPIC_API_KEY missing');
   const model = input.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
   const type = input.contentType || 'social';
+  const plan = input.budgetMs != null ? attemptPlan(input.budgetMs) : null;
   const res = await fetchWithRetry((process.env.ANTHROPIC_API_BASE || 'https://api.anthropic.com').replace(/\/$/, '') + '/v1/messages', {
     method: 'POST',
     headers: {
@@ -175,7 +185,7 @@ async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
       system: systemPrompt(type, input.brand),
       messages: [{ role: 'user', content: buildUserPrompt(input) }],
     }),
-  });
+  }, plan ? { retries: plan.attempts - 1, timeoutMs: plan.timeoutMs } : {});
   if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
   const data = await res.json();
   const text = data?.content?.[0]?.text ?? '';
@@ -187,6 +197,7 @@ async function callOpenAI(input: GenerateInput): Promise<ContentPack> {
   if (!key) throw new Error('OPENAI_API_KEY missing');
   const model = input.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
   const type = input.contentType || 'social';
+  const plan = input.budgetMs != null ? attemptPlan(input.budgetMs) : null;
   const res = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {   
     method: 'POST',
     headers: {
@@ -206,7 +217,7 @@ async function callOpenAI(input: GenerateInput): Promise<ContentPack> {
         { role: 'user', content: buildUserPrompt(input) },
       ],
     }),
-  });
+  }, plan ? { retries: plan.attempts - 1, timeoutMs: plan.timeoutMs } : {});
   if (!res.ok) throw new Error(`openai ${res.status}: ${await res.text()}`);
   const data = await res.json();
   const text = data?.choices?.[0]?.message?.content ?? '';
