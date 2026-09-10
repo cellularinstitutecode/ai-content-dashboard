@@ -142,6 +142,18 @@ export const REQUIRED_SCHEMA: SchemaProbe[] = [
     breaks: 'the advertising-notice setting in Brand Brain',
   },
   {
+    // Declared inside the CREATE TABLE, which is why it can be absent: that
+    // statement is a no-op on a database where the table already exists, so a
+    // column added to it later never arrives. lib/sweep-owner.ts ordered by
+    // this one, and its absence took down every automatic run with a message
+    // about the Brand Brain rather than about a missing column.
+    table: 'brand_profiles',
+    column: 'created_at',
+    kind: 'column',
+    file: 'supabase/schema.sql',
+    breaks: 'the automatic video runs — the nightly pass and the sheet\u2019s own trigger both stop, and every video has to be prepared by hand',
+  },
+  {
     table: 'brand_profiles',
     column: 'visual',
     kind: 'column',
