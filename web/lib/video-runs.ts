@@ -13,6 +13,8 @@
 // production while working perfectly in development.
 import 'server-only';
 
+import { SOURCE_IDS } from '@/lib/google-sources';
+import { rowKeyFor } from '@/lib/video-row';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
@@ -159,4 +161,75 @@ export async function recordRunFailure(
   delete fallback.last_error_code;
   const { error: retry } = await admin.from('video_runs').update(fallback).eq('user_id', userId).eq('id', id);
   if (retry) reportError('video-runs:record-failure', retry, { id });
+}
+
+/**
+ * Record a failure that happened at the BUTTON, not in the sweep.
+ *
+ * `video_runs` was only ever written on the success path, inside completeRow.
+ * So a Prepare that failed — one row or a whole batch — left no trace anywhere
+ * except a note in that browser's localStorage. The consequences all showed up
+ * at once: the assistant reported a healthy pipeline while two videos were
+ * broken, /api/videos/runs could not see them, the overnight pass had no row to
+ * revive, and the only way to find out what went wrong was to press the button
+ * again and watch.
+ *
+ * Keyed exactly as the success path keys it. rowKeyFor uses the LINK when there
+ * is one and falls back to the file name, and completeRow passes the same link
+ * this route was given — so this updates the sweep's own row rather than
+ * creating a second one beside it.
+ */
+export async function recordRowFailure(opts: {
+  userId: string;
+  tab: string;
+  row: number;
+  /** The link Prepare was given; the same one completeRow keys its row on. */
+  videoLink: string;
+  title: string | null;
+  message: string;
+  /** prepareVideo's own error code, which lib/failure-kind.ts classifies. */
+  code: string;
+  /** True when only a pasted transcript can move this on. */
+  needsPaste: boolean;
+  spreadsheetId?: string;
+}): Promise<void> {
+  const admin = supabaseAdmin();
+  const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
+  if (!spreadsheetId || !opts.tab || !Number.isInteger(opts.row)) return;
+  const rowKey = rowKeyFor(opts.title || '', opts.videoLink);
+
+  // Read the attempt count first rather than upserting over it. A row the sweep
+  // has already tried twice must not be reset to one by a person pressing the
+  // button, or the allowance in lib/failure-kind.ts never runs out.
+  let attempts = 1;
+  try {
+    const { data } = await admin.from('video_runs').select('attempts')
+      .eq('spreadsheet_id', spreadsheetId).eq('tab', opts.tab).eq('row_key', rowKey).maybeSingle();
+    const prior = data as { attempts?: number } | null;
+    if (prior && typeof prior.attempts === 'number') attempts = prior.attempts + 1;
+  } catch { /* no prior row, or unreadable: one attempt is the honest floor */ }
+
+  const record: Record<string, unknown> = {
+    user_id: opts.userId,
+    spreadsheet_id: spreadsheetId,
+    tab: opts.tab,
+    row_key: rowKey,
+    row_number: opts.row,
+    video_title: opts.title || null,
+    video_link: opts.videoLink || null,
+    state: opts.needsPaste ? 'needs_transcript' : 'failed',
+    attempts,
+    last_error: opts.message,
+    last_error_code: opts.code,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await admin.from('video_runs').upsert(record, { onConflict: 'spreadsheet_id,tab,row_key' });
+  if (!error) return;
+  // A database that predates last_error_code refuses the whole statement, and
+  // losing the record entirely is the thing this function exists to prevent.
+  const fallback = { ...record };
+  delete fallback.last_error_code;
+  const { error: retry } = await admin.from('video_runs').upsert(fallback, { onConflict: 'spreadsheet_id,tab,row_key' });
+  if (retry) reportError('video-runs:record-row-failure', retry, { tab: opts.tab, row: String(opts.row) });
 }
