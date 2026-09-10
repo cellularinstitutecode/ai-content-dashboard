@@ -1,6 +1,7 @@
 // web/app/api/brand/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { normalizeVisual } from '@/lib/brand-visual';
+import { isMissingSchema } from '@/lib/schema-probe';
 import { supabaseServer } from '@/lib/supabase';
 
 export const runtime = 'nodejs';
@@ -52,15 +53,27 @@ export async function POST(req: NextRequest) {
     .upsert(payload, { onConflict: 'user_id' })
     .select()
     .maybeSingle();
-  // A database that has not run the `visual` migration (supabase/schema.sql)
-  // must still save the rest of the profile; the images then use the guide's
-  // defaults and /api/health reports the pending migration.
+  // A database behind supabase/schema.sql must still save what it CAN.
+  //
+  // This handled `visual` by name and nothing else, which was a guess about
+  // which column would go missing — and the one that actually did was
+  // updated_at, written on every save a few lines above. A database without it
+  // refuses the entire upsert, so the whole profile is lost over a timestamp,
+  // and on screen that is indistinguishable from a save that did not stick.
+  //
+  // Postgres names the column it refused. Drop that one and try again, rather
+  // than keeping a list of the columns somebody thought to predict.
   let warning: string | null = null;
-  if (error && /visual/i.test(error.message || '')) {
-    const { visual: _dropped, ...withoutVisual } = payload;
-    void _dropped;
-    ({ data, error } = await sb.from('brand_profiles').upsert(withoutVisual, { onConflict: 'user_id' }).select().maybeSingle());
-    warning = 'Saved without the visual identity: run supabase/schema.sql to add the brand_profiles.visual column.';
+  if (error && isMissingSchema(error.code)) {
+    const refused = Object.keys(payload).find((k) => new RegExp('\\b' + k + '\\b').test(error?.message || ''));
+    if (refused) {
+      const rest: Record<string, unknown> = { ...payload };
+      delete rest[refused];
+      ({ data, error } = await sb.from('brand_profiles').upsert(rest, { onConflict: 'user_id' }).select().maybeSingle());
+      warning = refused === 'visual'
+        ? 'Saved without the visual identity: run supabase/schema.sql to add the brand_profiles.visual column.'
+        : 'Saved, but this database has no brand_profiles.' + refused + ' column — run supabase/schema.sql to add it.';
+    }
   }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ brand: data, warning });

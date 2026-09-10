@@ -142,16 +142,30 @@ export const REQUIRED_SCHEMA: SchemaProbe[] = [
     breaks: 'the advertising-notice setting in Brand Brain',
   },
   {
-    // Declared inside the CREATE TABLE, which is why it can be absent: that
-    // statement is a no-op on a database where the table already exists, so a
-    // column added to it later never arrives. lib/sweep-owner.ts ordered by
-    // this one, and its absence took down every automatic run with a message
-    // about the Brand Brain rather than about a missing column.
+    // Both of these are declared inside the CREATE TABLE, which is why they can
+    // be absent: that statement is a no-op on a database where the table
+    // already exists, so a column added to it later never arrives.
+    //
+    // created_at took down every automatic run once, because lib/sweep-owner.ts
+    // ordered by it. That resolver no longer depends on it, so this is now a
+    // schema that has drifted rather than a thing that is broken — and saying
+    // otherwise would leave a person reading that their pipeline is dead when
+    // it is running.
     table: 'brand_profiles',
     column: 'created_at',
     kind: 'column',
     file: 'supabase/schema.sql',
-    breaks: 'the automatic video runs — the nightly pass and the sheet\u2019s own trigger both stop, and every video has to be prepared by hand',
+    breaks: 'nothing on its own — the code was changed to work without it — but the database no longer matches the code',
+  },
+  {
+    // This one is not cosmetic: app/api/brand/route.ts writes updated_at on
+    // every save, so without the column Postgres refuses the whole upsert and
+    // Brand Brain cannot be saved at all.
+    table: 'brand_profiles',
+    column: 'updated_at',
+    kind: 'column',
+    file: 'supabase/schema.sql',
+    breaks: 'saving Brand Brain — the whole profile is refused, which looks exactly like a save that did not stick',
   },
   {
     table: 'brand_profiles',
