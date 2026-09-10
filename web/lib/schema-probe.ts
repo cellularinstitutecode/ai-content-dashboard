@@ -63,6 +63,28 @@ export const REQUIRED_SCHEMA: SchemaProbe[] = [
     breaks: 'the record of which posts reached Metricool',
   },
   {
+    // Also an ALTER TABLE at the foot of that file. Without it the sweep
+    // cannot tell a row that ran out of time from one that needs a person, so
+    // it falls back to retrying everything the same number of times — which is
+    // the behaviour this column was added to end.
+    table: 'video_runs',
+    column: 'last_error_code',
+    kind: 'column',
+    file: 'supabase/video-autopilot.sql',
+    breaks: 'knowing which failures are worth retrying — every row gets the same three tries and then stops for good',
+  },
+  {
+    // The ceiling on automatic retries. Without it the revive pass cannot
+    // count how many times it has already brought a row back, so it either
+    // never retries or retries forever — and each retry is a full download
+    // and transcription.
+    table: 'video_runs',
+    column: 'revivals',
+    kind: 'column',
+    file: 'supabase/video-autopilot.sql',
+    breaks: 'the automatic retry of stalled videos — they stay stopped until somebody notices',
+  },
+  {
     // The TABLE, checked before any of its columns.
     //
     // Without this entry a missing table was reported as

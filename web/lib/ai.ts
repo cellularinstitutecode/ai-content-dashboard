@@ -420,7 +420,7 @@ export async function chatAssistant(
 // server (assistant route) can run it with the authed user + confirmation gate.
 // ---------------------------------------------------------------------------
 
-export type ToolName = "generate_content" | "save_draft" | "schedule_post" | "clip_video" | "research_topic" | "keyword_lookup";
+export type ToolName = "generate_content" | "save_draft" | "schedule_post" | "clip_video" | "research_topic" | "keyword_lookup" | "pipeline_status" | "retry_video";
 
 export type ToolCall = {
   name: ToolName;
@@ -443,9 +443,16 @@ Tool guidance:
 - schedule_post: schedule a post to a social network at a date/time via the connected scheduler. Networks: facebook, instagram, linkedin, twitter (x), tiktok, youtube, threads. publishAt must be an ISO datetime (YYYY-MM-DDTHH:MM). The server will ask the user to confirm before anything goes live, so it is fine to call this when the user asks; do not refuse.
 - clip_video: turn a long YouTube or Vimeo video into short vertical clips via OpusClip. Use when the user gives a video URL and asks for clips/shorts/reels. Requires a videoUrl; title and language are optional.
 - research_topic: run topic research (angles, keywords, hashtags, hooks, and a ready draft) for a network. Use when the user asks to research a topic or wants ideas/angles/keywords before drafting. Requires a topic; network is optional (default instagram).
+- pipeline_status: list the clinic's videos and what state each is in — done, queued, stuck, or waiting on a person. Call it whenever the user asks what happened to a video, what needs them, or what is stuck. The LIVE SITUATION block already gives you the headline; use this for detail or when the user asks about a specific video.
+- retry_video: re-run a video that stopped. Use it for anything the situation block marks [retry_video can fix this]. It clears the row's attempt count — which is the only way a video that has already been retired gets another chance — then re-transcribes and rewrites the copy and puts it back in the Google Sheet.
 - keyword_lookup: fetch REAL Semrush search data for a topic — monthly volume, keyword difficulty (KD), CPC, searcher intent, and the questions people actually ask. Call this BEFORE recommending topics, angles, or keywords, and whenever the user asks what to write about or how content might perform.
 
 Semrush grounding rules: recommendations about WHAT to write must be grounded in keyword_lookup or research_topic data, not guesses. Prefer high-volume, lower-difficulty (KD under ~60) terms; say the numbers out loud (e.g. "1,900 searches/mo, KD 26") so the user can judge; when data is unavailable, say so plainly rather than inventing metrics.
+
+What you may do without asking, and what you may not:
+- You MAY retry, re-prepare and rewrite a video, and write the caption into the Google Sheet, as many times as needed. Do it, then say what happened. Do not ask permission first.
+- You may NEVER queue anything to Metricool on your own. retry_video deliberately does not, and it will tell you so. When the user wants the drafts queued, say that the "Send to Metricool" button on that row does it — approving what gets posted is theirs, and it stays theirs.
+- Never claim a video was fixed unless the tool result says so. A tool that reports "still needs a transcript" means a person has to paste one; say that plainly instead of offering to try again.
 
 Keep replies concise and friendly. Only reference the clinic own website and YouTube content. Never invent medical claims; keep language compliant and non-exaggerated. If a scheduling request is missing the network or the date/time, ask a brief clarifying question instead of calling schedule_post.`;
 
@@ -463,6 +470,30 @@ const TOOL_DEFS = [
         provider: { type: "string", enum: ["anthropic", "openai"], description: "Which AI model to draft with. Default anthropic." },
       },
       required: ["topic"],
+    },
+  },
+  {
+    name: "pipeline_status",
+    description: "List the clinic's videos and the state each one is in: done, queued, being worked on, stuck on something temporary, or waiting on a person. Use for 'what happened to that video', 'what needs me', 'what is stuck'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        filter: { type: "string", enum: ["all", "stuck", "recent"], description: "Which rows to list. Default stuck." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "retry_video",
+    description: "Re-run a video that stopped, clearing its attempt count first so that even a row which had been retired for good is tried again. Re-transcribes if needed, rewrites the copy and writes it into the Google Sheet. It NEVER queues anything to Metricool — that stays a button the user presses.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The row id from pipeline_status. Preferred." },
+        title: { type: "string", description: "The video's title, if the id is not known." },
+        all_stuck: { type: "boolean", description: "Retry every video stuck on something temporary, instead of one. Capped per turn." },
+      },
+      required: [],
     },
   },
   {
@@ -529,7 +560,14 @@ const TOOL_DEFS = [
 
 export type ToolMessage = { role: "user" | "assistant"; content: any };
 
-export async function chatWithTools(messages: ToolMessage[]): Promise<ToolTurn> {
+/**
+ * @param systemExtra live facts about THIS user's workspace, appended as a
+ *   second system block rather than concatenated into the first. Two reasons:
+ *   the static half stays byte-identical turn to turn (so it can be prompt-
+ *   cached later without a rewrite), and the model sees a clearly delimited
+ *   "here is the situation right now" rather than a prompt that looks edited.
+ */
+export async function chatWithTools(messages: ToolMessage[], systemExtra?: string): Promise<ToolTurn> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error("ANTHROPIC_API_KEY missing");
   const model = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
@@ -543,7 +581,9 @@ export async function chatWithTools(messages: ToolMessage[]): Promise<ToolTurn> 
     body: JSON.stringify({
       model,
       max_tokens: 1500,
-      system: TOOLS_SYSTEM,
+      system: systemExtra
+        ? [{ type: 'text', text: TOOLS_SYSTEM }, { type: 'text', text: systemExtra }]
+        : TOOLS_SYSTEM,
       tools: TOOL_DEFS,
       messages,
     }),

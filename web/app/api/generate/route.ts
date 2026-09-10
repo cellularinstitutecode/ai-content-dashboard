@@ -2,7 +2,8 @@
 // Thin route — delegates to lib/ai.ts so we can swap providers.
 import { isAllowedEmail } from '@/lib/access';
 import { NextRequest, NextResponse } from 'next/server';
-import { generateContentPack, type Provider, type ContentType, type BrandContext } from '@/lib/ai';
+import { generateContentPack, type Provider, type ContentType } from '@/lib/ai';
+import { loadBrandContext } from '@/lib/brand-context';
 import { reviewPack } from '@/lib/safety';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -75,17 +76,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Load the signed-in user's Brand Brain profile (optional).
-    let brand: BrandContext | undefined;
-    try {
-      const { data: bp } = await sb
-        .from('brand_profiles')
-        .select('name, mission, voice, audience, keywords, guidelines, aviso_publicidad')
-        .eq('user_id', user.id)
-        .maybeSingle();
-      if (bp) brand = bp as BrandContext;
-    } catch {
-      // ignore brand-load failures; fall back to the default brand voice.
-    }
+    // Shared with the assistant, which used to load nothing at all.
+    const brand = await loadBrandContext(sb, user.id);
 
     // Load the user's recent top-performing posts to bias generation (optional).
     let performanceHint: string | undefined;

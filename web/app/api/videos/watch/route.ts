@@ -61,11 +61,17 @@ async function handle(req: NextRequest) {
   // want to read the copy before any of it reaches a posting queue.
   const skipMetricool = url.searchParams.get('sheetOnly') === '1';
   const maxParam = Number(url.searchParams.get('max'));
-  // One video per request by default. Inside a 60-second function there is
-  // room for exactly one download-extract-transcribe-write cycle with margin;
-  // asking for more would time out mid-video and lose the work in flight. The
-  // sweep comes back for the rest — a run is cheap and idempotent.
-  const maxVideos = Number.isFinite(maxParam) && maxParam > 0 ? Math.min(maxParam, 10) : 1;
+  // The default was ONE, sized for a 60-second function with room for exactly
+  // one download-extract-transcribe-write cycle. The function now has 300
+  // seconds — and since this route runs on a DAILY cron, a default of one
+  // meant the nightly pass cleared at most one video per day. A backlog of
+  // thirty would have taken a month, which is not a sweep so much as a queue
+  // that never empties.
+  //
+  // Five is safe because nothing here relies on it: `budgetMs` below stops the
+  // sweep STARTING another video once the clock runs down, and each row still
+  // owns its own per-step budget. The cap is the ceiling, not the plan.
+  const maxVideos = Number.isFinite(maxParam) && maxParam > 0 ? Math.min(maxParam, 10) : 5;
 
   try {
     const out = await sweepVideos({ userId, dryRun, skipMetricool, maxVideos, budgetMs: 270_000 });

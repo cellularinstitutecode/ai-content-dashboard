@@ -36,11 +36,14 @@ import {
   sourcesConfigured,
   type VideoField,
 } from '@/lib/google-sources';
+import { mayRetry } from '@/lib/failure-kind';
+import { isMissingSchema } from '@/lib/schema-probe';
 import { columnFor, pick, tableFromRows } from '@/lib/sheet-table';
 import { prepareVideo, type PrepareOk } from '@/lib/video-prepare';
 import { STATUS_TEXT, claimIsStale, firstLinkIn, fitsNetwork, isCandidate, preparedStatus, rowKeyFor } from '@/lib/video-row';
 import { NEEDS_VIDEO, networksFor, nextFreeSlot } from '@/lib/video-slot';
 import { publishVideoDraft, takenSlots, type PublishOutcome } from '@/lib/video-publish';
+import { reviveStalledRuns, type ReviveResult } from '@/lib/video-revive';
 import { publicVideoCopy } from '@/lib/drive';
 import { cachedPublicCopy, rememberPublicCopy } from '@/lib/transcript-cache';
 import { parseDriveFileId } from '@/lib/drive-url';
@@ -85,7 +88,50 @@ export type SweepResult = {
   metricoolDrafts: number;
   rows: SweepRowOutcome[];
   stoppedEarly: boolean;
+  /**
+   * What the revive pass handed back to the queue before this sweep started.
+   *
+   * Carried in the result so the assistant can say "overnight I retried three
+   * and fixed two" — the recovery was previously invisible even to the run
+   * that performed it.
+   */
+  revived?: ReviveResult;
 };
+
+/**
+ * Update one video_runs row, tolerating a database that predates a column.
+ *
+ * `last_error_code` arrived after the first version of this table, and naming
+ * an absent column refuses the WHOLE statement — so on a database where the
+ * migration has not been run yet, `state: 'prepared'` would be lost along with
+ * it and the row would be re-downloaded and re-transcribed on every sweep from
+ * then on, forever, at full price.
+ *
+ * A refusal that names a missing column is therefore retried without the new
+ * field. Everything else is reported rather than swallowed: supabase-js
+ * RESOLVES a failed query, so an unchecked update here looks exactly like a
+ * successful one.
+ */
+async function updateRun(
+  admin: ReturnType<typeof supabaseAdmin>,
+  where: { spreadsheetId: string; tab: string; rowKey: string },
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const apply = (fields: Record<string, unknown>) =>
+    admin.from('video_runs').update(fields)
+      .eq('spreadsheet_id', where.spreadsheetId).eq('tab', where.tab).eq('row_key', where.rowKey);
+
+  const { error } = await apply(patch);
+  if (!error) return;
+  if (isMissingSchema(error.code) && 'last_error_code' in patch) {
+    const rest = { ...patch };
+    delete rest.last_error_code;
+    const retry = await apply(rest);
+    if (retry.error) reportError('video-sweep:update-run', retry.error, { tab: where.tab });
+    return;
+  }
+  reportError('video-sweep:update-run', error, { tab: where.tab });
+}
 
 export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
   const started = Date.now();
@@ -99,6 +145,21 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
   const result: SweepResult = { ok: true, scanned: 0, candidates: 0, prepared: 0, needsTranscript: 0, failed: 0, metricoolDrafts: 0, rows: [], stoppedEarly: false };
   if (!sourcesConfigured()) {
     return { ...result, ok: false };
+  }
+
+  // Before reading a single tab: hand back the rows that stopped for reasons
+  // which have since passed — a claim from a run that died, a failure that
+  // looked temporary and has sat out its cooldown. One query, no spending, and
+  // it decides which rows the walk below is even allowed to consider.
+  //
+  // A dry run reports what WOULD happen and must not move anything.
+  if (!opts.dryRun) {
+    try {
+      result.revived = await reviveStalledRuns(opts.userId, started);
+    } catch (e) {
+      // Not being able to revive is not a reason to skip the sweep itself.
+      reportError('video-sweep:revive', e);
+    }
   }
 
   const tabs = await listTabs(spreadsheetId);
@@ -148,14 +209,34 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
       // Has this row been dealt with before? A prepared row is done. A failed
       // one is retried a few times and then left alone, so a video that simply
       // cannot be transcribed does not cost money every single day.
-      const { data: existing } = await admin
+      // '*' rather than a column list, so that a database which has not yet
+      // run the last_error_code migration simply returns a row without it.
+      // Naming the column explicitly would make the whole query fail there,
+      // and supabase-js RESOLVES a failed query — `prior` would come back null,
+      // every row would look brand new, and the sweep would re-download and
+      // re-transcribe the entire sheet. Degrading to "one column absent" is a
+      // great deal cheaper than degrading to "no memory at all".
+      const { data: existing, error: priorError } = await admin
         .from('video_runs')
-        .select('id, state, attempts, updated_at')
+        .select('*')
         .eq('spreadsheet_id', spreadsheetId).eq('tab', tab.title).eq('row_key', rowKey)
         .maybeSingle();
-      const prior = existing as { id: string; state: string; attempts: number; updated_at?: string } | null;
+      if (priorError) {
+        // Not knowing whether this row was done before is not a licence to do
+        // it again at full price. Skip it and let the next sweep ask again.
+        reportError('video-sweep:prior', priorError, { tab: tab.title, row: String(row) });
+        continue;
+      }
+      const prior = existing as { id: string; state: string; attempts: number; updated_at?: string; last_error_code?: string | null } | null;
       if (prior && (prior.state === 'prepared' || prior.state === 'skipped')) continue;
-      if (prior && prior.attempts >= 3) continue;
+      // How many passes this row is worth depends on WHY it stopped.
+      //
+      // This used to be a flat `attempts >= 3`, which retired a row that had
+      // merely run out of time exactly as hard as one whose copy named a
+      // person — and nothing anywhere could un-retire either. A timeout is
+      // fixed by trying again; a refusal is not, and two more transcriptions
+      // reach it again at full price. lib/failure-kind.ts holds the split.
+      if (prior && !mayRetry(prior.last_error_code ?? null, prior.attempts)) continue;
       // Claimed by a sweep that is still running. The hourly cron and the
       // sheet's own edit trigger can fire seconds apart, and transcribing a
       // video takes minutes — without this both would do it, and pay twice.
@@ -247,10 +328,11 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
         // person for a row that needs nothing from them.
         if (!prepared.ok && prepared.error === 'transcript_ready') {
           await writeStatus(spreadsheetId, tab.title, row, columns, STATUS_TEXT.transcript_ready);
-          await admin.from('video_runs').update({
+          await updateRun(admin, { spreadsheetId, tab: tab.title, rowKey }, {
             state: 'discovered',
             transcript_source: 'drive',
             last_error: null,
+            last_error_code: null,
             // Give back the attempt this pass consumed.
             //
             // attempts was incremented when the row was claimed, and three of them
@@ -261,7 +343,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
             // recorded anywhere to say why.
             attempts: Math.max(0, (prior?.attempts ?? 1) - 1),
             updated_at: new Date().toISOString(),
-          }).eq('spreadsheet_id', spreadsheetId).eq('tab', tab.title).eq('row_key', rowKey);
+          });
           outcome = { tab: tab.title, row, rowKey, title: title || videoLink, state: 'transcript_ready', message: prepared.message };
           result.rows.push(outcome);
           continue;
@@ -270,8 +352,15 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
         if (!prepared.ok) {
           const state = prepared.needsPaste ? 'needs_transcript' : 'failed';
           await writeStatus(spreadsheetId, tab.title, row, columns, STATUS_TEXT[state]);
-          await admin.from('video_runs').update({ state, last_error: prepared.message, updated_at: new Date().toISOString() })
-            .eq('spreadsheet_id', spreadsheetId).eq('tab', tab.title).eq('row_key', rowKey);
+          // The CODE as well as the sentence. `last_error` is written for a
+          // person and says nothing a machine can act on, so the decision
+          // about whether to try this row again had nothing to read.
+          await updateRun(admin, { spreadsheetId, tab: tab.title, rowKey }, {
+            state,
+            last_error: prepared.message,
+            last_error_code: prepared.error,
+            updated_at: new Date().toISOString(),
+          });
           if (state === 'needs_transcript') result.needsTranscript++; else result.failed++;
           outcome = { tab: tab.title, row, rowKey, title: title || videoLink, state, message: prepared.message };
           result.rows.push(outcome);
@@ -316,7 +405,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
           await writeStatus(spreadsheetId, tab.title, row, columns, status);
         }
 
-        await admin.from('video_runs').update({
+        await updateRun(admin, { spreadsheetId, tab: tab.title, rowKey }, {
           state: 'prepared',
           row_number: row,
           transcript_source: prepared.transcript.source,
@@ -327,8 +416,9 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
           wrote,
           metricool: posted,
           last_error: null,
+          last_error_code: null,
           updated_at: new Date().toISOString(),
-        }).eq('spreadsheet_id', spreadsheetId).eq('tab', tab.title).eq('row_key', rowKey);
+        });
 
         result.prepared++;
         result.metricoolDrafts += posted.filter((p) => p.ok).length;
@@ -337,8 +427,15 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
       } catch (e) {
         reportError('video-sweep:row', e, { tab: tab.title, row: String(row) });
         const message = e instanceof Error ? e.message : 'Unknown failure';
-        await admin.from('video_runs').update({ state: 'failed', last_error: message, updated_at: new Date().toISOString() })
-          .eq('spreadsheet_id', spreadsheetId).eq('tab', tab.title).eq('row_key', rowKey);
+        // A thrown exception is not one of prepareVideo's named refusals — it
+        // is Google, Supabase or the network having a bad moment, which is the
+        // definition of worth trying again.
+        await updateRun(admin, { spreadsheetId, tab: tab.title, rowKey }, {
+          state: 'failed',
+          last_error: message,
+          last_error_code: 'unreachable',
+          updated_at: new Date().toISOString(),
+        });
         result.failed++;
         result.rows.push({ tab: tab.title, row, rowKey, title: title || videoLink, state: 'failed', message });
       }
