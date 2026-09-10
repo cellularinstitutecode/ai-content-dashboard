@@ -409,7 +409,17 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
 
     // The citation the compliance pass verified, taken from whichever variant
     // the writer put it on.
-    ref = checkCompliance(tiktok).ref || checkCompliance(String(pack.facebook || '')).ref || '';
+    // linkedin ahead of facebook in the chain.
+    //
+    // facebook was the second place to look, and the writer is no longer asked
+    // to fill it — lib/ai.ts now requests only the channels a caller reads, so
+    // for a video that key comes back empty by design. Without linkedin here
+    // the citation would rest entirely on instagram, and a draft with no REF is
+    // refused outright.
+    ref = checkCompliance(tiktok).ref
+      || checkCompliance(String(pack.linkedin || '')).ref
+      || checkCompliance(String(pack.facebook || '')).ref
+      || '';
 
     // LinkedIn carries the notice and the citation too.
     //

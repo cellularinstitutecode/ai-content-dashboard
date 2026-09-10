@@ -8,6 +8,7 @@ import { REF_INSTRUCTION, avisoNumberFor, checkCompliance, ensureAviso, type Com
 import { verifyDoi, type CitationCheck } from '@/lib/citation';
 import { researchBundle, briefPromptFrom, type KeywordBrief } from '@/lib/semrush';
 import { attemptPlan } from '@/lib/ai-attempts';
+import { packKeyContract } from '@/lib/pack-keys';
 import { readAnthropicStream } from '@/lib/sse-stream';
 
 export type Provider = 'anthropic' | 'openai';
@@ -147,8 +148,27 @@ async function withRetry<T>(
 async function fetchWithRetry(url: string, init: RequestInit, opts: { retries?: number; timeoutMs?: number } = {}): Promise<Response> {
   return withRetry(url, init, opts, async (res) => res);
 }
+/**
+ * The output ceiling, which is not the same thing as a target.
+ *
+ * 'social' was 2000, set when TYPE_INSTRUCTIONS said "instagram: short (max
+ * ~150 words)". It does not say that any more. The house style now asks for
+ * 800-1,100 characters of BODY for instagram AND linkedin, each carrying a REF
+ * line, an AVISO line and eleven hashtags, inside one JSON object whose every
+ * paragraph break is escaped to \n — 1,300-1,900 tokens against a ceiling of
+ * 2,000. So it truncated, parseJsonStrict called it malformed, the caller
+ * re-rolled, and the second attempt truncated in the same place: "the model
+ * returned something unusable twice running".
+ *
+ * Streaming removed the reason the cap was low — a small ceiling used to keep a
+ * non-streaming response inside the HTTP timeout, and nothing waits on a silent
+ * socket now. Raised well clear rather than to the nearest fit, because a
+ * ceiling that is only just enough becomes wrong again the next time the house
+ * style gains a line. It costs nothing to be generous here: a short post still
+ * spends short-post tokens.
+ */
 function maxTokensFor(type: ContentType): number {
-  return type === 'blog' || type === 'email' ? 4000 : 2000;
+  return type === 'blog' || type === 'email' ? 16000 : 8000;
 }
 
 const DEFAULT_VOICE = `You are an expert marketing content writer. You write in a warm, clear, credible voice: helpful and specific, never hype. When a brand profile is provided, follow it exactly and let it override these defaults.`;
@@ -164,9 +184,24 @@ const TYPE_INSTRUCTIONS: Record<ContentType, string> = {
   ad: `Produce ad copy for Meta/Google Ads. Put 3 headline variations + primary text + CTA in the "blog" key. In "instagram", "facebook" and "linkedin" put a platform-tailored ad primary text for each.`,
 };
 
-function systemPrompt(type: ContentType, brand?: BrandContext) {
+/**
+ * @param channels the keys this caller will actually read, when it knows.
+ *
+ * Without it every request demands all four, and for a video that means writing
+ * a 250-400 word mini-article into `blog` on every single run — the largest
+ * field in the object — which lib/video-prepare.ts then discards unread. It was
+ * roughly a third of the output budget spent on nothing, and it is what put the
+ * response over max_tokens once the house style grew.
+ *
+ * The unrequested keys are still permitted, as empty strings, rather than
+ * removed: parseJsonStrict reads all four and enforces only instagram and
+ * linkedin, so an empty one is already a valid answer. Omitting `channels`
+ * leaves the prompt byte-for-byte as it was, which is what keeps
+ * lib/autopilot.ts, the assistant and /api/generate on today's behaviour.
+ */
+function systemPrompt(type: ContentType, brand?: BrandContext, channels?: string[]) {
   const voice = brand?.voice ? `You are the marketing content writer for ${brand.name || 'this brand'}. Write in this brand voice: ${brand.voice}` : DEFAULT_VOICE;
-  return `${voice} You always return STRICT JSON with exactly the keys: instagram, facebook, linkedin, blog. Each value is a finished, ready-to-use string. ${TYPE_INSTRUCTIONS[type]}${MEDICAL_SAFETY_GUARDRAILS}${REF_INSTRUCTION} Return strict JSON only. No prose, no markdown fences.`;
+  return `${voice} ${packKeyContract(channels)} Each value is a finished, ready-to-use string. ${TYPE_INSTRUCTIONS[type]}${MEDICAL_SAFETY_GUARDRAILS}${REF_INSTRUCTION} Return strict JSON only. No prose, no markdown fences.`;
 }
 
 /**
@@ -230,7 +265,7 @@ async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
         // Silently a no-op when the prefix is below the model's minimum
         // cacheable length, which is the correct failure: nothing breaks, the
         // saving simply does not appear.
-        system: [{ type: 'text', text: systemPrompt(type, input.brand), cache_control: { type: 'ephemeral' } }],
+        system: [{ type: 'text', text: systemPrompt(type, input.brand, input.channels), cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: buildUserPrompt(input) }],
         // Streamed. A non-streaming request holds the socket silent until the
         // whole answer is composed, which for two 800-1100 character posts is
@@ -277,7 +312,7 @@ async function callOpenAI(input: GenerateInput): Promise<ContentPack> {
       // in which specifics it picks, not in how far it wanders.
       temperature: 0.4,
       messages: [
-        { role: 'system', content: systemPrompt(type, input.brand) },
+        { role: 'system', content: systemPrompt(type, input.brand, input.channels) },
         { role: 'user', content: buildUserPrompt(input) },
       ],
     }),

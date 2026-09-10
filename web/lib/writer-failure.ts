@@ -69,8 +69,19 @@ export function describeWriterFailure(err: unknown): WriterFailure {
   if (/failed after \d+ attempts/i.test(message) || /abort/i.test(message)) {
     return { said: 'it ran out of time before the model replied', retryable: true };
   }
-  if (/malformed JSON|returned no /i.test(message)) {
-    return { said: 'the model returned something unusable twice running', retryable: true };
+  // Cut off, from lib/sse-stream.ts reading stop_reason off the wire.
+  if (/cut off at max_tokens/i.test(message)) {
+    return { said: 'the model ran out of room and its answer was cut off before it was complete', retryable: false };
+  }
+  // These two were one clause, and collapsing them is why a truncated answer
+  // and an empty field read identically. They are different faults: the first
+  // is a ceiling somebody can raise, the second is the prompt not being
+  // followed, and only one of them gets better by asking again.
+  if (/malformed JSON/i.test(message)) {
+    return { said: 'the model\u2019s answer came back incomplete or garbled, twice running', retryable: true };
+  }
+  if (/returned no /i.test(message)) {
+    return { said: 'the model left the instagram or linkedin copy empty, twice running', retryable: true };
   }
   return { said: 'the reason was not recorded', retryable: true };
 }

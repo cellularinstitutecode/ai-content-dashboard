@@ -21,7 +21,8 @@
 /**
  * Accumulate the text deltas of an Anthropic message stream.
  *
- * Two things this must get right, and both are invisible with tidy input:
+ * Three things this must get right, and all of them are invisible with tidy
+ * input:
  *
  *  - TCP does not respect SSE framing. A frame can arrive in three reads with
  *    its blank-line terminator in the last of them, so only WHOLE frames are
@@ -30,6 +31,13 @@
  *    caller half a JSON object, which reads as malformed — and lib/ai.ts
  *    re-rolls malformed JSON at full price, so a rate limit would show up as a
  *    bill rather than as a rate limit.
+ *  - `stop_reason` arrives on `message_delta`, and `max_tokens` means the answer
+ *    was CUT OFF. The first version of this file ignored that event, so a
+ *    truncated body went to parseJsonStrict, came back as "malformed JSON", and
+ *    was re-rolled — spending a second call to reproduce a certainty, then
+ *    reporting "the model returned something unusable twice running" about a
+ *    model that had told us exactly what happened. Reading it is the difference
+ *    between a wrong ceiling somebody can raise and a mystery.
  */
 export async function readAnthropicStream(res: Response): Promise<string> {
   const body = res.body;
@@ -38,6 +46,7 @@ export async function readAnthropicStream(res: Response): Promise<string> {
   const decoder = new TextDecoder();
   let buffered = '';
   let text = '';
+  let stopReason = '';
 
   for (;;) {
     const { done, value } = await reader.read();
@@ -56,16 +65,26 @@ export async function readAnthropicStream(res: Response): Promise<string> {
         if (!line.startsWith('data:')) continue;
         const payload = line.slice(5).trim();
         if (!payload || payload === '[DONE]') continue;
-        let event: { type?: string; delta?: { type?: string; text?: string }; error?: { message?: string } };
+        let event: { type?: string; delta?: { type?: string; text?: string; stop_reason?: string }; error?: { message?: string } };
         try { event = JSON.parse(payload); } catch { continue; }
         if (event.type === 'error') {
           throw new Error('anthropic stream error: ' + (event.error?.message || 'unknown'));
+        }
+        if (event.type === 'message_delta' && event.delta?.stop_reason) {
+          stopReason = String(event.delta.stop_reason);
         }
         if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
           text += event.delta.text ?? '';
         }
       }
     }
+  }
+
+  // Cut off, not garbled. Said here rather than left for parseJsonStrict,
+  // which can only report the symptom — and whose caller answers a malformed
+  // body by asking again, at full price, for the same truncation.
+  if (stopReason === 'max_tokens') {
+    throw new Error('anthropic: the answer was cut off at max_tokens after ' + text.length + ' characters');
   }
   return text;
 }
