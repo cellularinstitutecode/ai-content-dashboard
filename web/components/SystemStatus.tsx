@@ -50,7 +50,11 @@ export default function SystemStatus() {
   const blocking = failing.some((c) => c.severity === 'required');
   // The wording lives in lib/health-plain.ts so this banner and the
   // assistant say the same sentence about the same condition.
-  const lines = failing.map((c) => plainFor(c.name, c.code));
+  // Keep the check beside its wording. The `detail` is where the server says
+  // WHICH of several causes this is — sweep_owner alone distinguishes three,
+  // each with a different fix — and this component declared the field and then
+  // never rendered it, so the one sentence worth reading never arrived.
+  const lines = failing.map((c) => ({ ...plainFor(c.name, c.code), detail: c.detail }));
 
   return (
     <div
@@ -68,6 +72,10 @@ export default function SystemStatus() {
           <li key={i}>
             {l.down}
             {l.stillWorks ? <span className="opacity-70"> {l.stillWorks}</span> : null}
+            {/* The technical half, for whoever set this up. Second and quieter
+                so the plain words still lead, but present — it is the only
+                part that says which cause this is and what fixes it. */}
+            {l.detail ? <span className="mt-0.5 block text-[12px] opacity-60">{l.detail}</span> : null}
           </li>
         ))}
       </ul>

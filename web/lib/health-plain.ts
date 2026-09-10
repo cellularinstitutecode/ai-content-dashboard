@@ -24,6 +24,17 @@ export type PlainSaid = {
 
 export const PLAIN: Record<string, PlainSaid> = {
   supabase: { down: 'Saving and sign-in are unavailable.' },
+  // The automatic path's single point of failure. Named by what it COSTS: the
+  // phrase "sweep owner" means nothing to the person reading this, and the
+  // thing they will notice is that pasting a link into the sheet stops doing
+  // anything. Both automatic triggers — the sheet's own and the nightly pass —
+  // check this before they do a thing, and answer 503 when it fails.
+  sweep_owner: { down: 'Videos are not being prepared automatically — pasting a link into the sheet no longer starts anything, and the nightly pass does nothing either.', stillWorks: 'Preparing a video by hand from the Video Library still works.' },
+  // Google can be reached but will not accept a write, which looks exactly
+  // like everything working until the moment copy is written back.
+  sheet_write: { down: 'The copy cannot be written back into the Google Sheet.', stillWorks: 'Videos are still transcribed and the copy is still saved as a draft here.' },
+  supabase_service_role: { down: 'The database key is not the one the app needs, so anything it saves in the background may silently go nowhere.' },
+  audio_extractor: { down: 'Speech-to-text is unavailable — a video with no YouTube captions cannot be read.', stillWorks: 'A video with captions, or a transcript you paste, still works.' },
   database_schema: { down: 'The database is missing an update — ask whoever set this up to run the migration.', stillWorks: 'Writing and scheduling still work; Autopilot does not.' },
   ai_provider: { down: 'Writing is unavailable — no AI is connected.' },
   metricool: { down: 'Scheduling is unavailable.', stillWorks: 'You can still write and save drafts.' },
