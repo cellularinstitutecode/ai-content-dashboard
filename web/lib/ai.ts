@@ -79,6 +79,14 @@ export type GenerateInput = {
    */
   evidenceHint?: string;
   /**
+   * Who already ranks for this subject, and what to do about it.
+   *
+   * Built by lib/serp-landscape.ts from live SERP data. Placed after the
+   * research and before the house style: it changes what the post EMPHASISES,
+   * not what it is allowed to claim.
+   */
+  landscapeHint?: string;
+  /**
    * House rules for this particular job — length, shape, what must be named.
    *
    * TYPE_INSTRUCTIONS is shared with every caller, and its social entry says "max ~150
@@ -237,7 +245,7 @@ function buildUserPrompt(input: GenerateInput) {
 Target audience: ${input.audience || brand?.audience || 'a general audience'}
 Tone: ${input.tone || 'professional, friendly'}
 Channels to produce: ${channels}
-${input.keywordHint ? input.keywordHint + '\nWork these keywords in naturally — headings, body, hashtags.\n' : ''}${input.evidenceHint ? input.evidenceHint + '\n' : ''}${input.performanceHint ? input.performanceHint + '\n' : ''}${input.styleHint ? input.styleHint + '\n' : ''}Return strict JSON only. No prose, no markdown fences.`;
+${input.keywordHint ? input.keywordHint + '\nWork these keywords in naturally — headings, body, hashtags.\n' : ''}${input.evidenceHint ? input.evidenceHint + '\n' : ''}${input.landscapeHint ? input.landscapeHint + '\n' : ''}${input.performanceHint ? input.performanceHint + '\n' : ''}${input.styleHint ? input.styleHint + '\n' : ''}Return strict JSON only. No prose, no markdown fences.`;
 }
 
 async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
