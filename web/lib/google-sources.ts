@@ -711,6 +711,14 @@ export async function uploadFolderImage(
  * (512 MB) and pulls the audio track out of it, so what actually reaches the
  * transcriber is a couple of megabytes whatever the video weighs. The clinic's
  * reels run 76–283 MB, comfortably inside this.
+ *
+ * NOT the ceiling on what can be transcribed any more, and callers on the
+ * transcription path should pass Number.POSITIVE_INFINITY instead. A file too
+ * big to stage is now read where it lives (extractAudioFromUrl), so the size
+ * question became a routing decision and moved, whole, to lib/media-route.ts —
+ * where DISK_SAFE_BYTES is this same number wearing a name that says what it
+ * governs. This one remains for downloadDriveMedia below, which really does
+ * hold the file in memory and really is bounded by it.
  */
 export const MEDIA_MAX_BYTES = 450 * 1024 * 1024;
 
@@ -773,6 +781,24 @@ export async function probeDriveMedia(fileId: string, maxBytes = MEDIA_MAX_BYTES
  * Response so the caller owns the body — and with it, the choice of never
  * holding the whole file at once.
  */
+/**
+ * The same file as an address ffmpeg can open for itself.
+ *
+ * Handing out the token is deliberate and narrow: ffmpeg has no way to receive
+ * a credential except on its command line, and reading the video where it lives
+ * is what removes the scratch-disk ceiling. The scope is drive.readonly /
+ * drive.file, the token expires in under an hour, and lib/audio-extract.ts
+ * strips it out of every message before anything is logged or shown.
+ *
+ * Callers must not put the return value anywhere it would be persisted.
+ */
+export async function driveMediaAddress(fileId: string): Promise<{ url: string; token: string }> {
+  return {
+    url: DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true',
+    token: await accessToken(),
+  };
+}
+
 export async function driveMediaStream(fileId: string, transferMs = 40_000): Promise<Response> {
   // AbortSignal.timeout stays armed for the whole transfer, not just the
   // handshake, so `transferMs` is a real deadline on the download rather than

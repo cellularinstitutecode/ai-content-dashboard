@@ -16,9 +16,10 @@ import 'server-only';
 
 import { openAsBlob } from 'node:fs';
 
-import { extractAudio, ffmpegAvailable } from '@/lib/audio-extract';
-import { driveMediaStream, probeDriveMedia, MEDIA_MAX_BYTES } from '@/lib/google-sources';
-import { downloadBudgetMs, transcribeBudgetMs } from '@/lib/prepare-budget';
+import { extractAudio, extractAudioFromUrl, ffmpegAvailable, type ExtractedAudio } from '@/lib/audio-extract';
+import { driveMediaAddress, driveMediaStream, probeDriveMedia } from '@/lib/google-sources';
+import { megabytes, routeFor } from '@/lib/media-route';
+import { downloadBudgetMs, streamExtractBudgetMs, transcribeBudgetMs } from '@/lib/prepare-budget';
 import { redact } from '@/lib/report';
 
 /** Why a recording could not be turned into words. Named so callers that wrap
@@ -65,8 +66,23 @@ export async function transcribeDriveMedia(
 
   // Metadata first: one request rules out a file that is not a recording, or
   // one too big to pull down, before any of it is transferred.
-  const probe = await probeDriveMedia(fileId, MEDIA_MAX_BYTES);
+  // No size ceiling on the probe at all — it checks only that the file is
+  // reachable and is a recording. Size policy lives in exactly one place now
+  // (lib/media-route.ts), because it stopped being a yes/no: under the
+  // scratch-disk cap the video is staged as before, over it ffmpeg reads it
+  // where it lives, and only past what can cross the wire in one request is it
+  // actually refused. Two places deciding that would drift apart.
+  const probe = await probeDriveMedia(fileId, Number.POSITIVE_INFINITY);
   if (!probe.ok) return { ok: false, reason: probe.reason, message: probe.message };
+
+  const route = routeFor(probe.sizeBytes);
+  if (route === 'too_large') {
+    return {
+      ok: false,
+      reason: 'too_large',
+      message: 'That video is ' + megabytes(probe.sizeBytes) + ', too much to read inside one request however it is fetched. Paste the transcript instead.',
+    };
+  }
 
   // The clock, BEFORE the expensive step rather than after it.
   //
@@ -84,6 +100,27 @@ export async function transcribeDriveMedia(
       message: 'Only ' + Math.max(0, Math.round(leftNow / 1000)) + ' seconds were left on this request, which is not enough to fetch ' + mb +
         ' and transcribe it. Press Prepare again to start with a full clock.',
     };
+  }
+
+  // Big enough that staging it would need more scratch disk than the function
+  // has: ffmpeg opens the Drive URL itself and writes only the mp3.
+  if (route === 'stream') {
+    const address = await driveMediaAddress(fileId);
+    // Not forDownload: that holds back time for a separate extraction step this
+    // path does not have, and these are the files with none to spare.
+    const forStream = deadlineAt > 0 ? streamExtractBudgetMs(deadlineAt - Date.now()) : 120_000;
+    const streamed = await extractAudioFromUrl(address.url, address.token, { timeoutMs: forStream });
+    if (!streamed.ok) {
+      // Mapped exactly as the disk path maps the same failures below, so which
+      // route a video took never changes how its failure is classified — and
+      // in particular never changes whether lib/failure-kind.ts will retry it.
+      const reason = streamed.reason === 'no_audio' ? 'empty'
+        : streamed.reason === 'too_long' ? 'too_large'
+        : streamed.reason === 'not_available' ? 'not_configured'
+        : 'failed';
+      return { ok: false, reason, message: streamed.message };
+    }
+    return transcribeExtracted(streamed.audio, probe.name, key, deadlineAt);
   }
 
   let res: Response;
@@ -118,13 +155,32 @@ export async function transcribeDriveMedia(
     return { ok: false, reason, message: extracted.message };
   }
 
-  const { audio } = extracted;
+  return transcribeExtracted(extracted.audio, probe.name, key, deadlineAt, opts.timeoutMs);
+}
+
+/**
+ * Send an already-extracted mp3 to the transcriber.
+ *
+ * Split out when ffmpeg gained a second way to produce that mp3 (reading the
+ * Drive URL directly, for files too big to stage on the scratch disk). Both
+ * routes end with the same file on disk and the same work to do with it, and
+ * the alternative was a second copy of the budget arithmetic, the multipart
+ * upload, the abort handling and the release() in the finally — which is
+ * exactly the kind of duplication that drifts.
+ */
+async function transcribeExtracted(
+  audio: ExtractedAudio,
+  name: string,
+  key: string,
+  deadlineAt: number,
+  timeoutMs?: number,
+): Promise<MediaTranscript> {
   const model = MODEL();
   const ctl = new AbortController();
   // What is left after the download actually finished, not what was planned
   // for it. A download that took twice as long as expected must not hand the
   // transcriber a budget the function no longer has.
-  const forTranscribe = opts.timeoutMs
+  const forTranscribe = timeoutMs
     ?? (deadlineAt > 0 ? transcribeBudgetMs(deadlineAt - Date.now()) : 30_000);
   if (forTranscribe <= 0) {
     await audio.release();
@@ -158,7 +214,7 @@ export async function transcribeDriveMedia(
     const j = await out.json().catch(() => null) as { text?: string; language?: string } | null;
     const text = String(j?.text || '').replace(/\s+/g, ' ').trim();
     if (!text) return { ok: false, reason: 'empty', message: 'The transcriber heard no speech in that video.' };
-    return { ok: true, text, language: j?.language || null, source: 'drive', name: probe.name, sizeBytes: audio.sizeBytes };
+    return { ok: true, text, language: j?.language || null, source: 'drive', name, sizeBytes: audio.sizeBytes };
   } catch (e) {
     const why = e instanceof Error && e.name === 'AbortError' ? 'it took too long' : redact(e instanceof Error ? e.message : 'error');
     return { ok: false, reason: 'unreachable', message: 'The transcriber could not be reached (' + why + ').' };

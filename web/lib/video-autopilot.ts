@@ -37,6 +37,7 @@ import {
   type VideoField,
 } from '@/lib/google-sources';
 import { mayRetry } from '@/lib/failure-kind';
+import { megabytes, routeFor } from '@/lib/media-route';
 import { isMissingSchema } from '@/lib/schema-probe';
 import { columnFor, pick, tableFromRows } from '@/lib/sheet-table';
 import { prepareVideo, type PrepareOk } from '@/lib/video-prepare';
@@ -254,19 +255,22 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
         const fileId = !youtubeLink ? parseDriveFileId(videoLink) : null;
         let reach: SweepRowOutcome = { tab: tab.title, row, rowKey, title: title || videoLink, state: 'would_prepare' };
         if (fileId) {
-          const probe = await probeDriveMedia(fileId);
+          // Same ceiling the real run uses — none. A dry run that refused at
+          // 450 MB while the real run streams the file would report work as
+          // impossible that the sweep goes on to do.
+          const probe = await probeDriveMedia(fileId, Number.POSITIVE_INFINITY);
           if (!probe.ok) {
-            reach = {
-              ...reach,
-              // 'too_large' now means past what can be pulled down at all, not
-              // past what can be transcribed — the audio track is what gets
-              // transcribed, and that is always small.
-              state: probe.reason === 'too_large' ? 'needs_transcript' : 'failed',
-              message: probe.message,
-            };
-            if (probe.reason === 'too_large') result.needsTranscript++; else result.failed++;
+            reach = { ...reach, state: 'failed', message: probe.message };
+            result.failed++;
           } else {
-            reach.message = 'Reachable · ' + (probe.sizeBytes ? (probe.sizeBytes / 1024 / 1024).toFixed(1) + ' MB' : 'size unknown');
+            const route = routeFor(probe.sizeBytes);
+            if (route === 'too_large') {
+              reach = { ...reach, state: 'needs_transcript', message: megabytes(probe.sizeBytes) + ' — too much to read inside one request. A pasted transcript is the way in.' };
+              result.needsTranscript++;
+            } else {
+              reach.message = 'Reachable · ' + megabytes(probe.sizeBytes) +
+                (route === 'stream' ? ' · read from Drive rather than staged' : '');
+            }
           }
         } else if (youtubeLink) {
           reach.message = 'Published to YouTube — its captions will be used, at no cost.';
