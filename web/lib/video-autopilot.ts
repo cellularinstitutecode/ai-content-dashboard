@@ -595,6 +595,16 @@ export async function completeRow(opts: {
       draft_id: opts.prepared.draftId,
       wrote,
       metricool,
+      // The row succeeded, so the last failure is no longer true of it. The
+      // sweep clears this on its own success path; a retry driven from the
+      // assistant comes through here and nowhere else, and would otherwise
+      // leave a finished row still carrying the error that stopped it.
+      //
+      // last_error_code is deliberately NOT cleared here: naming a column a
+      // database has not migrated yet would refuse this whole upsert, and
+      // losing `state: 'prepared'` means re-downloading the video for ever.
+      // A stale code on a row that reads 'prepared' is consulted by nothing.
+      last_error: null,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'spreadsheet_id,tab,row_key' });
   } catch (e) {
