@@ -121,6 +121,20 @@ export type PrepareInput = {
  */
 const GROUNDING_FLOOR = 0.5;
 
+/**
+ * What to tell somebody after a refusal that a re-run might fix.
+ *
+ * "Press Prepare again" is only good advice when the expensive half survives the press.
+ * Where the transcript could not be stored, coming back means downloading and
+ * transcribing the whole video again — so the sentence names the actual blocker instead.
+ */
+function retryAdvice(banked: boolean): string {
+  return banked
+    ? 'Press Prepare again; the transcript is kept, so it costs seconds.'
+    : 'The transcript could not be saved, so pressing Prepare again would re-download and re-transcribe the whole video. ' +
+      'Run supabase/video-autopilot.sql in the Supabase SQL editor first.';
+}
+
 function hasSemrushData(stamp: SemrushStamp | null | undefined): boolean {
   return stamp?.source === 'semrush' && Boolean(stamp.primary);
 }
@@ -203,14 +217,28 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   // half finished, and the next attempt starts from it and takes seconds.
   const budgetMs = input.budgetMs ?? 0;
   if (budgetMs > 0 && Date.now() - startedAt > budgetMs) {
-    return {
-      ok: false,
-      status: 202,
-      error: 'transcript_ready',
-      message: 'The transcript is done and saved — that was the slow part. Press Prepare again to write the copy; it will take a few seconds now.',
-      needsPaste: false,
-      title,
-    };
+    // Only worth stopping for if the transcript SURVIVES the stop. Where the cache could
+    // not take it, coming back costs the whole download again and the second attempt dies
+    // exactly where the first one did — so say that, rather than sending somebody to
+    // press a button that cannot work.
+    return t.banked
+      ? {
+          ok: false,
+          status: 202,
+          error: 'transcript_ready',
+          message: 'The transcript is done and saved — that was the slow part. Press Prepare again to write the copy; it will take a few seconds now.',
+          needsPaste: false,
+          title,
+        }
+      : {
+          ok: false,
+          status: 503,
+          error: 'transcript_not_kept',
+          message: 'This video was transcribed but the transcript could not be saved, so pressing Prepare again would download and transcribe it all over again and run out of time in the same place. ' +
+            'The transcript store is missing from the database — run supabase/video-autopilot.sql in the Supabase SQL editor, then try again.',
+          needsPaste: false,
+          title,
+        };
   }
 
   let brief = await autoKeywordBrief(subject);
@@ -299,7 +327,7 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
       status: 422,
       error: 'no_citation',
       message: 'The writer produced no verifiable citation for this one — a REF line with a real DOI is required before it can be advertised. ' +
-        'Press Prepare again; the transcript is kept, so it costs seconds.',
+        retryAdvice(t.banked),
       needsPaste: false,
       title,
     };
@@ -332,7 +360,7 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
       error: 'named_a_person',
       message: 'The copy named ' + leaked.join(' and ') +
         ' — that is the file\u2019s owner, not somebody in the video, and a clinic must not appear to quote a patient who did not speak. ' +
-        'Press Prepare again; the transcript is kept, so it costs seconds.',
+        retryAdvice(t.banked),
       needsPaste: false,
       title,
     };

@@ -8,9 +8,21 @@
 // bug would look like "batch prepare works differently".
 import { friendlyErrorFromResponse } from '@/lib/friendly-error';
 
-/** What to tell a person when the platform kills a request outright. */
+/**
+ * What to tell a person when the platform kills a request outright.
+ *
+ * This used to say flatly "the transcript is kept, so the second run skips the download".
+ * A killed request returns no body — the server never got to say anything — so that
+ * sentence was printed on every timeout regardless of whether anything had been saved. On
+ * a database missing the transcript table nothing ever was, and somebody pressed the
+ * button over and over, paying for the same download each time, on advice this file
+ * invented.
+ *
+ * It now says what is actually known, and names the one thing to check when it is wrong.
+ */
 export const TIMEOUT_HINT =
-  'Press Prepare again — the transcript is kept, so the second run skips the download and finishes quickly.';
+  'Press Prepare again — if the transcript was saved, the second run skips the download and finishes quickly. ' +
+  'If it stops in the same place twice, the transcript is not being saved: check /api/health → database_schema.';
 
 export type PrepareRequest = {
   url: string;

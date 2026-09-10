@@ -63,10 +63,25 @@ export const REQUIRED_SCHEMA: SchemaProbe[] = [
     breaks: 'the record of which posts reached Metricool',
   },
   {
+    // The TABLE, checked before any of its columns.
+    //
+    // Without this entry a missing table was reported as
+    // "video_transcripts.public_copy_id is missing" — sending a reader hunting for a
+    // column inside a table that is not there, which is the precise confusion the `kind`
+    // field exists to prevent, and I introduced it. Worse, the consequence named was the
+    // Drive-copy dedupe, so nothing anywhere said the thing that actually mattered: with
+    // no transcript store, every Prepare re-downloads and re-transcribes the video, and
+    // the app tells the person to press the button again, for ever.
+    table: 'video_transcripts',
+    column: 'video_id',
+    kind: 'table',
+    file: 'supabase/video-autopilot.sql',
+    breaks: 'the transcript store — every video is downloaded and transcribed again on every attempt, and a long one can never finish',
+  },
+  {
     // The two halves of not leaving world-readable copies of the clinic's footage lying
     // about: one to find the copy a previous run already made, one to know when nothing
-    // needs it any more. Without them the delete path is silently a no-op — which is the
-    // exact failure this probe list exists to catch.
+    // needs it any more. Without them the delete path is silently a no-op.
     table: 'video_transcripts',
     column: 'public_copy_id',
     kind: 'column',

@@ -245,6 +245,15 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
             state: 'discovered',
             transcript_source: 'drive',
             last_error: null,
+            // Give back the attempt this pass consumed.
+            //
+            // attempts was incremented when the row was claimed, and three of them
+            // retires a row for good (see the guard above). A pass that banked the
+            // transcript and stopped on the clock made PROGRESS — counting it against a
+            // budget meant for videos that genuinely cannot be read would have the
+            // backlog quietly retiring itself after three good passes, with no error
+            // recorded anywhere to say why.
+            attempts: Math.max(0, (prior?.attempts ?? 1) - 1),
             updated_at: new Date().toISOString(),
           }).eq('spreadsheet_id', spreadsheetId).eq('tab', tab.title).eq('row_key', rowKey);
           outcome = { tab: tab.title, row, rowKey, title: title || videoLink, state: 'transcript_ready', message: prepared.message };
