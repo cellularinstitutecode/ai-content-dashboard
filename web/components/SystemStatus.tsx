@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 
+import { plainFor } from '@/lib/health-plain';
+
 /**
  * One line that says whether the dashboard is running on everything it has.
  *
@@ -18,23 +20,6 @@ import { useEffect, useState } from 'react';
 
 type Check = { name: string; ok: boolean; severity: 'required' | 'optional'; detail?: string; code?: string };
 
-// What a degraded check MEANS for the work, and what still works despite it.
-// Deliberately says nothing about environment variables: the person reading
-// this cannot set one, and the person who can does not need this banner.
-const PLAIN: Record<string, { down: string; stillWorks?: string }> = {
-  supabase: { down: 'Saving and sign-in are unavailable.' },
-  database_schema: { down: 'The database is missing an update — ask whoever set this up to run the migration.', stillWorks: 'Writing and scheduling still work; Autopilot does not.' },
-  ai_provider: { down: 'Writing is unavailable — no AI is connected.' },
-  metricool: { down: 'Scheduling is unavailable.', stillWorks: 'You can still write and save drafts.' },
-  allowed_emails: { down: 'Sign-in access is not configured.' },
-  cron_secret: { down: 'Autopilot and performance tracking are not running.', stillWorks: 'Writing and scheduling by hand are unaffected.' },
-  rate_limiting: { down: 'Usage limits are not being applied.' },
-  semrush: { down: 'Keyword research is paused.', stillWorks: 'Drafts are still written — just without live search data.' },
-  images: { down: 'AI images are not being generated.', stillWorks: 'Posts still write and schedule as text.' },
-  opus_webhook: { down: 'Video clips arrive more slowly than usual.', stillWorks: 'They still arrive.' },
-  drive: { down: 'Video clips are not being saved permanently and stop playing after a few days.' },
-  assistant_session_secret: { down: 'The assistant is using a shared key instead of its own.', stillWorks: 'Everything works; this is a housekeeping item.' },
-};
 
 export default function SystemStatus() {
   const [checks, setChecks] = useState<Check[] | null>(null);
@@ -63,31 +48,9 @@ export default function SystemStatus() {
   if (!failing.length) return null;
 
   const blocking = failing.some((c) => c.severity === 'required');
-  const lines = failing.map((c) => {
-    // Keyword research can be off for two very different reasons, and the
-    // difference is exactly who needs to act: nobody can "connect" their way
-    // out of an empty credit balance.
-    if (c.name === 'semrush' && c.code === 'budget') {
-      return { down: 'Keyword research is paused — the Semrush credit balance is at its protection floor.', stillWorks: 'Drafts are still written, just without live search data.' };
-    }
-    if (c.name === 'semrush' && c.code === 'balance_unknown') {
-      return { down: 'Keyword research is paused — the app cannot confirm the Semrush unit balance right now.', stillWorks: 'Drafts are still written, just without live search data. Ask whoever set this up to check the Semrush connection.' };
-    }
-    if (c.name === 'semrush' && c.code === 'no_token') {
-      return { down: 'Keyword research is not connected.', stillWorks: 'Drafts are still written, just without live search data.' };
-    }
-    // "AI images are not being generated" is true but useless when the cause is
-    // an empty wallet, because the same account also runs the check that keeps
-    // text off those images and the voice assistant. Naming it stops three
-    // separate "is this broken?" conversations.
-    if (c.name === 'images' && c.code === 'no_credit') {
-      return { down: 'The OpenAI account is out of credit — images, image checks and voice are paused.', stillWorks: 'Text still works.' };
-    }
-    if (c.name === 'images' && c.code === 'bad_key') {
-      return { down: 'AI images are not being generated — OpenAI rejected the key on the last attempt.', stillWorks: 'Posts still write and schedule as text.' };
-    }
-    return PLAIN[c.name] ?? { down: c.name.replace(/_/g, ' ') + ' is not available.' };
-  });
+  // The wording lives in lib/health-plain.ts so this banner and the
+  // assistant say the same sentence about the same condition.
+  const lines = failing.map((c) => plainFor(c.name, c.code));
 
   return (
     <div

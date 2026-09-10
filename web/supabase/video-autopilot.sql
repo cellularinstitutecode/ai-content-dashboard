@@ -127,3 +127,29 @@ alter table public.video_transcripts
   add column if not exists public_copy_id text;
 alter table public.video_transcripts
   add column if not exists public_copy_url text;
+
+-- ---------------------------------------------------------------------------
+-- WHY a row stopped, in a form something other than a human can read.
+--
+-- `last_error` holds the failure's own sentence, written for whoever pressed
+-- the button. Nothing could act on it, so the sweep answered "is this row
+-- worth another go?" with one flat number for every kind of failure: three
+-- attempts and the row was retired, permanently and silently, with no code
+-- anywhere able to un-retire it.
+--
+-- That treated a row that merely ran out of time exactly like one whose copy
+-- named a person who is not in the video. A retry fixes the first and cannot
+-- fix the second, and it pays for a whole download and transcription to find
+-- that out again. lib/failure-kind.ts makes the split; this column is what it
+-- reads.
+alter table public.video_runs
+  add column if not exists last_error_code text;
+
+-- How many times a retired row has been given another go.
+--
+-- The counterpart to last_error_code above: a failure that looked temporary is
+-- brought back after a cooldown (lib/revive-decision.ts), and this is what
+-- stops that cooldown becoming an unlimited retry. Each revival costs a whole
+-- download and transcription, so the ceiling is the point.
+alter table public.video_runs
+  add column if not exists revivals integer not null default 0;

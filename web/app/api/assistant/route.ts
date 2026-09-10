@@ -10,6 +10,7 @@ import {
   chatWithTools,
   researchTopic,
   type ToolMessage,
+  type BrandContext,
 } from "@/lib/ai";
 import { opusCreateClipProject } from "@/lib/opus";
 import { researchBundle, briefPromptFrom, getUnitsBalance, recordDraftKeywords, type SemKeyword } from "@/lib/semrush";
@@ -18,6 +19,14 @@ import { isAllowedEmail } from "@/lib/access";
 import { parseVideoUrl } from "@/lib/composer";
 import { boundToolMessages } from "@/lib/tool-transcript";
 import { normalizePublishAt, METRICOOL_TIMEZONE } from "@/lib/metricool-time";
+import { greetingFor, plainReason, renderSnapshot, situationOf, summarise } from "@/lib/assistant-context";
+import { listRuns, rearmRun, recordRunFailure } from "@/lib/video-runs";
+import { prepareVideo } from "@/lib/video-prepare";
+import { completeRow } from "@/lib/video-autopilot";
+import { canWriteCopy } from "@/lib/prepare-budget";
+import { plainFor } from "@/lib/health-plain";
+import { loadBrandContext } from "@/lib/brand-context";
+import { missingSchemaCached } from "@/lib/schema-check";
 
 // Compact, chat-friendly rendering of Semrush keyword rows.
 function fmtKw(k: SemKeyword): string {
@@ -336,7 +345,146 @@ async function doSchedule(userId: string, p: PendingSchedule) {
 
 // Run the agentic tool loop. Executes generate/save immediately; gates schedule
 // behind confirmation by stashing a pendingSchedule and returning to the user.
-async function runAgent(session: Session, input: string, userId: string | null) {
+/**
+ * Everything the assistant is told about this workspace, gathered once.
+ *
+ * Never fatal. A snapshot that cannot be built is a quieter assistant, not a
+ * broken one — the same posture buildSemrushContext takes for the voice
+ * session, and the reason the whole thing is wrapped rather than awaited
+ * hopefully.
+ */
+async function liveSituation(userId: string): Promise<{ snapshot: ReturnType<typeof summarise>; prompt: string; brand?: BrandContext }> {
+  const [runs, health, brand] = await Promise.all([
+    listRuns(userId, 80).catch(() => []),
+    missingSchemaCached()
+      .then((missing) => (missing.length ? [plainFor("database_schema")] : []))
+      .catch(() => [] as { down: string; stillWorks?: string }[]),
+    // Promise.resolve(): the Supabase query builder is a thenable, not a
+    // Promise, so it has no .catch of its own. Defaults to "there is one" —
+    // an unreadable profile must not make the assistant announce that the
+    // Brand Brain is missing when it is sitting right there.
+    loadBrandContext(supabaseAdmin(), userId),
+  ]);
+
+  const snapshot = summarise(runs, Date.now(), { health, hasBrandProfile: Boolean(brand) });
+  return { snapshot, prompt: renderSnapshot(snapshot), brand };
+}
+
+/**
+ * Re-run one or more stopped videos, and say what happened in words.
+ *
+ * Three things make this different from pressing Prepare:
+ *
+ *  1. It clears the row's attempt count first. The sweep retires a row once
+ *     its attempts are spent, and nothing in the app could undo that — so a
+ *     video stopped by a bad afternoon stayed stopped for the life of the
+ *     deployment. Re-arming is the only reason "retry it" means anything.
+ *  2. It calls the library, never its own HTTP route. A serverless self-fetch
+ *     needs an absolute URL and carries no cookies: it would 401 in production
+ *     while working perfectly in development.
+ *  3. It ALWAYS passes skipMetricool. The caption reaches the Google Sheet and
+ *     the drafts feed; what gets queued for posting stays a button the user
+ *     presses. That is not a policy the model can be talked out of, because it
+ *     is not expressed in the prompt.
+ */
+async function retryVideos(
+  userId: string,
+  input: Record<string, any>,
+  deadlineAt: number,
+): Promise<string> {
+  const rows = await listRuns(userId, 80);
+  const now = Date.now();
+
+  let targets = [] as typeof rows;
+  const id = String(input.id || "").trim();
+  const title = String(input.title || "").trim().toLowerCase();
+  if (id) {
+    targets = rows.filter((r) => r.id === id);
+  } else if (title) {
+    targets = rows.filter((r) => String(r.video_title || "").toLowerCase().includes(title));
+  } else if (input.all_stuck) {
+    targets = rows.filter((r) => situationOf(r, now) === "retryable");
+  }
+
+  if (!targets.length) {
+    return "No matching video to retry. Call pipeline_status first and use the id in brackets.";
+  }
+
+  // Two per turn. Each one is a download and a transcription inside a request
+  // that also has to answer; a model told "retry everything" would otherwise
+  // start thirty and finish none.
+  const capped = targets.slice(0, 2);
+  const notes: string[] = [];
+
+  for (const run of capped) {
+    // Enough clock left to finish AND answer? RESERVE_MS.copy is what writing
+    // the copy costs; starting with less produces a killed request, which is
+    // the one outcome that tells the user nothing at all.
+    if (!canWriteCopy(deadlineAt - Date.now())) {
+      notes.push('"' + (run.video_title || "Untitled") + '" — not enough time left in this request; it is back in the queue and the next pass will take it.');
+      await rearmRun(userId, run.id);
+      continue;
+    }
+
+    const rearmed = await rearmRun(userId, run.id);
+    if (!rearmed) {
+      notes.push('"' + (run.video_title || "Untitled") + '" — could not be put back in the queue.');
+      continue;
+    }
+
+    const link = String(run.video_link || "").trim();
+    if (!link) {
+      notes.push('"' + (run.video_title || "Untitled") + '" — has no video link on its row, so there is nothing to retry.');
+      continue;
+    }
+
+    const prepared = await prepareVideo({
+      userId,
+      url: link,
+      title: run.video_title || null,
+      budgetMs: Math.max(0, deadlineAt - Date.now()),
+    });
+
+    if (!prepared.ok) {
+      // Put the failure back. re-arming cleared it, and a retry that failed
+      // must not leave the row looking as though it had never been tried —
+      // that erases it from the situation block and buys the whole download
+      // again on the next sweep.
+      await recordRunFailure(userId, run.id, prepared.message, prepared.error, prepared.needsPaste);
+      notes.push('"' + (run.video_title || "Untitled") + '" — ' + prepared.message);
+      continue;
+    }
+
+    let wrote = "the copy is written";
+    if (run.tab && run.row_number) {
+      try {
+        const sheet = await completeRow({
+          userId,
+          tab: run.tab,
+          row: run.row_number,
+          prepared,
+          videoLink: link,
+          // Never negotiable. See the note above this function.
+          skipMetricool: true,
+        });
+        wrote = "written into the sheet (" + sheet.status + ")";
+      } catch (e) {
+        reportError("assistant:retry-complete", e, { id: run.id });
+        wrote = "written, but the sheet would not accept it";
+      }
+    }
+    notes.push('"' + prepared.title + '" — done: ' + wrote + (prepared.hasKeywords ? " with keyword data" : " but WITHOUT keyword data"));
+  }
+
+  const skipped = targets.length - capped.length;
+  return (
+    notes.join("\n") +
+    (skipped > 0 ? "\n(" + skipped + " more still stuck — say the word and I will do the next two.)" : "") +
+    "\nNothing was sent to Metricool; use the Send button on the row when you want the drafts queued."
+  );
+}
+
+async function runAgent(session: Session, input: string, userId: string | null, snapshot: string, deadlineAt: number, brand?: BrandContext) {
   const tm: ToolMessage[] = boundToolMessages(session.toolMessages);
   tm.push({ role: "user", content: input });
 
@@ -346,7 +494,15 @@ async function runAgent(session: Session, input: string, userId: string | null) 
 
   let finalMessage = "";
   for (let i = 0; i < 4; i++) {
-    const turn = await chatWithTools(tm);
+    // A tool loop that keeps going past the function's clock returns nothing at
+    // all — the worst answer available, because the retry it just performed did
+    // happen and the user is told neither that nor why.
+    if (Date.now() > deadlineAt) {
+      finalMessage = (finalMessage ? finalMessage + "\n\n" : "") +
+        "I ran out of time in this request. Anything I finished is saved; ask me again to carry on.";
+      break;
+    }
+    const turn = await chatWithTools(tm, snapshot);
     // Record the assistant turn (text and/or tool_use) so the model keeps context.
     const assistantBlocks: any[] = [];
     if (turn.message) assistantBlocks.push({ type: "text", text: turn.message });
@@ -372,6 +528,12 @@ async function runAgent(session: Session, input: string, userId: string | null) 
         provider: provider as any,
         model: MODELS[provider],
         contentType: (call.input.format || "social") as any,
+        // The Brand Brain. The dashboard's own generator has always passed
+        // this and the assistant never did, so the same request typed into
+        // the chat window came back in a default voice — and without the
+        // clinic's advertising-notice number, which complianceGate then
+        // refuses at the Metricool door.
+        brand,
       });
       const pack = (result?.pack || result) as Record<string, any>;
       session.lastPack = pack;
@@ -542,6 +704,37 @@ async function runAgent(session: Session, input: string, userId: string | null) 
       } catch (e: any) {
         toolResult = "Keyword lookup failed: " + (e?.message || "unknown error");
       }
+    } else if (call.name === "pipeline_status") {
+      try {
+        const rows = await listRuns(userId!, 80);
+        const snap = summarise(rows, Date.now());
+        const filter = String(call.input.filter || "stuck");
+        const c = snap.counts;
+        const head =
+          c.done + " done, " + c.working + " in progress, " + c.waiting + " queued, " +
+          (c.needs_you + c.blocked) + " waiting on a person, " + c.retryable + " worth retrying.";
+        // Ids travel with each row so a follow-up retry_video names the row
+        // rather than guessing from a title the model half-remembers.
+        const listed = (filter === "all" ? rows : rows.filter((r) => {
+          const sit = situationOf(r, Date.now());
+          return filter === "recent" ? true : sit === "retryable" || sit === "needs_you" || sit === "blocked";
+        })).slice(0, 20);
+        const detail = listed.map((r) => {
+          const sit = situationOf(r, Date.now());
+          return "- [" + r.id + "] \"" + (r.video_title || "Untitled") + "\"" +
+            (r.row_number ? " (row " + r.row_number + ")" : "") +
+            " — " + sit + ": " + plainReason(r, sit);
+        }).join("\n");
+        toolResult = head + (detail ? "\n" + detail : "\nNothing matching that filter.");
+      } catch (e: any) {
+        toolResult = "The video records could not be read: " + (e?.message || "unknown error");
+      }
+    } else if (call.name === "retry_video") {
+      try {
+        toolResult = await retryVideos(userId!, call.input, deadlineAt);
+      } catch (e: any) {
+        toolResult = "The retry could not be run: " + (e?.message || "unknown error");
+      }
     } else {
       toolResult = "Unknown tool.";
     }
@@ -648,13 +841,25 @@ export async function POST(req: Request) {
     );
   }
 
+  // What is actually going on, read once per request and thrown away.
+  //
+  // Deliberately NOT stored in the session: that object round-trips through the
+  // browser and is HMAC-signed, so a snapshot in it would inflate every request
+  // and every response, force a re-sign, and be stale by the time it came back.
+  // The clock this request answers to. maxDuration is 300; the margin is what
+  // composing and returning the answer costs after the last tool has run.
+  const deadlineAt = Date.now() + 250_000;
+  const live = await liveSituation(userId);
+
   try {
     // Priming call: greet without advancing state.
+    //
+    // This was a fixed paragraph introducing the product to somebody who has
+    // been using it every day for weeks. It is the most-read message in the
+    // app and it knew nothing — so it now opens with what needs them.
     if (!input && session.step === "greet" && !session.mode) {
-      return reply(
-        session,
-        "Hi! I am your AI assistant for Content Studio. Ask me anything, or tell me to do something — like \"write an Instagram post about NK cell therapy and schedule it for Friday 9am\". I will always confirm with you before anything goes live.",
-      );
+      const greeting = greetingFor(live.snapshot);
+      return reply(session, greeting.message, greeting.chips);
     }
 
     // If a schedule is awaiting confirmation, handle yes/no first.
@@ -723,7 +928,7 @@ export async function POST(req: Request) {
     // Default: agentic chat that can take actions via tools.
     if (input && !inGuided) {
       try {
-        const out = await runAgent(session, input, userId);
+        const out = await runAgent(session, input, userId, live.prompt, deadlineAt, live.brand);
         return reply({ ...session, mode: "chat", step: "greet" }, out.message, out.options);
       } catch (e: any) {
         // Fall back to plain conversational answer if tool loop fails.

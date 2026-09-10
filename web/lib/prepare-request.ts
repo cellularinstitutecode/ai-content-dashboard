@@ -45,8 +45,18 @@ export type PrepareRequest = {
 export type PrepareOutcome =
   | { ok: true; data: Record<string, unknown> }
   /** No captions and no speech: only a person can move this one on. */
-  | { ok: false; kind: 'needs_transcript'; message: string }
-  | { ok: false; kind: 'error'; message: string };
+  | { ok: false; kind: 'needs_transcript'; message: string; code?: string }
+  /**
+   * @param code the server's own error name — `out_of_time`, `named_a_person`,
+   *   `no_citation` and so on.
+   *
+   * Eight distinct codes used to collapse into these three kinds and the code
+   * itself was dropped here, so nothing downstream could tell "trying again
+   * fixes this" from "trying again buys the same refusal at the price of
+   * another download". lib/failure-kind.ts can answer that question, but only
+   * if the answer survives this boundary.
+   */
+  | { ok: false; kind: 'error'; message: string; code?: string };
 
 /**
  * @param onProgress called when the first pass banks the transcript, so a
@@ -70,7 +80,7 @@ export async function runPrepare(req: PrepareRequest, onProgress?: (note: string
     const j = (await r.json().catch(() => ({}))) as Record<string, unknown>;
 
     if (r.status === 422 && j?.error === 'no_transcript') {
-      return { ok: false, kind: 'needs_transcript', message: String(j.message || 'No captions on this video — paste the transcript.') };
+      return { ok: false, kind: 'needs_transcript', message: String(j.message || 'No captions on this video — paste the transcript.'), code: 'no_transcript' };
     }
     if (r.status === 202 && j?.error === 'transcript_ready' && attempt === 0) {
       onProgress?.(String(j.message || 'The transcript is done — writing the copy now.'));
@@ -82,7 +92,7 @@ export async function runPrepare(req: PrepareRequest, onProgress?: (note: string
         'We could not prepare that video.',
         TIMEOUT_HINT,
       );
-      return { ok: false, kind: 'error', message };
+      return { ok: false, kind: 'error', message, code: typeof j?.error === 'string' ? j.error : undefined };
     }
     return { ok: true, data: j };
   }
