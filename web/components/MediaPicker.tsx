@@ -13,7 +13,8 @@
 // the clinic's footage — pressing Prepare on a row in the Video Library is the
 // one action that does that, and this picker cannot.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { friendlyErrorFromResponse } from '@/lib/friendly-error';
 
 export type ShareableVideo = { videoId: string; title: string; url: string; source: string; updatedAt: string };
@@ -54,18 +55,41 @@ export default function MediaPicker({ value, label, onChange, hint }: {
 
   // Loaded when the list is opened, not on mount: most posts carry no video,
   // and a picker that never opens should cost nothing.
+  //
+  // The guard is a ref, and there is no cancel-on-cleanup, because the obvious
+  // version of this deadlocks: with `loading` in the dependency array, setting
+  // it to true re-runs the effect, whose CLEANUP then cancels the fetch that
+  // the first run had just started. The request completes, its `.then` sees a
+  // cancelled flag and returns, and the panel reads "Reading your video
+  // library…" forever. A ref survives the re-render without being a dependency,
+  // and a state update after unmount is a no-op in React 18+, so nothing needs
+  // cancelling.
+  const started = useRef(false);
   useEffect(() => {
-    if (!open || videos || loading) return;
-    let alive = true;
+    if (!open || started.current) return;
+    started.current = true;
     setLoading(true);
     void fetchShareableVideos().then((out) => {
-      if (!alive) return;
       setVideos(out.videos);
       setErr(out.error);
       setLoading(false);
     });
-    return () => { alive = false; };
-  }, [open, videos, loading]);
+  }, [open]);
+
+  /** Try again after a failure — the one case where a second fetch is right. */
+  function retry() {
+    started.current = false;
+    setVideos(null);
+    setErr(null);
+    setOpen(true);
+    started.current = true;
+    setLoading(true);
+    void fetchShareableVideos().then((out) => {
+      setVideos(out.videos);
+      setErr(out.error);
+      setLoading(false);
+    });
+  }
 
   if (value) {
     const isImage = looksLikeImage(value, label);
@@ -101,13 +125,20 @@ export default function MediaPicker({ value, label, onChange, hint }: {
       {open && (
         <div className="mt-2 rounded-2xl bg-subtle p-2.5 ring-1 ring-line">
           {loading && <p className="px-1 py-2 text-[12px] text-ink-muted">Reading your video library…</p>}
-          {err && <p role="alert" className="px-1 py-2 text-[12px] font-medium text-danger">{err}</p>}
+          {err && (
+            <div role="alert" className="px-1 py-2 text-[12px]">
+              <p className="font-medium text-danger">{err}</p>
+              <button type="button" onClick={retry} className="mt-1.5 rounded-full bg-white px-3 py-1 text-[12px] font-medium text-ink ring-1 ring-line transition hover:ring-accent">Try again</button>
+            </div>
+          )}
           {!loading && !err && videos && videos.length === 0 && (
             // The empty state has to name the action that fills it, or it reads
             // as "this feature is broken" rather than "nothing is ready yet".
-            <p className="px-1 py-2 text-[12px] text-ink-muted">
-              No videos are ready to attach yet. Press <strong>Prepare</strong> on a row in the Video Library — that is what makes the shareable copy a network can fetch.
-            </p>
+            <div className="px-1 py-2 text-[12px] text-ink-muted">
+              <p>No videos are ready to attach yet. A video becomes attachable when its row is prepared — that is the step that makes the shareable copy a network can fetch.</p>
+              <p className="mt-1">A row prepared before this change may not have one: until recently the copy was only made when a video-only channel was going out, and rows with nothing ticked went to LinkedIn as text. Preparing the row again makes it.</p>
+              <Link href="/sources/videos" className="mt-1.5 inline-flex rounded-full bg-white px-3 py-1 font-medium text-ink no-underline ring-1 ring-line transition hover:ring-accent">Open the Video Library ↗</Link>
+            </div>
           )}
           {!loading && !err && videos && videos.length > 0 && (
             <ul className="grid max-h-64 gap-1 overflow-y-auto">
