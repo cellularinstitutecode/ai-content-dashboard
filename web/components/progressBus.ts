@@ -53,6 +53,12 @@ const EWMA_ALPHA = 0.35;
 // exercises the endpoint once. Keys are matched by longest prefix.
 const SEED: Array<[string, number]> = [
   ['POST /api/generate', 22000],
+  // The video pipeline was missing entirely, so seedFor() fell through to its
+  // 2,500ms default for a job that takes one to four MINUTES: the eased curve
+  // ran to ~95% within seconds and then crawled there for the rest of it. The
+  // number was worst during the one operation worth watching.
+  ['POST /api/videos/prepare', 120000],
+  ['POST /api/videos/batch', 4000],
   ['POST /api/assistant', 26000],
   ['POST /api/drafts/image', 30000],
   ['POST /api/transform', 12000],
@@ -136,6 +142,8 @@ export function generationScopeFor(key: string): string | null {
 // readable version of the path, so a new route is never a blank overlay.
 const LABELS: Array<[RegExp, string]> = [
   [/^POST \/api\/generate(?:[/?]|$)/, 'Writing your content pack'],
+  [/^POST \/api\/videos\/prepare(?:[/?]|$)/, 'Preparing the video'],
+  [/^POST \/api\/videos\/batch(?:[/?]|$)/, 'Setting up the sheet'],
   [/^POST \/api\/assistant(?:[/?]|$)/, 'Thinking it through'],
   [/^POST \/api\/drafts\/image(?:[/?]|$)/, 'Generating and verifying the hero image'],
   [/^POST \/api\/drafts(?:[/?]|$)/, 'Saving the draft'],

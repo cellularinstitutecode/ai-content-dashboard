@@ -7,6 +7,11 @@
 // that written twice would mean one of the copies eventually drifting, and the
 // bug would look like "batch prepare works differently".
 import { friendlyErrorFromResponse } from '@/lib/friendly-error';
+// progressBus lives under components/ but is not a component — it is the
+// client-side task bus, and this file is client-side too. Imported here rather
+// than threaded through both callers as a callback, so the two of them cannot
+// report a prepare differently.
+import { startTask } from '@/components/progressBus';
 
 /**
  * What to tell a person when the platform kills a request outright.
@@ -63,6 +68,31 @@ export type PrepareOutcome =
  *        caller can say what is happening instead of showing a frozen button.
  */
 export async function runPrepare(req: PrepareRequest, onProgress?: (note: string) => void): Promise<PrepareOutcome> {
+  /**
+   * One task per PASS, rather than one for the whole thing.
+   *
+   * The obvious shape — a single task whose progress is set at each milestone —
+   * is worse than what it replaces: curve() returns an explicit value verbatim,
+   * so the number would FREEZE at the checkpoint and sit there until the next
+   * one. Two eased tasks keep moving between milestones, and because aggregate()
+   * weights by expectedMs the hand-off lands at a proportion that reflects how
+   * long each half actually takes rather than a flat "half done".
+   *
+   * The inner fetches are marked quiet so the interceptor's own task stays in
+   * the background and does not compete with these for the headline label.
+   */
+  const stage = { handle: null as null | ReturnType<typeof startTask> };
+  const begin = (label: string, expectedMs: number) => {
+    stage.handle?.done();
+    stage.handle = startTask({ key: 'POST /api/videos/prepare', label, kind: 'foreground', expectedMs });
+  };
+  const finish = (failed?: string) => {
+    if (failed) stage.handle?.fail(failed); else stage.handle?.done();
+    stage.handle = null;
+  };
+
+  begin('Transcribing the video…', 100_000);
+  try {
   // Twice, never more. A second 'transcript_ready' means something other than
   // the clock is wrong, and looping would hide it behind a spinner.
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -70,7 +100,7 @@ export async function runPrepare(req: PrepareRequest, onProgress?: (note: string
     try {
       r = await fetch('/api/videos/prepare', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'x-chi-progress': 'quiet' },
         body: JSON.stringify({ url: req.url, transcript: req.transcript || undefined, tab: req.tab, row: req.row, publicationDate: req.publicationDate, skipMetricool: req.skipMetricool }),
       });
     } catch {
@@ -84,6 +114,9 @@ export async function runPrepare(req: PrepareRequest, onProgress?: (note: string
     }
     if (r.status === 202 && j?.error === 'transcript_ready' && attempt === 0) {
       onProgress?.(String(j.message || 'The transcript is done — writing the copy now.'));
+      // A fact, not an estimate: the server sends this precisely because the
+      // transcript is stored and the writing has not started.
+      begin('Writing the copy…', 45_000);
       continue;
     }
     if (!r.ok) {
@@ -97,4 +130,9 @@ export async function runPrepare(req: PrepareRequest, onProgress?: (note: string
     return { ok: true, data: j };
   }
   return { ok: false, kind: 'error', message: 'That video needed more than two passes, which means something other than the clock is wrong.' };
+  } finally {
+    // Whatever happened — success, refusal, a throw — the badge must not be
+    // left spinning at 94% for the rest of the session.
+    finish();
+  }
 }
