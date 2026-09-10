@@ -136,18 +136,30 @@ export function TopProgressBar() {
   const busy = snap.running.length > 0;
   if (!busy) return null;
   return (
-    <div className="pointer-events-none fixed right-4 top-4 z-[90]" role="status" aria-live="polite">
+    // Vertically centred on the right edge, not tucked under the top bar.
+    // At top-4 it sat on the page header — the row carrying the nav and Sign
+    // out — and nothing else on the page is fixed, so the right-hand edge is
+    // free the whole way down.
+    <div className="pointer-events-none fixed right-4 top-1/2 z-[90] -translate-y-1/2" role="status" aria-live="polite">
       {/* The 2px hairline and the 10px chip that used to live here are gone.
           Both were present and neither was noticeable, which is the whole
           reason this changed — one visible thing beats two invisible ones. */}
       <span
-        className="flex items-center justify-center rounded-full bg-white/85 p-1 text-ink-muted shadow-soft ring-1 ring-line backdrop-blur"
+        className="flex flex-col items-center gap-1.5 rounded-2xl bg-white/85 p-1.5 text-ink-muted shadow-soft ring-1 ring-line backdrop-blur"
         data-testid="top-progress-percent"
         data-percent={snap.percent}
       >
         <MobiusProgress percent={snap.percent} size={48} />
+        {/* What it is doing, which the bus has always carried and this badge
+            has always dropped. Capped narrow: it lives beside the page, not in
+            it, and a sentence here would be a second thing to read. */}
+        {snap.label && (
+          <span className="max-w-[92px] px-1 pb-0.5 text-center text-[10px] font-medium leading-tight text-ink-muted">
+            {snap.label}
+          </span>
+        )}
       </span>
-      <span className="sr-only">Update {snap.percent} percent complete</span>
+      <span className="sr-only">{snap.label} — {snap.percent} percent complete</span>
     </div>
   );
 }
