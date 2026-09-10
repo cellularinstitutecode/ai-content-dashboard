@@ -17,8 +17,10 @@ test('scheduled mode is the one and only way a post goes live', () => {
 });
 
 test('a replace carries the media, or Metricool drops the picture', () => {
-  const body = replacePostBody({ ...base, mode: 'review', media: [{ url: 'https://x/img.jpg' }] });
-  assert.deepEqual(body.media, [{ url: 'https://x/img.jpg' }]);
+  // URL STRINGS. {url} objects are the shape Metricool ANSWERS with; sent as a
+  // request they are accepted with a 200 and the file is dropped.
+  const body = replacePostBody({ ...base, mode: 'review', media: ['https://x/img.jpg'] });
+  assert.deepEqual(body.media, ['https://x/img.jpg']);
 });
 
 test('no media is sent as an empty list, never omitted', () => {
@@ -45,4 +47,18 @@ test('the date is sent as clinic wall-clock with its zone', () => {
 test('an empty replace is refused before it reaches Metricool', () => {
   assert.throws(() => replacePostBody({ ...base, text: '   ', mode: 'review' }), /text and at least one network/);
   assert.throws(() => replacePostBody({ ...base, providers: [], mode: 'review' }), /text and at least one network/);
+});
+
+
+// --- YouTube's fields must survive an approve --------------------------------
+test('a replace keeps youtubeData for a YouTube post, and never invents it', () => {
+  const yt = { title: 'A title', type: 'short', privacy: 'public', madeForKids: false };
+  const kept = replacePostBody({ ...base, providers: ['youtube'], mode: 'scheduled', youtubeData: yt }) as any;
+  assert.deepEqual(kept.youtubeData, yt, 'approving would otherwise wipe the title the draft was accepted with');
+
+  const other = replacePostBody({ ...base, providers: ['facebook'], mode: 'scheduled', youtubeData: yt }) as any;
+  assert.equal('youtubeData' in other, false, 'a Facebook post has no business carrying YouTube fields');
+
+  const none = replacePostBody({ ...base, providers: ['youtube'], mode: 'scheduled' }) as any;
+  assert.equal('youtubeData' in none, false);
 });

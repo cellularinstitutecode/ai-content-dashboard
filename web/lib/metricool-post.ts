@@ -38,9 +38,16 @@ export type ReplacePostInput = {
   text: string;
   providers: Provider[];
   publicationDate: string;
-  /** Attached media. Omitting it on a REPLACE drops the image from the post. */
-  media?: { url: string }[];
+  /**
+   * Attached media, as URLs Metricool has already normalised.
+   *
+   * Omitting it on a REPLACE drops the image from the post — and so does
+   * sending the wrong shape, which is what {url} objects were doing silently.
+   */
+  media?: string[];
   mode: PostMode;
+  /** YouTube's own fields. A replace that omits them wipes the video's title. */
+  youtubeData?: unknown;
 };
 
 /** The exact body a replace sends — exported so the rule is unit-testable. */
@@ -56,7 +63,11 @@ export function replacePostBody(post: ReplacePostInput) {
     text,
     providers: providers.map((network) => ({ network })),
     publicationDate: { dateTime: wallClockOf(post.publicationDate), timezone: SCHEDULE_TZ },
-    media: Array.isArray(post.media) ? post.media.filter((m) => m && m.url) : [],
+    media: Array.isArray(post.media) ? post.media.filter((m) => typeof m === 'string' && m) : [],
+    // A replace REPLACES. Leaving youtubeData out of an approve would strip the
+    // title and audience the draft was accepted with, and Metricool would then
+    // refuse the very post a person had just approved.
+    ...(post.youtubeData && providers.includes('youtube' as Provider) ? { youtubeData: post.youtubeData } : {}),
     ...modeFlags(post.mode),
   };
 }

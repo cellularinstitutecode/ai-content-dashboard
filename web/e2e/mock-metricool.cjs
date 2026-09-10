@@ -54,6 +54,16 @@ const server = http.createServer(async (req, res) => {
   // regression that drops it fails loudly here instead of silently upstream.
   if (!req.headers['x-mc-auth']) return json(res, 401, { error: 'missing X-Mc-Auth' });
 
+  // Media has to be normalised before Metricool will keep it — the real API
+  // accepts an un-normalised URL with a 200 and silently drops the file, which
+  // is how every image and video this app sent went missing for months. The
+  // mock answers the same call so the harness exercises the real two-step.
+  if (url.pathname === '/actions/normalize/image/url') {
+    const src = url.searchParams.get('url') || '';
+    if (!src) return json(res, 400, { error: 'url is required' });
+    return json(res, 200, { url: 'https://mock-metricool.local/normalized/' + encodeURIComponent(src) });
+  }
+
   const m = /^\/v2\/scheduler\/posts(?:\/([^/]+))?$/.exec(url.pathname);
   if (!m) return json(res, 404, { error: 'mock metricool: no route for ' + req.method + ' ' + url.pathname });
   const id = m[1];

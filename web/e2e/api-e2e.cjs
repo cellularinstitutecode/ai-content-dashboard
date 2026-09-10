@@ -175,6 +175,11 @@ const jsonOf = async (r) => { try { return await r.json(); } catch { return null
     JSON.stringify(apPuts[0]?.body));
   check('and a media list is always sent, so the picture cannot be dropped by the replace',
     Array.isArray(apPuts[0]?.body?.media), JSON.stringify(apPuts[0]?.body?.media));
+  // Metricool keeps media only when the URL has been normalised first, and it
+  // answers 200 either way — so "media was sent" never meant "media arrived".
+  check('and every media entry is a normalised URL string, not a {url} object',
+    (apPuts[0]?.body?.media || []).every((m) => typeof m === 'string'),
+    JSON.stringify(apPuts[0]?.body?.media));
   const approvedRow = ((await jsonOf(await app('/api/posts')))?.posts || []).find((p) => p.id === toApprove.id);
   // 'approved', not 'scheduled': see lib/post-mode.ts. 'scheduled' is the
   // column default and Metricool's word for a post in its REVIEW queue, so it

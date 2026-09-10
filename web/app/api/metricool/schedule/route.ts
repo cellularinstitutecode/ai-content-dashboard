@@ -1,6 +1,7 @@
 import { reportError, redact } from '@/lib/report';
 import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
-import { apiBase as metricoolApiBase } from '@/lib/metricool';
+import { apiBase as metricoolApiBase, normalizeMedia } from '@/lib/metricool';
+import { youtubeDataFor } from '@/lib/youtube-meta';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -78,6 +79,15 @@ export async function POST(req: NextRequest) {
   const blogId = String(payload.blogId || DEFAULT_BLOG_ID);
   const draftId = payload.draftId ? String(payload.draftId) : null;
   if (!when) return NextResponse.json({ error: 'publishAt must be a valid datetime' }, { status: 400 });
+  // Metricool refuses a past date, but only when a person opens the draft and
+  // tries to save it — by which point the post has been sitting in the queue
+  // looking fine. Refuse it here, where the answer is still useful.
+  if (Date.parse(when.instant) <= Date.now()) {
+    return NextResponse.json(
+      { error: 'That time has already passed. Pick a future date and time.' },
+      { status: 422 },
+    );
+  }
   if (!ALLOWED_BLOG_IDS.has(blogId)) {
     return NextResponse.json({ error: 'Unknown brand profile' }, { status: 400 });
   }
@@ -101,7 +111,31 @@ export async function POST(req: NextRequest) {
     draft: true,
   };
   if (payload.mediaUrl) {
-    body.media = [{ url: String(payload.mediaUrl) }];
+    // Normalised first, and sent as a URL STRING.
+    //
+    // Both halves of that were wrong, and the effect was the same either way:
+    // Metricool accepted the post with a 200 and quietly dropped the file, so
+    // "attached" here meant nothing at all by the time a person opened the
+    // draft and read "Add at least 1 image or video."
+    body.media = [await normalizeMedia(String(payload.mediaUrl))];
+  }
+
+  // YouTube alone needs a title, a Short-or-video answer and a stated audience;
+  // without them Metricool will not let the draft be saved, let alone approved.
+  if (provider === 'youtube') {
+    const yt = youtubeDataFor({
+      title: typeof payload.title === 'string' ? payload.title : '',
+      body: text,
+      format: typeof payload.format === 'string' ? payload.format : '',
+      defaultPrivacy: process.env.YOUTUBE_DEFAULT_PRIVACY,
+    });
+    if (!yt) {
+      return NextResponse.json(
+        { error: 'A YouTube post needs a title. Give the post a first line, or send it to the other networks.' },
+        { status: 422 },
+      );
+    }
+    body.youtubeData = yt;
   }
 
   // The same base every other Metricool call uses (lib/metricool.ts), so the
