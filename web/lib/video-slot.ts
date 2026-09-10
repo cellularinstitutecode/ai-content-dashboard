@@ -80,20 +80,55 @@ export function reserveSlots(count: number, taken: Iterable<string>, now: Date =
  * be fetched by Metricool.
  *
  * The sheet's checkboxes are the clinic's own intent for that video and are
- * followed where they are set. Where a row says nothing — most new rows do —
- * LinkedIn is the default, because it is the one network whose post is
- * complete without a video file attached.
+ * followed where they are set. Where a row says nothing — which is most rows —
+ * all three of the clinic's video destinations are chosen.
  *
- * A network that needs a video is dropped when there is no fetchable URL for
- * one, rather than drafted empty: a TikTok post with no video is not a draft a
- * person can approve, it is a chore.
+ * The default used to be LinkedIn alone, on the reasoning that it is the one
+ * network whose post is complete without a video attached. That was true and
+ * beside the point: nobody ticks the boxes, so in practice every prepared
+ * video went to exactly one network and the other two were never reached. A
+ * default is what the thing does, not a fallback nobody was meant to hit.
+ *
+ * A network that needs a video is still dropped when there is no fetchable URL
+ * for one, rather than drafted empty: a TikTok post with no video is not a
+ * draft a person can approve, it is a chore.
  */
 export const NEEDS_VIDEO = new Set(['tiktok', 'instagram', 'youtube']);
 
-export function networksFor(ticked: readonly string[], hasVideoUrl: boolean): string[] {
+/** Where a video goes when the row does not say otherwise. */
+export const DEFAULT_VIDEO_NETWORKS = ['youtube', 'linkedin', 'tiktok'];
+
+/**
+ * Networks that only make sense for a portrait video.
+ *
+ * TikTok is a vertical feed; a 16:9 video posted there is letterboxed or
+ * cropped through the middle of whatever it was framing. YouTube is
+ * deliberately absent — landscape is the normal shape of a YouTube video, and
+ * only its Shorts shelf wants portrait.
+ */
+const VERTICAL_ONLY = new Set(['tiktok']);
+
+/**
+ * Does this video's shape suit this network?
+ *
+ * Read from the sheet's FORMATO column, which the clinic already fills in with
+ * "Vertical 9:16" or "Horizontal 16:9". An unreadable or empty format is
+ * treated as fine: the column is a human note, and refusing to post because
+ * somebody left a cell blank would be the tool inventing a rule.
+ */
+export function fitsAspect(network: string, format: string | null | undefined): boolean {
+  if (!VERTICAL_ONLY.has(String(network || '').toLowerCase())) return true;
+  return !/horizontal|16\s*[:x/]\s*9|landscape|paisaje/i.test(String(format || ''));
+}
+
+export function networksFor(ticked: readonly string[], hasVideoUrl: boolean, format?: string | null): string[] {
   const wanted = (ticked || []).map((n) => String(n || '').toLowerCase()).filter(Boolean);
-  const chosen = wanted.length ? wanted : ['linkedin'];
-  const out = chosen.filter((n) => (NEEDS_VIDEO.has(n) ? hasVideoUrl : true));
+  const chosen = wanted.length ? wanted : DEFAULT_VIDEO_NETWORKS;
+  const out = chosen
+    .filter((n) => (NEEDS_VIDEO.has(n) ? hasVideoUrl : true))
+    // Only applied when a format was actually supplied, so every existing
+    // caller keeps its behaviour until it opts in by passing one.
+    .filter((n) => (format === undefined ? true : fitsAspect(n, format)));
   // Email is a column in the sheet, not a social network Metricool posts to.
   return Array.from(new Set(out.filter((n) => n !== 'email')));
 }

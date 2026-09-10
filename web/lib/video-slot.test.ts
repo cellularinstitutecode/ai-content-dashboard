@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { NEEDS_VIDEO, POST_WEEKDAYS, networksFor, nextFreeSlot, reserveSlots } from './video-slot.ts';
+import { NEEDS_VIDEO, POST_WEEKDAYS, fitsAspect, networksFor, nextFreeSlot, reserveSlots } from './video-slot.ts';
 
 const TZ = 'America/Cancun';
 // A Wednesday, mid-afternoon in Cancun (UTC-5).
@@ -52,10 +52,36 @@ test('weekends are never scheduled', () => {
   }
 });
 
-test('a row with no ticks defaults to LinkedIn', () => {
-  // LinkedIn is the one network whose post is complete without a video file.
+test('a row with no ticks goes to all three video destinations', () => {
+  // It used to default to LinkedIn alone, on the reasoning that LinkedIn is the
+  // one network complete without a video attached. True, and beside the point:
+  // nobody ticks the boxes, so every prepared video reached exactly one network
+  // and the other two were never touched.
+  assert.deepEqual(networksFor([], true), ['youtube', 'linkedin', 'tiktok']);
+  // Without a video the two that require one still drop out, which is the half
+  // of the old behaviour that was right.
   assert.deepEqual(networksFor([], false), ['linkedin']);
-  assert.deepEqual(networksFor([], true), ['linkedin']);
+});
+
+test('a horizontal video is kept off TikTok and kept on YouTube', () => {
+  // TikTok is a vertical feed — 16:9 there is letterboxed or cropped through
+  // the middle of the shot. Landscape is simply what a YouTube video looks
+  // like, so it is not treated as a problem.
+  assert.deepEqual(networksFor([], true, 'Horizontal 16:9'), ['youtube', 'linkedin']);
+  assert.deepEqual(networksFor([], true, 'Vertical 9:16'), ['youtube', 'linkedin', 'tiktok']);
+  assert.equal(fitsAspect('tiktok', 'Horizontal 16:9'), false);
+  assert.equal(fitsAspect('youtube', 'Horizontal 16:9'), true);
+  assert.equal(fitsAspect('linkedin', 'Horizontal 16:9'), true);
+});
+
+test('a blank or unreadable format is not a reason to refuse a post', () => {
+  // FORMATO is a human note in a spreadsheet. Refusing to post because
+  // somebody left the cell empty would be the tool inventing a rule.
+  assert.equal(fitsAspect('tiktok', ''), true);
+  assert.equal(fitsAspect('tiktok', null), true);
+  assert.equal(fitsAspect('tiktok', 'no idea'), true);
+  // And a caller that passes nothing at all keeps its old behaviour exactly.
+  assert.deepEqual(networksFor([], true), networksFor([], true, undefined));
 });
 
 test('the sheet’s ticks are followed where they are set', () => {

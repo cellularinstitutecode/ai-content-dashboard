@@ -59,6 +59,9 @@ export function preparedStatus(opts: { hasKeywords: boolean; overLength: boolean
  */
 export const NETWORK_LIMIT: Record<string, number> = {
   linkedin: 3000,
+  // YouTube's description field. Missing here meant a video caption was checked
+  // against Infinity — never refused by us, refused by YouTube instead.
+  youtube: 5000,
   instagram: 2200,
   tiktok: 2200,
   facebook: 5000,
