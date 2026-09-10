@@ -10,7 +10,8 @@ import CollapsibleSection from "@/components/CollapsibleSection";
 import SystemStatus from "@/components/SystemStatus";
 import ProcessTracker, { makeSteps, stepActive, stepError, stepSkip, stepsDone, type ProcessStep } from "@/components/ProcessTracker";
 import { announce, onRefresh, fetchDrafts } from "@/components/refreshBus";
-import { tightestLimit, networkLabel, parseVideoUrl, localDateTimeValue, draftLabel } from "@/lib/composer";
+import { tightestLimit, networkLabel, parseVideoUrl, localDateTimeValue, draftLabel, PUBLISH_NETWORKS, DEFAULT_VIDEO_NETWORKS, mediaProblem } from "@/lib/composer";
+import MediaPicker from "@/components/MediaPicker";
 import { useWorkspace } from "@/components/workspace";
 import { appliesTo as complianceApplies, checkCompliance, ensureAviso, DEFAULT_AVISO_NUMBER } from "@/lib/compliance";
 import { PanelLoader } from "@/components/LoadingScreen";
@@ -65,14 +66,11 @@ const ONBOARD_STEPS: { title: string; body: string }[] = [
 ];
 const ONBOARD_KEY = 'chi_onboarding_dismissed_v1';
 
-// Networks we can publish to through Metricool, with display labels. These map
-// to the providers supported by /api/metricool/schedule.
-const PUBLISH_NETWORKS: { id: string; label: string }[] = [
-{ id: 'facebook', label: 'Facebook' },
-{ id: 'instagram', label: 'Instagram' },
-{ id: 'linkedin', label: 'LinkedIn' },
-{ id: 'twitter', label: 'X / Twitter' },
-];
+// The channel list, its per-network character ceilings and the "this feed needs
+// a video" rule all live in lib/composer.ts now. This file kept its own copy of
+// the list — as did app/calendar/page.tsx — so YouTube and TikTok stayed
+// unpickable for months while Metricool had both connected and
+// /api/metricool/schedule had both mapped.
 
 // Seed topics for the Trending in stem cell therapy panel. These are a curated
 // starting set the team controls — NOT scraped live — and only ever pre-fill the
@@ -322,6 +320,13 @@ const [mBusy, setMBusy] = useState(false);
     try { scrollToPublisher(); } catch { /* not mounted yet */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.handoffNonce]);
+  // Declared above the send gate on purpose: mProblem reads mMedia, and a
+  // `const` used before its declaration is a temporal-dead-zone crash, not a
+  // warning.
+  const [mMedia, setMMedia] = useState<string>("");
+  const [mMediaLabel, setMMediaLabel] = useState<string>("");
+  /** Is a video-only channel selected? Drives the picker's hint. */
+  const mNeedsMedia = Boolean(mediaProblem(mNetworks, ''));
   const mChars = mText.trim().length;
   const mLimit = tightestLimit(mNetworks);
   const mOverBy = mLimit ? mChars - mLimit.limit : 0;
@@ -336,13 +341,14 @@ const [mBusy, setMBusy] = useState(false);
     : mTooLong && mLimit ? networkLabel(mLimit.network) + ' allows ' + mLimit.limit.toLocaleString() + ' characters. Trim ' + mOverBy.toLocaleString() + '.'
     : !mDate ? 'Pick the date and time it should go out.'
     : mDateInPast ? 'That time has already passed. Pick a future time.'
+    : mediaProblem(mNetworks, mMedia) ? mediaProblem(mNetworks, mMedia)
     : mCompliance && !mCompliance.ok ? (mCompliance.missing.includes('ref') ? 'Instagram and Facebook posts need a REF line citing a scientific study.' : 'Add the AVISO DE PUBLICIDAD line before sending.')
     : null;
   const mCanSend = !mProblem && !mBusy;
-  const [mMedia, setMMedia] = useState<string>("");
-  const [mMediaLabel, setMMediaLabel] = useState<string>("");
   function platformsForFormat(fmt: string): string[] {
-    if (fmt === "video") return ["instagram", "facebook"];
+    // A video draft went to Instagram and Facebook — the two channels that are
+    // not what the clinic's video work is for. Same default the sweep uses.
+    if (fmt === "video") return DEFAULT_VIDEO_NETWORKS;
     if (fmt === "blog" || fmt === "email") return ["linkedin", "facebook"];
     return ["instagram", "facebook", "linkedin"];
   }
@@ -1621,11 +1627,10 @@ return (
 <div className="flex flex-wrap gap-2" role="group" aria-label="Networks to post to">
 {PUBLISH_NETWORKS.map((n) => {
 const on = mNetworks.includes(n.id);
-const emoji = n.id === 'facebook' ? '📘' : n.id === 'instagram' ? '📸' : n.id === 'linkedin' ? '💼' : n.id === 'twitter' ? '𝕏' : '🔗';
 return (
 <button type="button" key={n.id} onClick={() => toggleNetwork(n.id)} aria-pressed={on}
 className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 transition " + (on ? "bg-accent text-white ring-accent" : "bg-white text-ink ring-line hover:ring-accent")}>
-<span aria-hidden>{emoji}</span>{n.label}
+<span aria-hidden>{n.emoji}</span>{n.label}
 </button>
 );
 })}
@@ -1663,7 +1668,7 @@ className={"mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring
     <p className="mt-2 text-[12px] text-emerald-700" role="status">✓ Advertising notice and scientific reference present.</p>
   ) : (
     <div className="mt-2 rounded-2xl bg-amber-50 p-3 text-[12px] text-amber-900 ring-1 ring-amber-200" role="status">
-      <div className="font-semibold">Instagram and Facebook posts must carry two lines</div>
+      <div className="font-semibold">These posts must carry two lines</div>
       <ul className="mt-1 list-disc pl-4">
         <li>{mCompliance && !mCompliance.missing.includes('aviso') ? '✓ ' : ''}AVISO DE PUBLICIDAD: {avisoNumber}{mCompliance && mCompliance.missing.includes('aviso') ? (<> — <button type="button" onClick={() => setMText(ensureAviso(mText, avisoNumber))} className="font-semibold underline">add it now</button></>) : null}</li>
         <li>{mCompliance && !mCompliance.missing.includes('ref') ? '✓ ' : ''}REF: a scientific study that supports the claim{mCompliance && mCompliance.missing.includes('ref') ? ' — add a line starting with "REF:" (author, year, journal, DOI). Drafts from the Content Generator include one.' : ''}</li>
@@ -1671,7 +1676,15 @@ className={"mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring
     </div>
   )
 ) : null}
-{mMedia ? ((() => { const isImage = /image/i.test(mMediaLabel) || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(mMedia); return (<div className="mt-2 flex items-center justify-between gap-2 rounded-2xl bg-subtle p-2.5 ring-1 ring-line"><div className="flex min-w-0 items-center gap-2"><span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">{isImage ? '\uD83D\uDDBC' : '\uD83C\uDFAC'}</span><div className="min-w-0"><div className="truncate text-[13px] font-medium text-ink">{mMediaLabel || (isImage ? "Image attached" : "Video attached")}</div><div className="text-[11px] text-ink-faint">{isImage ? 'This image will be attached to the post.' : 'This video will be attached to the post.'}</div></div></div><button type="button" onClick={() => { setMMedia(""); setMMediaLabel(""); }} className="shrink-0 rounded-full px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white">Remove</button></div>); })()) : null}
+{/* Was inline markup that could only DISPLAY media handed over from
+    somewhere else — there was no way to attach a video from this screen, which
+    is why a video post could not be written here at all. */}
+<MediaPicker
+  value={mMedia}
+  label={mMediaLabel}
+  onChange={(url, lbl) => { setMMedia(url); setMMediaLabel(lbl); }}
+  hint={mNeedsMedia ? 'YouTube and TikTok will not take a post without one.' : 'Optional — LinkedIn, Facebook, Instagram and X can go out as text.'}
+/>
 <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px]">
 <span className={mTooLong ? 'font-semibold text-danger' : 'text-ink-muted'}>
 {mLimit
@@ -1686,14 +1699,19 @@ Too long for {networkLabel(mLimit.network)} by {mOverBy.toLocaleString()} charac
 </p>
 )}
 <p className="mt-3 text-[12px] text-ink-muted">Every post lands in your queue as a draft. Press Approve there to publish.</p>
+{/* The only reason the Send button was disabled used to be 12px grey text
+    UNDER it, which reads as "the button is broken" rather than "one thing is
+    missing". Same sentence, above the button, in a colour, naming the fix. */}
+{mProblem && !mBusy && (
+<p role="status" className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[13px] font-medium text-amber-900 ring-1 ring-amber-200">
+{mProblem}{!mDate ? ' The three time chips above set one in a click.' : ''}
+</p>
+)}
 <div className="mt-4 flex flex-wrap items-center gap-3">
 <button onClick={schedulePost} disabled={!mCanSend} title={mProblem || undefined} className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">{mBusy ? 'Sending…' : 'Send to Metricool for review'}</button>
 <a href={metricoolPlannerUrl(activeBlogId)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:ring-accent">Open in Metricool ↗</a>
 </div>
 {mStatus && <p className="mt-3 rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink-muted ring-1 ring-line">{mStatus}</p>}
-{mProblem && !mBusy && (
-<p className="mt-3 text-[12px] font-medium text-ink-muted" role="status">{mProblem}</p>
-)}
 <p className="mt-3 text-[11px] text-ink-muted">Nothing publishes automatically — it lands in your queue as a draft for you to approve.</p>
 </div>
 )}

@@ -49,6 +49,9 @@ const POLICIES: Record<string, Policy> = {
   'autopilot-action': { limit: 40, windowSec: 3600 },
   semrush: { limit: 120, windowSec: 3600 },
   keywords: { limit: 60, windowSec: 3600 },
+  // One database read, no third party, no spend — but a picker that opens on
+  // every composer visit should still not be the one uncapped door.
+  'media-list': { limit: 240, windowSec: 3600 },
   // The research copilot runs a Semrush pre-filter AND an LLM call, so it is
   // at least as expensive as `generate`. Without an entry here it silently
   // took DEFAULT_POLICY — double the cap of the cheaper operation.

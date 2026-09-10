@@ -26,6 +26,8 @@ test('the rule applies to every network the clinic advertises on', () => {
   // therapies in Mexico does not stop being advertising because the post is on LinkedIn.
   assert.equal(appliesTo(['linkedin']), true);
   assert.equal(appliesTo(['tiktok']), true);
+  // A therapeutic claim in a video description is still advertising.
+  assert.equal(appliesTo(['youtube']), true);
   assert.equal(appliesTo(['twitter', 'blog']), false);
   assert.equal(appliesTo([]), false);
   assert.equal(appliesTo(null), false);

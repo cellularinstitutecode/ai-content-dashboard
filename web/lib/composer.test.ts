@@ -2,7 +2,8 @@
 // Uses node:test — no extra dependency, no browser, runs in CI in under a second.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tightestLimit, networkLabel, parseVideoUrl, localDateTimeValue, draftLabel, localDateKey } from './composer.ts';
+import { tightestLimit, networkLabel, parseVideoUrl, localDateTimeValue, draftLabel, localDateKey, PUBLISH_NETWORKS, NETWORKS_NEEDING_MEDIA, DEFAULT_VIDEO_NETWORKS, mediaProblem } from './composer.ts';
+import { DEFAULT_VIDEO_NETWORKS as SWEEP_VIDEO_NETWORKS } from './video-slot.ts';
 
 // --- F4: a garbage URL must never arm a billable Opus job --------------------
 test('parseVideoUrl rejects anything Opus cannot fetch', () => {
@@ -67,4 +68,47 @@ test('localDateKey does not roll over just because UTC has', () => {
   // 03:00 UTC on the 22nd is still the evening of the 21st in Tijuana.
   const d = new Date('2026-08-22T03:00:00Z');
   assert.equal(localDateKey(d), process.env.TZ === 'America/Tijuana' ? '2026-08-21' : localDateKey(d));
+});
+
+
+// --- the channel list is the one the brand actually has connected -----------
+//
+// It was declared three times (here, app/page.tsx, app/calendar/page.tsx), all
+// four entries, and Metricool has had six connected for months. These tests
+// exist so a channel cannot be half-added again: chip, limit and media rule.
+test('every connected channel can be picked', () => {
+  const ids = PUBLISH_NETWORKS.map((n) => n.id);
+  assert.deepEqual(ids, ['facebook', 'instagram', 'linkedin', 'twitter', 'youtube', 'tiktok']);
+});
+
+test('every listed channel has a character ceiling and a label', () => {
+  for (const n of PUBLISH_NETWORKS) {
+    assert.equal(typeof tightestLimit([n.id])?.limit, 'number', n.id + ' has no limit, so it would be checked against Infinity');
+    assert.equal(networkLabel(n.id), n.label);
+    assert.ok(n.emoji, n.id + ' has no chip icon');
+  }
+});
+
+test('tightestLimit prefers TikTok over YouTube when both are picked', () => {
+  assert.deepEqual(tightestLimit(['youtube', 'tiktok']), { network: 'tiktok', limit: 2200 });
+  assert.deepEqual(tightestLimit(['youtube', 'linkedin']), { network: 'linkedin', limit: 3000 });
+});
+
+// --- a video-only feed is never sent without a video ------------------------
+test('mediaProblem names the channels that need an attachment', () => {
+  assert.equal(NETWORKS_NEEDING_MEDIA.has('youtube'), true);
+  assert.equal(NETWORKS_NEEDING_MEDIA.has('tiktok'), true);
+  assert.equal(NETWORKS_NEEDING_MEDIA.has('linkedin'), false, 'LinkedIn carries a video but does not require one');
+
+  assert.match(mediaProblem(['tiktok'], '')!, /^TikTok needs a video/);
+  assert.match(mediaProblem(['youtube', 'tiktok'], '')!, /YouTube and TikTok need/);
+  assert.equal(mediaProblem(['linkedin', 'facebook'], ''), null);
+  assert.equal(mediaProblem(['youtube'], 'https://drive.google.com/uc?id=abc'), null);
+  assert.equal(mediaProblem([], ''), null);
+  assert.equal(mediaProblem(['TikTok'], '   '), 'TikTok needs a video or image attached. Attach one below, or unselect it.');
+});
+
+// --- one answer to "where does a video go", not two -------------------------
+test('the composer and the sweep agree on a video default', () => {
+  assert.deepEqual(DEFAULT_VIDEO_NETWORKS, SWEEP_VIDEO_NETWORKS);
 });

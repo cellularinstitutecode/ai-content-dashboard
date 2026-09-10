@@ -19,6 +19,7 @@ import PageNav from '@/components/PageNav';
 import { useWorkspace } from '@/components/workspace';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 import VideoPrepare, { type Prepared } from '@/components/VideoPrepare';
+import { fetchShareableVideos } from '@/components/MediaPicker';
 import { runPrepare } from '@/lib/prepare-request';
 import { mapLimit } from '@/lib/map-limit';
 import { mayStartBatch, reasons, tally, type BatchReasons, type BatchState } from '@/lib/batch-plan';
@@ -313,6 +314,17 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   const [calendar, setCalendar] = useState<{ entries: CalendarEntry[]; tabs: string[] } | null>(null);
   const [videos, setVideos] = useState<{ entries: VideoEntry[]; tabs: string[] } | null>(null);
   const [images, setImages] = useState<DriveImage[] | null>(null);
+  /**
+   * Source video id → the URL of its shareable copy.
+   *
+   * "Use in post" handed over the caption and an empty media slot, then pasted
+   * `Watch: <Drive link>` onto the text — a link the clinic's Drive keeps
+   * private, so a reader clicking it got a permission wall. The copy that IS
+   * fetchable already exists for any prepared row; this is the lookup that
+   * finds it. Empty until it loads, and empty is handled: the button then says
+   * what to press to make one.
+   */
+  const [shareable, setShareable] = useState<Record<string, string>>({});
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [q, setQ] = useState('');
@@ -355,6 +367,25 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     load(tab, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
+
+  // Which videos already have a copy a network can fetch. Read once; a failure
+  // costs the video on a hand-off, never the hand-off itself.
+  useEffect(() => {
+    let alive = true;
+    void fetchShareableVideos().then(({ videos: found }) => {
+      if (!alive) return;
+      const byId: Record<string, string> = {};
+      for (const v of found) byId[v.videoId] = v.url;
+      setShareable(byId);
+    });
+    return () => { alive = false; };
+  }, []);
+
+  /** The fetchable copy of this row's video, if one has been made. */
+  function shareableFor(v: VideoEntry): string {
+    const id = parseDriveFileId(firstLink(v));
+    return (id && shareable[id]) || '';
+  }
 
   async function load(kind: Tab, fresh: boolean) {
     setErr(null);
@@ -992,7 +1023,24 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                                 {prepareLink(v) && (
                                   <button type="button" style={btn} onClick={() => prepare(v)} title="Transcript → keywords → LinkedIn + TikTok copy">Prepare</button>
                                 )}
-                                <button type="button" style={ghost} onClick={() => handoff([v.copy || v.title, v.videoLink ? 'Watch: ' + firstLink(v) : ''].filter(Boolean).join('\n\n'), '', '')}>Use in post</button>
+                                {/* The video comes WITH the copy when there is a fetchable version of it.
+    Without one this used to append `Watch: <Drive link>` instead, which is
+    private — so the post shipped a link most readers cannot open. Now it
+    either attaches the video or says plainly what makes one. */}
+{(() => {
+  const media = shareableFor(v);
+  const yt = youtubeOf(v);
+  // A YouTube source is public and genuinely worth linking; a Drive one is not.
+  const text = [v.copy || v.title, media || !yt ? '' : 'Watch: ' + yt].filter(Boolean).join('\n\n');
+  return (
+    <button
+      type="button"
+      style={ghost}
+      title={media ? 'Brings the caption and the video' : 'Brings the caption. Press Prepare to make the shareable copy a network can fetch.'}
+      onClick={() => handoff(text, media, media ? v.title || 'Video' : '')}
+    >{media ? 'Use in post · with video' : 'Use in post'}</button>
+  );
+})()}
                                 <button type="button" style={{ ...ghost, padding: '5px 10px' }} onClick={() => setEditing(editing === v.tab + ':' + v.row ? null : v.tab + ':' + v.row)}>
                                   {editing === v.tab + ':' + v.row ? 'Close' : 'Edit'}
                                 </button>

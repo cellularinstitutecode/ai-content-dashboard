@@ -6,22 +6,78 @@
 // to let a mistake through silently. Keeping them pure makes each rule
 // unit-testable without a browser (see lib/composer.test.ts).
 
-export const PUBLISH_NETWORKS: { id: string; label: string }[] = [
-  { id: 'facebook', label: 'Facebook' },
-  { id: 'instagram', label: 'Instagram' },
-  { id: 'linkedin', label: 'LinkedIn' },
-  { id: 'twitter', label: 'X / Twitter' },
+/**
+ * Every channel this deployment can post to, in the order the chips appear.
+ *
+ * THE LIST WAS DECLARED THREE TIMES — here, in app/page.tsx and in
+ * app/calendar/page.tsx — all four entries, all identical, and nothing kept
+ * them in step with what Metricool actually has connected. So YouTube and
+ * TikTok, the two channels the clinic's video work is for, could not be picked
+ * anywhere, while /api/metricool/schedule had mapped both providers the whole
+ * time. Both pages now import this one; adding a channel is a one-line change.
+ *
+ * `needsMedia` marks a feed that will not take a text-only post. It is not the
+ * same question as "is this a video channel": LinkedIn happily carries a video
+ * AND happily goes out without one, so it is not marked.
+ */
+export const PUBLISH_NETWORKS: { id: string; label: string; emoji: string; needsMedia?: true }[] = [
+  { id: 'facebook', label: 'Facebook', emoji: '\u{1F4D8}' },
+  { id: 'instagram', label: 'Instagram', emoji: '\u{1F4F8}' },
+  { id: 'linkedin', label: 'LinkedIn', emoji: '\u{1F4BC}' },
+  { id: 'twitter', label: 'X / Twitter', emoji: '\u{1D54F}' },
+  { id: 'youtube', label: 'YouTube', emoji: '\u{25B6}\u{FE0F}', needsMedia: true },
+  { id: 'tiktok', label: 'TikTok', emoji: '\u{1F3B5}', needsMedia: true },
 ];
 
 // Hard character ceilings each network enforces on its own side. Metricool will
 // reject or truncate anything longer, and it used to do that silently after the
 // post had already left this screen — so the composer checks first.
+//
+// A network missing from this map is checked against Infinity — never refused
+// here, refused by the network instead — which is what was happening to
+// YouTube and TikTok while they had no chips to be selected from.
 export const NETWORK_LIMITS: Record<string, number> = {
   twitter: 280,
   instagram: 2200,
   facebook: 63206,
   linkedin: 3000,
+  // YouTube's description field.
+  youtube: 5000,
+  tiktok: 2200,
 };
+
+/** Feeds that refuse a post with no image or video attached. */
+export const NETWORKS_NEEDING_MEDIA: ReadonlySet<string> = new Set(
+  PUBLISH_NETWORKS.filter((n) => n.needsMedia).map((n) => n.id),
+);
+
+/**
+ * Where a video goes by default, mirroring DEFAULT_VIDEO_NETWORKS in
+ * lib/video-slot.ts — the sweep's own answer to the same question.
+ *
+ * Mirrored rather than imported: video-slot.ts pulls ./timezone.ts with an
+ * explicit .ts specifier, which is fine on the server and needless risk in a
+ * client bundle. lib/composer.test.ts asserts the two stay identical, so there
+ * is still exactly one answer.
+ */
+export const DEFAULT_VIDEO_NETWORKS = ['youtube', 'linkedin', 'tiktok'];
+
+/**
+ * Why this post cannot be sent yet, as far as attachments go — or null.
+ *
+ * The composer holds a media URL and sends it, but nothing ever checked that a
+ * video-only channel HAD one. Selecting TikTok with no video produced a draft
+ * that failed at Metricool with a vague upstream message, which is a much
+ * worse place to find out than the screen you are standing on.
+ */
+export function mediaProblem(networks: readonly string[], media: string | null | undefined): string | null {
+  if (String(media || '').trim()) return null;
+  const missing = (networks || []).filter((n) => NETWORKS_NEEDING_MEDIA.has(String(n || '').toLowerCase()));
+  if (!missing.length) return null;
+  const names = missing.map((n) => networkLabel(n));
+  const which = names.length === 1 ? names[0] : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+  return which + (names.length === 1 ? ' needs' : ' need') + ' a video or image attached. Attach one below, or unselect ' + (names.length === 1 ? 'it' : 'them') + '.';
+}
 
 // Returns the tightest limit across the selected channels, or null if none.
 export function tightestLimit(networks: string[]): { network: string; limit: number } | null {
