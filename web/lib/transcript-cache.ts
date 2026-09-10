@@ -50,11 +50,23 @@ export async function cachedTranscript(videoId: string): Promise<CachedTranscrip
   return { text, source: String(row?.source || 'drive'), language: row?.language ?? null, title: row?.title ?? null };
 }
 
-/** Keep a transcript for next time. Never throws. */
-export async function cacheTranscript(videoId: string, t: CachedTranscript): Promise<void> {
+/**
+ * Keep a transcript for next time. Never throws — but SAYS whether it worked.
+ *
+ * It used to return void, and that was the whole failure. On a database where the table
+ * does not exist the write comes back "relation does not exist", which was logged to a
+ * server log nobody reads and then discarded; the caller carried on as though the
+ * transcript were banked, the request was killed at sixty seconds a moment later, and the
+ * person was told "press Prepare again — the transcript is kept". It was not kept. The
+ * next press re-downloaded a hundred and fifty megabytes and died in the same place, and
+ * that could repeat for ever because nothing anywhere knew the difference.
+ *
+ * So the caller is told, and can stop promising something that did not happen.
+ */
+export async function cacheTranscript(videoId: string, t: CachedTranscript): Promise<boolean> {
   const id = String(videoId || '').trim();
   const text = String(t.text || '').trim();
-  if (!id || !text) return;
+  if (!id || !text) return false;
   const r = await supabaseAdmin()
     .from('video_transcripts')
     .upsert({
@@ -67,7 +79,11 @@ export async function cacheTranscript(videoId: string, t: CachedTranscript): Pro
       updated_at: new Date().toISOString(),
     }, { onConflict: 'video_id' })
     .then((x) => x, (e: unknown) => ({ error: e as { message?: string } }));
-  if (r.error) reportError('transcript-cache:write', r.error, { videoId: id });
+  if (r.error) {
+    reportError('transcript-cache:write', r.error, { videoId: id });
+    return false;
+  }
+  return true;
 }
 
 /**

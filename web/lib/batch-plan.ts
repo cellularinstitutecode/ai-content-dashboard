@@ -49,3 +49,35 @@ export function mayStartBatch(
   }
   return { ok: true };
 }
+
+/** Where a batched row has got to. Mirrored in the component that renders it. */
+export type BatchState = 'queued' | 'working' | 'done' | 'failed' | 'needs_transcript';
+
+export type Tally = {
+  total: number;
+  done: number;
+  failed: number;
+  needsTranscript: number;
+  /** Not yet finished — queued or in flight. */
+  pending: number;
+};
+
+/**
+ * How a run is going, countable at any moment.
+ *
+ * The end-of-run summary counts what the pool RETURNED, which is correct and exists only
+ * once every row has finished. A batch takes minutes, and for all of them there was no
+ * aggregate anywhere — only per-row cells scattered down a table below the fold, which is
+ * how somebody ran one, saw nothing move, and concluded it had not started.
+ */
+export function tally(states: readonly BatchState[]): Tally | null {
+  if (!states.length) return null;
+  const n = (want: BatchState) => states.filter((s) => s === want).length;
+  return {
+    total: states.length,
+    done: n('done'),
+    failed: n('failed'),
+    needsTranscript: n('needs_transcript'),
+    pending: n('queued') + n('working'),
+  };
+}

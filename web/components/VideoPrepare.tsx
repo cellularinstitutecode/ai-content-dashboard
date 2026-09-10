@@ -56,11 +56,28 @@ function defaultWhen(): string {
   return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
 }
 
-export default function VideoPrepare({ initialUrl, blogId, sheetRow }: {
+export type BatchTally = {
+  total: number;
+  done: number;
+  failed: number;
+  needsTranscript: number;
+  pending: number;
+};
+
+export default function VideoPrepare({ initialUrl, blogId, sheetRow, batch, batchRunning }: {
   initialUrl?: string;
   blogId?: string;
   /** The row this was pressed from, so the copy goes back where the link was. */
   sheetRow?: { tab: string; row: number };
+  /**
+   * How a batch running further down the page is getting on.
+   *
+   * It is reported HERE because this panel is where a person watches a Prepare happen, and
+   * the batch bar is about a thousand pixels below it, past an embedded sheet — far enough
+   * that somebody ran a batch, saw nothing change, and thought it had not started.
+   */
+  batch?: BatchTally | null;
+  batchRunning?: boolean;
 }) {
   const [url, setUrl] = useState(initialUrl || '');
   const [pasted, setPasted] = useState('');
@@ -173,6 +190,19 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow }: {
         <div role="alert" style={{ marginTop: 10, background: '#fff8e6', border: '1px solid #f0c36d', borderRadius: 10, padding: 12, fontSize: 12 }}>
           <div style={{ fontWeight: 600 }}>{needPaste}</div>
           <textarea style={{ ...inputStyle, marginTop: 8, minHeight: 120 }} value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder="Paste the transcript here, then press Prepare again." />
+        </div>
+      )}
+      {batch && batch.total > 0 && (
+        <div role="status" style={{ marginTop: 10, padding: '9px 11px', borderRadius: 10, background: batchRunning ? '#eef3ff' : '#f6f7f9', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 11 }}>
+          <strong style={{ fontSize: 12 }}>
+            {batchRunning ? 'Preparing ' + batch.total + ' videos…' : 'Last run · ' + batch.total + ' videos'}
+          </strong>
+          {/* The same pills, and the same three colours, the single-run badges below use. */}
+          {batch.done > 0 && <span style={{ background: '#eaf7ee', color: '#1f6b3a', borderRadius: 999, padding: '3px 9px' }}>✓ {batch.done} written into the sheet</span>}
+          {batch.pending > 0 && <span style={{ background: '#eef3ff', color: '#1d4ed8', borderRadius: 999, padding: '3px 9px' }}>{batch.pending} to go</span>}
+          {batch.needsTranscript > 0 && <span style={{ background: '#fff8e6', color: '#8a5a00', borderRadius: 999, padding: '3px 9px' }}>{batch.needsTranscript} need a transcript</span>}
+          {batch.failed > 0 && <span style={{ background: '#fff2f2', color: '#a1252b', borderRadius: 999, padding: '3px 9px' }}>✗ {batch.failed} not done</span>}
+          <span style={{ opacity: .7 }}>Row-by-row detail is in the Videos table below.</span>
         </div>
       )}
       {err && <div role="alert" style={{ color: '#d70015', fontSize: 12, marginTop: 8 }}>{err}</div>}

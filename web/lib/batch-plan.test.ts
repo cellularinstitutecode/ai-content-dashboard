@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { mayStartBatch } from './batch-plan.ts';
+import { mayStartBatch, tally } from './batch-plan.ts';
 
 const READY = { tab: 'Sept', hasAiColumns: true };
 const NEEDS = { tab: 'Oct', hasAiColumns: false };
@@ -42,4 +42,23 @@ test('one needy tab among ready ones stops everything', () => {
 
 test('an empty selection is not an error', () => {
   assert.deepEqual(mayStartBatch([], ['Oct'], 'boom'), { ok: true });
+});
+
+test('the live tally counts a run in progress, not just a finished one', () => {
+  // summarise() counts what mapLimit returned, which only exists once every row is done —
+  // so for the minutes a batch is running there was no aggregate anywhere, and the only
+  // sign of life was per-row text a thousand pixels below the fold.
+  assert.deepEqual(tally(['done', 'working', 'queued', 'failed', 'needs_transcript']), {
+    total: 5, done: 1, failed: 1, needsTranscript: 1, pending: 2,
+  });
+});
+
+test('nothing running tallies to nothing', () => {
+  assert.equal(tally([]), null);
+});
+
+test('a finished run has nothing pending', () => {
+  const t = tally(['done', 'done', 'failed']);
+  assert.equal(t?.pending, 0);
+  assert.equal(t?.done, 2);
 });

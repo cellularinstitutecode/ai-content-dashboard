@@ -21,7 +21,7 @@ import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 import VideoPrepare from '@/components/VideoPrepare';
 import { runPrepare } from '@/lib/prepare-request';
 import { mapLimit } from '@/lib/map-limit';
-import { mayStartBatch } from '@/lib/batch-plan';
+import { mayStartBatch, tally, type BatchState } from '@/lib/batch-plan';
 import { isDriveUrl, parseDriveFileId } from '@/lib/drive-url';
 
 /** How a batched row is getting on, in words rather than a spinner. */
@@ -59,9 +59,6 @@ const BATCH_MAX = 60;
  * comfortably inside that and still four times faster than one at a time.
  */
 const BATCH_CONCURRENCY = 4;
-
-/** Where one row of a batch has got to. */
-type BatchState = 'queued' | 'working' | 'done' | 'failed' | 'needs_transcript';
 
 export type Tab = 'calendar' | 'videos' | 'images';
 
@@ -388,6 +385,16 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   const rowKey = (v: VideoEntry) => v.tab + ':' + v.row;
 
   /**
+   * How the run is going, right now.
+   *
+   * summarise() counts what mapLimit RETURNED, which is correct but only exists once every
+   * row has finished — so during the minutes a batch is running there was no aggregate
+   * anywhere, only per-row cells scattered down a table below the fold. This is the same
+   * tally, derived at render time, so the top of the page can show it while it happens.
+   */
+  const liveTally = useMemo(() => tally(Object.values(batch).map((b) => b.state)), [batch]);
+
+  /**
    * The basket, kept across a reload.
    *
    * Building one means searching a row number, ticking it, searching the next — minutes
@@ -413,7 +420,10 @@ export default function SourcesView({ kind }: { kind: Tab }) {
         const restored: Record<string, { state: BatchState; note?: string }> = {};
         for (const [k, v] of Object.entries(saved.batch)) {
           restored[k] = v.state === 'working' || v.state === 'queued'
-            ? { state: 'failed', note: 'Interrupted — press Prepare again; the transcript is kept, so it finishes in seconds.' }
+            // Deliberately not "the transcript is kept": a page restored from storage has
+            // no idea whether it was, and that guess is what had somebody pressing a
+            // button that could never work.
+            ? { state: 'failed', note: 'Interrupted — press Prepare again to finish this one.' }
             : v;
         }
         setBatch(restored);
@@ -472,6 +482,11 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     setRunning(true);
     stopRef.current = false;
     setSummary(null);
+    // Up to where the news is. The single-row Prepare button has always done this
+    // (see prepare() below); the batch did not, and the batch bar sits about a thousand
+    // pixels down past a seven-hundred-pixel embedded sheet — so a person pressed it,
+    // saw nothing move, and concluded nothing had happened.
+    setTimeout(() => document.getElementById('video-prepare')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
     setBatch(Object.fromEntries(work.map((v) => [rowKey(v), { state: 'queued' as const }])));
 
     // Settle the columns and the slots first, serially, server-side.
@@ -764,7 +779,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
 
         {tab === 'videos' && (
           <div style={{ display: 'grid', gap: 20 }}>
-            <VideoPrepare initialUrl={prepareUrl} sheetRow={prepareRow} />
+            <VideoPrepare initialUrl={prepareUrl} sheetRow={prepareRow} batch={liveTally} batchRunning={running} />
             <section style={{ ...card, padding: 0, overflow: 'hidden' }}>
               {ids && <SheetFrame id={ids.videos} title="Distribución RRSS CHI" height={sheetHeight - 60} />}
             </section>

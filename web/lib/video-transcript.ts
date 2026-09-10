@@ -22,7 +22,19 @@ import { cacheTranscript, cachedTranscript } from '@/lib/transcript-cache';
 export type TranscriptOrigin = 'pasted' | 'youtube' | 'drive';
 
 export type ResolvedTranscript =
-  | { ok: true; text: string; origin: TranscriptOrigin; language: string | null; title: string | null; videoId: string | null }
+  | {
+      ok: true; text: string; origin: TranscriptOrigin; language: string | null; title: string | null; videoId: string | null;
+      /**
+       * Is this transcript safe from a timeout — either it came FROM the cache, or it was
+       * just written there successfully?
+       *
+       * False means the expensive half will have to be done again, and any advice to
+       * "press Prepare again" would be a lie. On a database missing the table this is
+       * false every time, which is precisely the case that had a person pressing a button
+       * that could never work.
+       */
+      banked: boolean;
+    }
   | { ok: false; reason: string; message: string; title: string | null; /** True when pasting the words is the way forward. */ needsPaste: boolean };
 
 export type TranscriptInput = {
@@ -45,20 +57,24 @@ const MIN_CHARS = 40;
  * timeout into a run that finishes in seconds.
  */
 async function transcribeOrRecall(fileId: string): Promise<
-  { ok: true; text: string; language: string | null; name: string; cached: boolean }
+  { ok: true; text: string; language: string | null; name: string; banked: boolean }
   | { ok: false; reason: MediaFailure; message: string }
 > {
   const hit = await cachedTranscript(fileId);
   if (hit) {
-    return { ok: true, text: hit.text, language: hit.language, name: hit.title || '', cached: true };
+    // Already safe by definition — it came out of the cache.
+    return { ok: true, text: hit.text, language: hit.language, name: hit.title || '', banked: true };
   }
   const t = await transcribeDriveMedia(fileId);
   if (!t.ok) return t;
   // Stored before anything else is attempted. What follows this — the keyword
   // brief and the copy — is what usually runs the function out of time, and
   // storing afterwards would be storing it never.
-  await cacheTranscript(fileId, { text: t.text, source: 'drive', language: t.language ?? null, title: t.name || null });
-  return { ok: true, text: t.text, language: t.language ?? null, name: t.name, cached: false };
+  //
+  // Whether it actually landed is carried onward. It used to be discarded, and a failed
+  // write then looked exactly like a successful one.
+  const banked = await cacheTranscript(fileId, { text: t.text, source: 'drive', language: t.language ?? null, title: t.name || null });
+  return { ok: true, text: t.text, language: t.language ?? null, name: t.name, banked };
 }
 
 export async function resolveTranscript(input: TranscriptInput): Promise<ResolvedTranscript> {
@@ -67,7 +83,8 @@ export async function resolveTranscript(input: TranscriptInput): Promise<Resolve
     if (pasted.length < MIN_CHARS) {
       return { ok: false, reason: 'transcript_too_short', message: 'That transcript is too short to write from.', title: null, needsPaste: true };
     }
-    return { ok: true, text: pasted, origin: 'pasted', language: null, title: null, videoId: null };
+    // Typed by a person: there is no expensive half to lose.
+    return { ok: true, text: pasted, origin: 'pasted', language: null, title: null, videoId: null, banked: true };
   }
 
   const url = String(input.url || '').trim();
@@ -80,7 +97,9 @@ export async function resolveTranscript(input: TranscriptInput): Promise<Resolve
     if (!parsed.ok || parsed.source !== 'YouTube') continue;
     const t = await fetchYouTubeTranscript(parsed.id);
     if (t.ok) {
-      return { ok: true, text: t.text.replace(/\s+/g, ' ').trim(), origin: 'youtube', language: t.language, title: t.title, videoId: parsed.id };
+      // Captions are a small fetch, not a download and a transcription: re-doing them
+      // costs a second, so a retry is honest advice here whatever the cache did.
+      return { ok: true, text: t.text.replace(/\s+/g, ' ').trim(), origin: 'youtube', language: t.language, title: t.title, videoId: parsed.id, banked: true };
     }
     // A YouTube link with no captions is not the end: the Drive file below may
     // still carry the audio. Only when there is no Drive file either does this
@@ -100,7 +119,7 @@ export async function resolveTranscript(input: TranscriptInput): Promise<Resolve
       if (text.length < MIN_CHARS) {
         return { ok: false, reason: 'transcript_too_short', message: 'Only a few words could be heard in that video.', title: t.name, needsPaste: true };
       }
-      return { ok: true, text, origin: 'drive', language: t.language, title: stripExtension(t.name), videoId: fileId };
+      return { ok: true, text, origin: 'drive', language: t.language, title: stripExtension(t.name), videoId: fileId, banked: t.banked };
     }
     // 'too_large' and 'empty' are the cases a person can fix by pasting;
     // 'not_configured' and 'unreachable' are ours to fix, and pasting is a
