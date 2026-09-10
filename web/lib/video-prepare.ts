@@ -22,6 +22,7 @@ import { keywordLineFrom } from '@/lib/video-row';
 import { composeCaption, forbiddenNames, houseStyleHint, keywordGrounding, namesLeaked, topicFromTranscript, transcriptExcerpt, videoSubject } from '@/lib/video-copy';
 import { draftDefect, type DraftDefect } from '@/lib/draft-defect';
 import { canWriteCopy, remainingMs } from '@/lib/prepare-budget';
+import { shouldReseed } from '@/lib/reseed';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
@@ -294,13 +295,17 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   // the clinic is talking to.
   const spoken = excerpt ? topicFromTranscript(excerpt) : '';
   const grounded = (b: typeof brief) => keywordGrounding(b.stamp.keywords || [], excerpt);
+  const asReseed = (b: typeof brief) => ({ hasData: hasSemrushData(b.stamp), grounding: grounded(b) });
   if (excerpt && spoken && spoken.toLowerCase() !== subject.toLowerCase()) {
     const weak = !hasSemrushData(brief.stamp) || grounded(brief) < GROUNDING_FLOOR;
     if (weak) {
       const retry = await autoKeywordBrief(spoken);
-      // Only if it is BETTER. A second lookup that is equally off-topic is not
-      // an improvement, and the filename may still have been the truer seed.
-      if (hasSemrushData(retry.stamp) && (!hasSemrushData(brief.stamp) || grounded(retry) > grounded(brief))) {
+      // Better AND about this video. The second half used to be skipped
+      // entirely when the first brief had no data — the `||` short-circuited
+      // before grounding was ever measured — so any phrase Semrush recognised
+      // was accepted however unrelated. lib/reseed.ts holds the rule and the
+      // reason it is a floor rather than a comparison.
+      if (shouldReseed(asReseed(brief), asReseed(retry), GROUNDING_FLOOR).accept) {
         brief = retry;
       }
     }

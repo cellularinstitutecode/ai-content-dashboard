@@ -88,7 +88,7 @@ export function houseStyleHint(): string {
   return [
     'HOUSE STYLE (this clinic writes to a settled pattern — follow it over any general length guidance above):',
     '- Length: 800-1,100 characters of BODY for both instagram and linkedin, before the REF line, the AVISO line and the hashtags. This overrides the word counts given earlier.',
-    '- Open with a declarative line that reframes the subject — "Safety in regenerative medicine starts long before a therapy reaches the patient." Do not open with a question.',
+    '- Open with a declarative line about what the speaker is actually doing or showing in THIS video — "Safety in regenerative medicine starts long before a therapy reaches the patient." Name this video\u2019s own subject, not a keyword and not a search phrase: if a keyword brief above disagrees with the transcript about what this video is about, the transcript is right. Do not open with a question.',
     '- Then 3-4 short paragraphs, one idea each, separated by a blank line.',
     '- SUBSTANCE, the most important rule: name at least three concrete things the speaker actually said — a step in the protocol, a material, a piece of equipment, a named therapy, a measurement, a condition being controlled for. Specifics are what make the post worth reading.',
     '- Never pad with wellness filler. Phrases like "designed to help", "supports your wellness", "reconnect with yourself", "holistic approach" say nothing; if the transcript does not say it, do not write it.',
