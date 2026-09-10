@@ -23,9 +23,14 @@ import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 // Speech-to-text on a Drive file is the slow step: the download, the audio
-// extraction and the transcription together run well past the default. 60 is
-// the Hobby plan's ceiling and a deployment asking for more is rejected.
-export const maxDuration = 60;
+// extraction and the transcription together run well past the default.
+//
+// 60 was set on the belief that it was this plan's hard ceiling. It is not —
+// /api/assistant has declared 300 since the Sources work and deploys fine, so
+// the ceiling was never the constraint; the 60 simply guaranteed that a large
+// reel could not finish in one press. 300 is the same number, from the same
+// plan, applied where the slow work actually is.
+export const maxDuration = 300;
 
 /**
  * What to actually DO about a failed sheet write.
@@ -87,10 +92,10 @@ export async function POST(req: NextRequest) {
     youtubeUrl: typeof body?.youtubeUrl === 'string' ? body.youtubeUrl : null,
     pasted,
     title: typeof body?.title === 'string' ? body.title : null,
-    // maxDuration is 60 and the platform kills the request at it, so the
-    // decision to stop has to be made with room to answer. Writing the copy
-    // takes roughly fifteen seconds; anything past this point cannot finish.
-    budgetMs: 32_000,
+    // The platform kills the request at maxDuration, so the decision to stop
+    // has to be made with room left to answer. This is the share of the clock
+    // the work may use; the remainder is what answering costs.
+    budgetMs: 280_000,
   });
 
   if (!out.ok) {

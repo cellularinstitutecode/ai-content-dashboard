@@ -44,6 +44,13 @@ export type TranscriptInput = {
   youtubeUrl?: string | null;
   /** Words a person typed. Wins over everything. */
   pasted?: string | null;
+  /**
+   * When the platform will kill the function, as a clock reading.
+   *
+   * Only the Drive branch can outlast it — a pasted transcript costs nothing
+   * and a caption track is one small fetch.
+   */
+  deadlineAt?: number;
 };
 
 const MIN_CHARS = 40;
@@ -56,7 +63,7 @@ const MIN_CHARS = 40;
  * skipping it is what turns a second attempt from a repeat of the first
  * timeout into a run that finishes in seconds.
  */
-async function transcribeOrRecall(fileId: string): Promise<
+async function transcribeOrRecall(fileId: string, deadlineAt?: number): Promise<
   { ok: true; text: string; language: string | null; name: string; banked: boolean }
   | { ok: false; reason: MediaFailure; message: string }
 > {
@@ -65,7 +72,7 @@ async function transcribeOrRecall(fileId: string): Promise<
     // Already safe by definition — it came out of the cache.
     return { ok: true, text: hit.text, language: hit.language, name: hit.title || '', banked: true };
   }
-  const t = await transcribeDriveMedia(fileId);
+  const t = await transcribeDriveMedia(fileId, { deadlineAt });
   if (!t.ok) return t;
   // Stored before anything else is attempted. What follows this — the keyword
   // brief and the copy — is what usually runs the function out of time, and
@@ -113,7 +120,7 @@ export async function resolveTranscript(input: TranscriptInput): Promise<Resolve
   // 3) The Drive recording.
   const fileId = parseDriveFileId(url);
   if (fileId) {
-    const t = await transcribeOrRecall(fileId);
+    const t = await transcribeOrRecall(fileId, input.deadlineAt);
     if (t.ok) {
       const text = t.text.trim();
       if (text.length < MIN_CHARS) {
