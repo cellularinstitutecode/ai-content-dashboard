@@ -23,7 +23,7 @@
 // available, so the spend guard works from the account's monthly allowance
 // minus what this app has logged in semrush_usage this month.
 
-import { pickPrimary } from '@/lib/keyword-brief';
+import { pickPrimary, withoutShopping } from '@/lib/keyword-brief';
 import { reportError } from '@/lib/report';
 import { decideSpend, applyCharge, type SpendDecision } from '@/lib/semrush-budget';
 import { reasonForCode, reasonForHttpStatus, type SemrushReason } from '@/lib/semrush-reason';
@@ -604,8 +604,7 @@ export function opportunityScore(k: SemKeyword): number {
 }
 
 export function selectBrief(topic: string, related: SemKeyword[], questions: SemKeyword[]): Omit<KeywordBrief, 'source' | 'fromCache' | 'unitsSpent'> {
-  const scored = related
-    .filter((k) => (k.volume ?? 0) > 0)
+  const scored = withoutShopping(related.filter((k) => (k.volume ?? 0) > 0))
     .map((k) => ({ k, s: opportunityScore(k) }))
     .sort((a, b) => b.s - a.s);
   // Primary: the best opportunity that a person would actually SAY, preferring

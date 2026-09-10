@@ -5,6 +5,7 @@
 // Both existed as bugs before they existed as functions, and both were
 // invisible from inside the code — they only showed up in the output.
 import { avisoLine } from './compliance.ts';
+import { pickSeed } from './topic-seed.ts';
 
 // ---------------------------------------------------------------------------
 // What to research
@@ -257,38 +258,27 @@ export function transcriptExcerpt(text: string, maxChars: number): string {
   return body.trim() + '\n\n[Transcript truncated here — the video continues.]';
 }
 
-export function topicFromTranscript(text: string): string {
-  const words = String(text || '')
+function significantWords(text: string): string[] {
+  return String(text || '')
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, ' ')
     .split(/\s+/)
     .filter((w) => w.length > 2 && !STOPWORDS.has(w) && !/^\d+$/.test(w));
-  if (!words.length) return '';
+}
 
-  const bigrams = new Map<string, number>();
-  for (let i = 0; i < words.length - 1; i++) {
-    const key = words[i] + ' ' + words[i + 1];
-    bigrams.set(key, (bigrams.get(key) || 0) + 1);
-  }
-  let best = '';
-  let bestCount = 1; // said once is not a theme
-  for (const [phrase, count] of bigrams) {
-    if (count > bestCount) { best = phrase; bestCount = count; }
-  }
-  if (best) return best;
-
-  // A single word gets the same bar as a pair: said once is not a theme, it
-  // is whatever happened to open the video. Nothing repeated means there is no
-  // signal here, and '' says so — the caller keeps the filename's subject
-  // rather than searching for a word picked at random.
-  const singles = new Map<string, number>();
-  for (const w of words) singles.set(w, (singles.get(w) || 0) + 1);
-  let word = '';
-  let wordCount = 1;
-  for (const [w, count] of singles) {
-    if (count > wordCount) { word = w; wordCount = count; }
-  }
-  return word;
+/**
+ * The phrase worth searching, from what the speaker actually repeats.
+ *
+ * `subject` is the file name's own answer to what the video is about, and
+ * passing it is what stops a DETAIL displacing the SUBJECT. On
+ * "Reel_RyallOxygenCircuit_Rodrigo" the speaker says "red light" more often
+ * than "hyperbaric oxygen", so the unanchored rule researched consumer
+ * red-light gear for a post about the clinic's oxygen protocol. See
+ * lib/topic-seed.ts for the whole story; omitting `subject` keeps the old
+ * most-frequent-phrase behaviour exactly.
+ */
+export function topicFromTranscript(text: string, subject = ''): string {
+  return pickSeed(significantWords(text), significantWords(subject));
 }
 
 export function videoSubject(title: string, transcript = ''): string {

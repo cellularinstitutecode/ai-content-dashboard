@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { briefPromptFrom, isSearchShaped, pickPrimary, type ScoredKeyword } from './keyword-brief.ts';
+import { briefPromptFrom, isSearchShaped, isShoppingShaped, pickPrimary, withoutShopping, type ScoredKeyword } from './keyword-brief.ts';
 
 const kw = (keyword: string, volume = 1000, difficulty = 30): ScoredKeyword => ({ keyword, volume, difficulty });
 
@@ -94,4 +94,34 @@ test('no Semrush data means no contract at all', () => {
   // contract naming an undefined keyword.
   assert.equal(briefPromptFrom({ primary: null, supporting: [], questions: [], intentSummary: 'x', source: 'semrush' }), '');
   assert.equal(briefPromptFrom(null), '');
+});
+
+test('shopping searches leave the brief entirely — this is row 183', () => {
+  // Semrush returned both of these for a video about a clinic's oxygen
+  // protocol. Someone buying a lamp is not someone the clinic can treat.
+  assert.ok(isShoppingShaped('red light therapy at home'));
+  assert.ok(isShoppingShaped('red light therapy devices'));
+  assert.ok(isShoppingShaped('buy red light panel'));
+  assert.ok(isShoppingShaped('comprar dispositivo de luz roja'));
+  // Care, not equipment.
+  assert.ok(!isShoppingShaped('red light therapy'));
+  assert.ok(!isShoppingShaped('red light therapy benefits'));
+  assert.ok(!isShoppingShaped('hyperbaric oxygen therapy'));
+});
+
+test('the real row 183 keyword set, filtered and ranked', () => {
+  const real = ['red light therapy near me', 'red light therapy', 'red light therapy benefits',
+    'red healing', 'red lights', 'red light therapy at home', 'red light therapy devices']
+    .map((keyword) => kw(keyword));
+  const kept = withoutShopping(real).map((k) => k.keyword);
+  assert.ok(!kept.includes('red light therapy at home'));
+  assert.ok(!kept.includes('red light therapy devices'));
+  assert.ok(kept.includes('red light therapy'));
+  // And the query shape still loses the lead to the speakable one.
+  assert.equal(pickPrimary(kept.map((k) => kw(k)))?.keyword, 'red light therapy');
+});
+
+test('a brief made entirely of shopping searches is kept rather than emptied', () => {
+  const all = [kw('red light devices'), kw('red light panels for sale')];
+  assert.equal(withoutShopping(all).length, 2, 'losing the data is worse than an imperfect term');
 });

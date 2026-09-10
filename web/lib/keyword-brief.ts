@@ -73,6 +73,53 @@ const SEARCH_SHAPED: RegExp[] = [
   es('mejor(es)?'),
 ];
 
+/**
+ * Phrases for BUYING A DEVICE, which a clinic cannot serve at all.
+ *
+ * Different from the query shapes above in what it costs. A query shape is only
+ * barred from LEADING — "eboo therapy cost" is a real thing the clinic wants to
+ * rank for, and it earns its place in the body. But "red light therapy at home"
+ * and "red light therapy devices" — both of which Semrush returned for row 183
+ * — describe someone shopping for a lamp. There is no version of the clinic's
+ * post that should be weighted toward them, so these leave the brief entirely
+ * rather than being demoted to supporting terms.
+ */
+const SHOPPING_SHAPED: RegExp[] = [
+  /\bat home\b/,
+  /\ben casa\b/,
+  /\bdevices?\b/,
+  /\bdispositivos?\b/,
+  /\bfor sale\b/,
+  /\bbuy\b/,
+  /\bcomprar\b/,
+  /\bkits?\b/,
+  /\bmachines?\b/,
+  /\bamazon\b/,
+  /\blamps?\b/,
+  /\bbulbs?\b/,
+  /\bpanels? for\b/,
+];
+
+/** Is this phrase somebody shopping for equipment rather than for care? */
+export function isShoppingShaped(keyword: string): boolean {
+  const k = String(keyword || '').toLowerCase().trim();
+  if (!k) return false;
+  return SHOPPING_SHAPED.some((re) => re.test(k));
+}
+
+/**
+ * Drop the shopping searches, unless that would leave nothing.
+ *
+ * The same guard as pickPrimary's fallbacks: an empty brief loses the keyword
+ * data altogether, which is worse than carrying a supporting term that is not
+ * quite right — the prompt keeps every keyword out of the opening line now
+ * regardless.
+ */
+export function withoutShopping<T extends ScoredKeyword>(keywords: readonly T[]): readonly T[] {
+  const kept = keywords.filter((k) => !isShoppingShaped(k.keyword));
+  return kept.length ? kept : keywords;
+}
+
 /** Is this phrase a search query rather than something a person would say? */
 export function isSearchShaped(keyword: string): boolean {
   const k = String(keyword || '').toLowerCase().trim();

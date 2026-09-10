@@ -295,7 +295,11 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   // actually uses. Seeding from speech instead returns "vagus nerve reset"
   // (22,200) and "how to regulate nervous system": more volume, and the people
   // the clinic is talking to.
-  const spoken = excerpt ? topicFromTranscript(excerpt) : '';
+  // Seeded with the SUBJECT as well as the transcript. Without it the rule is
+  // "whatever the speaker repeats most", and on row 183 that was "red light" —
+  // a step inside the Oxygen Circuit — so a post about the clinic's oxygen
+  // protocol was researched as one about consumer red-light gear.
+  const spoken = excerpt ? topicFromTranscript(excerpt, subject) : '';
   const grounded = (b: typeof brief) => keywordGrounding(b.stamp.keywords || [], excerpt);
   const asReseed = (b: typeof brief) => ({ hasData: hasSemrushData(b.stamp), grounding: grounded(b) });
   if (excerpt && spoken && spoken.toLowerCase() !== subject.toLowerCase()) {
