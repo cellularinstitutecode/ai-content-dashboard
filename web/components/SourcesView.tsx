@@ -21,7 +21,7 @@ import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 import VideoPrepare from '@/components/VideoPrepare';
 import { runPrepare } from '@/lib/prepare-request';
 import { mapLimit } from '@/lib/map-limit';
-import { mayStartBatch, tally, type BatchState } from '@/lib/batch-plan';
+import { mayStartBatch, reasons, tally, type BatchReasons, type BatchState } from '@/lib/batch-plan';
 import { isDriveUrl, parseDriveFileId } from '@/lib/drive-url';
 
 /** How a batched row is getting on, in words rather than a spinner. */
@@ -393,6 +393,9 @@ export default function SourcesView({ kind }: { kind: Tab }) {
    * tally, derived at render time, so the top of the page can show it while it happens.
    */
   const liveTally = useMemo(() => tally(Object.values(batch).map((b) => b.state)), [batch]);
+  // WHY the ones that stopped, stopped. Every failed row already carries the
+  // server's own sentence; until now it only reached the table far below.
+  const liveReasons = useMemo(() => reasons(Object.values(batch)), [batch]);
 
   /**
    * The basket, kept across a reload.
@@ -779,7 +782,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
 
         {tab === 'videos' && (
           <div style={{ display: 'grid', gap: 20 }}>
-            <VideoPrepare initialUrl={prepareUrl} sheetRow={prepareRow} batch={liveTally} batchRunning={running} />
+            <VideoPrepare initialUrl={prepareUrl} sheetRow={prepareRow} batch={liveTally} batchReasons={liveReasons} batchRunning={running} />
             <section style={{ ...card, padding: 0, overflow: 'hidden' }}>
               {ids && <SheetFrame id={ids.videos} title="Distribución RRSS CHI" height={sheetHeight - 60} />}
             </section>
