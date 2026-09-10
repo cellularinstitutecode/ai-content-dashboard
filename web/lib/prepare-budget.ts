@@ -17,9 +17,37 @@ export const RESERVE_MS = {
   extract: 25_000,
   /** Whisper on that track. */
   transcribe: 60_000,
-  /** Semrush + the writer + the sheet + the Metricool draft. */
+  /**
+   * The FLOOR kept back for Semrush + the writer + the sheet + the Metricool
+   * draft — what must remain before the transcription step is allowed to eat
+   * the rest of the clock.
+   *
+   * Not the same question as "is there enough left to press on", which is
+   * COMFORTABLE_COPY_MS below. Raising this one to answer that question starves
+   * transcribeBudgetMs, and the run then dies before the transcript is banked —
+   * which is strictly worse than dying after it, because nothing is kept.
+   */
   copy: 60_000,
 } as const;
+
+/**
+ * Enough time to write the copy WITHOUT hurrying.
+ *
+ * The number that decides between two paths that both already exist: press on
+ * in this request, or bank the transcript, answer 202 'transcript_ready', and
+ * let lib/prepare-request.ts ask again — where the second request begins with a
+ * whole fresh clock and the transcript comes back from cache in about a second.
+ *
+ * At 60 seconds the pipeline pressed on with a minute. That is the wrong choice
+ * whenever the download was slow, because handing off costs one extra round
+ * trip and buys FIVE TIMES the time. It only looked right because a normal
+ * 76-283 MB reel downloads in seconds and never comes close to the threshold.
+ *
+ * Deliberately larger than RESERVE_MS.copy rather than replacing it: the floor
+ * governs how much transcription may spend, this governs whether writing starts
+ * here or next door. One number cannot mean both.
+ */
+export const COMFORTABLE_COPY_MS = 150_000;
 
 /** Time left on the function's clock. Negative once it has been overrun. */
 export function remainingMs(startedAt: number, totalMs: number, now: number): number {
@@ -73,5 +101,5 @@ export function transcribeBudgetMs(remaining: number): number {
  * the generation starts, not in the middle of it.
  */
 export function canWriteCopy(remaining: number): boolean {
-  return remaining >= RESERVE_MS.copy;
+  return remaining >= COMFORTABLE_COPY_MS;
 }

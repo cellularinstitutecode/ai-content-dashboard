@@ -38,6 +38,7 @@ import {
 } from '@/lib/google-sources';
 import { mayRetry } from '@/lib/failure-kind';
 import { megabytes, routeFor } from '@/lib/media-route';
+import { canWriteCopy } from '@/lib/prepare-budget';
 import { isMissingSchema } from '@/lib/schema-probe';
 import { columnFor, pick, tableFromRows } from '@/lib/sheet-table';
 import { prepareVideo, type PrepareOk } from '@/lib/video-prepare';
@@ -304,7 +305,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
 
       let outcome: SweepRowOutcome;
       try {
-        const prepared = await prepareVideo({
+        const runPass = () => prepareVideo({
           userId: opts.userId,
           url: videoLink,
           youtubeUrl: youtubeLink || null,
@@ -324,6 +325,25 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
           // already stopped starting rows.
           budgetMs: Math.max(20_000, budgetMs - (Date.now() - started)),
         });
+
+        let prepared = await runPass();
+
+        // Banked the transcript and stopped? Finish it now, not tomorrow.
+        //
+        // The browser does exactly this (lib/prepare-request.ts asks a second
+        // time on 202), and the sweep did not — it filed the row back into the
+        // queue and moved on. That was survivable while a hand-off was rare;
+        // now that the writer hands off rather than hurrying, it would mean the
+        // biggest videos take two days, and the cron runs ONCE daily.
+        //
+        // The second pass is cheap: the transcript comes back from cache in
+        // about a second and only the writing is left. Once, never twice — a
+        // second 202 means something other than the clock is wrong, and the
+        // existing branch below files it properly instead of looping.
+        if (!prepared.ok && prepared.error === 'transcript_ready'
+            && canWriteCopy(budgetMs - (Date.now() - started))) {
+          prepared = await runPass();
+        }
 
         // Out of time, with the transcript stored. That is half the job done,
         // not a failure — so the row keeps its place in the queue and the next
