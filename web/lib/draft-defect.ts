@@ -43,12 +43,27 @@ const REF_CORRECTIVE =
   'a line beginning "REF:" naming the authors, journal and year, with a real DOI. It is not optional: this is a ' +
   'medical advertisement and it cannot be published without one.';
 
-function nameCorrective(leaked: readonly string[]): string {
+/**
+ * Deliberately does NOT quote the name back.
+ *
+ * The obvious phrasing — 'your draft named "Rodrigo", do not name "Rodrigo"' —
+ * puts the banned name straight back into the prompt, and a model told to
+ * avoid a token is a well-known way to make it produce that token. It is also
+ * the exact regression this pipeline already paid for once: the file name used
+ * to be handed over, the model read "Reel_MolecularHydrogen_Rodrigo", and it
+ * wrote "As our patient Rodrigo shares:" over a line of the transcript.
+ * lib/video-copy.ts strips the owner suffix before the topic is built for that
+ * reason, and a corrective that reintroduces it would undo the fix.
+ *
+ * The rule is categorical anyway. The writer does not need to know which name
+ * it used; it needs to know it must not use any.
+ */
+function nameCorrective(count: number): string {
   return (
-    'IMPORTANT: your previous draft named ' + leaked.map((n) => '"' + n + '"').join(' and ') + '. ' +
-    'That is the person who filmed or uploaded the video, not somebody speaking in it. Never name any individual — ' +
-    'no patient, presenter, staff member or uploader — and never attribute a quote or an experience to a named person. ' +
-    'Write as the clinic sharing its own video.'
+    'IMPORTANT: your previous draft named ' + (count === 1 ? 'a person' : 'people') + ' — ' +
+    (count === 1 ? 'someone' : 'people') + ' who filmed or uploaded this video, not anybody speaking in it. ' +
+    'Never name any individual: no patient, presenter, staff member or uploader. Never attribute a quote, a result ' +
+    'or an experience to a named person. Write only as the clinic sharing its own video.'
   );
 }
 
@@ -63,7 +78,7 @@ function nameCorrective(leaked: readonly string[]): string {
  */
 export function draftDefect(ref: string, leaked: readonly string[]): DraftDefect | null {
   const correctives: string[] = [];
-  if (leaked.length) correctives.push(nameCorrective(leaked));
+  if (leaked.length) correctives.push(nameCorrective(leaked.length));
   if (!String(ref || '').trim()) correctives.push(REF_CORRECTIVE);
   if (!correctives.length) return null;
   return {
