@@ -107,7 +107,13 @@ export async function normalizeMedia(rawUrl: string): Promise<string> {
   const url = String(rawUrl || '').trim();
   if (!url) return '';
   try {
-    const res = await metricoolFetch('/actions/normalize/image/url?url=' + encodeURIComponent(url));
+    // 60s, not the client's usual 15. Normalising is not a metadata call: it is
+    // Metricool PULLING the file onto its own storage, and the clinic's reels
+    // run to hundreds of megabytes. At 15s a large video aborts, the catch
+    // below hands back the un-normalised URL, and the media is dropped exactly
+    // as it was before any of this was written — a silent regression that only
+    // shows up on the big files that matter most.
+    const res = await metricoolFetch('/actions/normalize/image/url?url=' + encodeURIComponent(url), { timeoutMs: 60_000 });
     if (!res.ok) {
       console.warn('metricool:normalize-media non-ok', res.status);
       return url;
@@ -135,14 +141,29 @@ export async function normalizeMedia(rawUrl: string): Promise<string> {
   }
 }
 
-/** Normalise every attachment, in order, dropping the ones that come back empty. */
-export async function normalizeMediaList(urls: readonly string[]): Promise<string[]> {
-  const out: string[] = [];
+/**
+ * Normalise every attachment, in order, dropping the ones that come back empty.
+ *
+ * `degraded` is the part that matters: a normalise that failed returns the
+ * ORIGINAL url, which Metricool accepts with a 200 and then silently discards.
+ * Without a flag saying so, the caller reports a perfectly successful post and
+ * the person finds out days later from Metricool's own editor. Callers that can
+ * surface a warning should; none may treat this as ordinary success.
+ */
+export async function normalizeMediaList(
+  urls: readonly string[],
+): Promise<{ media: string[]; degraded: boolean }> {
+  const media: string[] = [];
+  let degraded = false;
   for (const u of urls) {
     const n = await normalizeMedia(u);
-    if (n) out.push(n);
+    if (!n) continue;
+    // Unchanged means normalise did not happen — every success path returns
+    // Metricool's own reference, never the URL it was given.
+    if (n === u) degraded = true;
+    media.push(n);
   }
-  return out;
+  return { media, degraded };
 }
 
 // Metricool wants a wall-clock "YYYY-MM-DDTHH:MM:SS" plus an IANA timezone —
@@ -158,7 +179,12 @@ export async function metricoolSchedulePost(input: SchedulePostInput, mode: Post
   // Normalised before the post is built, never after: an un-normalised URL is
   // accepted and then discarded, so "media sent" and "media attached" are two
   // different things and only this call makes them the same one.
-  const media = await normalizeMediaList((input.media || []).map((m) => m.url).filter(Boolean));
+  const { media, degraded } = await normalizeMediaList((input.media || []).map((m) => m.url).filter(Boolean));
+  if (degraded) {
+    // Loud, because the failure is otherwise invisible: Metricool answers 200
+    // and the post simply arrives with no video.
+    console.error('metricool:media-not-normalised — the post will arrive WITHOUT its media', { count: media.length });
+  }
 
   const body = {
     text: input.text,

@@ -14,7 +14,9 @@ import { modeOfStatus, APPROVED_STATUS } from '@/lib/post-mode';
 export const runtime = 'nodejs';
 // Both mutating paths now make an upstream Metricool call before they touch the
 // local row, so the default 10s budget is too tight.
-export const maxDuration = 30;
+// Two sequential Metricool calls now — normalise, then replace — each with its
+// own timeout. 30 was the budget for one.
+export const maxDuration = 60;
 
 // GET /api/posts
 // Returns the current user's scheduled posts, most recent publication first.
@@ -123,7 +125,11 @@ export async function PATCH(req: Request) {
   }
   // Metricool discards a media URL it has not normalised, silently and with a
   // 200 — so a list that skipped this step is the same as no list at all.
-  if (media.length) media = await normalizeMediaList(media);
+  if (media.length) {
+    const norm = await normalizeMediaList(media);
+    media = norm.media;
+    if (norm.degraded) console.error('posts:media-not-normalised — this replace will drop the attachment');
+  }
 
   // YouTube's own fields have to be re-sent for the same reason the media does.
   const isYoutube = ((existing.providers || []) as string[]).some((p) => String(p).toLowerCase() === 'youtube');
