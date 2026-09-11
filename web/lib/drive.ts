@@ -175,3 +175,66 @@ export async function persistClips(clips: any[], projectId: string, known: any[]
     }
     return out;
 }
+
+/**
+ * What the shareable-copy folder actually is, asked of Drive rather than of
+ * the environment.
+ *
+ * The health check has only ever tested that GOOGLE_SERVICE_ACCOUNT_JSON and
+ * DRIVE_FOLDER_ID are non-empty, which both were for this whole project while
+ * not one copy ever succeeded. Two non-empty strings say nothing about whether
+ * the service account can write there.
+ *
+ * `driveId` is the entire answer. A service account authenticates as ITSELF
+ * here — there is no `subject` on the JWT, so no domain-wide delegation — and a
+ * service account owns zero bytes of Drive storage. A file it creates in an
+ * ordinary My Drive folder is charged to that 0-byte quota and refused with
+ * storageQuotaExceeded, every time, no matter how much space the folder's human
+ * owner has. Inside a Shared Drive the file belongs to the drive and the
+ * organisation is billed, so the limit never applies. `driveId` is present for
+ * the second case and absent for the first.
+ *
+ * Never throws: this exists to diagnose a broken Drive, so it must not break
+ * the page that shows it.
+ */
+export async function driveFolderReport(): Promise<{
+  ok: boolean;
+  folderId: string;
+  folderName: string;
+  /** Present only for a folder inside a Shared Drive. The whole diagnosis. */
+  inSharedDrive: boolean;
+  /** Bytes, as Drive reports them for the identity we authenticate as. */
+  quota: { limit: string | null; usage: string | null };
+  error: string;
+}> {
+  const folderId = String(process.env.DRIVE_FOLDER_ID || '').trim();
+  const blank = {
+    ok: false, folderId, folderName: '', inSharedDrive: false,
+    quota: { limit: null as string | null, usage: null as string | null },
+  };
+  if (!folderId) return { ...blank, error: 'DRIVE_FOLDER_ID is not set.' };
+
+  try {
+    const drive = driveClient();
+    const [folder, about] = await Promise.all([
+      drive.files.get({ fileId: folderId, supportsAllDrives: true, fields: 'id, name, driveId, mimeType' }),
+      // Asked separately and tolerated failing: a Shared Drive answers this
+      // with the service account's own (empty) quota, which is informative
+      // rather than authoritative, so it must not decide `ok`.
+      drive.about.get({ fields: 'storageQuota' }).catch(() => null),
+    ]);
+    const q = (about?.data?.storageQuota || {}) as { limit?: string | null; usage?: string | null };
+    const inSharedDrive = Boolean(folder.data.driveId);
+    return {
+      ok: inSharedDrive,
+      folderId,
+      folderName: String(folder.data.name || ''),
+      inSharedDrive,
+      quota: { limit: q.limit ?? null, usage: q.usage ?? null },
+      error: '',
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ...blank, error: msg.slice(0, 300) };
+  }
+}

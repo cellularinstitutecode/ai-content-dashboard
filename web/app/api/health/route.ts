@@ -26,6 +26,7 @@ import { resolveFfmpeg } from '@/lib/audio-extract';
 import { missingSchema } from '@/lib/schema-check';
 import { resolveOwner } from '@/lib/sweep-owner';
 import { sheetWriteAccess } from '@/lib/google-sources';
+import { driveFolderReport } from '@/lib/drive';
 import { serviceKeyVerdict } from '@/lib/supabase-key';
 import { schemaDetail } from '@/lib/schema-probe';
 
@@ -74,6 +75,14 @@ export async function GET() {
   // permission list nowhere, and the first write returned 403 — after the
   // transcription had been paid for. Google is asked directly here.
   const sheet = await sheetWriteAccess();
+
+  // Is the copies folder somewhere the service account can actually write?
+  // The `drive` check below has only ever tested that two environment variables
+  // are non-empty — both were, for this entire project, while not one shareable
+  // copy ever succeeded. A service account owns zero bytes of Drive storage, so
+  // a folder outside a Shared Drive refuses every copy with storageQuotaExceeded
+  // however empty it is. Two non-empty strings could never have caught that.
+  const driveFolder = await driveFolderReport();
   const serviceKey = serviceKeyVerdict(process.env.SUPABASE_SERVICE_ROLE_KEY);
 
   // Images: what the account last DID, not what is in the environment.
@@ -285,6 +294,19 @@ export async function GET() {
         : !has('GOOGLE_SERVICE_ACCOUNT_JSON')
           ? 'GOOGLE_SERVICE_ACCOUNT_JSON is not set, so nothing can read or copy anything in Drive.'
           : 'Holds the shareable copy of each video — the URL Metricool fetches — and permanent clip storage.',
+    },
+    {
+      name: 'drive_storage',
+      ok: driveFolder.ok,
+      // Required, not optional: without it no video reaches any network at all.
+      severity: 'required',
+      code: driveFolder.error ? 'unreachable' : driveFolder.inSharedDrive ? undefined : 'not_shared_drive',
+      detail: driveFolder.error
+        ? 'Could not read the copies folder: ' + driveFolder.error
+        : driveFolder.inSharedDrive
+          ? 'Copies folder “' + driveFolder.folderName + '” is inside a Shared Drive, so the organisation owns the copies and the service account\u2019s own 0-byte quota never applies.'
+          : 'Copies folder “' + driveFolder.folderName + '” is NOT in a Shared Drive. A service account owns no storage of its own, so every video copy is refused there however empty it looks, and no video can be attached to any post. '
+            + 'Create a Shared Drive, add the service account as Content manager, and point DRIVE_FOLDER_ID at a folder inside it.',
     },
     {
       name: 'rate_limiting',

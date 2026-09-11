@@ -16,10 +16,10 @@
 import 'server-only';
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { publicVideoCopy } from '@/lib/drive';
+import { driveFolderReport, publicVideoCopy } from '@/lib/drive';
 import { cachedPublicCopy, rememberPublicCopy } from '@/lib/transcript-cache';
 import { parseDriveFileId } from '@/lib/drive-url';
-import { copyFailureAdvice } from '@/lib/drive-copy-error';
+import { copyFailureAdvice, storageAdvice } from '@/lib/drive-copy-error';
 import { reportError } from '@/lib/report';
 
 export type ShareableVideo = {
@@ -122,7 +122,15 @@ export async function ensureShareableVideo(videoLink: string, title?: string | n
     // Google says WHICH of five very different problems this is, and the first
     // version of this threw that away and told everyone to "try again" — the
     // right advice for exactly one of them.
-    const advice = copyFailureAdvice(e);
+    let advice = copyFailureAdvice(e);
+    // Google reports "the drive is full" and "this identity owns no storage at
+    // all" with the same code, and only the folder itself distinguishes them.
+    // Worth one extra call on a path that has already failed: the difference is
+    // between an afternoon clearing space for nothing and a five-minute fix.
+    if (advice.reason === 'out_of_space') {
+      const folder = await driveFolderReport();
+      if (!folder.error) advice = storageAdvice(folder.inSharedDrive);
+    }
     return { ok: false, reason: 'failed', code: advice.reason, message: advice.message };
   }
 }
