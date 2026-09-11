@@ -1,7 +1,7 @@
 // Unit tests for the Drive copy diagnosis. Run with: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFailureAdvice } from './drive-copy-error.ts';
+import { copyFailureAdvice, storageAdvice } from './drive-copy-error.ts';
 
 test('a missing folder is a deployment problem, not a Drive one', () => {
   const a = copyFailureAdvice(new Error('DRIVE_FOLDER_ID missing'));
@@ -50,4 +50,29 @@ test('an unrecognised refusal repeats what Google actually said', () => {
 test('nothing thrown at all still produces a sentence', () => {
   assert.equal(copyFailureAdvice(null).reason, 'unknown');
   assert.ok(copyFailureAdvice(undefined).message.length > 0);
+});
+
+// --- the two problems behind one Google error code ---------------------------
+//
+// storageQuotaExceeded means either "the drive is full" or "the service account
+// has no storage at all". Telling someone to clear space is useless advice for
+// the second, which is also the commoner one and the one that never recovers.
+test('a My Drive folder is named as the cause, not blamed on being full', () => {
+  const a = storageAdvice(false);
+  assert.equal(a.reason, 'no_shared_drive');
+  assert.match(a.message, /Shared Drive/);
+  assert.match(a.message, /clearing space will not help/i);
+});
+
+test('a Shared Drive that is genuinely full says to clear space', () => {
+  const a = storageAdvice(true);
+  assert.equal(a.reason, 'out_of_space');
+  assert.match(a.message, /Clear space/);
+  assert.doesNotMatch(a.message, /service account owns no storage/);
+});
+
+test('the generic storage message points at the check that can tell them apart', () => {
+  const a = copyFailureAdvice({ code: 403, errors: [{ reason: 'storageQuotaExceeded' }] });
+  assert.equal(a.reason, 'out_of_space');
+  assert.match(a.message, /drive_storage/);
 });

@@ -17,6 +17,7 @@ export type CopyFailure =
   | 'no_access'        // the service account cannot see the source file
   | 'sharing_blocked'  // Workspace policy forbids anyone-with-the-link sharing
   | 'out_of_space'     // the Drive holding the copy is full
+  | 'no_shared_drive'  // the folder is in My Drive, where a service account owns 0 bytes
   | 'rate_limited'
   | 'unknown';
 
@@ -79,9 +80,13 @@ export function copyFailureAdvice(err: unknown): CopyAdvice {
     };
   }
   if (/storagequotaexceeded|out of (storage|space)|quota.*storage/.test(hay)) {
+    // Deliberately the vaguer of the two sentences. Google reports both
+    // problems with the same code, and only a look at the folder can tell them
+    // apart — lib/media-library.ts does that look and upgrades this to
+    // storageAdvice() when it can.
     return {
       reason: 'out_of_space',
-      message: 'The Drive holding the shareable copies is full. Clear space in that folder, then try again.',
+      message: 'Drive refused the copy for lack of storage. If the copies folder is not inside a Shared Drive, that is the cause — see System Status → drive_storage.',
     };
   }
   if (/ratelimitexceeded|userratelimitexceeded|too many requests/.test(hay) || status === 429) {
@@ -105,5 +110,33 @@ export function copyFailureAdvice(err: unknown): CopyAdvice {
   return {
     reason: 'unknown',
     message: 'Drive refused to copy that video' + (textOf(err) ? ': ' + textOf(err).slice(0, 200) : '.') + ' Try again, or press Prepare on the row.',
+  };
+}
+
+/**
+ * The storage refusal, once we know what kind of folder it is.
+ *
+ * `storageQuotaExceeded` is two unrelated problems wearing one error code, and
+ * telling someone to clear space is useless advice for the commoner of them:
+ *
+ *   not in a Shared Drive — the service account authenticates as itself and
+ *     owns ZERO bytes, so every copy is refused no matter how empty the folder
+ *     is. Deleting files changes nothing. This is the one that fails on the
+ *     very first attempt and never stops.
+ *   in a Shared Drive — the drive really is full, and clearing space is
+ *     exactly right.
+ */
+export function storageAdvice(inSharedDrive: boolean): CopyAdvice {
+  if (inSharedDrive) {
+    return {
+      reason: 'out_of_space',
+      message: 'The Shared Drive holding the copies is full. Clear space in it, then try again.',
+    };
+  }
+  return {
+    reason: 'no_shared_drive',
+    message:
+      'The copies folder is not inside a Shared Drive. A Google service account owns no storage of its own, so every copy is refused there however empty the folder looks — clearing space will not help. ' +
+      'Create a Shared Drive, add the service account as Content manager, and point DRIVE_FOLDER_ID at a folder inside it.',
   };
 }
