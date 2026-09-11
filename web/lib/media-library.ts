@@ -19,6 +19,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { publicVideoCopy } from '@/lib/drive';
 import { cachedPublicCopy, rememberPublicCopy } from '@/lib/transcript-cache';
 import { parseDriveFileId } from '@/lib/drive-url';
+import { copyFailureAdvice } from '@/lib/drive-copy-error';
 import { reportError } from '@/lib/report';
 
 export type ShareableVideo = {
@@ -95,7 +96,7 @@ export async function listShareableVideos(limit = 40): Promise<{ videos: Shareab
  */
 export async function ensureShareableVideo(videoLink: string, title?: string | null): Promise<
   | { ok: true; url: string; fileId: string; created: boolean }
-  | { ok: false; reason: 'not_drive' | 'failed'; message: string }
+  | { ok: false; reason: 'not_drive' | 'failed'; code?: string; message: string }
 > {
   const fileId = parseDriveFileId(String(videoLink || ''));
   if (!fileId) {
@@ -118,10 +119,10 @@ export async function ensureShareableVideo(videoLink: string, title?: string | n
     return { ok: true, url: made.url, fileId: made.fileId, created: true };
   } catch (e) {
     reportError('media-library:ensure-copy', e, { fileId });
-    return {
-      ok: false,
-      reason: 'failed',
-      message: 'We could not make a shareable copy of that video just now. Try again, or press Prepare on the row.',
-    };
+    // Google says WHICH of five very different problems this is, and the first
+    // version of this threw that away and told everyone to "try again" — the
+    // right advice for exactly one of them.
+    const advice = copyFailureAdvice(e);
+    return { ok: false, reason: 'failed', code: advice.reason, message: advice.message };
   }
 }
