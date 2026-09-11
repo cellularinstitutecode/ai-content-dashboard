@@ -90,7 +90,13 @@ export async function POST(req: NextRequest) {
   try {
     const out = await ensureShareableVideo(videoLink, title);
     if (!out.ok) {
-      return NextResponse.json({ error: out.message, reason: out.reason }, { status: out.reason === 'not_drive' ? 422 : 502 });
+      // `message` for the person, `error` for the machine — the house rule in
+      // lib/friendly-error.ts. Putting the sentence in `error` instead got it
+      // truncated at 200 characters, which cut the half that says what to do.
+      return NextResponse.json(
+        { error: out.code || out.reason, message: out.message },
+        { status: out.reason === 'not_drive' ? 422 : 502 },
+      );
     }
     return NextResponse.json({ ok: true, url: out.url, fileId: out.fileId, created: out.created });
   } catch (e) {

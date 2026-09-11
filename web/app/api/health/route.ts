@@ -274,7 +274,17 @@ export async function GET() {
       name: 'drive',
       ok: has('GOOGLE_SERVICE_ACCOUNT_JSON') && has('DRIVE_FOLDER_ID'),
       severity: 'optional',
-      detail: 'Permanent clip storage. Without it clips rely on Opus signed links, which expire in ~3 days.',
+      code: !has('DRIVE_FOLDER_ID') ? 'no_folder' : !has('GOOGLE_SERVICE_ACCOUNT_JSON') ? 'no_service_account' : undefined,
+      // This grew a second job and the check never said so. Besides clip
+      // storage, DRIVE_FOLDER_ID is where the world-readable COPY of a video
+      // goes — the only URL Metricool can fetch, because the clinic's own file
+      // is private. Without it no video reaches any network, and the old wording
+      // ("permanent clip storage") sent people looking at the wrong feature.
+      detail: !has('DRIVE_FOLDER_ID')
+        ? 'DRIVE_FOLDER_ID is not set. Videos cannot be attached to posts at all: the shareable copy has nowhere to go, so YouTube and TikTok drafts arrive empty.'
+        : !has('GOOGLE_SERVICE_ACCOUNT_JSON')
+          ? 'GOOGLE_SERVICE_ACCOUNT_JSON is not set, so nothing can read or copy anything in Drive.'
+          : 'Holds the shareable copy of each video — the URL Metricool fetches — and permanent clip storage.',
     },
     {
       name: 'rate_limiting',
