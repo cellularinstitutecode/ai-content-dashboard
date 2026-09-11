@@ -10,6 +10,12 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { normalizePublishAt, METRICOOL_TIMEZONE } from '@/lib/metricool-time';
 
 export const runtime = 'nodejs';
+// This route makes TWO sequential calls to Metricool now — normalise the media,
+// then create the post — and normalising a large video is a file transfer, not
+// a metadata lookup. With no maxDuration the platform default (10s) killed the
+// request mid-normalise, so adding the media step would have turned a working
+// button into an unexplained timeout on exactly the posts that carry video.
+export const maxDuration = 60;
 
 const NETWORK_MAP: Record<string, string> = {
   facebook: 'facebook',
