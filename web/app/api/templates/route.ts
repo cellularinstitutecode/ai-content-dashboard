@@ -4,6 +4,7 @@ import { supabaseServer } from '@/lib/supabase';
 import { normalizeStrategy } from '@/lib/autopilot';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
 
@@ -92,6 +93,36 @@ export async function POST(req: NextRequest) {
   // databases without the column yet) keep working unchanged.
   if (body.strategy !== undefined) row.strategy = normalizeStrategy(body.strategy);
   if (body.id) row.id = body.id;
+
+  // An id from the request, upserted on the id as conflict key, is an
+  // "INSERT … ON CONFLICT DO UPDATE" against whatever row holds it — somebody
+  // else's template included. RLS should refuse that (schema.sql's
+  // "templates: owner update" policy), so this is the belt to that brace, and
+  // the only write in the app keyed on a request id with no ownership check
+  // anywhere. Its sibling DELETE below has always done this.
+  if (row.id) {
+    const { data: owned, error: ownerError } = await sb
+      .from('schedule_templates')
+      .select('id')
+      .eq('id', row.id)
+      .eq('user_id', user.id)
+      .maybeSingle();
+    // Checked, not ignored: supabase-js resolves a failed read, and treating
+    // "I could not tell" as "not yours" is the safe direction here.
+    if (ownerError) {
+      reportError('templates:owner-check', ownerError);
+      return NextResponse.json(
+        { error: 'unverified', message: 'We could not confirm that template belongs to you. Nothing was saved — try again in a moment.' },
+        { status: 503 },
+      );
+    }
+    if (!owned) {
+      return NextResponse.json(
+        { error: 'not_found', message: 'That template does not exist in your workspace.' },
+        { status: 404 },
+      );
+    }
+  }
 
   let { data, error } = await sb
     .from('schedule_templates')

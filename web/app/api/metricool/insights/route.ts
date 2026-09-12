@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { isAllowedEmail, isAllowedBlogId } from '@/lib/access';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 // GET /api/metricool/insights?blogId=123
 // Aggregates several Metricool datasets in one call so the dashboard can show
@@ -46,6 +47,14 @@ export async function GET(request: Request) {
       return NextResponse.json(
         { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
         { status: 403 },
+      );
+    }
+    // Reaches Metricool twice per call, on every dashboard render.
+    const rl = await checkRateLimit(user.id, 'metricool-read');
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'rate_limited', limit: rl.limit },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } },
       );
     }
   } catch {

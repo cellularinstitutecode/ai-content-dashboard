@@ -46,8 +46,17 @@ jobs:
         with:
           node-version: 22
       # Advisories should arrive as a visible check rather than as a finding in
-      # the next manual audit. Reported separately from the build, and
-      # non-blocking, so an unrelated new CVE never wedges an urgent merge -
-      # the point is that somebody sees it the day it lands.
-      - run: npm audit --audit-level=high
+      # the next manual audit. Reported separately from the build so an
+      # unrelated new CVE never wedges an urgent merge.
+      #
+      # But `continue-on-error` on the ONLY step in this job made the job report
+      # SUCCESS while a critical Next.js advisory sat unfixed for weeks — the
+      # badge was green, so nobody looked, which is the precise outcome the job
+      # exists to prevent. Split in two: HIGH stays advisory, CRITICAL fails the
+      # job. A critical advisory is worth one person's attention the day it
+      # lands, and the build job is untouched either way.
+      - name: High-severity advisories (advisory only)
+        run: npm audit --audit-level=high
         continue-on-error: true
+      - name: Critical advisories (fails this job)
+        run: npm audit --audit-level=critical
