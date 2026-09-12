@@ -11,7 +11,11 @@ import { reportError } from '@/lib/report';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+// 300, not 60. This route runs THREE phases and only budgeted the third, so the
+// clock it was sized against was never the clock it actually ran on — see the
+// note on the budget below. /api/videos/watch has declared 300 on this same
+// plan since the video work and deploys fine.
+export const maxDuration = 300;
 
 async function handle(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -44,13 +48,30 @@ async function handle(req: NextRequest) {
   // {ok:true, planned:0, advanced:0} - indistinguishable from a quiet day, and
   // green on the Vercel cron dashboard. Answer with a real status code so a
   // broken engine looks broken.
+  // The budget has to span the REQUEST, not just the last phase of it.
+  //
+  // 40_000 was measured from the moment advanceRuns was called, after planRuns
+  // and expireStaleRuns had already spent an unknown amount of the 60s ceiling.
+  // And advanceRuns only checks its deadline at loop boundaries, while a single
+  // step is very heavy — stepResearch alone makes two Semrush calls, several
+  // database reads and an assistant call in sequence. A step entered with one
+  // second left still runs to completion, or to the platform killing the
+  // process mid-write.
+  //
+  // So: start the clock at the top, give the advance phase whatever is actually
+  // left, and keep a floor so a slow planning phase cannot hand it a budget too
+  // small to finish even one step honestly.
+  const started = Date.now();
   try {
     const planned = await planRuns(scopeUserId);
     const expired = await expireStaleRuns(scopeUserId);
+    const remaining = 300_000 - (Date.now() - started);
+    // 45s of headroom for the step in flight to finish and write back.
+    const advanceBudget = Math.max(40_000, remaining - 45_000);
     const advancedResult = await advanceRuns({
       scopeUserId,
       runId,
-      budgetMs: 40_000,
+      budgetMs: advanceBudget,
       maxRuns: runId ? 1 : 4,
     });
     return NextResponse.json({ ok: true, expired, ...planned, ...advancedResult });

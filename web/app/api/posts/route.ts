@@ -4,6 +4,7 @@ import { recordApproval } from '@/lib/approval-log';
 import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { isAllowedEmail } from '@/lib/access';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { metricoolDeletePost, metricoolReplacePost, normalizeMediaList, type Provider } from '@/lib/metricool';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { cachedPublicCopy } from '@/lib/transcript-cache';
@@ -59,6 +60,15 @@ export async function GET() {
   const auth = await requireClinicUser(sb);
   if (!auth.ok) return auth.response;
   const user = auth.user;
+  // Reaches Metricool and Drive. Every other route that leaves the building is
+  // capped; this one, which publishes and deletes, was not.
+  const rl = await checkRateLimit(user.id, 'posts');
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: 'rate_limited', limit: rl.limit },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } },
+    );
+  }
 
   const { data, error } = await sb
     .from('posts')
@@ -100,6 +110,15 @@ export async function PATCH(req: Request) {
   const auth = await requireClinicUser(sb);
   if (!auth.ok) return auth.response;
   const user = auth.user;
+  // Reaches Metricool and Drive. Every other route that leaves the building is
+  // capped; this one, which publishes and deletes, was not.
+  const rl = await checkRateLimit(user.id, 'posts');
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: 'rate_limited', limit: rl.limit },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } },
+    );
+  }
 
   let body: any = null;
   try {
@@ -295,6 +314,15 @@ export async function DELETE(req: Request) {
   const auth = await requireClinicUser(sb);
   if (!auth.ok) return auth.response;
   const user = auth.user;
+  // Reaches Metricool and Drive. Every other route that leaves the building is
+  // capped; this one, which publishes and deletes, was not.
+  const rl = await checkRateLimit(user.id, 'posts');
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: 'rate_limited', limit: rl.limit },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } },
+    );
+  }
 
   const id = new URL(req.url).searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 });

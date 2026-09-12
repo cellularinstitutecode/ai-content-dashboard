@@ -55,6 +55,16 @@ const POLICIES: Record<string, Policy> = {
   // Copies a file inside the clinic's Drive and opens it to anyone with the
   // link. Cheap in time, permanent in effect — nothing in this app deletes one.
   'media-copy': { limit: 40, windowSec: 3600 },
+  // Routes that reach the shared Metricool account. Each was uncapped: `posts`
+  // is the one that APPROVES into the live queue and DELETES, and the two
+  // read paths are called on every dashboard render.
+  posts: { limit: 120, windowSec: 3600 },
+  'metricool-read': { limit: 120, windowSec: 3600 },
+  'metricool-sync': { limit: 12, windowSec: 3600 },
+  // Named by sources/route.ts but absent from this table, so both silently took
+  // DEFAULT_POLICY — the same mistake the 'ai-research' note above records.
+  'sources-edit': { limit: 120, windowSec: 3600 },
+  'sources-import': { limit: 60, windowSec: 3600 },
   // The research copilot runs a Semrush pre-filter AND an LLM call, so it is
   // at least as expensive as `generate`. Without an entry here it silently
   // took DEFAULT_POLICY — double the cap of the cheaper operation.

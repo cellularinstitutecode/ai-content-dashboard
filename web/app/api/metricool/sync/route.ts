@@ -10,6 +10,7 @@
 //           metrics are stored for every user that has a brand profile.
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { fetchPostMetrics, fetchPostMetricsResult, type NormalizedMetric } from '@/lib/performance';
 import { reportError } from '@/lib/report';
@@ -54,6 +55,17 @@ export async function POST() {
   // widens again.
   const auth = await requireAllowlistedUser();
   if (!auth.ok) return auth.response;
+
+  // Each call is a 30-day analytics pull plus a bulk upsert. The cron path
+  // above is bounded by its once-a-day schedule; the human one was not bounded
+  // at all.
+  const rl = await checkRateLimit(auth.userId, 'metricool-sync');
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: 'rate_limited', limit: rl.limit },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } },
+    );
+  }
 
   const metrics = await fetchPostMetrics(30);
   try {

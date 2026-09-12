@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { isAllowedEmail, DEFAULT_BLOG_ID, isAllowedBlogId } from '@/lib/access';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { redact } from '@/lib/report';
 
 export const runtime = 'nodejs';
@@ -19,6 +20,16 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
       { status: 403 },
+    );
+  }
+
+  // Reaches Metricool on every call. Capped like every other route that leaves
+  // the building; this one is hit on each dashboard render.
+  const rl = await checkRateLimit(user.id, 'metricool-read');
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: 'rate_limited', limit: rl.limit },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } },
     );
   }
 
