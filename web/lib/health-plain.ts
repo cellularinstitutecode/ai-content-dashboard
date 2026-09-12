@@ -45,6 +45,19 @@ export const PLAIN: Record<string, PlainSaid> = {
   images: { down: 'AI images are not being generated.', stillWorks: 'Posts still write and schedule as text.' },
   opus_webhook: { down: 'Video clips arrive more slowly than usual.', stillWorks: 'They still arrive.' },
   drive: { down: 'Video clips are not being saved permanently and stop playing after a few days.' },
+  // The check that decides whether ANY video can be attached to ANY post.
+  drive_storage: {
+    down: 'Videos cannot be attached to posts — the shareable copy cannot be made.',
+    stillWorks: 'Captions are still written into the sheet, and text-only posts still go out.',
+  },
+  'drive_storage:not_shared_drive': {
+    down: 'Videos cannot be attached to posts: the copies folder is not in a Shared Drive.',
+    stillWorks: 'Captions are still written into the sheet, and text-only posts still go out.',
+  },
+  'drive_storage:unreachable': {
+    down: 'Videos cannot be attached to posts: the copies folder cannot be opened.',
+    stillWorks: 'Captions are still written into the sheet, and text-only posts still go out.',
+  },
   assistant_session_secret: { down: 'The assistant is using a shared key instead of its own.', stillWorks: 'Everything works; this is a housekeeping item.' },
 };
 

@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { requireAllowlistedUser } from '@/lib/auth';
 import { ensureShareableVideo, listShareableVideos } from '@/lib/media-library';
+import { driveSelfTest } from '@/lib/drive';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { reportError } from '@/lib/report';
 
@@ -79,8 +80,21 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let body: { videoLink?: unknown; title?: unknown };
+  let body: { videoLink?: unknown; title?: unknown; selfTest?: unknown };
   try { body = await req.json(); } catch { body = {}; }
+
+  // { selfTest: true } — prove the Drive setup works without touching a video.
+  //
+  // Create, share, fetch anonymously, delete. Four separate permissions, each
+  // failing at its own moment, and only the last is visible from the read-only
+  // health checks — so a Shared Drive can look correctly configured and still
+  // refuse the sharing step, which is the difference between a post with a
+  // video and a post without one. A few bytes of text, always cleaned up.
+  if (body.selfTest === true) {
+    const out = await driveSelfTest();
+    return NextResponse.json({ ok: out.ok, steps: out.steps }, { status: out.ok ? 200 : 502 });
+  }
+
   const videoLink = typeof body.videoLink === 'string' ? body.videoLink : '';
   const title = typeof body.title === 'string' ? body.title : '';
   if (!videoLink.trim()) {

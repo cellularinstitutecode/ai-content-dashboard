@@ -238,3 +238,85 @@ export async function driveFolderReport(): Promise<{
     return { ...blank, error: msg.slice(0, 300) };
   }
 }
+
+/**
+ * Prove, end to end, that a video CAN be copied and served — without touching a
+ * video.
+ *
+ * The four things that must all work are separate permissions, and each fails
+ * with its own error at its own moment: create a file in the folder, open it to
+ * anyone with the link, fetch it back as a stranger would, delete it again.
+ * Only the last of those is visible from the health page's read-only checks, so
+ * a Shared Drive could look correctly configured and still refuse the sharing
+ * step — which is the difference between a post with a video and a post
+ * without one.
+ *
+ * Writes a few bytes of text, not a video, and always cleans up. Safe to run as
+ * often as anyone likes.
+ */
+export async function driveSelfTest(): Promise<{
+  ok: boolean;
+  steps: { step: 'create' | 'share' | 'fetch' | 'cleanup'; ok: boolean; detail: string }[];
+}> {
+  const steps: { step: 'create' | 'share' | 'fetch' | 'cleanup'; ok: boolean; detail: string }[] = [];
+  const folderId = process.env.DRIVE_FOLDER_ID;
+  if (!folderId) {
+    return { ok: false, steps: [{ step: 'create', ok: false, detail: 'DRIVE_FOLDER_ID is not set.' }] };
+  }
+
+  const drive = driveClient();
+  let fileId = '';
+  try {
+    const created = await drive.files.create({
+      supportsAllDrives: true,
+      requestBody: { name: 'chi-drive-selftest.txt', parents: [folderId] },
+      media: { mimeType: 'text/plain', body: Readable.from(Buffer.from('ok')) },
+      fields: 'id, webContentLink',
+    });
+    fileId = String(created.data.id || '');
+    if (!fileId) throw new Error('Drive returned no file id');
+    steps.push({ step: 'create', ok: true, detail: 'Wrote a test file into the folder.' });
+
+    try {
+      await drive.permissions.create({
+        supportsAllDrives: true,
+        fileId,
+        requestBody: { role: 'reader', type: 'anyone' },
+      });
+      steps.push({ step: 'share', ok: true, detail: 'Opened it to anyone with the link.' });
+
+      // As a stranger: no credentials on this request at all. This is the step
+      // Metricool performs, and the only one that proves the URL is reachable
+      // from outside the organisation.
+      const url = String(created.data.webContentLink || '') || 'https://drive.google.com/uc?export=download&id=' + fileId;
+      try {
+        const res = await fetch(url, { redirect: 'follow' });
+        steps.push({
+          step: 'fetch',
+          ok: res.ok,
+          detail: res.ok
+            ? 'Fetched it back with no credentials, exactly as Metricool will.'
+            : 'Drive answered ' + res.status + ' to an anonymous fetch, so a network could not download the video either.',
+        });
+      } catch (e) {
+        steps.push({ step: 'fetch', ok: false, detail: 'Anonymous fetch failed: ' + (e instanceof Error ? e.message : String(e)) });
+      }
+    } catch (e) {
+      steps.push({ step: 'share', ok: false, detail: 'Could not open it to anyone with the link: ' + (e instanceof Error ? e.message : String(e)) });
+    }
+  } catch (e) {
+    steps.push({ step: 'create', ok: false, detail: e instanceof Error ? e.message : String(e) });
+  }
+
+  if (fileId) {
+    try {
+      await drive.files.delete({ fileId, supportsAllDrives: true });
+      steps.push({ step: 'cleanup', ok: true, detail: 'Removed the test file.' });
+    } catch (e) {
+      // Left behind rather than lost: say so, because it is a stray public file.
+      steps.push({ step: 'cleanup', ok: false, detail: 'Test file left in the folder (' + fileId + '): ' + (e instanceof Error ? e.message : String(e)) });
+    }
+  }
+
+  return { ok: steps.every((s) => s.ok), steps };
+}

@@ -38,15 +38,28 @@ test('a row with no link at all falls back to its file name', () => {
 });
 
 test('the keyword brief reads as one cell, primary first', () => {
-  assert.equal(
-    keywordLineFrom({ primary: 'therapeutic plasma exchange', keywords: ['therapeutic plasma exchange', 'TPE therapy', 'plasmapheresis'] }),
-    'therapeutic plasma exchange · TPE therapy, plasmapheresis',
-  );
-  assert.equal(keywordLineFrom({ primary: 'molecular hydrogen', keywords: [] }), 'molecular hydrogen');
-  assert.equal(keywordLineFrom({ primary: null, keywords: ['hyperbaric oxygen'] }), 'hyperbaric oxygen');
+  const cell = keywordLineFrom({ primary: 'therapeutic plasma exchange', keywords: ['therapeutic plasma exchange', 'TPE therapy', 'plasmapheresis'] });
+  const [terms] = cell.split('\n\n');
+  assert.equal(terms, 'therapeutic plasma exchange · TPE therapy, plasmapheresis');
+  assert.equal(keywordLineFrom({ primary: 'molecular hydrogen', keywords: [] }).split('\n\n')[0], 'molecular hydrogen');
+  assert.equal(keywordLineFrom({ primary: null, keywords: ['hyperbaric oxygen'] }).split('\n\n')[0], 'hyperbaric oxygen');
   // Nothing to say is an empty cell, never the word "null".
   assert.equal(keywordLineFrom(null), '');
   assert.equal(keywordLineFrom({ primary: '', keywords: [] }), '');
+});
+
+// The cell is pasted straight into a post, so it carries the tags as well as
+// the terms — the shape the team pointed at in the sheet.
+test('the keyword cell carries hashtags under the terms', () => {
+  const cell = keywordLineFrom({ primary: 'red light therapy', keywords: ['hyperbaric oxygen', 'regenerative medicine'] });
+  const [terms, tags] = cell.split('\n\n');
+  assert.equal(terms, 'red light therapy · hyperbaric oxygen, regenerative medicine');
+  assert.equal(tags, '#cellularinstitute #redlighttherapy #hyperbaricoxygen #regenerativemedicine');
+});
+
+test('a row with no keyword data stays an empty cell, not a lone house tag', () => {
+  assert.equal(keywordLineFrom({ primary: '', keywords: [] }), '');
+  assert.equal(keywordLineFrom({ primary: null, keywords: null }), '');
 });
 
 test('the sheet status column speaks the sheet’s language', () => {

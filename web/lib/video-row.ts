@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 
 import { parseDriveFileId } from './drive-url.ts';
 import { parseVideoUrl } from './composer.ts';
+import { hashtagsFrom } from './hashtags.ts';
 
 /**
  * A row's identity — derived from its CONTENT, never its row number.
@@ -127,8 +128,20 @@ export function keywordLineFrom(stamp: KeywordStampLike): string {
   const primary = String(stamp.primary || '').trim();
   const rest = Array.isArray(stamp.keywords) ? stamp.keywords.map((k) => String(k || '').trim()).filter(Boolean) : [];
   const supporting = rest.filter((k) => k.toLowerCase() !== primary.toLowerCase());
-  if (!primary) return supporting.join(', ');
-  return supporting.length ? primary + ' · ' + supporting.join(', ') : primary;
+  const terms = !primary
+    ? supporting.join(', ')
+    : supporting.length ? primary + ' · ' + supporting.join(', ') : primary;
+
+  // The cell does two jobs and only ever did one of them. Most rows hold the
+  // SEO terms the copy was written against; the row the team pointed at holds
+  // hashtags instead, because that is what someone actually pastes when
+  // posting. Both, then — terms first, tags under them — so neither use has to
+  // be retyped by hand from the other.
+  // No terms means no brief, and a cell holding nothing but the house tag would
+  // look like a finished row that had in fact never been researched.
+  if (!terms) return '';
+  const tags = hashtagsFrom([primary, ...supporting]);
+  return tags.length ? terms + '\n\n' + tags.join(' ') : terms;
 }
 
 /**
