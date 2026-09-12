@@ -5,8 +5,8 @@
 // `server-only`, so nothing in it could run under `node --test` — and the row it
 // built shipped with two defects that a single assertion would have caught: it
 // wrote a wall-clock string into a timestamptz column (putting every batch draft
-// five hours out on the dashboard calendar) and it linked neither the draft nor
-// the Drive file, so the first edit stripped the post's video.
+// five hours out on the dashboard calendar) and it did not link the draft it had
+// just created.
 //
 // No imports: the test runner strips types and runs this file directly.
 
@@ -19,7 +19,6 @@ export type PostRow = {
   metricool_post_id: string | null;
   status: string;
   draft_id?: string;
-  media_drive_file_id?: string;
 };
 
 /**
@@ -37,7 +36,6 @@ export function postRowFor(input: {
   instant: string;
   metricoolId?: string | null;
   draftId?: string | null;
-  mediaFileId?: string | null;
 }): PostRow {
   return {
     user_id: input.userId,
@@ -48,10 +46,19 @@ export function postRowFor(input: {
     // Never 'scheduled'. Metricool says that about a post it is HOLDING for
     // review, and storing its word made our rows claim an approval nobody gave.
     status: 'pending_review',
-    // Both are what /api/posts rebuilds a post's media from on a later edit,
-    // under an explicit "a replace REPLACES" contract — a row with neither loses
-    // its video the first time anybody nudges the time on the calendar.
+    // draft_id is what /api/posts rebuilds a post's media from on a later edit,
+    // under an explicit "a replace REPLACES" contract.
+    //
+    // media_drive_file_id is deliberately NOT set here, and the reason is worth
+    // stating because writing it looked like the obvious fix and is dangerous.
+    // That column means "the id of the world-readable COPY this app made", which
+    // is how lib/video-autopilot.ts fills it — and /api/posts DELETE hands it
+    // straight to deleteDriveFile, whose own contract is "only ever called with
+    // an id the app RECORDED when it made the file". The only id available here
+    // is parsed out of a URL the model supplied, so a link to a publicly-shared
+    // ORIGINAL would put the clinic's source footage on the delete path. It also
+    // would not work: /api/posts resolves the column through cachedPublicCopy,
+    // which is keyed by the SOURCE video id, not the copy id.
     ...(input.draftId ? { draft_id: input.draftId } : {}),
-    ...(input.mediaFileId ? { media_drive_file_id: input.mediaFileId } : {}),
   };
 }

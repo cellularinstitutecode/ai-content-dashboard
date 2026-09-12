@@ -32,12 +32,9 @@ export type CheckLike = {
  * Three were here and have been taken out, each for the same reason — their own
  * plain wording says the pipeline keeps running:
  *
- *  - sheet_write: "Videos are still transcribed and the copy is still saved as a
- *    draft here." It also outranked drive_storage, so a read-only sheet silenced
- *    the fact that no video could be attached to any post at all.
  *  - drive: severity `optional`, and "clips stop playing after a few days" is a
- *    slow degradation. It was usually deduplicated away by drive_storage, which
- *    hid the misclassification until drive failed on its own.
+ *    slow degradation. It is also redundant — drive_storage fails whenever drive
+ *    does, and the dedupe below drops it — so nothing is lost by demoting it.
  *
  * audio_extractor stays OUT but is the genuine close call, and the old reasoning
  * for it was wrong for this clinic: "a video with captions still goes through"
@@ -50,6 +47,13 @@ const BLOCKS_VIDEO = new Set([
   'sweep_owner',
   'ai_provider',
   'drive_storage',
+  // Back in the set, but ranked LAST — which is the distinction that was
+  // missing. Demoting it entirely meant a total sheet outage could only reach a
+  // person through greetingFor's aside, and the aside prints health[0] alone:
+  // any note ahead of it, including a non-blocking schema note, hid it
+  // completely. Blocking is position-independent; the aside is not. Ranking it
+  // below drive_storage keeps the stronger claim in the headline when both fail.
+  'sheet_write',
 ]);
 
 /**
@@ -64,6 +68,7 @@ const PRIORITY = [
   'ai_provider',
   'sweep_owner',
   'drive_storage',
+  'sheet_write',
 ];
 
 /**

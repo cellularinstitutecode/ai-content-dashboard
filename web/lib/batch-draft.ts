@@ -17,7 +17,6 @@ import { generateContentPack, type BrandContext, type ContentType } from '@/lib/
 import { complianceGate } from '@/lib/compliance-gate';
 import { ensureAviso } from '@/lib/compliance';
 import { apiBase as metricoolApiBase, normalizeMediaList } from '@/lib/metricool';
-import { parseDriveFileId } from '@/lib/drive-url';
 import { postRowFor } from '@/lib/batch-row';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { normalizePublishAt, METRICOOL_TIMEZONE } from '@/lib/metricool-time';
@@ -166,7 +165,6 @@ export async function draftAndQueue(
     draft: true,
   };
 
-  let mediaFileId: string | null = null;
   if (item.mediaUrl) {
     // Normalised first and sent as a URL STRING. Both halves matter: Metricool
     // answers 200 and silently drops an un-normalised URL, so "attached" meant
@@ -187,9 +185,6 @@ export async function draftAndQueue(
       };
     }
     body.media = norm.media;
-    // Remembered so /api/posts can rebuild the media on a later edit — see the
-    // note on the insert below.
-    mediaFileId = parseDriveFileId(String(item.mediaUrl));
   }
 
   if (provider === 'youtube') {
@@ -237,7 +232,7 @@ export async function draftAndQueue(
     // the request — because this id was created by this function, for this user,
     // four steps ago.
     const { error } = await supabaseAdmin().from('posts').insert(
-      postRowFor({ userId, provider, text, instant: when.instant, metricoolId, draftId, mediaFileId }),
+      postRowFor({ userId, provider, text, instant: when.instant, metricoolId, draftId }),
     );
     if (error) throw error;
   } catch (e) {

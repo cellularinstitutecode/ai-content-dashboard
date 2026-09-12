@@ -150,10 +150,20 @@ export function claimBatch(jti: string, ttlMs = BATCH_TTL_MS): boolean {
   const id = String(jti || '');
   if (!id) return false;
   const now = Date.now();
-  // Opportunistic sweep. The map only ever holds tickets from the last quarter
-  // hour, so it cannot grow without bound on a long-lived instance.
+  // Opportunistic sweep, with a hard ceiling behind it.
+  //
+  // Dropping only expired entries is not a bound: entries are stored as
+  // now + ttlMs, so once 500 UNEXPIRED ids accumulate the sweep deletes nothing
+  // and runs a full scan on every claim while the map keeps growing. The
+  // oldest-first eviction below is what actually caps it. Evicting a live ticket
+  // only means that one could be replayed — the same exposure a cold start
+  // already carries — and a thousand live tickets on one instance is far outside
+  // anything this feature produces.
   if (spent.size > 500) {
     for (const [k, at] of spent) if (at <= now) spent.delete(k);
+    if (spent.size > 1000) {
+      for (const k of [...spent.keys()].slice(0, spent.size - 1000)) spent.delete(k);
+    }
   }
   const seen = spent.get(id);
   if (seen !== undefined && seen > now) return false;

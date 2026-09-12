@@ -102,16 +102,30 @@ test('a read-only sheet does not silence "no video can be attached"', () => {
   assert.match(firstBlocking!.down, /Shared Drive/, 'the total block outranks the partial one');
 });
 
-test('a check whose own wording says the pipeline continues is not blocking', () => {
-  for (const name of ['sheet_write', 'drive', 'audio_extractor', 'semrush', 'metricool', 'images']) {
+test('a degradation does not silence the rest of the greeting', () => {
+  for (const name of ['drive', 'audio_extractor', 'semrush', 'metricool', 'images']) {
     const note = healthNotes([{ name, ok: false, severity: 'required' }])[0];
-    assert.equal(note.blocksVideos, false, name + ' must not silence the rest of the greeting');
+    assert.equal(note.blocksVideos, false, name + ' must not take the headline');
   }
 });
 
-test('the checks that really do stop everything are still blocking', () => {
-  for (const name of ['supabase', 'supabase_service_role', 'sweep_owner', 'ai_provider', 'drive_storage']) {
+test('the checks that stop the pipeline are blocking', () => {
+  for (const name of ['supabase', 'supabase_service_role', 'sweep_owner', 'ai_provider', 'drive_storage', 'sheet_write']) {
     const note = healthNotes([{ name, ok: false, severity: 'required' }])[0];
-    assert.equal(note.blocksVideos, true, name + ' means no video gets through at all');
+    assert.equal(note.blocksVideos, true, name + ' must reach the greeting headline');
   }
+});
+
+// sheet_write is blocking so it is always REPORTED — greetingFor's aside prints
+// health[0] alone, so a non-blocking note can be hidden behind any other note —
+// but it must not outrank the check that says no video reaches any network.
+test('sheet_write is reportable without outranking drive_storage', () => {
+  const alone = healthNotes([{ name: 'sheet_write', ok: false, severity: 'required', code: 'read_only' }]);
+  assert.equal(alone[0].blocksVideos, true, 'on its own it must still be said');
+
+  const both = healthNotes([
+    { name: 'sheet_write', ok: false, severity: 'required', code: 'read_only' },
+    { name: 'drive_storage', ok: false, severity: 'required', code: 'not_shared_drive' },
+  ]);
+  assert.match(both[0].down, /Shared Drive/, 'the stronger claim takes the headline');
 });

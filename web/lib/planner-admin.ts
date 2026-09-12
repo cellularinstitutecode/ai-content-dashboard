@@ -151,19 +151,29 @@ export async function saveTemplate(
   }
 
   // --- the fields, each falling back to what is already stored ---------------
-  const keep = <T,>(sent: unknown, current: T, fallback: T): T =>
-    sent !== undefined ? (sent as T) : existing ? (current as T) : fallback;
+  //
+  // ONE rule, applied to every field: a value counts as "sent" only when it is
+  // neither undefined nor null. There were three different rules here and only
+  // one of them was safe — `providers` fell back to the stored value for any
+  // non-array, `weekdays` did not (so a string emptied the schedule), and `keep`
+  // treated an explicit null as a deliberate write. A model emitting `null` for
+  // an optional it is not changing is routine, and it renamed templates and
+  // wiped their weekdays.
+  const sent = (v: unknown): boolean => v !== undefined && v !== null;
+  const keep = <T,>(value: unknown, current: T, fallback: T): T =>
+    sent(value) ? (value as T) : existing ? current : fallback;
 
-  const weekdays = draft.weekdays !== undefined
+  const weekdays = sent(draft.weekdays)
     ? cleanWeekdays(draft.weekdays)
     : cleanWeekdays(existing?.weekdays);
-  const time = draft.time_of_day !== undefined
-    ? cleanTime(draft.time_of_day)
-    : existing
-      ? cleanTime(existing.time_of_day)
-      : cleanTime(undefined);
-  if (draft.time_of_day !== undefined && !isUsableTime(draft.time_of_day)) {
+  const time = sent(draft.time_of_day) ? cleanTime(draft.time_of_day) : cleanTime(existing?.time_of_day);
+  if (sent(draft.time_of_day) && !isUsableTime(draft.time_of_day)) {
     notes.push('"' + String(draft.time_of_day) + '" is not a 24-hour HH:MM time, so this is set to 09:00 — say so and offer to correct it.');
+  }
+  // A sent-but-unusable weekday list empties the schedule, and a template with
+  // no weekdays never fires. Worth saying rather than discovering.
+  if (sent(draft.weekdays) && !weekdays.length) {
+    notes.push('The weekdays given could not be read, so this template now has none and will never fire until some are chosen.');
   }
 
   const row: Record<string, any> = {
@@ -175,8 +185,11 @@ export async function saveTemplate(
     text: String(keep(draft.text, existing?.text, '') ?? ''),
     weekdays,
     time_of_day: time,
-    active: draft.active !== undefined
-      ? draft.active !== false
+    // Strictly true/false. `!== false` read the strings "false" and "no", and
+    // the number 0, as ACTIVE — so a call meaning to pause could resume a
+    // template into daily paid spend. Anything else keeps the stored value.
+    active: draft.active === true ? true
+      : draft.active === false ? false
       : existing ? existing.active !== false : true,
     updated_at: new Date().toISOString(),
   };

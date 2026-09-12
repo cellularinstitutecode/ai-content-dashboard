@@ -31,20 +31,25 @@ test('a missing Metricool id is null, not undefined', () => {
 
 // /api/posts PATCH rebuilds media from draft_id, then media_drive_file_id, and
 // nothing else. A row with neither publishes the edit with no media at all.
-test('a post with media records where to find it again', () => {
-  const row = postRowFor({ ...base, draftId: 'd1', mediaFileId: 'f1' });
-  assert.equal(row.draft_id, 'd1');
-  assert.equal(row.media_drive_file_id, 'f1');
+test('a post records the draft it came from', () => {
+  assert.equal(postRowFor({ ...base, draftId: 'd1' }).draft_id, 'd1');
 });
 
 test('absent links are omitted rather than written as null', () => {
   const row = postRowFor(base);
   assert.ok(!('draft_id' in row), 'a null draft_id would overwrite nothing but reads as a deliberate unlink');
-  assert.ok(!('media_drive_file_id' in row));
   // Empty strings are absent too — a blank id is not a link.
-  const blank = postRowFor({ ...base, draftId: '', mediaFileId: '' });
-  assert.ok(!('draft_id' in blank));
-  assert.ok(!('media_drive_file_id' in blank));
+  assert.ok(!('draft_id' in postRowFor({ ...base, draftId: '' })));
+});
+
+// media_drive_file_id means "the id of the copy THIS APP made", and /api/posts
+// DELETE passes it to deleteDriveFile. The batch path has no such id — only one
+// parsed out of a model-supplied URL — so writing it would put a link to a
+// publicly-shared ORIGINAL on the delete path for the clinic's own footage.
+test('a batch row never claims to own a Drive file', () => {
+  for (const row of [postRowFor(base), postRowFor({ ...base, draftId: 'd1' })]) {
+    assert.ok(!('media_drive_file_id' in row), 'the batch path cannot know a copy id, so it must not assert one');
+  }
 });
 
 test('the provider is always a list, because the column is', () => {

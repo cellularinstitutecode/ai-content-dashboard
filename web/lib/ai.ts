@@ -727,7 +727,7 @@ const TOOL_DEFS = [
   },
   {
     name: "update_schedule",
-    description: "Change an existing schedule template. Give the id from list_schedule. Fields you do not send are reset to their defaults, so send the whole template as you want it to end up.",
+    description: "Change an existing schedule template. Give the id from list_schedule and ONLY the fields you are changing — everything you leave out keeps its current value. Do not resend a whole template from memory: a field you mis-remember overwrites the stored one.",
     input_schema: {
       type: "object",
       properties: {

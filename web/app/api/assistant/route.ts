@@ -26,6 +26,7 @@ import { prepareVideo } from "@/lib/video-prepare";
 import { completeRow } from "@/lib/video-autopilot";
 import { canWriteCopy } from "@/lib/prepare-budget";
 import { draftAndQueue, type BatchOutcome } from "@/lib/batch-draft";
+import { batchItemProblem } from "@/lib/batch-item";
 import { schemaDetail, type SchemaProbe } from "@/lib/schema-probe";
 import { loadBrandContext } from "@/lib/brand-context";
 import { missingSchemaCached } from "@/lib/schema-check";
@@ -33,6 +34,7 @@ import { cachedHealthReport } from "@/lib/health-checks";
 import { healthNotes } from "@/lib/health-notes";
 import { sessionKey, signBatch, batchIsAuthentic, claimBatch, newTicketId, BATCH_TTL_MS, type BatchTicket } from "@/lib/assistant-token";
 import { describeTemplates, listTemplates, saveTemplate, setTemplateActive, upcomingRuns } from "@/lib/planner-admin";
+import { normalizeStrategy } from "@/lib/autopilot";
 
 // Compact, chat-friendly rendering of Semrush keyword rows.
 function fmtKw(k: SemKeyword): string {
@@ -616,20 +618,6 @@ async function retryVideos(
 }
 
 /**
- * Write the whole batch and queue each one as a Metricool draft.
- *
- * Sequential on purpose. Eight concurrent generations would finish sooner and
- * would also spend eight lots of AI credit before the first failure was visible,
- * inside a request that can be killed at any moment — and a killed parallel run
- * leaves an unknowable number of drafts in the clinic's queue. One at a time,
- * each one accounted for.
- *
- * Everything that did not happen is reported as not having happened. The clock
- * is the common case here, not an edge one: ten blog posts do not fit in one
- * request, and "I did six, here are the four I did not reach" is a true answer
- * a person can act on. Silence is not.
- */
-/**
  * Close the open tool call the batch proposal left behind.
  *
  * Proposing a batch returns straight to the user, so the stored transcript ends
@@ -654,15 +642,36 @@ function closeOpenToolCall(messages: ToolMessage[] | undefined, result: string):
       next && next.role === "user" && Array.isArray(next.content) &&
       (next.content as any[]).some((b) => b && b.type === "tool_result" && b.tool_use_id === use.id);
     if (answered) break;
-    tm.splice(i + 1, 0, {
-      role: "user",
-      content: [{ type: "tool_result", tool_use_id: use.id, content: result }],
-    });
+    tm.splice(
+      i + 1,
+      0,
+      { role: "user", content: [{ type: "tool_result", tool_use_id: use.id, content: result }] },
+      // And an assistant turn, so the transcript ends the way a COMPLETED tool
+      // loop ends. Without it the stored history finishes on a user message and
+      // the next turn appends another one — a shape nothing in this codebase has
+      // ever sent, and one I could not verify the API accepts from here. Closing
+      // the turn properly costs a line and is correct either way.
+      { role: "assistant", content: result },
+    );
     break;
   }
   return tm;
 }
 
+/**
+ * Write the whole batch and queue each one as a Metricool draft.
+ *
+ * Sequential on purpose. Eight concurrent generations would finish sooner and
+ * would also spend eight lots of AI credit before the first failure was visible,
+ * inside a request that can be killed at any moment — and a killed parallel run
+ * leaves an unknowable number of drafts in the clinic's queue. One at a time,
+ * each one accounted for.
+ *
+ * Everything that did not happen is reported as not having happened. The clock
+ * is the common case here, not an edge one: ten blog posts do not fit in one
+ * request, and "I did six, here are the four I did not reach" is a true answer
+ * a person can act on. Silence is not.
+ */
 async function runBatch(
   userId: string,
   ticket: BatchTicket,
@@ -703,20 +712,36 @@ async function runBatch(
       continue;
     }
 
+    // Cheap rejections FIRST, before anything is consumed. checkRateLimit
+    // inserts a usage_event on success — it spends a token, it does not peek —
+    // so validating afterwards meant ten items with a mis-computed date burned
+    // ten 'generate' tokens (a third of the hourly allowance, shared with the
+    // dashboard's own Generate button) for zero AI calls.
+    const bad = batchItemProblem(item);
+    if (bad) {
+      outcomes.push({ topic: item.topic, network: item.network, publishAt: item.publishAt, state: "failed", problem: bad });
+      continue;
+    }
+
     // Per ITEM, not per batch. The only cap on this path was the one
     // checkRateLimit('assistant') at the top of the request, so ten generations
     // and ten Metricool writes counted as a single event — the same mistake the
     // opus-clip branch 200 lines above was fixed for, in this same function,
-    // with the same reasoning. 'generate' and 'schedule' are the buckets the
-    // equivalent single operations use.
+    // with the same reasoning.
+    //
+    // 'generate' (30/hr) before 'schedule' (60/hr): the scarcer bucket is the
+    // one more likely to refuse, and checking it first is what keeps a refusal
+    // from having already spent the other. They cannot be checked atomically,
+    // so a generate token is still wasted when schedule then refuses — rare by
+    // construction, and said here rather than left to be discovered.
     const genRl = await checkRateLimit(userId, "generate");
     if (!genRl.ok) {
-      skip("The hourly limit on writing was reached, so this one was not started. It is still on the list.");
+      skip("The hourly limit on writing was reached, so this one was not started.");
       continue;
     }
     const schedRl = await checkRateLimit(userId, "schedule");
     if (!schedRl.ok) {
-      skip("The hourly limit on scheduling was reached, so this one was not started. It is still on the list.");
+      skip("The hourly limit on scheduling was reached, so this one was not started.");
       continue;
     }
 
@@ -770,9 +795,17 @@ async function runBatch(
     lines.push("\u2717 " + o.topic + " — not queued: " + (o.problem || "reason not recorded"));
   }
   if (later.length) {
+    // WITH the reason. These carried a sentence each and the report printed only
+    // the topics, so somebody whose hourly writing cap was exhausted was told,
+    // word for word as somebody who merely ran out of clock, to say "carry on" —
+    // which re-proposes the batch and hits the same cap again.
+    const why = [...new Set(later.map((o) => o.problem).filter(Boolean))];
     lines.push(
-      "\u2026 " + later.length + " I did not reach: " +
-      later.map((o) => o.topic).join(", ") + ". Say \"carry on\" and I will do those.",
+      "\u2026 " + later.length + " I did not reach: " + later.map((o) => o.topic).join(", ") + "." +
+      (why.length ? " " + why.join(" ") : "") +
+      (why.some((w) => /hourly limit/i.test(String(w)))
+        ? " Waiting for the limit to reset is the only thing that helps here."
+        : " Say \"carry on\" and I will do those."),
     );
   }
 
@@ -1091,30 +1124,39 @@ async function runAgent(session: Session, input: string, userId: string | null, 
           // "Saved." with the user's real template untouched.
           toolResult = "update_schedule needs the template id. Call list_schedule and use the id in brackets.";
         } else {
-          // Only the pillars actually sent decide the mode. `[]` is truthy, so
-          // testing the array itself turned an empty list into mode 'pillars'
-          // with nothing in it — and pickSeedTopic then falls all the way
-          // through to a hardcoded 'stem cell therapy' for every occurrence.
-          const pillars = Array.isArray(call.input.pillars)
+          // Strategy fields are merged ONE BY ONE onto what is stored.
+          //
+          // An all-or-nothing "did this call mention strategy at all" test was
+          // not enough: mention one field and the whole object was rebuilt from
+          // that call, so "make the morning blog aim at traffic" arrived as
+          // { id, goal } and silently flattened a six-pillar template to mode
+          // 'off' — which stops it firing entirely, reported as "Saved."
+          const current = normalizeStrategy(
+            call.name === "update_schedule" ? (await listTemplates(userId)).find((t) => t.id === editId)?.strategy : undefined,
+          );
+          const sentPillars = Array.isArray(call.input.pillars)
             ? call.input.pillars.map((p: unknown) => String(p || "").trim()).filter(Boolean)
-            : [];
-          const topic = String(call.input.topic || "").trim();
-          // No mode named and nothing to write about is 'off' — normalizeStrategy's
-          // own default, and deliberately inert. It used to default to 'auto',
-          // which is the most expensive mode there is (two extra Semrush calls
-          // per occurrence) and the one the tool schema never describes.
+            : undefined;
+          const sentTopic = call.input.topic !== undefined ? String(call.input.topic || "").trim() : undefined;
+          const pillars = sentPillars ?? current.pillars ?? [];
+          const topic = sentTopic ?? current.topic;
+          // No mode named: infer it from what the template will HAVE once this
+          // edit is applied, not from this call alone. Defaulting to 'auto' was
+          // worse still — the most expensive mode, and the one the tool schema
+          // never describes; normalizeStrategy's own default is the inert 'off'.
           const mode = call.input.mode
             ? String(call.input.mode)
-            : pillars.length ? "pillars" : topic ? "fixed_topic" : "off";
-          // Did this call say anything at all about strategy? If not, send none
-          // and let saveTemplate keep what is stored. Passing a freshly-built
-          // object unconditionally is how "rename my pillars template" would
-          // have flattened it to mode 'off' with no pillars — the merge above
-          // can only protect a field the caller leaves undefined.
-          const saysStrategy =
-            call.input.mode !== undefined || call.input.topic !== undefined ||
-            call.input.pillars !== undefined || call.input.goal !== undefined ||
-            call.input.format !== undefined;
+            : call.name === "update_schedule" && current.mode !== "off"
+              ? current.mode
+              : pillars.length ? "pillars" : topic ? "fixed_topic" : "off";
+          // An explicit mode with nothing to write about is refused rather than
+          // saved: pickSeedTopic falls through to a hardcoded "stem cell therapy"
+          // for every occurrence, forever, and nothing surfaces it.
+          if (mode === "pillars" && !pillars.length) {
+            toolResult = "That template would be set to rotate through pillars but has none, so every post would come out on the same default subject. Ask the user which subjects it should rotate through.";
+          } else if (mode === "fixed_topic" && !topic) {
+            toolResult = "That template would be set to a fixed topic but none was given. Ask the user what it should write about.";
+          } else {
           const out = await saveTemplate(userId, {
             id: call.name === "update_schedule" ? editId : undefined,
             // undefined, not the raw value: saveTemplate merges onto the stored
@@ -1123,19 +1165,23 @@ async function runAgent(session: Session, input: string, userId: string | null, 
             providers: call.input.providers,
             weekdays: call.input.weekdays,
             time_of_day: call.input.time_of_day,
-            strategy: saysStrategy || call.name === "create_schedule"
-              ? {
-                  mode,
-                  topic: topic || undefined,
-                  pillars,
-                  goal: call.input.goal,
-                  format: call.input.format,
-                }
-              : undefined,
+            strategy: {
+              mode,
+              topic: topic || undefined,
+              pillars,
+              goal: call.input.goal ?? current.goal,
+              format: call.input.format ?? current.format,
+              // Never in either tool schema, so never sent — and rebuilding the
+              // object without them reset a hand-tuned lead time to 24h on every
+              // single edit.
+              lead_hours: current.lead_hours,
+              max_regens: current.max_regens,
+            },
           });
           toolResult = out.ok
             ? "Saved. " + describeTemplates([out.template]) + (out.notes.length ? "\n\nWorth telling the user: " + out.notes.join(" ") : "")
             : out.message;
+          }
         }
       }
     } else if (call.name === "pause_schedule") {
@@ -1329,9 +1375,14 @@ export async function POST(req: Request) {
     if (session.pendingBatch && input) {
       // DECLINE before AFFIRM, as below: "ok, cancel that" must cancel.
       if (DECLINE.test(input)) {
+        // SPENT, not merely cleared — the same reasoning as the yes path, which
+        // is why leaving it out here was the worse hole of the two. The browser
+        // keeps the pre-confirmation body with its signature intact, so without
+        // this a replay of it could queue ten posts AFTER an explicit refusal.
+        claimBatch(session.pendingBatch.jti);
         session.pendingBatch = null;
-        // Same repair as the yes path: the proposal left an unanswered tool_use
-        // in the transcript, and leaving it there 400s every later turn.
+        // The proposal left an unanswered tool_use in the transcript, and
+        // leaving it there 400s every later turn.
         session.toolMessages = closeOpenToolCall(session.toolMessages, "The user declined the batch. Nothing was drafted or queued.");
         return reply({ ...session, mode: "chat", step: "greet" }, "Okay, I have not written any of them. Anything else?");
       }
@@ -1407,6 +1458,7 @@ export async function POST(req: Request) {
       // not yet") cancels instead of scheduling.
       if (DECLINE.test(input)) {
         session.pendingSchedule = null;
+        session.toolMessages = closeOpenToolCall(session.toolMessages, "The user declined. Nothing was scheduled.");
         return reply({ ...session, mode: "chat", step: "greet" }, "Okay, I will not schedule it. Anything else?");
       }
       if (AFFIRM.test(input)) {
@@ -1419,11 +1471,13 @@ export async function POST(req: Request) {
           const res = await doSchedule(userId, p);
           session.links!.push({ label: "View calendar", url: "/calendar" });
           const pretty = p.network.charAt(0).toUpperCase() + p.network.slice(1);
+          session.toolMessages = closeOpenToolCall(session.toolMessages, "Queued in Metricool as a draft for review at " + res.publishAt + ".");
           return reply(
             { ...session, mode: "chat", step: "greet" },
             "Sent to " + pretty + " as a draft for review for " + res.publishAt + " (status: " + res.status + "). Approve it in Metricool to publish. You can also see it on the calendar.",
           );
         } catch (e: any) {
+          session.toolMessages = closeOpenToolCall(session.toolMessages, "Scheduling failed: " + (e?.message || "error") + ". Nothing was posted.");
           return reply(
             { ...session, mode: "chat", step: "greet" },
             "I could not schedule that: " + (e?.message || "error") + ". Nothing was posted.",
@@ -1432,6 +1486,8 @@ export async function POST(req: Request) {
       }
       // Ambiguous reply: keep waiting, and push the expiry out - otherwise the
       // prompt keeps asking after the offer it refers to has already lapsed.
+      // The tool call stays OPEN here on purpose: the offer is still live, and
+      // this branch returns without ever reaching runAgent.
       session.pendingSchedule = { ...session.pendingSchedule, expiresAt: Date.now() + PENDING_TTL_MS };
       return reply(session, "Just to confirm — should I send that post to Metricool for review? Please reply yes or no.", ["Yes, send for review", "No, cancel"]);
     }
