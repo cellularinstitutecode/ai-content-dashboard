@@ -1,7 +1,7 @@
 // Unit tests for the sheet's network checkboxes. Run with: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isPublishedLink, isTicked, tickedNetworks } from './sheet-ticks.ts';
+import { isPublishedLink, isTicked, publishedNetworks, tickedNetworks } from './sheet-ticks.ts';
 
 test('a checked box is a yes, in every shape the sheet writes one', () => {
   for (const v of ['TRUE', 'true', 'x', 'X', '✓', '✔', 'yes', 'si', 'sí', 'done', 'posted']) {
@@ -54,4 +54,17 @@ test('the X column maps to twitter, which is what Metricool calls it', () => {
 
 test('a row with nothing ticked asks for nothing — the caller decides the default', () => {
   assert.deepEqual(tickedNetworks(COLUMNS, () => 'FALSE'), []);
+});
+
+// --- what is already up, so the default cannot re-post it ---------------------
+test('publishedNetworks names the networks a row is already live on', () => {
+  const row: Record<string, string> = { youtube: 'https://youtu.be/abc123', linkedin: 'TRUE' };
+  assert.deepEqual(publishedNetworks(COLUMNS, (c) => row[c] || ''), ['youtube']);
+  assert.deepEqual(tickedNetworks(COLUMNS, (c) => row[c] || ''), ['linkedin']);
+});
+
+test('a tick and a published link are never the same answer', () => {
+  const row: Record<string, string> = { youtube: 'TRUE' };
+  assert.deepEqual(publishedNetworks(COLUMNS, (c) => row[c] || ''), []);
+  assert.deepEqual(tickedNetworks(COLUMNS, (c) => row[c] || ''), ['youtube']);
 });

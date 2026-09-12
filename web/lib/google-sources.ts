@@ -24,7 +24,7 @@ import { randomUUID } from 'crypto';
 
 import { google } from 'googleapis';
 import { reportError } from '@/lib/report';
-import { tickedNetworks } from '@/lib/sheet-ticks';
+import { VIDEO_NETWORK_COLUMNS, publishedNetworks, tickedNetworks } from '@/lib/sheet-ticks';
 import { classifyGoogleError, type GoogleFailure } from './google-error.ts';
 
 export { classifyGoogleError, type GoogleFailure };
@@ -367,6 +367,8 @@ function videoColumns(header: string[]): Partial<Record<VideoField, string>> {
 export type VideoEntry = {
   tab: string;
   row: number;
+  /** Networks whose column holds a published URL — already live, do not re-post. */
+  published: string[];
   headerRow: number;
   columns: Partial<Record<VideoField, string>>;
   creator: string;
@@ -394,7 +396,9 @@ export type VideoEntry = {
 // imports server-only, and "which networks does this row ask for" is the single
 // decision that determines what gets published.
 
-const VIDEO_NETWORKS: [string, string][] = [['youtube', 'youtube'], ['linkedin', 'linkedin'], ['tiktok', 'tiktok'], ['x', 'twitter'], ['facebook', 'facebook'], ['instagram', 'instagram'], ['email', 'email']];
+// One list, in lib/sheet-ticks.ts, so the sweep reads the same seven columns
+// without importing this server-only module.
+const VIDEO_NETWORKS = VIDEO_NETWORK_COLUMNS;
 
 /** The video inventory across every year tab. */
 export async function readVideos(spreadsheetId = SOURCE_IDS.videosSheet()): Promise<{ entries: VideoEntry[]; tabs: string[] }> {
@@ -418,6 +422,9 @@ export async function readVideos(spreadsheetId = SOURCE_IDS.videosSheet()): Prom
       // FALSE column as a network the video ships to — a video the sheet says
       // is YouTube-only was listed as LinkedIn and Email as well.
       const networks = tickedNetworks(VIDEO_NETWORKS as [string, string][], (col) => pick(r, col));
+      // Where this row is already live. Carried separately so the DEFAULT
+      // cannot queue a second upload to a channel the video is already on.
+      const published = publishedNetworks(VIDEO_NETWORKS as [string, string][], (col) => pick(r, col));
       entries.push({
         tab: t.title,
         row,
@@ -432,6 +439,7 @@ export async function readVideos(spreadsheetId = SOURCE_IDS.videosSheet()): Prom
         youtubeLink: (String(pick(r, 'youtube')).match(/https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/\S+/i) || [''])[0],
         format: pick(r, 'formato', 'format'),
         networks,
+        published,
         thumbnailTitle: pick(r, 'título thumbnails', 'titulo thumbnails', 'thumbnail'),
         coverLink: pick(r, 'link portada', 'cover'),
         notes: pick(r, 'observación', 'observacion', 'notes'),

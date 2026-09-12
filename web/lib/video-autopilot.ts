@@ -41,6 +41,7 @@ import { megabytes, routeFor } from '@/lib/media-route';
 import { canWriteCopy } from '@/lib/prepare-budget';
 import { isMissingSchema } from '@/lib/schema-probe';
 import { columnFor, pick, tableFromRows } from '@/lib/sheet-table';
+import { VIDEO_NETWORK_COLUMNS, publishedNetworks } from '@/lib/sheet-ticks';
 import { prepareVideo, type PrepareOk } from '@/lib/video-prepare';
 import { STATUS_TEXT, claimIsStale, firstLinkIn, fitsNetwork, isCandidate, preparedStatus, rowKeyFor } from '@/lib/video-row';
 import { NEEDS_VIDEO, networksFor, nextFreeSlot } from '@/lib/video-slot';
@@ -418,6 +419,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
               title: prepared.title,
               format: pick(rec, 'formato', 'format'),
               sheetYoutube: pick(rec, 'youtube'),
+              published: publishedNetworks(VIDEO_NETWORK_COLUMNS, (col: string) => pick(rec, col)),
             });
 
         // ESTADO IA last, once both the keyword coverage and the hand-off are
@@ -593,6 +595,7 @@ export async function completeRow(opts: {
     title: opts.prepared.title,
     format: pick(found.rec, 'formato', 'format'),
     sheetYoutube: pick(found.rec, 'youtube'),
+    published: publishedNetworks(VIDEO_NETWORK_COLUMNS, (col: string) => pick(found.rec, col)),
     publicationDate: opts.publicationDate,
   });
 
@@ -672,10 +675,12 @@ export async function handOffToMetricool(args: {
   format?: string | null;
   /** The sheet's YOUTUBE cell. Sometimes a link, sometimes the word "Unlisted". */
   sheetYoutube?: string | null;
+  /** Networks this row is already live on, so the default cannot re-post them. */
+  published?: readonly string[];
   /** A slot already reserved for this row by a batch; overrides the local search. */
   publicationDate?: string;
 }): Promise<PublishOutcome[]> {
-  const { userId, prepared, networks, videoLink, title, format, sheetYoutube } = args;
+  const { userId, prepared, networks, videoLink, title, format, sheetYoutube, published = [] } = args;
 
   // Make the copy whenever any network is going out and there is a file.
   //
@@ -684,7 +689,7 @@ export async function handOffToMetricool(args: {
   // link that is not public and most readers cannot open. Every network that
   // can carry the video now does.
   const fileId = parseDriveFileId(videoLink);
-  const wantsVideo = networksFor(networks, true, format).length > 0;
+  const wantsVideo = networksFor(networks, true, format, published).length > 0;
   let mediaUrl: string | null = null;
   let mediaFileId: string | null = null;
   if (wantsVideo && fileId) {
@@ -710,7 +715,7 @@ export async function handOffToMetricool(args: {
     }
   }
 
-  const chosen = networksFor(networks, Boolean(mediaUrl), format);
+  const chosen = networksFor(networks, Boolean(mediaUrl), format, published);
   if (!chosen.length) return [];
 
   const now = new Date();

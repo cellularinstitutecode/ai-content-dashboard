@@ -124,3 +124,30 @@ test('asking for none, or for more than the horizon holds, is not an error', () 
   // treating as a failure.
   assert.ok(reserveSlots(10_000, []).length < 10_000);
 });
+
+// --- a video already on a channel must not be queued for it again ------------
+//
+// The link rule stops a published URL counting as a tick, which leaves the row
+// asking for nothing — and "nothing" means the video default, which includes
+// YouTube. Without subtracting, the duplicate came back through the default.
+test('the default does not re-post a network the row is already live on', () => {
+  assert.deepEqual(
+    networksFor([], true, 'Vertical 9:16', ['youtube']),
+    ['linkedin', 'tiktok'],
+  );
+  assert.deepEqual(
+    networksFor([], true, 'Vertical 9:16', ['youtube', 'tiktok']),
+    ['linkedin'],
+  );
+});
+
+test('an explicit tick still wins over what is already published', () => {
+  // Two cells cannot both be a tick and a link, but a person re-ticking a
+  // column is asking for it on purpose and outranks our guess.
+  assert.deepEqual(networksFor(['youtube'], true, 'Vertical 9:16', ['youtube']), ['youtube']);
+});
+
+test('nothing published leaves the default exactly as it was', () => {
+  assert.deepEqual(networksFor([], true, 'Vertical 9:16'), ['youtube', 'linkedin', 'tiktok']);
+  assert.deepEqual(networksFor([], true, 'Vertical 9:16', []), ['youtube', 'linkedin', 'tiktok']);
+});

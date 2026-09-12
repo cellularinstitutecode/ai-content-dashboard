@@ -121,9 +121,26 @@ export function fitsAspect(network: string, format: string | null | undefined): 
   return !/horizontal|16\s*[:x/]\s*9|landscape|paisaje/i.test(String(format || ''));
 }
 
-export function networksFor(ticked: readonly string[], hasVideoUrl: boolean, format?: string | null): string[] {
+export function networksFor(
+  ticked: readonly string[],
+  hasVideoUrl: boolean,
+  format?: string | null,
+  /**
+   * Networks this row is already live on — a published URL in its column.
+   *
+   * Subtracted from the DEFAULT only, never from an explicit tick. A tick is
+   * somebody asking for this now and outranks our guess about what is already
+   * out there; the default is our guess, and guessing "post it to YouTube" at a
+   * row whose YouTube column holds the live URL is how a second upload of the
+   * same video gets queued.
+   */
+  alreadyPosted: readonly string[] = [],
+): string[] {
   const wanted = (ticked || []).map((n) => String(n || '').toLowerCase()).filter(Boolean);
-  const chosen = wanted.length ? wanted : DEFAULT_VIDEO_NETWORKS;
+  const posted = new Set((alreadyPosted || []).map((n) => String(n || '').toLowerCase()).filter(Boolean));
+  const chosen = wanted.length
+    ? wanted
+    : DEFAULT_VIDEO_NETWORKS.filter((n) => !posted.has(n));
   const out = chosen
     .filter((n) => (NEEDS_VIDEO.has(n) ? hasVideoUrl : true))
     // Only applied when a format was actually supplied, so every existing
