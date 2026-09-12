@@ -17,6 +17,11 @@ import { SOURCE_IDS } from '@/lib/google-sources';
 import { rowKeyFor } from '@/lib/video-row';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
+// The canonical Drive-link parser. A hand-rolled regex lived here instead, with
+// no host check and a looser id pattern — and because the WRITER side keys the
+// public-copy cache by this function, any disagreement between the two showed a
+// video that has a shareable copy as one that does not.
+import { parseDriveFileId } from '@/lib/drive-url';
 
 // Every read below selects '*' rather than a column list. `last_error_code`
 // and `revivals` arrived after the first version of this table, and naming a
@@ -260,7 +265,7 @@ export async function readinessFor(
 ): Promise<Map<string, boolean>> {
   const ids = new Set<string>();
   for (const r of runs) {
-    const id = driveIdOf(r.video_link);
+    const id = parseDriveFileId(String(r.video_link || ''));
     if (id) ids.add(id);
   }
   const out = new Map<string, boolean>();
@@ -281,9 +286,3 @@ export async function readinessFor(
   return out;
 }
 
-/** The Drive file id inside a link, or null. Kept local so this module stays self-contained. */
-function driveIdOf(link: string | null | undefined): string | null {
-  const s = String(link || '');
-  const m = /\/d\/([A-Za-z0-9_-]{10,})/.exec(s) || /[?&]id=([A-Za-z0-9_-]{10,})/.exec(s);
-  return m ? m[1] : null;
-}

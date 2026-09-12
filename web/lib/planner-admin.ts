@@ -21,7 +21,6 @@ import { normalizeStrategy } from '@/lib/autopilot';
 import { cleanTime, cleanWeekdays, isUsableTime } from '@/lib/template-input';
 import { reportError } from '@/lib/report';
 
-const COLUMNS = 'id, name, providers, text, weekdays, time_of_day, active, strategy, updated_at';
 
 export type PlannerTemplate = {
   id: string;
@@ -60,9 +59,14 @@ function shape(row: Record<string, any>): PlannerTemplate {
 
 /** Every template this user owns, newest change first. Throws on a failed read. */
 export async function listTemplates(userId: string): Promise<PlannerTemplate[]> {
+  // '*', not an explicit column list. Naming `strategy` here made this throw on
+  // a database where supabase/autopilot.sql has not been run — so the assistant
+  // reported "the planner could not be read" for a workspace whose templates are
+  // perfectly readable, while /templates showed them fine (it uses '*' and even
+  // special-cases the missing table).
   const { data, error } = await supabaseAdmin()
     .from('schedule_templates')
-    .select(COLUMNS)
+    .select('*')
     .eq('user_id', userId)
     .order('updated_at', { ascending: false });
   // Thrown, not swallowed. "You have no templates" and "I could not read your
@@ -100,6 +104,18 @@ export async function upcomingRuns(userId: string, limit = 12): Promise<
 /**
  * Create a template, or change one this user owns.
  *
+ * MERGES onto the existing row when given an id. It used to build a complete row
+ * from the draft alone and upsert that, which is safe for the /templates page —
+ * it posts the whole template every time — and destructive for the assistant,
+ * which sends only the fields it was asked to change. "Move the Monday post to
+ * 6pm" arrived as { id, time_of_day } and therefore also blanked the template's
+ * text (permanently: the Apply flow then refuses it with template_has_no_text,
+ * and the model cannot put it back because `text` is in neither tool schema),
+ * un-paused it back into daily paid spend, and reset its lead time.
+ *
+ * The read costs nothing extra: the ownership check was already fetching the row
+ * and throwing away everything but the id.
+ *
  * Returns the saved row and any notes worth repeating to the person — a time
  * that was not understood becomes 09:00, and silently moving somebody's 6pm blog
  * to the morning is exactly the kind of thing an assistant should say out loud.
@@ -110,41 +126,62 @@ export async function saveTemplate(
 ): Promise<{ ok: true; template: PlannerTemplate; notes: string[] } | { ok: false; message: string }> {
   const notes: string[] = [];
 
-  const weekdays = cleanWeekdays(draft.weekdays);
-  const time = cleanTime(draft.time_of_day);
+  // --- what is already there -------------------------------------------------
+  let existing: Record<string, any> | null = null;
+  if (draft.id) {
+    // Scoped by user_id, and this doubles as the ownership check: an id from the
+    // caller, upserted on the id, is an INSERT … ON CONFLICT DO UPDATE against
+    // whatever row holds it — somebody else's included. Selecting '*' rather
+    // than the explicit column list so a database that predates a column still
+    // answers (see listTemplates for the same reason).
+    const { data: owned, error: ownerError } = await supabaseAdmin()
+      .from('schedule_templates')
+      .select('*')
+      .eq('id', draft.id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    // Checked, not ignored: supabase-js resolves a failed read, and treating
+    // "I could not tell" as "not yours" is the safe direction.
+    if (ownerError) {
+      reportError('planner-admin:owner-check', ownerError);
+      return { ok: false, message: 'Could not confirm that template belongs to this workspace, so nothing was changed. Try again in a moment.' };
+    }
+    if (!owned) return { ok: false, message: 'There is no template with that id in this workspace.' };
+    existing = owned as Record<string, any>;
+  }
+
+  // --- the fields, each falling back to what is already stored ---------------
+  const keep = <T,>(sent: unknown, current: T, fallback: T): T =>
+    sent !== undefined ? (sent as T) : existing ? (current as T) : fallback;
+
+  const weekdays = draft.weekdays !== undefined
+    ? cleanWeekdays(draft.weekdays)
+    : cleanWeekdays(existing?.weekdays);
+  const time = draft.time_of_day !== undefined
+    ? cleanTime(draft.time_of_day)
+    : existing
+      ? cleanTime(existing.time_of_day)
+      : cleanTime(undefined);
   if (draft.time_of_day !== undefined && !isUsableTime(draft.time_of_day)) {
     notes.push('"' + String(draft.time_of_day) + '" is not a 24-hour HH:MM time, so this is set to 09:00 — say so and offer to correct it.');
   }
 
   const row: Record<string, any> = {
     user_id: userId,
-    name: String(draft.name ?? '').slice(0, 200) || 'Untitled template',
-    providers: Array.isArray(draft.providers) ? draft.providers.map((p) => String(p)) : [],
-    text: String(draft.text ?? ''),
+    name: String(keep(draft.name, existing?.name, '') ?? '').slice(0, 200) || 'Untitled template',
+    providers: Array.isArray(draft.providers)
+      ? draft.providers.map((p) => String(p))
+      : Array.isArray(existing?.providers) ? existing!.providers : [],
+    text: String(keep(draft.text, existing?.text, '') ?? ''),
     weekdays,
     time_of_day: time,
-    active: draft.active === false ? false : true,
+    active: draft.active !== undefined
+      ? draft.active !== false
+      : existing ? existing.active !== false : true,
     updated_at: new Date().toISOString(),
   };
   if (draft.strategy !== undefined) row.strategy = normalizeStrategy(draft.strategy);
-
-  if (draft.id) {
-    // The same belt-and-braces the route carries: an id from the caller,
-    // upserted on the id, is an INSERT … ON CONFLICT DO UPDATE against whatever
-    // row holds it — somebody else's included.
-    const { data: owned, error: ownerError } = await supabaseAdmin()
-      .from('schedule_templates')
-      .select('id')
-      .eq('id', draft.id)
-      .eq('user_id', userId)
-      .maybeSingle();
-    if (ownerError) {
-      reportError('planner-admin:owner-check', ownerError);
-      return { ok: false, message: 'Could not confirm that template belongs to this workspace, so nothing was changed. Try again in a moment.' };
-    }
-    if (!owned) return { ok: false, message: 'There is no template with that id in this workspace.' };
-    row.id = draft.id;
-  }
+  if (draft.id) row.id = draft.id;
 
   if (!weekdays.length) {
     // A template with no weekdays never produces a slot. It saves, it looks
@@ -152,13 +189,22 @@ export async function saveTemplate(
     // is least able to notice.
     notes.push('No weekdays are set, so this template will never fire until some are chosen.');
   }
+  // The other silent dead end: mode 'off' means the Apply flow posts the stored
+  // text verbatim, and there is none.
+  if (!row.text && normalizeStrategy(row.strategy ?? existing?.strategy).mode === 'off') {
+    notes.push('This template is set to static mode but has no text, so Apply will refuse it. Give it text, or give it a strategy.');
+  }
 
-  let { data, error } = await supabaseAdmin().from('schedule_templates').upsert(row).select(COLUMNS).maybeSingle();
+  // .select('*'), not the explicit column list. The retry below drops `strategy`
+  // from the PAYLOAD, and asking for it back in the SELECT made the retry fail
+  // for the identical reason — so the graceful path was unreachable and the
+  // reassuring note could never be shown.
+  let { data, error } = await supabaseAdmin().from('schedule_templates').upsert(row).select('*').maybeSingle();
   // The autopilot migration may not have been run: save without the strategy
   // rather than failing the whole write, exactly as the route does.
   if (error && row.strategy !== undefined && /strategy/i.test(String(error.message || ''))) {
     delete row.strategy;
-    ({ data, error } = await supabaseAdmin().from('schedule_templates').upsert(row).select(COLUMNS).maybeSingle());
+    ({ data, error } = await supabaseAdmin().from('schedule_templates').upsert(row).select('*').maybeSingle());
     if (!error) notes.push('Saved, but WITHOUT its strategy: the database is missing schedule_templates.strategy, so Autopilot cannot pick topics for it. Run supabase/autopilot.sql.');
   }
   if (error) {
@@ -181,7 +227,7 @@ export async function setTemplateActive(
     .update({ active, updated_at: new Date().toISOString() })
     .eq('id', id)
     .eq('user_id', userId)
-    .select(COLUMNS)
+    .select('*')
     .maybeSingle();
   if (error) {
     reportError('planner-admin:set-active', error);

@@ -22,6 +22,7 @@ import { sheetWriteAccess } from '@/lib/google-sources';
 import { driveFolderReport } from '@/lib/drive';
 import { serviceKeyVerdict } from '@/lib/supabase-key';
 import { schemaDetail, type SchemaProbe } from '@/lib/schema-probe';
+import { reportError } from '@/lib/report';
 
 export type Check = {
   name: string;
@@ -351,5 +352,21 @@ export async function cachedHealthReport(): Promise<HealthReport> {
         inFlight = null;
       });
   }
-  return inFlight;
+  // STALE ON ERROR, rather than letting the rejection reach the caller.
+  //
+  // Seven probes run here and not all of them are individually guarded, so one
+  // transient Supabase or Google error rejects the whole round. The assistant's
+  // catch then yields an empty health list, no note is marked blocking, and the
+  // greeting says "Everything in the video pipeline is either done or moving" —
+  // reinstating, through a different door, the exact failure this module was
+  // written to end. A minute-old answer is worth far more than no answer.
+  try {
+    return await inFlight;
+  } catch (e) {
+    if (cached) {
+      reportError('health:probe-failed-serving-stale', e);
+      return cached.report;
+    }
+    throw e;
+  }
 }

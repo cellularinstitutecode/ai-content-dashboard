@@ -82,3 +82,36 @@ test('every check name the map knows still resolves through healthNotes', () => 
   assert.equal(note.down, said.down);
   assert.equal(note.blocksVideos, true);
 });
+
+// --- what may silence the greeting -------------------------------------------
+//
+// greetingFor returns on the FIRST blocking note and says nothing else, so a
+// wrong `true` buys silence about everything behind it.
+
+test('a read-only sheet does not silence "no video can be attached"', () => {
+  // Both failing. sheet_write used to be classified blocking AND sorted ahead of
+  // drive_storage, so the greeting said "the copy cannot be written back into
+  // the Google Sheet — videos are still transcribed" and never mentioned that no
+  // video could reach any network.
+  const notes = healthNotes([
+    { name: 'sheet_write', ok: false, severity: 'required', code: 'read_only' },
+    { name: 'drive_storage', ok: false, severity: 'required', code: 'not_shared_drive' },
+  ]);
+  const firstBlocking = notes.find((n) => n.blocksVideos);
+  assert.ok(firstBlocking, 'something must still be blocking');
+  assert.match(firstBlocking!.down, /Shared Drive/, 'the total block outranks the partial one');
+});
+
+test('a check whose own wording says the pipeline continues is not blocking', () => {
+  for (const name of ['sheet_write', 'drive', 'audio_extractor', 'semrush', 'metricool', 'images']) {
+    const note = healthNotes([{ name, ok: false, severity: 'required' }])[0];
+    assert.equal(note.blocksVideos, false, name + ' must not silence the rest of the greeting');
+  }
+});
+
+test('the checks that really do stop everything are still blocking', () => {
+  for (const name of ['supabase', 'supabase_service_role', 'sweep_owner', 'ai_provider', 'drive_storage']) {
+    const note = healthNotes([{ name, ok: false, severity: 'required' }])[0];
+    assert.equal(note.blocksVideos, true, name + ' means no video gets through at all');
+  }
+});

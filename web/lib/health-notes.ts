@@ -29,16 +29,26 @@ export type CheckLike = {
  * right for "the copy cannot be written anywhere" and wrong for "keyword research
  * is paused". Degraded-but-working belongs in the aside, not the headline.
  *
- * audio_extractor is the close call and is deliberately absent: a video with
- * captions still goes through, so it costs quality, not the pipeline.
+ * Three were here and have been taken out, each for the same reason — their own
+ * plain wording says the pipeline keeps running:
+ *
+ *  - sheet_write: "Videos are still transcribed and the copy is still saved as a
+ *    draft here." It also outranked drive_storage, so a read-only sheet silenced
+ *    the fact that no video could be attached to any post at all.
+ *  - drive: severity `optional`, and "clips stop playing after a few days" is a
+ *    slow degradation. It was usually deduplicated away by drive_storage, which
+ *    hid the misclassification until drive failed on its own.
+ *
+ * audio_extractor stays OUT but is the genuine close call, and the old reasoning
+ * for it was wrong for this clinic: "a video with captions still goes through"
+ * does not hold for private Drive footage, which has none. It is excluded only
+ * because a pasted transcript is still a working route, and the aside names it.
  */
 const BLOCKS_VIDEO = new Set([
   'supabase',
   'supabase_service_role',
   'sweep_owner',
-  'sheet_write',
   'ai_provider',
-  'drive',
   'drive_storage',
 ]);
 
@@ -53,9 +63,7 @@ const PRIORITY = [
   'supabase_service_role',
   'ai_provider',
   'sweep_owner',
-  'sheet_write',
   'drive_storage',
-  'drive',
 ];
 
 /**

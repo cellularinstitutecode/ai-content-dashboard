@@ -17,6 +17,7 @@ import { researchBundle, briefPromptFrom, getUnitsBalance, recordDraftKeywords, 
 import { checkRateLimit } from "@/lib/rate-limit";
 import { isAllowedEmail } from "@/lib/access";
 import { parseVideoUrl } from "@/lib/composer";
+import { parseDriveFileId } from "@/lib/drive-url";
 import { boundToolMessages } from "@/lib/tool-transcript";
 import { normalizePublishAt, METRICOOL_TIMEZONE } from "@/lib/metricool-time";
 import { greetingFor, plainReason, renderSnapshot, situationOf, summarise, type HealthNote } from "@/lib/assistant-context";
@@ -30,8 +31,7 @@ import { loadBrandContext } from "@/lib/brand-context";
 import { missingSchemaCached } from "@/lib/schema-check";
 import { cachedHealthReport } from "@/lib/health-checks";
 import { healthNotes } from "@/lib/health-notes";
-import { sessionKey, signBatch, batchIsAuthentic, BATCH_TTL_MS, type BatchTicket } from "@/lib/assistant-token";
-import { PLAYBOOK } from "@/lib/playbook";
+import { sessionKey, signBatch, batchIsAuthentic, claimBatch, newTicketId, BATCH_TTL_MS, type BatchTicket } from "@/lib/assistant-token";
 import { describeTemplates, listTemplates, saveTemplate, setTemplateActive, upcomingRuns } from "@/lib/planner-admin";
 
 // Compact, chat-friendly rendering of Semrush keyword rows.
@@ -415,7 +415,7 @@ function schemaNotes(missing: SchemaProbe[]): HealthNote[] {
  * hopefully.
  */
 async function liveSituation(userId: string): Promise<{ snapshot: ReturnType<typeof summarise>; prompt: string; brand?: BrandContext }> {
-  const [runsOutcome, schemaHealth, everything, brand] = await Promise.all([
+  const [runsOutcome, report, brand] = await Promise.all([
     // NOT .catch(() => []).
     //
     // listRuns throws on a failed read on purpose, because "nothing to report"
@@ -430,24 +430,24 @@ async function liveSituation(userId: string): Promise<{ snapshot: ReturnType<typ
         return { ok: false as const, rows: [] as Awaited<ReturnType<typeof listRuns>> };
       },
     ),
-    missingSchemaCached()
-      .then(schemaNotes)
-      .catch(() => [] as HealthNote[]),
-    // Every OTHER health check — sixteen of them.
+    // ALL SEVENTEEN health checks, in one read.
     //
-    // This used to be the schema probe alone, which is one check out of
-    // seventeen, and it left the assistant structurally unable to know about
-    // the one that is red most often: with the Drive copies folder unusable it
-    // opened with "Everything in the video pipeline is either done or moving"
-    // while the banner on the same screen said no video could be attached to
-    // any post. Cached for 60s, because this is a Drive call, a Sheets call and
-    // a Semrush balance read, and it must not run per message.
-    cachedHealthReport()
-      .then((r) => healthNotes(r.checks))
-      .catch((e: unknown) => {
-        reportError("assistant:health", e);
-        return [] as HealthNote[];
-      }),
+    // This used to be the schema probe alone, which is one of them, and it left
+    // the assistant structurally unable to know about the one that is red most
+    // often: with the Drive copies folder unusable it opened with "Everything in
+    // the video pipeline is either done or moving" while the banner on the same
+    // screen said no video could be attached to any post. Cached for 60s,
+    // because this is a Drive call, a Sheets call and a Semrush balance read,
+    // and it must not run per message.
+    //
+    // The report carries schemaGaps so the schema probe is read from HERE rather
+    // than called a second time through missingSchemaCached — which is what this
+    // did at first, running the same fourteen queries twice per cold turn
+    // against two independently-expiring caches that could disagree.
+    cachedHealthReport().catch((e: unknown) => {
+      reportError("assistant:health", e);
+      return null;
+    }),
     // Promise.resolve(): the Supabase query builder is a thenable, not a
     // Promise, so it has no .catch of its own. Defaults to "there is one" —
     // an unreadable profile must not make the assistant announce that the
@@ -455,16 +455,22 @@ async function liveSituation(userId: string): Promise<{ snapshot: ReturnType<typ
     loadBrandContext(supabaseAdmin(), userId),
   ]);
 
-  // Schema first: it is the only one that names a file to run.
-  const health = [...schemaHealth, ...everything];
+  // Schema notes first: they are the only ones that name a file to run, and
+  // schemaNotes splits the video half from the Autopilot half, which a flattened
+  // "run the migration" cannot.
+  const health = report
+    ? [...schemaNotes(report.schemaGaps), ...healthNotes(report.checks)]
+    : [];
   const snapshot = summarise(runsOutcome.rows, Date.now(), {
     health,
     hasBrandProfile: Boolean(brand),
     pipelineUnreadable: !runsOutcome.ok,
   });
-  // The playbook first (static, so it prompt-caches byte-identically turn to
-  // turn), then the clinic's own profile, then what is true right now.
-  const prompt = [PLAYBOOK, brandBlock(brand), renderSnapshot(snapshot)].filter(Boolean).join("\n\n");
+  // The playbook is NOT here. It is static, so chatWithTools sends it as its own
+  // cached system block; concatenating it into this one — which changes every
+  // single turn by design — is what made ~2,000 tokens of it uncacheable and
+  // re-sent on each of up to four tool-loop iterations per message.
+  const prompt = [brandBlock(brand), renderSnapshot(snapshot)].filter(Boolean).join("\n\n");
   return { snapshot, prompt, brand };
 }
 
@@ -623,38 +629,122 @@ async function retryVideos(
  * request, and "I did six, here are the four I did not reach" is a true answer
  * a person can act on. Silence is not.
  */
+/**
+ * Close the open tool call the batch proposal left behind.
+ *
+ * Proposing a batch returns straight to the user, so the stored transcript ends
+ * with an assistant tool_use and no tool_result. Anthropic requires the pair, so
+ * the next ordinary message is a 400 — and since the transcript is only rewritten
+ * on a successful turn, the 400 repeats for the life of the session.
+ *
+ * Answering the call with what actually happened fixes the protocol error and
+ * tells the model which items are already in Metricool, so "carry on" does not
+ * re-draft them.
+ */
+function closeOpenToolCall(messages: ToolMessage[] | undefined, result: string): ToolMessage[] {
+  const tm = Array.isArray(messages) ? [...messages] : [];
+  for (let i = tm.length - 1; i >= 0; i--) {
+    const m = tm[i];
+    if (m.role !== "assistant" || !Array.isArray(m.content)) continue;
+    const use = (m.content as any[]).find((b) => b && b.type === "tool_use" && b.id);
+    if (!use) break;
+    // Already answered? Then there is nothing open and nothing to repair.
+    const next = tm[i + 1];
+    const answered =
+      next && next.role === "user" && Array.isArray(next.content) &&
+      (next.content as any[]).some((b) => b && b.type === "tool_result" && b.tool_use_id === use.id);
+    if (answered) break;
+    tm.splice(i + 1, 0, {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: use.id, content: result }],
+    });
+    break;
+  }
+  return tm;
+}
+
 async function runBatch(
   userId: string,
   ticket: BatchTicket,
   deadlineAt: number,
   brand?: BrandContext,
-): Promise<{ message: string; queued: number }> {
+): Promise<{ message: string; queued: number; note: string }> {
   const outcomes: BatchOutcome[] = [];
+
+  // What one item needs end to end: the writing, then the tail that follows it —
+  // two brand_profiles reads, a drafts insert, normalizeMedia (60s of its own),
+  // the Metricool POST and a posts insert.
+  //
+  // NOT canWriteCopy, which is what this used to gate on. That threshold is
+  // 150s, sized in lib/prepare-budget.ts for download + extract + transcribe +
+  // write, and asking for it before a TEXT generation meant item 2 could only
+  // start if item 1 finished in under 95 seconds. A batch of ten did two, and
+  // MAX_BATCH was unreachable by a factor of five.
+  const ITEM_TAIL_MS = 75_000;
+  const ITEM_WRITE_MS = 45_000;
 
   for (const item of ticket.items) {
     const msLeft = deadlineAt - Date.now();
-    // The same reservation prepareVideo and retryVideos use: starting a write
-    // there is not time to finish produces a killed request, which tells the
-    // user nothing at all — the one outcome worth avoiding above all others.
-    if (!canWriteCopy(msLeft)) {
+    const skip = (problem: string): void => {
       outcomes.push({
         topic: item.topic,
         network: item.network,
         publishAt: item.publishAt,
         state: "not_started",
-        problem: "There was not enough time left in this request.",
+        problem,
       });
+    };
+
+    if (msLeft < ITEM_WRITE_MS + ITEM_TAIL_MS) {
+      // Starting work there is not time to finish produces a killed request,
+      // which tells the user nothing at all — the one outcome worth avoiding
+      // above all others.
+      skip("There was not enough time left in this request.");
       continue;
     }
-    outcomes.push(
-      await draftAndQueue(
-        userId,
-        { topic: item.topic, network: item.network, publishAt: item.publishAt, format: item.format as any, mediaUrl: item.mediaUrl },
-        brand,
-        // Leave the reservation for composing the answer.
-        { budgetMs: Math.max(msLeft - 20_000, 15_000) },
-      ),
-    );
+
+    // Per ITEM, not per batch. The only cap on this path was the one
+    // checkRateLimit('assistant') at the top of the request, so ten generations
+    // and ten Metricool writes counted as a single event — the same mistake the
+    // opus-clip branch 200 lines above was fixed for, in this same function,
+    // with the same reasoning. 'generate' and 'schedule' are the buckets the
+    // equivalent single operations use.
+    const genRl = await checkRateLimit(userId, "generate");
+    if (!genRl.ok) {
+      skip("The hourly limit on writing was reached, so this one was not started. It is still on the list.");
+      continue;
+    }
+    const schedRl = await checkRateLimit(userId, "schedule");
+    if (!schedRl.ok) {
+      skip("The hourly limit on scheduling was reached, so this one was not started. It is still on the list.");
+      continue;
+    }
+
+    // draftAndQueue documents itself as never throwing, and its own body honours
+    // that — but complianceGate and supabaseAdmin() sit outside its try, so an
+    // unexpected throw here would unwind runBatch and lose the report for items
+    // ALREADY IN METRICOOL. The user would be told nothing about posts that exist.
+    try {
+      outcomes.push(
+        await draftAndQueue(
+          userId,
+          { topic: item.topic, network: item.network, publishAt: item.publishAt, format: item.format as any, mediaUrl: item.mediaUrl },
+          brand,
+          // Bounded per item as well as by what is left: one blog post must not
+          // eat the budget for the other nine.
+          { budgetMs: Math.min(msLeft - ITEM_TAIL_MS, 90_000) },
+        ),
+      );
+    } catch (e) {
+      reportError("assistant:batch-item", e, { topic: item.topic });
+      outcomes.push({
+        topic: item.topic,
+        network: item.network,
+        publishAt: item.publishAt,
+        state: "failed",
+        problem: "This one stopped with an unexpected error and was not queued.",
+      });
+    }
   }
 
   const queued = outcomes.filter((o) => o.state === "queued");
@@ -681,12 +771,26 @@ async function runBatch(
   }
   if (later.length) {
     lines.push(
-      "\u2026 " + later.length + " I did not reach before this request ran out of time: " +
+      "\u2026 " + later.length + " I did not reach: " +
       later.map((o) => o.topic).join(", ") + ". Say \"carry on\" and I will do those.",
     );
   }
 
-  return { message: lines.join("\n"), queued: queued.length };
+  // What the MODEL is told, as distinct from what the person reads.
+  //
+  // Without this the model had no record of the batch's outcome at all — the
+  // draft_batch branch returns before pushing a tool_result — so "carry on"
+  // sent it back to the only list it could see, the original one, and it
+  // re-drafted the items already sitting in Metricool. The local drafts feed
+  // could then produce a third copy, because nothing there was marked as queued
+  // either.
+  const done = queued.map((o) => o.topic);
+  const note = done.length
+    ? "\n\nALREADY IN METRICOOL, do not draft these again: " + done.join("; ") +
+      (later.length ? ". Still to do: " + later.map((o) => o.topic).join("; ") + "." : ".")
+    : "";
+
+  return { message: lines.join("\n"), queued: queued.length, note };
 }
 
 async function runAgent(session: Session, input: string, userId: string | null, snapshot: string, deadlineAt: number, brand?: BrandContext) {
@@ -930,8 +1034,10 @@ async function runAgent(session: Session, input: string, userId: string | null, 
         })).slice(0, 20);
         const detail = listed.map((r) => {
           const sit = situationOf(r, Date.now());
-          const driveId = /\/d\/([A-Za-z0-9_-]{10,})/.exec(String(r.video_link || ""))?.[1]
-            ?? /[?&]id=([A-Za-z0-9_-]{10,})/.exec(String(r.video_link || ""))?.[1];
+          // The same parser the readiness map is keyed by. A second hand-rolled
+          // regex here could disagree with it and report "no shareable copy" for
+          // a video that has one.
+          const driveId = parseDriveFileId(String(r.video_link || ""));
           const media = !driveId
             ? ""
             : ready.get(driveId)
@@ -974,22 +1080,58 @@ async function runAgent(session: Session, input: string, userId: string | null, 
         toolResult = "Cannot change the planner: user is not signed in.";
       } else {
         const rl = await checkRateLimit(userId, "templates");
+        const editId = String(call.input.id || "").trim();
         if (!rl.ok) {
           toolResult = "Too many template changes just now. Wait a moment before making more.";
+        } else if (call.name === "update_schedule" && !editId) {
+          // Refused loudly rather than falling through. An empty id skips
+          // saveTemplate's `if (draft.id)` ownership branch entirely and runs
+          // the INSERT path, so a dropped id turned "change my Monday blog" into
+          // a phantom second template called "Untitled template" — reported as
+          // "Saved." with the user's real template untouched.
+          toolResult = "update_schedule needs the template id. Call list_schedule and use the id in brackets.";
         } else {
+          // Only the pillars actually sent decide the mode. `[]` is truthy, so
+          // testing the array itself turned an empty list into mode 'pillars'
+          // with nothing in it — and pickSeedTopic then falls all the way
+          // through to a hardcoded 'stem cell therapy' for every occurrence.
+          const pillars = Array.isArray(call.input.pillars)
+            ? call.input.pillars.map((p: unknown) => String(p || "").trim()).filter(Boolean)
+            : [];
+          const topic = String(call.input.topic || "").trim();
+          // No mode named and nothing to write about is 'off' — normalizeStrategy's
+          // own default, and deliberately inert. It used to default to 'auto',
+          // which is the most expensive mode there is (two extra Semrush calls
+          // per occurrence) and the one the tool schema never describes.
+          const mode = call.input.mode
+            ? String(call.input.mode)
+            : pillars.length ? "pillars" : topic ? "fixed_topic" : "off";
+          // Did this call say anything at all about strategy? If not, send none
+          // and let saveTemplate keep what is stored. Passing a freshly-built
+          // object unconditionally is how "rename my pillars template" would
+          // have flattened it to mode 'off' with no pillars — the merge above
+          // can only protect a field the caller leaves undefined.
+          const saysStrategy =
+            call.input.mode !== undefined || call.input.topic !== undefined ||
+            call.input.pillars !== undefined || call.input.goal !== undefined ||
+            call.input.format !== undefined;
           const out = await saveTemplate(userId, {
-            id: call.name === "update_schedule" ? String(call.input.id || "") : undefined,
+            id: call.name === "update_schedule" ? editId : undefined,
+            // undefined, not the raw value: saveTemplate merges onto the stored
+            // row, and only a field the model actually sent should overwrite one.
             name: call.input.name,
             providers: call.input.providers,
             weekdays: call.input.weekdays,
             time_of_day: call.input.time_of_day,
-            strategy: {
-              mode: call.input.mode ?? (call.input.pillars ? "pillars" : call.input.topic ? "fixed_topic" : "auto"),
-              topic: call.input.topic,
-              pillars: call.input.pillars,
-              goal: call.input.goal,
-              format: call.input.format,
-            },
+            strategy: saysStrategy || call.name === "create_schedule"
+              ? {
+                  mode,
+                  topic: topic || undefined,
+                  pillars,
+                  goal: call.input.goal,
+                  format: call.input.format,
+                }
+              : undefined,
           });
           toolResult = out.ok
             ? "Saved. " + describeTemplates([out.template]) + (out.notes.length ? "\n\nWorth telling the user: " + out.notes.join(" ") : "")
@@ -997,8 +1139,14 @@ async function runAgent(session: Session, input: string, userId: string | null, 
         }
       }
     } else if (call.name === "pause_schedule") {
+      // Capped like its siblings. Resuming a template is not a read: it
+      // re-enrols it in daily AI and Semrush spend, which is the same class of
+      // action create_schedule performs.
+      const pauseRl = userId ? await checkRateLimit(userId, "templates") : null;
       if (!userId) {
         toolResult = "Cannot change the planner: user is not signed in.";
+      } else if (pauseRl && !pauseRl.ok) {
+        toolResult = "Too many template changes just now. Wait a moment before making more.";
       } else {
         const out = await setTemplateActive(userId, String(call.input.id || ""), call.input.active === true);
         toolResult = out.ok
@@ -1020,7 +1168,7 @@ async function runAgent(session: Session, input: string, userId: string | null, 
           "Batch drafting is unavailable on this deployment: there is no signing key, so a confirmation cannot be trusted. " +
           "Ask whoever set this up to set ASSISTANT_SESSION_SECRET.";
       } else {
-        const ticket: BatchTicket = { userId, items, expiresAt: Date.now() + BATCH_TTL_MS };
+        const ticket: BatchTicket = { userId, items, expiresAt: Date.now() + BATCH_TTL_MS, jti: newTicketId() };
         session.pendingBatch = ticket;
         session.toolMessages = tm;
         const lines = items.map(
@@ -1182,21 +1330,57 @@ export async function POST(req: Request) {
       // DECLINE before AFFIRM, as below: "ok, cancel that" must cancel.
       if (DECLINE.test(input)) {
         session.pendingBatch = null;
+        // Same repair as the yes path: the proposal left an unanswered tool_use
+        // in the transcript, and leaving it there 400s every later turn.
+        session.toolMessages = closeOpenToolCall(session.toolMessages, "The user declined the batch. Nothing was drafted or queued.");
         return reply({ ...session, mode: "chat", step: "greet" }, "Okay, I have not written any of them. Anything else?");
       }
       if (AFFIRM.test(input)) {
         const ticket = session.pendingBatch;
-        // Cleared BEFORE the work, not after. A batch that times out mid-way
-        // and comes back to a session still holding the ticket is a batch that
-        // a second "yes" would run again from the top, duplicating whatever the
-        // first pass already queued.
+        // Cleared BEFORE the work, not after.
         session.pendingBatch = null;
+        // And SPENT before the work, which is the half that actually protects
+        // anything. Clearing the field only edits the copy in this response —
+        // the browser still holds the pre-confirmation body with a valid
+        // signature, so re-posting it with "yes" ran the batch again, as many
+        // times as anyone liked inside the 15-minute window. Claiming the
+        // ticket's id makes it single-use.
+        if (!claimBatch(ticket.jti)) {
+          return reply(
+            { ...session, mode: "chat", step: "greet" },
+            "I have already drafted that batch — I am not writing it a second time. Ask me for a new one if you want more, or check Metricool for the drafts from the first run.",
+          );
+        }
         const out = await runBatch(userId, ticket, deadlineAt, live.brand);
         session.links = session.links || [];
         if (out.queued) session.links.push({ label: "Open Metricool", url: "/calendar" });
+        session.toolMessages = closeOpenToolCall(session.toolMessages, out.message + out.note);
         return reply({ ...session, mode: "chat", step: "greet" }, out.message);
       }
-      // Anything else: leave the offer standing and let the model answer.
+      // Ambiguous reply: block, re-ask, and push the expiry out — exactly what
+      // the single-post gate below does, and what this one used to get wrong by
+      // falling through to the model instead.
+      //
+      // Two things went wrong with falling through, and the unit of consent here
+      // is TEN posts, so both mattered more than they would there:
+      //
+      //  1. The conversation continued with the offer still standing, so a later
+      //     "ok, that works" about something else matched AFFIRM and queued the
+      //     whole batch.
+      //  2. Proposing a batch stores a transcript ending in an assistant
+      //     tool_use with no tool_result. Sending that on with a plain user
+      //     message is a 400 from Anthropic, runAgent throws, the fallback
+      //     answers without tools, and session.toolMessages is never repaired —
+      //     so every later tool call 400s too. lib/tool-transcript.ts names this
+      //     exact outcome: "degrade into a plain chatbot ... only a page reload
+      //     would recover it."
+      session.pendingBatch = { ...session.pendingBatch, expiresAt: Date.now() + BATCH_TTL_MS };
+      return reply(
+        session,
+        'Just to confirm — should I draft those ' + session.pendingBatch.items.length +
+          ' and put them in Metricool as drafts for you to approve? Please reply yes or no.',
+        ['Yes, draft them all', 'No, cancel'],
+      );
     }
 
     // If a schedule is awaiting confirmation, handle yes/no first.
