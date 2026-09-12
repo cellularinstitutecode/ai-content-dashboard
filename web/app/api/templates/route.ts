@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { normalizeStrategy } from '@/lib/autopilot';
+import { cleanTime, cleanWeekdays } from '@/lib/template-input';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { reportError } from '@/lib/report';
@@ -28,21 +29,6 @@ type TemplateInput = {
   // Autopilot: how the engine should treat each occurrence of this template.
   strategy?: unknown;
 };
-
-function cleanWeekdays(x: any): number[] {
-  if (!Array.isArray(x)) return [];
-  const seen = new Set<number>();
-  for (const v of x) {
-    const n = Number(v);
-    if (Number.isInteger(n) && n >= 0 && n <= 6) seen.add(n);
-  }
-  return Array.from(seen).sort((a, b) => a - b);
-}
-
-function cleanTime(x: any): string {
-  const s = (x ?? '').toString();
-  return /^([01]\d|2[0-3]):[0-5]\d$/.test(s) ? s : '09:00';
-}
 
 // GET /api/templates — list the user's templates.
 export async function GET() {

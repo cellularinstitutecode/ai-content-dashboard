@@ -111,7 +111,7 @@ test('routes that reach the shared org accounts require the tenant allowlist', (
     // the two that APPROVE a post into the live queue and DELETE one. So
     // /api/posts — the single most consequential route in the app — slipped
     // through the net built to catch exactly this, and went un-gated.
-    { name: 'the org-wide Metricool account', re: /METRICOOL_USER_TOKEN|metricoolSchedulePost|metricoolReplacePost|metricoolDeletePost|fetchPostMetrics|doSchedule|approveRun/ },
+    { name: 'the org-wide Metricool account', re: /METRICOOL_USER_TOKEN|metricoolSchedulePost|metricoolReplacePost|metricoolDeletePost|fetchPostMetrics|doSchedule|approveRun|draftAndQueue/ },
     { name: 'the shared Semrush unit pot', re: /SEMRUSH_API_KEY|researchBundle|domainBundle|getUnitsBalance|researchKeywords/ },
     { name: 'the shared AI budget', re: /generateContentPack|chatWithTools|chatAssistant|researchTopic|generatePackImage/ },
     { name: 'the paid OpusClip account', re: /opusCreateClipProject/ },
@@ -155,6 +155,45 @@ test('the Metricool handoff always asks for a draft, never a live post', () => {
   assert.match(route!.source, /autoPublish:\s*false/, 'must send autoPublish: false');
   assert.match(route!.source, /draft:\s*true/, 'must send draft: true');
   assert.doesNotMatch(route!.source, /draft:\s*!/, 'draft must be a constant, not derived');
+});
+
+// The route test above reads app/api only. draftAndQueue puts posts into the
+// clinic's Metricool queue from lib/, so the invariant has to follow it there —
+// otherwise the one code path that creates posts in BULK is the one path not
+// covered by the check that keeps posts out of the live queue.
+test('the batch drafter queues drafts and cannot be argued into publishing', () => {
+  const src = readFileSync(join(WEB_ROOT, 'lib', 'batch-draft.ts'), 'utf8');
+  assert.match(src, /autoPublish:\s*false/, 'must send autoPublish: false');
+  assert.match(src, /draft:\s*true/, 'must send draft: true');
+  // Constants, not expressions: no ternary, no variable, nothing an input can
+  // reach. This is the assertion that would have caught autoPublish being a
+  // request parameter on the schedule route.
+  // Negative lookahead, not a negated class: `\s*` matches zero characters, so
+  // /draft:\s*[^t]/ matches the space in "draft: true" and the check passes for
+  // the wrong reason on every input. Worth the note — a security assertion that
+  // cannot fail is worse than no assertion, because it reads as coverage.
+  assert.doesNotMatch(src, /draft:(?!\s*true\b)/, 'draft must be the literal true');
+  assert.doesNotMatch(src, /autoPublish:(?!\s*false\b)/, 'autoPublish must be the literal false');
+  assert.doesNotMatch(
+    src,
+    /(?:item|input|body|opts|payload)\s*(?:\.|\[['"])\s*(?:autoPublish|draft)\b/,
+    'neither flag may be read from the caller',
+  );
+  // And the compliance door is on this path, not merely nearby.
+  assert.match(src, /complianceGate\s*\(/, 'every batch item must go through the advertising gate');
+});
+
+test('a batch cannot be run without a signature the server issued', () => {
+  const route = ROUTES.find((r) => r.path === 'app/api/assistant/route.ts');
+  assert.ok(route, 'expected the assistant route to exist');
+  // The session round-trips through the browser. A pendingBatch that is acted
+  // on without verification is a forged list of posts plus the word "yes".
+  assert.match(route!.source, /batchIsAuthentic\s*\(/, 'pendingBatch must be verified before it runs');
+  assert.match(route!.source, /signBatch\s*\(/, 'pendingBatch must be signed on the way out');
+  // Cleared before the work, so a timed-out batch cannot be re-run from the top
+  // by a second "yes" and duplicate whatever the first pass already queued.
+  const confirm = route!.source.slice(route!.source.indexOf('session.pendingBatch = null;\n        const out = await runBatch'));
+  assert.ok(confirm.startsWith('session.pendingBatch = null;'), 'the ticket must be cleared before runBatch, not after');
 });
 
 test('every route that spends money on a third party is rate limited', () => {

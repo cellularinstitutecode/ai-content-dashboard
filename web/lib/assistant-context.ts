@@ -82,6 +82,24 @@ export type Snapshot = {
   hasBrandProfile: boolean;
   /** True when nothing has ever been swept — a different message from "all clear". */
   everRun: boolean;
+  /**
+   * The pipeline list could not be READ this turn.
+   *
+   * Not the same as "there is nothing in it", and the difference is the whole
+   * reason listRuns throws instead of returning []. The assistant used to
+   * swallow that throw with .catch(() => []), so a database outage produced a
+   * confident "everything is done or moving" — saying "nothing to report" is
+   * exactly how a broken read looks like good news.
+   */
+  pipelineUnreadable?: boolean;
+  /**
+   * Rows that have permanently stopped and will never move without a person.
+   *
+   * Derived here rather than taken from the revive pass's own needsHuman count,
+   * which is a per-run number that is persisted nowhere. This one is a property
+   * of the rows themselves, so it is true whenever it is asked.
+   */
+  needsHuman?: number;
 };
 
 /** Named rows in the prompt. Beyond a handful this is a token bill, not context. */
@@ -142,7 +160,12 @@ const EMPTY_COUNTS = (): Record<Situation, number> =>
 export function summarise(
   rows: RunRow[],
   now: number,
-  extra: { recovery?: { revived: number; released: number } | null; health?: HealthNote[]; hasBrandProfile?: boolean } = {},
+  extra: {
+    recovery?: { revived: number; released: number } | null;
+    health?: HealthNote[];
+    hasBrandProfile?: boolean;
+    pipelineUnreadable?: boolean;
+  } = {},
 ): Snapshot {
   const counts = EMPTY_COUNTS();
   const problems: ProblemRow[] = [];
@@ -171,6 +194,8 @@ export function summarise(
     health: extra.health || [],
     hasBrandProfile: extra.hasBrandProfile !== false,
     everRun: rows.length > 0,
+    pipelineUnreadable: extra.pipelineUnreadable === true,
+    needsHuman: counts.needs_you + counts.blocked,
   };
 }
 
@@ -190,7 +215,16 @@ export function renderSnapshot(s: Snapshot): string {
   const lines: string[] = [];
   lines.push('LIVE SITUATION (as of this message — do not repeat it verbatim, use it to answer):');
 
-  if (!s.everRun) {
+  if (s.pipelineUnreadable) {
+    // Said FIRST and said plainly. An assistant that cannot read the pipeline
+    // must not answer questions about it from the counts below, which in this
+    // state are all zero for a reason that has nothing to do with the videos.
+    lines.push(
+      '- The video pipeline could not be READ this turn (a database error, not an empty queue). ' +
+      'Do not say anything about how many videos are done, queued or stuck: you do not know. ' +
+      'Say the list could not be read and offer to look again.',
+    );
+  } else if (!s.everRun) {
     lines.push('- No video has been through the pipeline yet on this account.');
   } else {
     const c = s.counts;
@@ -235,6 +269,19 @@ export function renderSnapshot(s: Snapshot): string {
  */
 export function greetingFor(s: Snapshot): { message: string; chips: string[] } {
   const chips: string[] = [];
+
+  // Could not read the list at all. This has to come before the health notes
+  // and before the counts: every branch below reads counts that are zero
+  // because the query failed, and "everything is done or moving" is the single
+  // most misleading sentence this function can produce.
+  if (s.pipelineUnreadable) {
+    return {
+      message:
+        'I could not read the video pipeline just now — that is a database error, not an empty queue, so I genuinely do not know what state the videos are in. ' +
+        'Ask me again in a moment and I will look properly. Everything else I can help with meanwhile.',
+      chips: ['Try again'],
+    };
+  }
 
   // Something the videos DEPEND ON is down. Say that before offering anything
   // that cannot work.

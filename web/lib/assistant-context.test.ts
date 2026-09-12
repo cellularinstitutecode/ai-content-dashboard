@@ -151,3 +151,61 @@ test('overnight recovery is reported only when something actually moved', () => 
   const busy = summarise([{ state: 'prepared' }], NOW, { recovery: { revived: 2, released: 1 } });
   assert.match(renderSnapshot(busy), /Since the last pass: 2 retried/);
 });
+
+// --- the two states the assistant used to get wrong --------------------------
+
+test('a pipeline that could not be READ is never reported as one that is fine', () => {
+  // The bug this exists for: listRuns throws deliberately on a failed read, the
+  // assistant caught it with .catch(() => []), and every count came back zero —
+  // so the greeting said "everything is done or moving" during a database
+  // outage. Saying "nothing to report" is how a broken read looks like good news.
+  const s = summarise([], Date.now(), { pipelineUnreadable: true });
+  const greeting = greetingFor(s);
+  assert.doesNotMatch(greeting.message, /done or moving/i);
+  assert.match(greeting.message, /could not read/i);
+  assert.match(greeting.message, /not an empty queue/i);
+  // And the prompt block must stop the model answering from the zeroes.
+  const rendered = renderSnapshot(s);
+  assert.match(rendered, /could not be READ/);
+  assert.match(rendered, /do not know/i);
+});
+
+test('an empty pipeline still reads as empty, not as an outage', () => {
+  const greeting = greetingFor(summarise([], Date.now()));
+  assert.match(greeting.message, /Nothing has been through/i);
+});
+
+test('a health check that blocks video takes over the greeting', () => {
+  // The headline finding: with the Drive copies folder unusable the assistant
+  // opened with "Everything in the video pipeline is either done or moving"
+  // while the banner on the same screen said no video could be attached.
+  const s = summarise([{ state: 'prepared', video_title: 'A', updated_at: new Date().toISOString() }], Date.now(), {
+    health: [{ down: 'Videos cannot be attached to posts: the copies folder is not in a Shared Drive.', stillWorks: 'Captions are still written into the sheet.', blocksVideos: true }],
+  });
+  const greeting = greetingFor(s);
+  assert.match(greeting.message, /Shared Drive/);
+  assert.doesNotMatch(greeting.message, /done or moving/i);
+  // The half that stops it reading as a total outage.
+  assert.match(greeting.message, /Captions are still written/);
+});
+
+test('something degraded elsewhere stays a footnote, not the headline', () => {
+  const s = summarise([{ state: 'prepared', video_title: 'A', updated_at: new Date().toISOString() }], Date.now(), {
+    health: [{ down: 'Keyword research is paused.', stillWorks: 'Drafts are still written.', blocksVideos: false }],
+  });
+  const greeting = greetingFor(s);
+  assert.match(greeting.message, /done or moving/i, 'the videos really are fine');
+  assert.match(greeting.message, /Separately: Keyword research is paused/);
+});
+
+test('needsHuman counts the rows only a person can move', () => {
+  const now = Date.now();
+  const s = summarise(
+    [
+      { state: 'needs_transcript', last_error_code: 'no_transcript', updated_at: new Date(now).toISOString() },
+      { state: 'prepared', updated_at: new Date(now).toISOString() },
+    ],
+    now,
+  );
+  assert.equal(s.needsHuman, s.counts.needs_you + s.counts.blocked);
+});

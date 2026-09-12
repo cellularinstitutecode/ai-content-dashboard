@@ -553,7 +553,20 @@ export async function chatAssistant(
 // server (assistant route) can run it with the authed user + confirmation gate.
 // ---------------------------------------------------------------------------
 
-export type ToolName = "generate_content" | "save_draft" | "schedule_post" | "clip_video" | "research_topic" | "keyword_lookup" | "pipeline_status" | "retry_video";
+export type ToolName =
+  | "generate_content"
+  | "save_draft"
+  | "schedule_post"
+  | "clip_video"
+  | "research_topic"
+  | "keyword_lookup"
+  | "pipeline_status"
+  | "retry_video"
+  | "list_schedule"
+  | "create_schedule"
+  | "update_schedule"
+  | "pause_schedule"
+  | "draft_batch";
 
 export type ToolCall = {
   name: ToolName;
@@ -576,16 +589,25 @@ Tool guidance:
 - schedule_post: schedule a post to a social network at a date/time via the connected scheduler. Networks: facebook, instagram, linkedin, twitter (x), tiktok, youtube, threads. publishAt must be an ISO datetime (YYYY-MM-DDTHH:MM). The server will ask the user to confirm before anything goes live, so it is fine to call this when the user asks; do not refuse.
 - clip_video: turn a long YouTube or Vimeo video into short vertical clips via OpusClip. Use when the user gives a video URL and asks for clips/shorts/reels. Requires a videoUrl; title and language are optional.
 - research_topic: run topic research (angles, keywords, hashtags, hooks, and a ready draft) for a network. Use when the user asks to research a topic or wants ideas/angles/keywords before drafting. Requires a topic; network is optional (default instagram).
-- pipeline_status: list the clinic's videos and what state each is in — done, queued, stuck, or waiting on a person. Call it whenever the user asks what happened to a video, what needs them, or what is stuck. The LIVE SITUATION block already gives you the headline; use this for detail or when the user asks about a specific video.
+- pipeline_status: list the clinic's videos and what state each is in — done, queued, stuck, or waiting on a person, and for each whether it has a shareable copy (so it CAN carry its video) and whether a Metricool draft already exists for it. Call it whenever the user asks what happened to a video, what needs them, what is stuck, or whether something is ready to send. The LIVE SITUATION block already gives you the headline; use this for detail or when the user asks about a specific video.
 - retry_video: re-run a video that stopped. Use it for anything the situation block marks [retry_video can fix this]. It clears the row's attempt count — which is the only way a video that has already been retired gets another chance — then re-transcribes and rewrites the copy and puts it back in the Google Sheet.
+- list_schedule: show the planner — every schedule template, when each fires, what subject it draws from, and how many slots are planned ahead. Call this BEFORE answering any question about the planner or the posting schedule, and before creating a template, so you are describing what exists rather than what you assume.
+- create_schedule / update_schedule: build or change a template. One template produces at most one post per weekday at its own time_of_day, so SEVERAL POSTS A DAY MEANS SEVERAL TEMPLATES — same weekdays, different time_of_day, each with its own strategy.pillars or strategy.topic. When the user asks for more than one blog a day, explain that shape AND offer to create the templates; if they say yes, create them, one call each.
+- pause_schedule: turn a template off without deleting it, keeping its history.
+- draft_batch: write a whole set of posts and queue every one as a Metricool DRAFT for the user to approve. Propose the list first — topics, networks, dates — and call this only once the user has agreed to the BATCH. Each item is researched, written in the clinic's voice, checked against the advertising rules, saved to drafts, and queued as a draft. Nothing publishes.
 - keyword_lookup: fetch REAL Semrush search data for a topic — monthly volume, keyword difficulty (KD), CPC, searcher intent, and the questions people actually ask. Call this BEFORE recommending topics, angles, or keywords, and whenever the user asks what to write about or how content might perform.
 
 Semrush grounding rules: recommendations about WHAT to write must be grounded in keyword_lookup or research_topic data, not guesses. Prefer high-volume, lower-difficulty (KD under ~60) terms; say the numbers out loud (e.g. "1,900 searches/mo, KD 26") so the user can judge; when data is unavailable, say so plainly rather than inventing metrics.
 
 What you may do without asking, and what you may not:
 - You MAY retry, re-prepare and rewrite a video, and write the caption into the Google Sheet, as many times as needed. Do it, then say what happened. Do not ask permission first.
-- You may NEVER queue anything to Metricool on your own. retry_video deliberately does not, and it will tell you so. When the user wants the drafts queued, say that the "Send to Metricool" button on that row does it — approving what gets posted is theirs, and it stays theirs.
+- You MAY create, change and pause schedule templates when the user asks for a schedule. Do it rather than describing how they could.
+- You MAY queue Metricool DRAFTS with draft_batch — but ask once for the BATCH first. Show the list you intend to write (topics, networks, dates), get a yes, then run it. Never queue a batch nobody asked for, and never expand one you were given.
+- You may NEVER publish anything, or ask for anything to be published. There is no autoPublish here and no route that sets it: everything stops as a draft in Metricool and a person presses Approve. Say so plainly when someone asks you to "post" something.
+- A draft refused by the advertising check is REPORTED, never quietly reworded and queued anyway. Say which rule it failed. Never invent an AVISO number or a REF citation to get past the check.
+- retry_video deliberately queues nothing at all, and will tell you so; that is separate from draft_batch and is not a rule you can route around by calling the other one.
 - Never claim a video was fixed unless the tool result says so. A tool that reports "still needs a transcript" means a person has to paste one; say that plainly instead of offering to try again.
+- When the LIVE SITUATION says the pipeline could not be read, you do not know how many videos are done, queued or stuck. Say that, and do not answer from the counts.
 
 Keep replies concise and friendly. Only reference the clinic own website and YouTube content. Never invent medical claims; keep language compliant and non-exaggerated. If a scheduling request is missing the network or the date/time, ask a brief clarifying question instead of calling schedule_post.`;
 
@@ -676,6 +698,86 @@ const TOOL_DEFS = [
         network: { type: "string", enum: ["instagram", "facebook", "linkedin", "x", "blog"], description: "Target network. Default instagram." },
       },
       required: ["topic"],
+    },
+  },
+  {
+    name: "list_schedule",
+    description: "Show the planner: every schedule template (when it fires, what subject it draws from, whether it is active) and how many slots are planned ahead. Call before answering anything about the posting schedule, and before creating a template.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "create_schedule",
+    description: "Create one schedule template. A template fires at most once per weekday, at its time_of_day — so three blogs a day means calling this three times with three different times.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "A short name a person will recognise, e.g. 'Morning blog — joints'." },
+        weekdays: { type: "array", items: { type: "number" }, description: "0=Sunday .. 6=Saturday." },
+        time_of_day: { type: "string", description: "24-hour HH:MM, clinic-local (America/Cancun). Anything else falls back to 09:00." },
+        providers: { type: "array", items: { type: "string" }, description: "Networks this template posts to." },
+        format: { type: "string", enum: ["social", "blog", "email", "video", "ad"], description: "What each occurrence produces. Use 'blog' for blog posts." },
+        mode: { type: "string", enum: ["off", "fixed_topic", "pillars", "auto"], description: "'pillars' rotates through a subject list; 'fixed_topic' always writes the same subject; 'off' is a static template Autopilot ignores." },
+        topic: { type: "string", description: "The subject, when mode is fixed_topic." },
+        pillars: { type: "array", items: { type: "string" }, description: "The subjects to rotate through, when mode is pillars. Max 12." },
+        goal: { type: "string", enum: ["rank", "traffic", "engagement", "authority"], description: "What each occurrence is optimised for. Default rank." },
+      },
+      required: ["name", "weekdays", "time_of_day"],
+    },
+  },
+  {
+    name: "update_schedule",
+    description: "Change an existing schedule template. Give the id from list_schedule. Fields you do not send are reset to their defaults, so send the whole template as you want it to end up.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The template id from list_schedule." },
+        name: { type: "string" },
+        weekdays: { type: "array", items: { type: "number" } },
+        time_of_day: { type: "string" },
+        providers: { type: "array", items: { type: "string" } },
+        format: { type: "string", enum: ["social", "blog", "email", "video", "ad"] },
+        mode: { type: "string", enum: ["off", "fixed_topic", "pillars", "auto"] },
+        topic: { type: "string" },
+        pillars: { type: "array", items: { type: "string" } },
+        goal: { type: "string", enum: ["rank", "traffic", "engagement", "authority"] },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "pause_schedule",
+    description: "Turn a schedule template off (or back on) without deleting it, so its history survives.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The template id from list_schedule." },
+        active: { type: "boolean", description: "false to pause, true to resume. Default false." },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "draft_batch",
+    description: "Write a whole set of posts and queue each as a Metricool DRAFT awaiting the user's approval. Propose the list in words first and call this only after the user agrees to the batch. Nothing publishes.",
+    input_schema: {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          description: "The posts to write. At most 10 per batch.",
+          items: {
+            type: "object",
+            properties: {
+              topic: { type: "string", description: "What this post is about." },
+              network: { type: "string", enum: ["facebook", "instagram", "linkedin", "twitter", "x", "tiktok", "youtube", "threads"] },
+              publishAt: { type: "string", description: "ISO datetime YYYY-MM-DDTHH:MM in the clinic timezone. Must be in the future." },
+              format: { type: "string", enum: ["social", "blog", "email", "video", "ad"] },
+            },
+            required: ["topic", "network", "publishAt"],
+          },
+        },
+      },
+      required: ["items"],
     },
   },
   {

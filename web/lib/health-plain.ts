@@ -89,5 +89,16 @@ export function plainFor(name: string, code?: string | null): PlainSaid {
   if (name === 'images' && code === 'bad_key') {
     return { down: 'AI images are not being generated — OpenAI rejected the key on the last attempt.', stillWorks: 'Posts still write and schedule as text.' };
   }
+  // The general form of the two cases above: a "name:code" entry in the map wins
+  // over the bare name.
+  //
+  // This was missing, and the two drive_storage:* entries below had therefore
+  // never once been read — the banner showed the generic "the shareable copy
+  // cannot be made" for a folder that is simply not in a Shared Drive, which is
+  // the one failure where the specific wording is the whole fix.
+  if (code) {
+    const narrowed = PLAIN[name + ':' + code];
+    if (narrowed) return narrowed;
+  }
   return PLAIN[name] ?? { down: name.replace(/_/g, ' ') + ' is not available.' };
 }

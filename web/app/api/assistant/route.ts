@@ -20,13 +20,19 @@ import { parseVideoUrl } from "@/lib/composer";
 import { boundToolMessages } from "@/lib/tool-transcript";
 import { normalizePublishAt, METRICOOL_TIMEZONE } from "@/lib/metricool-time";
 import { greetingFor, plainReason, renderSnapshot, situationOf, summarise, type HealthNote } from "@/lib/assistant-context";
-import { listRuns, rearmRun, recordRunFailure } from "@/lib/video-runs";
+import { listRuns, readinessFor, rearmRun, recordRunFailure } from "@/lib/video-runs";
 import { prepareVideo } from "@/lib/video-prepare";
 import { completeRow } from "@/lib/video-autopilot";
 import { canWriteCopy } from "@/lib/prepare-budget";
+import { draftAndQueue, type BatchOutcome } from "@/lib/batch-draft";
 import { schemaDetail, type SchemaProbe } from "@/lib/schema-probe";
 import { loadBrandContext } from "@/lib/brand-context";
 import { missingSchemaCached } from "@/lib/schema-check";
+import { cachedHealthReport } from "@/lib/health-checks";
+import { healthNotes } from "@/lib/health-notes";
+import { sessionKey, signBatch, batchIsAuthentic, BATCH_TTL_MS, type BatchTicket } from "@/lib/assistant-token";
+import { PLAYBOOK } from "@/lib/playbook";
+import { describeTemplates, listTemplates, saveTemplate, setTemplateActive, upcomingRuns } from "@/lib/planner-admin";
 
 // Compact, chat-friendly rendering of Semrush keyword rows.
 function fmtKw(k: SemKeyword): string {
@@ -95,6 +101,18 @@ type Session = {
   lastPack?: Record<string, any>;
   lastTopic?: string;
   pendingSchedule?: PendingSchedule | null;
+  /**
+   * A whole batch of posts the assistant has proposed and is waiting on.
+   *
+   * The clinic's rule used to be "never queue anything to Metricool on your
+   * own". It is now "ask once per BATCH" — so the unit of consent is this
+   * object, and it is signed for the same reason pendingSchedule is: the
+   * session round-trips through the browser, and a forged batch plus "yes"
+   * must not put eight posts into a medical clinic's queue.
+   */
+  pendingBatch?: BatchTicket | null;
+  /** Server-issued HMAC over pendingBatch. */
+  _bsig?: string | null;
   // Server-issued HMAC over pendingSchedule. The whole session round-trips
   // through the client, so anything action-bearing must be tamper-evident:
   // a forged/edited pendingSchedule + "yes" must not schedule anything.
@@ -149,38 +167,9 @@ const SCHEDULE_NETWORK_MAP: Record<string, string> = {
 // One implementation now, in lib/metricool-time.ts, unit-tested.
 const TIMEZONE = METRICOOL_TIMEZONE;
 
-// Key material for signing the client-round-tripped session.
-//
-// Prefer a dedicated secret. The chain below keeps existing deployments working,
-// but borrowing SUPABASE_SERVICE_ROLE_KEY as application signing material couples
-// the most privileged credential in the system to an unrelated purpose - rotating
-// one then forces the other, and the key ends up in more code paths than it needs
-// to be in. Set ASSISTANT_SESSION_SECRET (openssl rand -hex 32) to break that tie.
-let warnedAboutBorrowedKey = false;
-function sessionKey(): string {
-  const dedicated = process.env.ASSISTANT_SESSION_SECRET || process.env.CRON_SECRET;
-  if (dedicated) return dedicated;
-  const borrowed = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-  if (!warnedAboutBorrowedKey) {
-    warnedAboutBorrowedKey = true;
-    if (borrowed) {
-      console.error(
-        "assistant: signing sessions with SUPABASE_SERVICE_ROLE_KEY because neither " +
-        "ASSISTANT_SESSION_SECRET nor CRON_SECRET is set. Set ASSISTANT_SESSION_SECRET.",
-      );
-    } else {
-      // With no key at all, every session fails verification and resets. The
-      // assistant still answers, but statelessly: guided mode cannot advance and
-      // "yes" never confirms anything. That is safe, and invisible - so say it.
-      console.error(
-        "assistant: NO signing key configured (ASSISTANT_SESSION_SECRET / CRON_SECRET / " +
-        "SUPABASE_SERVICE_ROLE_KEY all unset). Session state cannot survive a round-trip: " +
-        "guided mode and yes/no confirmation will not work until one is set.",
-      );
-    }
-  }
-  return borrowed;
-}
+// The signing key now lives in lib/assistant-token.ts: the batch route has to
+// verify tickets this route issued, and a second copy of the fallback chain is
+// how the two halves of one feature end up signing with different keys.
 const PENDING_TTL_MS = 15 * 60 * 1000;
 
 function signPending(p: PendingSchedule | null | undefined): string | null {
@@ -251,9 +240,40 @@ function sessionIsAuthentic(session: Session): boolean {
 function reply(session: Session, message: string, options?: string[]) {
   // Stamp (or clear) the signature so only server-created pending actions survive the round-trip.
   session._sig = signPending(session.pendingSchedule);
+  session._bsig = session.pendingBatch ? signBatch(session.pendingBatch) : null;
   // Stamp the whole-session signature LAST, so it covers every mutation above.
   session._ssig = signSession(session);
   return NextResponse.json({ session, message, options: options || null });
+}
+
+/**
+ * The batch items worth acting on, from whatever the model produced.
+ *
+ * Capped at ten. Not a guess: each item is a full generation plus two Metricool
+ * calls, and a model told "draft everything for the quarter" would otherwise
+ * start forty and finish six, having spent the credit for all forty.
+ */
+const MAX_BATCH = 10;
+function normaliseBatch(raw: unknown): BatchTicket["items"] {
+  if (!Array.isArray(raw)) return [];
+  const out: BatchTicket["items"] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const i = item as Record<string, unknown>;
+    const topic = String(i.topic ?? "").trim();
+    const network = String(i.network ?? "").trim().toLowerCase();
+    const publishAt = String(i.publishAt ?? "").trim();
+    if (!topic || !network || !publishAt) continue;
+    out.push({
+      topic: topic.slice(0, 300),
+      network,
+      publishAt,
+      ...(i.format ? { format: String(i.format) } : {}),
+      ...(i.mediaUrl ? { mediaUrl: String(i.mediaUrl) } : {}),
+    });
+    if (out.length >= MAX_BATCH) break;
+  }
+  return out;
 }
 
 function parseChannels(text: string): string[] {
@@ -395,11 +415,39 @@ function schemaNotes(missing: SchemaProbe[]): HealthNote[] {
  * hopefully.
  */
 async function liveSituation(userId: string): Promise<{ snapshot: ReturnType<typeof summarise>; prompt: string; brand?: BrandContext }> {
-  const [runs, health, brand] = await Promise.all([
-    listRuns(userId, 80).catch(() => []),
+  const [runsOutcome, schemaHealth, everything, brand] = await Promise.all([
+    // NOT .catch(() => []).
+    //
+    // listRuns throws on a failed read on purpose, because "nothing to report"
+    // is exactly how a broken read looks like good news: the counts all come
+    // back zero and the greeting says everything is done or moving. The throw
+    // is caught into a FLAG so the assistant can say it does not know, which is
+    // the true answer and the only useful one.
+    listRuns(userId, 80).then(
+      (rows) => ({ ok: true as const, rows }),
+      (e: unknown) => {
+        reportError("assistant:list-runs", e);
+        return { ok: false as const, rows: [] as Awaited<ReturnType<typeof listRuns>> };
+      },
+    ),
     missingSchemaCached()
       .then(schemaNotes)
       .catch(() => [] as HealthNote[]),
+    // Every OTHER health check — sixteen of them.
+    //
+    // This used to be the schema probe alone, which is one check out of
+    // seventeen, and it left the assistant structurally unable to know about
+    // the one that is red most often: with the Drive copies folder unusable it
+    // opened with "Everything in the video pipeline is either done or moving"
+    // while the banner on the same screen said no video could be attached to
+    // any post. Cached for 60s, because this is a Drive call, a Sheets call and
+    // a Semrush balance read, and it must not run per message.
+    cachedHealthReport()
+      .then((r) => healthNotes(r.checks))
+      .catch((e: unknown) => {
+        reportError("assistant:health", e);
+        return [] as HealthNote[];
+      }),
     // Promise.resolve(): the Supabase query builder is a thenable, not a
     // Promise, so it has no .catch of its own. Defaults to "there is one" —
     // an unreadable profile must not make the assistant announce that the
@@ -407,8 +455,44 @@ async function liveSituation(userId: string): Promise<{ snapshot: ReturnType<typ
     loadBrandContext(supabaseAdmin(), userId),
   ]);
 
-  const snapshot = summarise(runs, Date.now(), { health, hasBrandProfile: Boolean(brand) });
-  return { snapshot, prompt: renderSnapshot(snapshot), brand };
+  // Schema first: it is the only one that names a file to run.
+  const health = [...schemaHealth, ...everything];
+  const snapshot = summarise(runsOutcome.rows, Date.now(), {
+    health,
+    hasBrandProfile: Boolean(brand),
+    pipelineUnreadable: !runsOutcome.ok,
+  });
+  // The playbook first (static, so it prompt-caches byte-identically turn to
+  // turn), then the clinic's own profile, then what is true right now.
+  const prompt = [PLAYBOOK, brandBlock(brand), renderSnapshot(snapshot)].filter(Boolean).join("\n\n");
+  return { snapshot, prompt, brand };
+}
+
+/**
+ * The clinic, in the assistant's own words, from the Brand Brain row.
+ *
+ * The profile was loaded and then thrown away — only `Boolean(brand)` reached
+ * the prompt — so the assistant knew a Brand Brain EXISTED and not one thing it
+ * said. It wrote in a default voice for a clinic whose whole position is the
+ * careful one, and it could not quote the advertising notice it is required to
+ * put on every Spanish post.
+ */
+function brandBlock(brand?: BrandContext): string {
+  if (!brand) return "";
+  const bits: string[] = [];
+  const add = (label: string, v: unknown) => {
+    const t = typeof v === "string" ? v.trim() : Array.isArray(v) ? v.join(", ") : "";
+    if (t) bits.push("- " + label + ": " + t.slice(0, 600));
+  };
+  add("Name", brand.name);
+  add("Mission", brand.mission);
+  add("Voice", brand.voice);
+  add("Audience", brand.audience);
+  add("Priority keywords", brand.keywords);
+  add("House rules", brand.guidelines);
+  // Quoted exactly. An AVISO that is paraphrased is not an AVISO.
+  add("AVISO DE PUBLICIDAD permit (use VERBATIM, never invent or translate)", brand.aviso_publicidad);
+  return bits.length ? "CLINIC PROFILE (the saved Brand Brain \u2014 authoritative over anything you assume):\n" + bits.join("\n") : "";
 }
 
 /**
@@ -523,6 +607,86 @@ async function retryVideos(
     (skipped > 0 ? "\n(" + skipped + " more still stuck — say the word and I will do the next two.)" : "") +
     "\nNothing was sent to Metricool; use the Send button on the row when you want the drafts queued."
   );
+}
+
+/**
+ * Write the whole batch and queue each one as a Metricool draft.
+ *
+ * Sequential on purpose. Eight concurrent generations would finish sooner and
+ * would also spend eight lots of AI credit before the first failure was visible,
+ * inside a request that can be killed at any moment — and a killed parallel run
+ * leaves an unknowable number of drafts in the clinic's queue. One at a time,
+ * each one accounted for.
+ *
+ * Everything that did not happen is reported as not having happened. The clock
+ * is the common case here, not an edge one: ten blog posts do not fit in one
+ * request, and "I did six, here are the four I did not reach" is a true answer
+ * a person can act on. Silence is not.
+ */
+async function runBatch(
+  userId: string,
+  ticket: BatchTicket,
+  deadlineAt: number,
+  brand?: BrandContext,
+): Promise<{ message: string; queued: number }> {
+  const outcomes: BatchOutcome[] = [];
+
+  for (const item of ticket.items) {
+    const msLeft = deadlineAt - Date.now();
+    // The same reservation prepareVideo and retryVideos use: starting a write
+    // there is not time to finish produces a killed request, which tells the
+    // user nothing at all — the one outcome worth avoiding above all others.
+    if (!canWriteCopy(msLeft)) {
+      outcomes.push({
+        topic: item.topic,
+        network: item.network,
+        publishAt: item.publishAt,
+        state: "not_started",
+        problem: "There was not enough time left in this request.",
+      });
+      continue;
+    }
+    outcomes.push(
+      await draftAndQueue(
+        userId,
+        { topic: item.topic, network: item.network, publishAt: item.publishAt, format: item.format as any, mediaUrl: item.mediaUrl },
+        brand,
+        // Leave the reservation for composing the answer.
+        { budgetMs: Math.max(msLeft - 20_000, 15_000) },
+      ),
+    );
+  }
+
+  const queued = outcomes.filter((o) => o.state === "queued");
+  const refused = outcomes.filter((o) => o.state === "refused");
+  const failed = outcomes.filter((o) => o.state === "failed");
+  const later = outcomes.filter((o) => o.state === "not_started");
+
+  const lines: string[] = [];
+  lines.push(
+    queued.length
+      ? queued.length + " of " + outcomes.length + " are in Metricool as drafts, waiting for your Approve. Nothing has been published."
+      : "Nothing was queued.",
+  );
+  for (const o of queued) {
+    lines.push("\u2713 " + o.topic + " — " + o.network + ", " + o.publishAt + (o.untracked ? " (in Metricool, but this dashboard could not record it — it will not show on your calendar here)" : ""));
+  }
+  // Refusals get their own heading. A compliance failure is not a technical
+  // failure and needs a different thing done about it.
+  for (const o of refused) {
+    lines.push("\u2717 " + o.topic + " — NOT queued, it failed the advertising check: " + (o.problem || "reason not recorded"));
+  }
+  for (const o of failed) {
+    lines.push("\u2717 " + o.topic + " — not queued: " + (o.problem || "reason not recorded"));
+  }
+  if (later.length) {
+    lines.push(
+      "\u2026 " + later.length + " I did not reach before this request ran out of time: " +
+      later.map((o) => o.topic).join(", ") + ". Say \"carry on\" and I will do those.",
+    );
+  }
+
+  return { message: lines.join("\n"), queued: queued.length };
 }
 
 async function runAgent(session: Session, input: string, userId: string | null, snapshot: string, deadlineAt: number, brand?: BrandContext) {
@@ -748,6 +912,10 @@ async function runAgent(session: Session, input: string, userId: string | null, 
     } else if (call.name === "pipeline_status") {
       try {
         const rows = await listRuns(userId!, 80);
+        // Whether each row can actually CARRY its video. "The caption was
+        // written" was all this tool ever knew, so "is it ready to send?" was
+        // answered from the wrong evidence.
+        const ready = await readinessFor(rows);
         const snap = summarise(rows, Date.now());
         const filter = String(call.input.filter || "stuck");
         const c = snap.counts;
@@ -762,9 +930,20 @@ async function runAgent(session: Session, input: string, userId: string | null, 
         })).slice(0, 20);
         const detail = listed.map((r) => {
           const sit = situationOf(r, Date.now());
+          const driveId = /\/d\/([A-Za-z0-9_-]{10,})/.exec(String(r.video_link || ""))?.[1]
+            ?? /[?&]id=([A-Za-z0-9_-]{10,})/.exec(String(r.video_link || ""))?.[1];
+          const media = !driveId
+            ? ""
+            : ready.get(driveId)
+              ? "; video attachable"
+              : "; NO shareable copy yet — a post from this row would go out with no video";
+          // video_runs.metricool records what actually reached the queue.
+          const queued = r.metricool && typeof r.metricool === "object" && Object.keys(r.metricool as object).length
+            ? "; already queued to Metricool"
+            : "";
           return "- [" + r.id + "] \"" + (r.video_title || "Untitled") + "\"" +
             (r.row_number ? " (row " + r.row_number + ")" : "") +
-            " — " + sit + ": " + plainReason(r, sit);
+            " — " + sit + ": " + plainReason(r, sit) + media + queued;
         }).join("\n");
         toolResult = head + (detail ? "\n" + detail : "\nNothing matching that filter.");
       } catch (e: any) {
@@ -775,6 +954,86 @@ async function runAgent(session: Session, input: string, userId: string | null, 
         toolResult = await retryVideos(userId!, call.input, deadlineAt);
       } catch (e: any) {
         toolResult = "The retry could not be run: " + (e?.message || "unknown error");
+      }
+    } else if (call.name === "list_schedule") {
+      if (!userId) {
+        toolResult = "Cannot read the planner: user is not signed in.";
+      } else {
+        try {
+          const [templates, runs] = await Promise.all([listTemplates(userId), upcomingRuns(userId)]);
+          toolResult = describeTemplates(templates, runs);
+        } catch (e: any) {
+          // Thrown by listTemplates on a failed read, on purpose: "you have no
+          // templates" would invite the assistant to offer to create the three
+          // that already exist.
+          toolResult = "The planner could not be read: " + (e?.message || "unknown error") + " Do not guess what is scheduled.";
+        }
+      }
+    } else if (call.name === "create_schedule" || call.name === "update_schedule") {
+      if (!userId) {
+        toolResult = "Cannot change the planner: user is not signed in.";
+      } else {
+        const rl = await checkRateLimit(userId, "templates");
+        if (!rl.ok) {
+          toolResult = "Too many template changes just now. Wait a moment before making more.";
+        } else {
+          const out = await saveTemplate(userId, {
+            id: call.name === "update_schedule" ? String(call.input.id || "") : undefined,
+            name: call.input.name,
+            providers: call.input.providers,
+            weekdays: call.input.weekdays,
+            time_of_day: call.input.time_of_day,
+            strategy: {
+              mode: call.input.mode ?? (call.input.pillars ? "pillars" : call.input.topic ? "fixed_topic" : "auto"),
+              topic: call.input.topic,
+              pillars: call.input.pillars,
+              goal: call.input.goal,
+              format: call.input.format,
+            },
+          });
+          toolResult = out.ok
+            ? "Saved. " + describeTemplates([out.template]) + (out.notes.length ? "\n\nWorth telling the user: " + out.notes.join(" ") : "")
+            : out.message;
+        }
+      }
+    } else if (call.name === "pause_schedule") {
+      if (!userId) {
+        toolResult = "Cannot change the planner: user is not signed in.";
+      } else {
+        const out = await setTemplateActive(userId, String(call.input.id || ""), call.input.active === true);
+        toolResult = out.ok
+          ? (out.template.active ? "Resumed: " : "Paused: ") + describeTemplates([out.template])
+          : out.message;
+      }
+    } else if (call.name === "draft_batch") {
+      // THE CONFIRMATION GATE, and it is the same one schedule_post uses: the
+      // server signs what it intends to do, hands it back through the client,
+      // and only runs it when the person says yes. The difference is the unit —
+      // one batch, not one post — which is the rule the clinic changed.
+      const items = normaliseBatch(call.input.items);
+      if (!userId) {
+        toolResult = "Cannot draft a batch: user is not signed in.";
+      } else if (!items.length) {
+        toolResult = "No usable items in that batch. Each one needs a topic, a network and a future date and time.";
+      } else if (!sessionKey()) {
+        toolResult =
+          "Batch drafting is unavailable on this deployment: there is no signing key, so a confirmation cannot be trusted. " +
+          "Ask whoever set this up to set ASSISTANT_SESSION_SECRET.";
+      } else {
+        const ticket: BatchTicket = { userId, items, expiresAt: Date.now() + BATCH_TTL_MS };
+        session.pendingBatch = ticket;
+        session.toolMessages = tm;
+        const lines = items.map(
+          (i, n) => (n + 1) + ". " + i.topic + " — " + i.network + ", " + i.publishAt,
+        );
+        return {
+          message:
+            (turn.message ? turn.message + "\n\n" : "") +
+            "I will write these " + items.length + " and put each one in Metricool as a DRAFT for you to approve. Nothing publishes:\n\n" +
+            lines.join("\n") +
+            "\n\nShall I draft the batch? (yes / no)",
+          options: ["Yes, draft them all", "No, cancel"],
+        };
       }
     } else {
       toolResult = "Unknown tool.";
@@ -901,6 +1160,43 @@ export async function POST(req: Request) {
     if (!input && session.step === "greet" && !session.mode) {
       const greeting = greetingFor(live.snapshot);
       return reply(session, greeting.message, greeting.chips);
+    }
+
+    // A BATCH awaiting confirmation, handled before the single-post one: the
+    // two are mutually exclusive in practice, and a stale pendingSchedule left
+    // in a session must not swallow a "yes" meant for the batch.
+    if (session.pendingBatch && !batchIsAuthentic(session.pendingBatch, String(session._bsig || ""), userId)) {
+      const expired =
+        session.pendingBatch.userId === userId &&
+        typeof session.pendingBatch.expiresAt === "number" &&
+        Date.now() > session.pendingBatch.expiresAt;
+      session.pendingBatch = null;
+      if (expired && input) {
+        return reply(
+          { ...session, mode: "chat", step: "greet" },
+          "That batch offer expired, so I did not write anything. Tell me the list again and I will redo it.",
+        );
+      }
+    }
+    if (session.pendingBatch && input) {
+      // DECLINE before AFFIRM, as below: "ok, cancel that" must cancel.
+      if (DECLINE.test(input)) {
+        session.pendingBatch = null;
+        return reply({ ...session, mode: "chat", step: "greet" }, "Okay, I have not written any of them. Anything else?");
+      }
+      if (AFFIRM.test(input)) {
+        const ticket = session.pendingBatch;
+        // Cleared BEFORE the work, not after. A batch that times out mid-way
+        // and comes back to a session still holding the ticket is a batch that
+        // a second "yes" would run again from the top, duplicating whatever the
+        // first pass already queued.
+        session.pendingBatch = null;
+        const out = await runBatch(userId, ticket, deadlineAt, live.brand);
+        session.links = session.links || [];
+        if (out.queued) session.links.push({ label: "Open Metricool", url: "/calendar" });
+        return reply({ ...session, mode: "chat", step: "greet" }, out.message);
+      }
+      // Anything else: leave the offer standing and let the model answer.
     }
 
     // If a schedule is awaiting confirmation, handle yes/no first.

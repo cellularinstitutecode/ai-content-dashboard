@@ -46,6 +46,7 @@ import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance
 import { metricoolSchedulePost, readPostId, type Provider as McProvider } from '@/lib/metricool';
 import { ensureDraftImage, type PackImage } from '@/lib/images';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
+import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -115,14 +116,14 @@ export type RunRow = {
 };
 
 const ACTIVE_STATES = ['planned', 'researched', 'drafted'] as const;
-// Two, not three. The cron fires once a day and `advanceRuns` takes at most one
-// attempt per run per tick, inside an eligibility window that is only ever a
-// couple of ticks wide - so with a limit of 3 a broken run could never reach
-// `failed`, never showed up under "Needs attention", and simply went quiet.
-const MAX_ATTEMPTS = 2;
-const SCORE_THRESHOLD = 70;
-const ANTI_REPEAT_DAYS = 30;
-const HORIZON_DAYS = 10;
+// MAX_ATTEMPTS is two, not three. The cron fires once a day and `advanceRuns`
+// takes at most one attempt per run per tick, inside an eligibility window that
+// is only ever a couple of ticks wide - so with a limit of 3 a broken run could
+// never reach `failed`, never showed up under "Needs attention", and simply went
+// quiet.
+//
+// These four moved to lib/planner-constants.ts so the assistant's playbook can
+// interpolate them rather than restate them from memory and drift.
 
 function num(v: unknown): number | null {
   const n = typeof v === 'string' ? parseFloat(v) : (v as number);
