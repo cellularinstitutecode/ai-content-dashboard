@@ -111,6 +111,18 @@ export const REQUIRED_SCHEMA: SchemaProbe[] = [
     breaks: 'reusing a video\u2019s public copy — every run would make another one, and none could be removed',
   },
   {
+    // The column the video PICKER actually filters on (lib/media-library.ts).
+    // public_copy_id above and this one are added by the same ALTER TABLE, but
+    // only that one was probed — so a database missing both reported a green
+    // schema while the "Attach a video" picker came back empty every time, with
+    // nothing anywhere connecting the two.
+    table: 'video_transcripts',
+    column: 'public_copy_url',
+    kind: 'column',
+    file: 'supabase/video-autopilot.sql',
+    breaks: 'attaching any video to any post — the picker lists the videos that have a shareable copy by reading this column, so it is always empty',
+  },
+  {
     table: 'posts',
     column: 'media_drive_file_id',
     kind: 'column',

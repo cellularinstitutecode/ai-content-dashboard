@@ -48,6 +48,14 @@ export type VideoRun = {
   transcript_source: string | null;
   keywords: string | null;
   ref: string | null;
+  /**
+   * What actually reached Metricool for this row, keyed by network.
+   *
+   * Declared here at last: the column has existed since video-autopilot.sql and
+   * the schema probe checks for it, but the type did not mention it, so the one
+   * record of "has this already been queued?" was invisible to every caller.
+   */
+  metricool?: Record<string, unknown> | null;
   updated_at: string | null;
 };
 
@@ -232,4 +240,50 @@ export async function recordRowFailure(opts: {
   delete fallback.last_error_code;
   const { error: retry } = await admin.from('video_runs').upsert(fallback, { onConflict: 'spreadsheet_id,tab,row_key' });
   if (retry) reportError('video-runs:record-row-failure', retry, { tab: opts.tab, row: String(opts.row) });
+}
+
+/**
+ * Can these videos actually GO anywhere yet, and has anything been queued?
+ *
+ * Two facts the assistant could never see. "The caption was written" was the
+ * whole of what it knew, so "is this one ready to send?" — the question people
+ * actually ask — got a confident answer built from the wrong evidence: a row can
+ * be perfectly prepared and still be unable to carry its video, because the
+ * world-readable Drive copy is what a network fetches and the clinic's own file
+ * is private.
+ *
+ * Never throws. A readiness lookup that fails should cost the detail, not the
+ * pipeline listing it decorates.
+ */
+export async function readinessFor(
+  runs: readonly { video_link?: string | null; metricool?: unknown }[],
+): Promise<Map<string, boolean>> {
+  const ids = new Set<string>();
+  for (const r of runs) {
+    const id = driveIdOf(r.video_link);
+    if (id) ids.add(id);
+  }
+  const out = new Map<string, boolean>();
+  if (!ids.size) return out;
+
+  const r = await supabaseAdmin()
+    .from('video_transcripts')
+    .select('video_id, public_copy_url')
+    .in('video_id', [...ids])
+    .then((x) => x, (e: unknown) => ({ data: null, error: e as { message?: string } }));
+  if (r.error) {
+    reportError('video-runs:readiness', r.error);
+    return out;
+  }
+  for (const row of (r.data || []) as { video_id?: string; public_copy_url?: string | null }[]) {
+    if (row.video_id) out.set(String(row.video_id), Boolean(String(row.public_copy_url || '').trim()));
+  }
+  return out;
+}
+
+/** The Drive file id inside a link, or null. Kept local so this module stays self-contained. */
+function driveIdOf(link: string | null | undefined): string | null {
+  const s = String(link || '');
+  const m = /\/d\/([A-Za-z0-9_-]{10,})/.exec(s) || /[?&]id=([A-Za-z0-9_-]{10,})/.exec(s);
+  return m ? m[1] : null;
 }
