@@ -15,6 +15,23 @@
 // Pure, because lib/google-sources.ts imports server-only and cannot be
 // unit-tested, and this rule decides what gets published.
 
+/**
+ * The sheet's network columns, and what each is called everywhere else.
+ *
+ * Lives here rather than in lib/google-sources.ts so the sweep can read the
+ * same seven columns without importing a server-only module. Note X → twitter:
+ * the sheet uses the new name, Metricool's API still uses the old one.
+ */
+export const VIDEO_NETWORK_COLUMNS: [string, string][] = [
+  ['youtube', 'youtube'],
+  ['linkedin', 'linkedin'],
+  ['tiktok', 'tiktok'],
+  ['x', 'twitter'],
+  ['facebook', 'facebook'],
+  ['instagram', 'instagram'],
+  ['email', 'email'],
+];
+
 /** What counts as "yes" in a hand-kept column: ticks, x, TRUE — never FALSE. */
 const YES = /^(x|✓|✔|yes|si|sí|true|posted|done)$/i;
 
@@ -41,4 +58,20 @@ export function tickedNetworks(
   read: (column: string) => string,
 ): string[] {
   return columns.filter(([col]) => isTicked(read(col))).map(([, network]) => network);
+}
+
+/**
+ * The networks a row has ALREADY been published to.
+ *
+ * The mirror of tickedNetworks, and the reason it has to exist separately: a
+ * row with a YouTube URL in its YOUTUBE column and nothing else ticked asks for
+ * nothing, which sends the caller to its default — and the default for a video
+ * includes YouTube. Without this, "already on YouTube" produced a fresh YouTube
+ * draft by the back door, which is the duplicate the link rule exists to stop.
+ */
+export function publishedNetworks(
+  columns: readonly [string, string][],
+  read: (column: string) => string,
+): string[] {
+  return columns.filter(([col]) => isPublishedLink(read(col))).map(([, network]) => network);
 }
