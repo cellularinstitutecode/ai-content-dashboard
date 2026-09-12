@@ -19,10 +19,35 @@ import { plainFor } from '@/lib/health-plain';
  */
 
 type Check = { name: string; ok: boolean; severity: 'required' | 'optional'; detail?: string; code?: string };
+type TestStep = { step: string; ok: boolean; detail: string };
 
 
 export default function SystemStatus() {
   const [checks, setChecks] = useState<Check[] | null>(null);
+  // The Drive round-trip, run on demand. Create → share → fetch as a stranger →
+  // delete: four separate permissions that fail at four different moments, and
+  // only the last is visible to the read-only checks above. A Shared Drive can
+  // look correctly set up and still refuse the sharing step.
+  const [testing, setTesting] = useState(false);
+  const [steps, setSteps] = useState<TestStep[] | null>(null);
+
+  async function runDriveTest() {
+    setTesting(true);
+    setSteps(null);
+    try {
+      const r = await fetch('/api/media', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ selfTest: true }),
+      });
+      const j = await r.json().catch(() => null);
+      setSteps(Array.isArray(j?.steps) ? j.steps : [{ step: 'create', ok: false, detail: 'The test could not be run.' }]);
+    } catch {
+      setSteps([{ step: 'create', ok: false, detail: 'We could not reach the server to run the test.' }]);
+    } finally {
+      setTesting(false);
+    }
+  }
 
   useEffect(() => {
     let live = true;
@@ -79,6 +104,30 @@ export default function SystemStatus() {
           </li>
         ))}
       </ul>
+      {/* Offered only when Drive is the thing that is failing: it is the one
+          check a person can act on and then re-verify in seconds, which is
+          exactly what a fresh Shared Drive needs. */}
+      {failing.some((c) => c.name === 'drive_storage' || c.name === 'drive') && (
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => void runDriveTest()}
+            disabled={testing}
+            className="rounded-full bg-white/80 px-3 py-1.5 text-[12px] font-semibold ring-1 ring-current/20 transition hover:bg-white disabled:opacity-50"
+          >
+            {testing ? 'Testing Drive…' : 'Test the Drive setup'}
+          </button>
+          {steps && (
+            <ul className="mt-2 space-y-0.5 text-[12px]">
+              {steps.map((s, i) => (
+                <li key={i}>
+                  <span aria-hidden>{s.ok ? '\u2705' : '\u274C'}</span> <strong>{s.step}</strong> — {s.detail}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       <p className="mt-2 text-[12px] opacity-70">Ask whoever set this up to take a look — nothing you do here can break it further.</p>
     </div>
   );

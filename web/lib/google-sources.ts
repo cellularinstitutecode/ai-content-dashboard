@@ -24,6 +24,7 @@ import { randomUUID } from 'crypto';
 
 import { google } from 'googleapis';
 import { reportError } from '@/lib/report';
+import { tickedNetworks } from '@/lib/sheet-ticks';
 import { classifyGoogleError, type GoogleFailure } from './google-error.ts';
 
 export { classifyGoogleError, type GoogleFailure };
@@ -301,7 +302,7 @@ export async function readCalendar(spreadsheetId = SOURCE_IDS.calendarSheet()): 
       const caption = pick(r, 'description', 'caption', 'copy');
       const date = parseSheetDate(pick(r, 'date', 'fecha'));
       if (!caption && !date) continue;
-      const networks = NETWORK_COLUMNS.filter(([col]) => YES.test(pick(r, col))).map(([, n]) => n);
+      const networks = tickedNetworks(NETWORK_COLUMNS as [string, string][], (col) => pick(r, col));
       entries.push({
         tab: t.title,
         row,
@@ -389,14 +390,9 @@ export type VideoEntry = {
   aiStatus: string;
 };
 
-/** What counts as "yes" in a hand-kept sheet column: ticks, x, TRUE — never FALSE. */
-const YES = /^(x|✓|✔|yes|si|sí|true|posted|done)$/i;
-/**
- * A network column can also hold the published link itself (Rodrigo pastes
- * the YouTube URL into YOUTUBE once a video is up). A link there is the
- * strongest "yes" the sheet can give, so it counts — FALSE still does not.
- */
-const isTicked = (v: string) => YES.test(v) || /^https?:\/\//i.test(v.trim());
+// The tick rule lives in lib/sheet-ticks.ts so it can be unit-tested: this file
+// imports server-only, and "which networks does this row ask for" is the single
+// decision that determines what gets published.
 
 const VIDEO_NETWORKS: [string, string][] = [['youtube', 'youtube'], ['linkedin', 'linkedin'], ['tiktok', 'tiktok'], ['x', 'twitter'], ['facebook', 'facebook'], ['instagram', 'instagram'], ['email', 'email']];
 
@@ -421,7 +417,7 @@ export async function readVideos(spreadsheetId = SOURCE_IDS.videosSheet()): Prom
       // (Google's checkbox default), so treating a value as a yes marked every
       // FALSE column as a network the video ships to — a video the sheet says
       // is YouTube-only was listed as LinkedIn and Email as well.
-      const networks = VIDEO_NETWORKS.filter(([col]) => isTicked(pick(r, col))).map(([, n]) => n);
+      const networks = tickedNetworks(VIDEO_NETWORKS as [string, string][], (col) => pick(r, col));
       entries.push({
         tab: t.title,
         row,
