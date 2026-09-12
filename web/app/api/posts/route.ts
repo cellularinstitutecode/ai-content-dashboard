@@ -3,6 +3,7 @@ import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
 import { recordApproval } from '@/lib/approval-log';
 import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
+import { isAllowedEmail } from '@/lib/access';
 import { metricoolDeletePost, metricoolReplacePost, normalizeMediaList, type Provider } from '@/lib/metricool';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { cachedPublicCopy } from '@/lib/transcript-cache';
@@ -18,12 +19,46 @@ export const runtime = 'nodejs';
 // own timeout. 30 was the budget for one.
 export const maxDuration = 60;
 
+/**
+ * A valid session is the weaker question here.
+ *
+ * This route APPROVES posts into the clinic's live Metricool queue and DELETES
+ * files from its Drive — the two most consequential things the app can do — and
+ * it was the only route touching that shared account with no allowlist check
+ * of its own. Every sibling carries one as a second copy of the middleware
+ * rule, precisely because the middleware exemption has gone wrong before
+ * (see lib/machine-auth.ts). Someone removed from ALLOWED_EMAILS but still
+ * holding a live cookie could publish to the clinic's channels.
+ *
+ * Worse, the guard test built to catch exactly this
+ * (lib/route-policy.test.ts) missed it: its "reaches the shared Metricool
+ * account" pattern did not name metricoolReplacePost or metricoolDeletePost,
+ * so this file passed a net designed around it. Both are in the pattern now.
+ */
+async function requireClinicUser(sb: Awaited<ReturnType<typeof supabaseServer>>) {
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) {
+    return { ok: false as const, response: NextResponse.json({ error: 'unauthorized' }, { status: 401 }) };
+  }
+  if (!isAllowedEmail(user.email)) {
+    return {
+      ok: false as const,
+      response: NextResponse.json(
+        { error: 'forbidden', message: 'This account is not authorized for this workspace.' },
+        { status: 403 },
+      ),
+    };
+  }
+  return { ok: true as const, user };
+}
+
 // GET /api/posts
 // Returns the current user's scheduled posts, most recent publication first.
 export async function GET() {
   const sb = await supabaseServer();
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const auth = await requireClinicUser(sb);
+  if (!auth.ok) return auth.response;
+  const user = auth.user;
 
   const { data, error } = await sb
     .from('posts')
@@ -62,8 +97,9 @@ const PUBLISH_NOW_LEAD_MS = 2 * 60 * 1000;
 
 export async function PATCH(req: Request) {
   const sb = await supabaseServer();
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const auth = await requireClinicUser(sb);
+  if (!auth.ok) return auth.response;
+  const user = auth.user;
 
   let body: any = null;
   try {
@@ -108,8 +144,24 @@ export async function PATCH(req: Request) {
   // media_drive_file_id, which video-publish writes for exactly this reason.
   let media: string[] = [];
   if (existing.draft_id) {
-    const { data: d } = await sb
+    // The error is checked because a replace REPLACES. supabase-js RESOLVES a
+    // failed read, so an ignored `error` gave `d = null`, an empty media list,
+    // and a post published with its picture deleted — indistinguishable from a
+    // draft that never had one. A video survives this through the
+    // media_drive_file_id fallback below; an image has no second source, so
+    // for images the failure was silent and permanent.
+    const { data: d, error: draftError } = await sb
       .from('drafts').select('pack').eq('id', existing.draft_id).eq('user_id', user.id).maybeSingle();
+    if (draftError) {
+      reportError('posts:draft-media-read', draftError, { id });
+      return NextResponse.json(
+        {
+          error: 'media_unreadable',
+          message: 'We could not read this post’s image, and approving now would publish it without one. Nothing was changed — try again in a moment.',
+        },
+        { status: 503 },
+      );
+    }
     const url = (d as any)?.pack?._image?.url;
     const textInImage = (d as any)?.pack?._image?.verification?.textDetected === true;
     if (typeof url === 'string' && url && !textInImage) media = [url];
@@ -240,8 +292,9 @@ export async function PATCH(req: Request) {
 // failure here never leaves an orphan live in Metricool.
 export async function DELETE(req: Request) {
   const sb = await supabaseServer();
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const auth = await requireClinicUser(sb);
+  if (!auth.ok) return auth.response;
+  const user = auth.user;
 
   const id = new URL(req.url).searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 });
