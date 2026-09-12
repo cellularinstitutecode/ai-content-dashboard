@@ -329,9 +329,14 @@ async function doSchedule(userId: string, p: PendingSchedule) {
   const post = parsed && parsed.data ? parsed.data : parsed;
   const id = post && (post.id || post.postId) ? post.id || post.postId : null;
   const status = (post && post.providers && post.providers[0] && post.providers[0].status) || "pending_review";
+  // The same bug as app/api/metricool/schedule/route.ts had, through the other
+  // door. supabase-js RESOLVES a failed insert, so this catch never fired for a
+  // database error and the result went unread — leaving the post live in
+  // Metricool with no local row, on no calendar, unreachable from /api/posts.
+  let orphaned = false;
   try {
     const admin = supabaseAdmin();
-    await admin.from("posts").insert({
+    const { error: insertError } = await admin.from("posts").insert({
       user_id: userId,
       providers: [provider],
       text: p.text,
@@ -339,8 +344,14 @@ async function doSchedule(userId: string, p: PendingSchedule) {
       metricool_post_id: id,
       status: status && status !== "scheduled" ? status : "pending_review",
     });
-  } catch (err) { /* logging-only */ reportError('assistant:posts-insert', err); }
-  return { id, status, publishAt };
+    if (insertError) throw insertError;
+  } catch (err) {
+    reportError('assistant:posts-insert', err);
+    orphaned = true;
+  }
+  // Returned so the assistant tells the person, rather than reporting a clean
+  // success for a draft this dashboard has lost track of.
+  return { id, status, publishAt, ...(orphaned ? { warning: 'Scheduled in Metricool, but not saved to this dashboard — it will not show in your queue. Open Metricool to manage it.' } : {}) };
 }
 
 // Run the agentic tool loop. Executes generate/save immediately; gates schedule

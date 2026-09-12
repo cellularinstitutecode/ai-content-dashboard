@@ -121,12 +121,27 @@ export async function POST(req: NextRequest) {
   // with the same text is treated as already applied.
   const first = slots[0].toISOString();
   const last = slots[slots.length - 1].toISOString();
-  const { data: existing } = await sb
+  // Refuse rather than guess. supabase-js RESOLVES a failed read, so ignoring
+  // `error` turned "I could not check" into "nothing is scheduled" — and this
+  // read is the ONLY thing standing between a second click and a duplicate of
+  // every slot in the range. Failing closed costs a retry; failing open costs
+  // up to forty duplicate posts in the clinic's live queue.
+  const { data: existing, error: existingError } = await sb
     .from('posts')
     .select('publication_date, text')
     .eq('user_id', user.id)
     .gte('publication_date', first)
     .lte('publication_date', last);
+  if (existingError) {
+    reportError('templates:apply-existing', existingError);
+    return NextResponse.json(
+      {
+        error: 'schedule_unreadable',
+        message: 'We could not check what is already scheduled, so nothing was created — applying now could duplicate every slot. Try again in a moment.',
+      },
+      { status: 503 },
+    );
+  }
   const taken = new Set(
     (existing || [])
       .filter((row: any) => String(row.text || '').trim() === text)

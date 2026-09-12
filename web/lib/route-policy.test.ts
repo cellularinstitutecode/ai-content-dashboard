@@ -107,7 +107,11 @@ test('routes that reach the shared org accounts require the tenant allowlist', (
   // The net: any route naming a shared resource directly must also be gated.
   // Catches new routes the FLOOR has not been told about yet.
   const SHARED = [
-    { name: 'the org-wide Metricool account', re: /METRICOOL_USER_TOKEN|metricoolSchedulePost|fetchPostMetrics|doSchedule|approveRun/ },
+    // metricoolReplacePost and metricoolDeletePost were missing, and they are
+    // the two that APPROVE a post into the live queue and DELETE one. So
+    // /api/posts — the single most consequential route in the app — slipped
+    // through the net built to catch exactly this, and went un-gated.
+    { name: 'the org-wide Metricool account', re: /METRICOOL_USER_TOKEN|metricoolSchedulePost|metricoolReplacePost|metricoolDeletePost|fetchPostMetrics|doSchedule|approveRun/ },
     { name: 'the shared Semrush unit pot', re: /SEMRUSH_API_KEY|researchBundle|domainBundle|getUnitsBalance|researchKeywords/ },
     { name: 'the shared AI budget', re: /generateContentPack|chatWithTools|chatAssistant|researchTopic|generatePackImage/ },
     { name: 'the paid OpusClip account', re: /opusCreateClipProject/ },

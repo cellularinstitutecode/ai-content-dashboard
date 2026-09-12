@@ -201,9 +201,15 @@ export async function POST(req: NextRequest) {
         console.warn('metricool/schedule: ignoring draftId not owned by caller');
       }
     }
+    // supabase-js RESOLVES a failed insert rather than throwing, so this catch
+    // could never fire for a database error and the result was discarded
+    // unread. The post is already live in Metricool at this point; without the
+    // local row it appears on no calendar, and /api/posts cannot reschedule or
+    // delete it — a post nobody can reach, reported as ok:true.
+    let bookkeeping: string | null = null;
     try {
       const admin = supabaseAdmin();
-      await admin.from('posts').insert({
+      const { error: insertError } = await admin.from('posts').insert({
         user_id: user.id,
         draft_id: ownedDraftId,
         providers: [provider],
@@ -214,10 +220,18 @@ export async function POST(req: NextRequest) {
         metricool_post_id: id,
         status: status || 'pending_review',
       });
-    } catch (err) { /* logging-only */ reportError('schedule:posts-insert', err); }
+      if (insertError) throw insertError;
+    } catch (err) {
+      reportError('schedule:posts-insert', err);
+      // Said out loud rather than swallowed: the draft exists in Metricool and
+      // this dashboard has no record of it, which is the one situation where a
+      // person must go and look there instead of here.
+      bookkeeping = 'The draft is in Metricool, but it could not be saved to this dashboard — it will not appear in your queue or calendar. Open it in Metricool to approve or remove it.';
+    }
 
     return NextResponse.json({
       ok: true,
+      ...(bookkeeping ? { warning: bookkeeping } : {}),
       id: id,
       status: status || 'pending_review',
       autoPublish: false,
