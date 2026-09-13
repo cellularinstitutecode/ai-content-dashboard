@@ -51,6 +51,16 @@ function whenWords(iso: string, now: number): string {
 
 export default function VideoRegister() {
   const [entries, setEntries] = useState<Entry[]>([]);
+  /**
+   * The clock, read ONCE when the entries arrive.
+   *
+   * Not Date.now() inside the render: "3h ago" computed during render is an
+   * impure result that changes every time React happens to re-render, which is
+   * both a real correctness rule (react-hooks/purity) and a real bug — two rows
+   * rendered in the same pass could disagree about what "now" is. Read with the
+   * data, used for the whole list.
+   */
+  const [now, setNow] = useState(0);
   const [off, setOff] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
@@ -65,6 +75,7 @@ export default function VideoRegister() {
     fetch('/api/videos/register?limit=40')
       .then((r) => (r.ok ? r.json() : r.json().then((j) => Promise.reject(new Error(j?.message || 'unreadable')))))
       .then((j) => {
+        setNow(Date.now());
         setOff(Boolean(j?.off));
         setEntries(Array.isArray(j?.entries) ? j.entries : []);
       })
@@ -116,7 +127,7 @@ export default function VideoRegister() {
                   }}
                 />
                 <span style={{ flex: '0 0 auto', color: 'var(--muted, #6b7280)', minWidth: 58 }}>
-                  {whenWords(e.createdAt, Date.now())}
+                  {whenWords(e.createdAt, now)}
                 </span>
                 <span style={{ minWidth: 0 }}>
                   {e.link ? (
