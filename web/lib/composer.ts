@@ -22,7 +22,11 @@
  */
 export const PUBLISH_NETWORKS: { id: string; label: string; emoji: string; needsMedia?: true }[] = [
   { id: 'facebook', label: 'Facebook', emoji: '\u{1F4D8}' },
-  { id: 'instagram', label: 'Instagram', emoji: '\u{1F4F8}' },
+  // needsMedia: Instagram cannot accept a text-only post AT ALL. It was the one
+  // network missing here while lib/video-slot.ts's NEEDS_VIDEO had it, so the
+  // sweep and the composer disagreed about the same post — and the composer let
+  // a text-only Instagram send through to a network that will refuse it.
+  { id: 'instagram', label: 'Instagram', emoji: '\u{1F4F8}', needsMedia: true },
   { id: 'linkedin', label: 'LinkedIn', emoji: '\u{1F4BC}' },
   { id: 'twitter', label: 'X / Twitter', emoji: '\u{1D54F}' },
   { id: 'youtube', label: 'YouTube', emoji: '\u{25B6}\u{FE0F}', needsMedia: true },

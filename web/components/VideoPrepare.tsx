@@ -13,7 +13,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { friendlyErrorFromResponse } from '@/lib/friendly-error';
 import { runPrepare } from '@/lib/prepare-request';
-import { parseVideoUrl } from '@/lib/composer';
+import { parseVideoUrl, NETWORKS_NEEDING_MEDIA } from '@/lib/composer';
 import { isDriveUrl } from '@/lib/drive-url';
 import { fitsNetwork } from '@/lib/video-row';
 import { MediaPreview } from '@/components/MediaPicker';
@@ -49,7 +49,9 @@ type VideoNetwork = 'youtube' | 'linkedin' | 'tiktok';
 const VIDEO_NETWORKS: VideoNetwork[] = ['youtube', 'linkedin', 'tiktok'];
 const LABEL: Record<VideoNetwork, string> = { youtube: 'YouTube', linkedin: 'LinkedIn', tiktok: 'TikTok' };
 /** Feeds that will not take a text-only post. LinkedIn will, so it is not here. */
-const NEEDS_MEDIA = new Set<VideoNetwork>(['youtube', 'tiktok']);
+// The one shared set (lib/composer.ts). A third local copy is how Instagram
+// ended up in one definition and not the others.
+const NEEDS_MEDIA = NETWORKS_NEEDING_MEDIA;
 
 const card: React.CSSProperties = { background: '#fff', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 12, padding: 20 };
 const inputStyle: React.CSSProperties = { width: '100%', padding: 9, borderRadius: 8, background: '#f5f5f7', border: '1px solid rgba(0,0,0,0.1)', color: '#1d1d1f', boxSizing: 'border-box', fontSize: 13 };

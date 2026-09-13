@@ -20,6 +20,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { normalizeStrategy } from '@/lib/autopilot';
 import { cleanTime, cleanWeekdays, isUsableTime } from '@/lib/template-input';
 import { reportError } from '@/lib/report';
+import { leadProblem } from '@/lib/lead-window';
+import { SCHEDULE_TZ, tzOffsetMs } from '@/lib/timezone';
 
 
 export type PlannerTemplate = {
@@ -202,6 +204,22 @@ export async function saveTemplate(
     // is least able to notice.
     notes.push('No weekdays are set, so this template will never fire until some are chosen.');
   }
+  // A lead the daily pass can never reach. Raised by advanceRuns anyway, but a
+  // person who typed 4 should be told it is being treated as more, rather than
+  // discovering it by reading the engine.
+  {
+    const [hh, mm] = time.split(':').map((n) => parseInt(n, 10) || 0);
+    const strat = normalizeStrategy(row.strategy ?? existing?.strategy);
+    // time_of_day is clinic-LOCAL wall clock; the engine schedules in UTC, and
+    // the tick cadence this is measured against is UTC too. tzOffsetMs gives the
+    // zone's offset at this instant (Cancún has no DST, but the helper does not
+    // depend on that).
+    const offsetMin = tzOffsetMs(new Date(), SCHEDULE_TZ) / 60000;
+    const slotUtc = ((Math.round(hh * 60 + mm - offsetMin) % 1440) + 1440) % 1440;
+    const bad = leadProblem(strat.lead_hours ?? 24, slotUtc);
+    if (bad) notes.push(bad.message);
+  }
+
   // The other silent dead end: mode 'off' means the Apply flow posts the stored
   // text verbatim, and there is none.
   if (!row.text && normalizeStrategy(row.strategy ?? existing?.strategy).mode === 'off') {

@@ -1,5 +1,7 @@
 // web/app/api/posts/route.ts
 import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
+import { videoVerdict, pendingRefusal, videoSourceOf, type PackLike } from '@/lib/video-required';
+import { ensureShareableVideo } from '@/lib/media-library';
 import { recordApproval } from '@/lib/approval-log';
 import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
@@ -11,7 +13,7 @@ import { cachedPublicCopy } from '@/lib/transcript-cache';
 import { reportError } from '@/lib/report';
 import { deleteDriveFile } from '@/lib/drive';
 import { forgetPublicCopy } from '@/lib/transcript-cache';
-import { modeOfStatus, APPROVED_STATUS } from '@/lib/post-mode';
+import { modeOfStatus, videoPending, APPROVED_STATUS } from '@/lib/post-mode';
 
 export const runtime = 'nodejs';
 // Both mutating paths now make an upstream Metricool call before they touch the
@@ -77,7 +79,51 @@ export async function GET() {
     .order('publication_date', { ascending: true })
     .limit(200);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ posts: data ?? [] });
+
+  // `videoPending` — the PENDING chip's whole input.
+  //
+  // ONE extra query for the page, not one per post. Provenance lives in
+  // drafts.pack (there is no column for it anywhere), so the packs behind this
+  // page's posts are fetched in a single `in(...)` and matched up in memory.
+  // Whether the post has the video is answered by media_drive_file_id, which is
+  // already on the row — so no Drive call and no Metricool call happen here.
+  //
+  // That is a slightly weaker question than the gate in PATCH asks: PATCH also
+  // has to RESOLVE the copy through Drive, so a row pointing at a copy someone
+  // has since deleted shows no chip here and is still refused there. The two
+  // errors are not symmetric and this is the safe side of them — the chip can
+  // be missing from a post that cannot go out, never present on one that can.
+  const posts = (data ?? []) as Record<string, unknown>[];
+  const draftIds = Array.from(
+    new Set(posts.map((p) => String(p.draft_id || '')).filter(Boolean)),
+  );
+  const packs: Record<string, PackLike> = {};
+  let packsUnavailable = false;
+  if (draftIds.length) {
+    const { data: ds, error: packErr } = await sb
+      .from('drafts').select('id, pack').in('id', draftIds).eq('user_id', user.id);
+    if (packErr) {
+      // Said out loud rather than swallowed. Without the packs nothing can be
+      // known to be video-derived, so every chip would be absent — which reads
+      // as "nothing is pending" and is the opposite of the truth. The approve
+      // gate in PATCH is unaffected either way; it reads the pack itself.
+      reportError('posts:pack-read', packErr, { userId: user.id });
+      packsUnavailable = true;
+    }
+    for (const d of ds || []) {
+      packs[String((d as { id: string }).id)] = (d as { pack: PackLike }).pack ?? null;
+    }
+  }
+
+  return NextResponse.json({
+    posts: posts.map((p) => ({
+      ...p,
+      videoPending: packsUnavailable
+        ? false
+        : videoPending(p.status, packs[String(p.draft_id || '')] ?? null, Boolean(p.media_drive_file_id)),
+    })),
+    ...(packsUnavailable ? { packsUnavailable: true } : {}),
+  });
 }
 
 // PATCH /api/posts
@@ -133,7 +179,7 @@ export async function PATCH(req: Request) {
   if (!id || typeof id !== 'string') {
     return NextResponse.json({ error: 'id is required' }, { status: 400 });
   }
-  if (!['reschedule', 'approve', 'publish_now'].includes(action)) {
+  if (!['reschedule', 'approve', 'publish_now', 'attach_video'].includes(action)) {
     return NextResponse.json({ error: 'invalid_request', message: 'That is not something a post can do.' }, { status: 400 });
   }
   if (action === 'reschedule') {
@@ -154,14 +200,15 @@ export async function PATCH(req: Request) {
   if (findErr) return NextResponse.json({ error: findErr.message }, { status: 500 });
   if (!existing) return NextResponse.json({ error: 'post not found' }, { status: 404 });
 
-  // The media travels with every replace, because a replace REPLACES: whatever
-  // is not sent is removed from the post.
+  // --- the linked draft, read ONCE -----------------------------------------
   //
-  // Only the linked draft's IMAGE was ever looked up here, so approving a video
-  // post stripped the video — the one thing the post existed to carry. The
-  // video's world-readable copy is recoverable from the row's own
-  // media_drive_file_id, which video-publish writes for exactly this reason.
-  let media: string[] = [];
+  // Three things need this row and it used to be fetched twice: the hero image
+  // that travels with every replace (a replace REPLACES — whatever is not sent
+  // is removed from the post), the provenance that says whether this copy was
+  // transcribed from a video, and the source link the attach button fetches
+  // from. Two reads of one row can disagree; one cannot.
+  let draftPack: Record<string, unknown> | null = null;
+  let heroImage = '';
   if (existing.draft_id) {
     // The error is checked because a replace REPLACES. supabase-js RESOLVES a
     // failed read, so an ignored `error` gave `d = null`, an empty media list,
@@ -176,24 +223,106 @@ export async function PATCH(req: Request) {
       return NextResponse.json(
         {
           error: 'media_unreadable',
-          message: 'We could not read this post’s image, and approving now would publish it without one. Nothing was changed — try again in a moment.',
+          message: 'We could not read this post’s draft, and going ahead now would send it without its picture or its video. Nothing was changed — try again in a moment.',
         },
         { status: 503 },
       );
     }
+    draftPack = (d as any)?.pack ?? null;
     const url = (d as any)?.pack?._image?.url;
     const textInImage = (d as any)?.pack?._image?.verification?.textDetected === true;
-    if (typeof url === 'string' && url && !textInImage) media = [url];
+    if (typeof url === 'string' && url && !textInImage) heroImage = url;
   }
-  if (!media.length && existing.media_drive_file_id) {
+
+  // --- attach_video: what the PENDING chip does ------------------------------
+  //
+  // Makes the world-readable copy the post needs and records it, then falls
+  // through to the ordinary replace below so the video actually reaches
+  // Metricool. Separate from `approve` on purpose: attaching is not approving,
+  // and somebody fixing a post should be able to do the first without being
+  // committed to the second.
+  if (action === 'attach_video') {
+    // No draft at all, or a draft that has forgotten its video: one refusal for
+    // both, because from here they are the same thing — there is nothing to
+    // fetch. (This is why the read above is not conditional on the action:
+    // `.eq('id', '')` against a uuid column is a database ERROR, so a post that
+    // simply never had a draft would have come back to a person as "we could
+    // not read your draft".)
+    const source = videoSourceOf(draftPack);
+    if (!source) {
+      return NextResponse.json(
+        {
+          error: 'no_source',
+          message: 'This post’s draft does not record which video it came from, so there is nothing to attach. Re-prepare that row from the Video Library.',
+        },
+        { status: 422 },
+      );
+    }
+    // The primitive already exists: rate-limited, allowlisted, budgeted, and it
+    // writes copy_made / copy_failed to the video register either way.
+    const made = await ensureShareableVideo(source, String((draftPack as { title?: unknown } | null)?.title ?? ''), {
+      userId: user.id,
+      actor: 'button',
+    });
+    if (!made.ok) {
+      // copyFailureAdvice tells Google's five causes apart, and while the copies
+      // folder is not in a Shared Drive this is where a person finally reads
+      // that — per post, rather than as one global banner.
+      return NextResponse.json({ error: made.code || 'copy_failed', message: made.message }, { status: 502 });
+    }
+    const { error: linkError } = await sb
+      .from('posts')
+      .update({ media_drive_file_id: made.fileId })
+      .eq('id', id)
+      .eq('user_id', user.id);
+    if (linkError) {
+      reportError('posts:attach-link', linkError, { id });
+      return NextResponse.json(
+        { error: 'not_linked', message: 'The copy was made, but we could not attach it to this post. Try again in a moment.' },
+        { status: 503 },
+      );
+    }
+    // Read back through the same field the rest of this handler uses, so the
+    // replace below picks the video up exactly as an approve would.
+    (existing as { media_drive_file_id?: string | null }).media_drive_file_id = made.fileId;
+  }
+
+  // Only the linked draft's IMAGE was ever looked up for this, so approving a
+  // video post stripped the video — the one thing the post existed to carry.
+  // The video's world-readable copy is recoverable from the row's own
+  // media_drive_file_id, which video-publish writes for exactly this reason.
+  let media: string[] = [];
+  // Did the post resolve to THE VIDEO, as opposed to some attachment? The video
+  // rule below needs that exact question answered and no looser one.
+  let videoAttached = false;
+  // THE VIDEO FIRST, and the order matters.
+  //
+  // media_drive_file_id only ever holds the world-readable copy of a video —
+  // lib/video-publish.ts writes it, and so does attach_video above; no image
+  // path touches that column. So when a row carries one, that is the thing the
+  // post exists to deliver, and a hero image must not be sent in front of it.
+  //
+  // This used to read image-first, with the video as a fallback for posts that
+  // had no image. That was correct only by accident: video-prepared packs carry
+  // no _image today because ensureDraftImage is called from the Autopilot path
+  // alone. The day a video draft acquired one — a regeneration, a merge, a hand
+  // edit — approving it would have published the picture and silently dropped
+  // the video, which is the exact failure the rule above exists to prevent.
+  if (existing.media_drive_file_id) {
     try {
       const copy = await cachedPublicCopy(String(existing.media_drive_file_id));
-      if (copy?.url) media = [copy.url];
+      if (copy?.url) {
+        media = [copy.url];
+        videoAttached = true;
+      }
     } catch (e) {
       // Losing the video on an approve is bad; failing the approve is worse.
+      // The gate below still refuses the post, so this degrades to PENDING
+      // rather than to a video-less publish.
       reportError('posts:media-lookup', e);
     }
   }
+  if (!media.length && heroImage) media = [heroImage];
   // Metricool discards a media URL it has not normalised, silently and with a
   // 200 — so a list that skipped this step is the same as no list at all.
   if (media.length) {
@@ -215,6 +344,16 @@ export async function PATCH(req: Request) {
 
   if (action === 'reschedule') {
     nextDate = publicationDate;
+  } else if (action === 'attach_video') {
+    // Attaching is NOT approving. The replace below carries the video to
+    // Metricool and the post stays exactly where it was in the queue, waiting
+    // for a person — which is the whole point of the rule.
+    if (!existing.metricool_post_id) {
+      return NextResponse.json(
+        { error: 'not_in_metricool', message: 'This post was never sent to Metricool, so there is nothing to attach the video to. Send it for review first.' },
+        { status: 409 },
+      );
+    }
   } else {
     if (mode === 'scheduled') {
       return NextResponse.json(
@@ -242,6 +381,20 @@ export async function PATCH(req: Request) {
     // the advertising notice and a scientific reference.
     const gate = await complianceGate(user.id, String(existing.text || ''), (existing.providers || []) as string[]);
     if (!gate.ok) return NextResponse.json(gateRefusal(gate), { status: 422 });
+
+    // And the video rule, at the same door rather than in a mechanism of its
+    // own. Copy transcribed from a video may not go out without that video.
+    //
+    // `videoAttached`, not `media.length` — an image is an attachment and is not
+    // the video, and asking the looser question would wave through precisely the
+    // post this rule exists to stop.
+    const verdict = videoVerdict(draftPack, videoAttached);
+    if (verdict.pending) {
+      return NextResponse.json(
+        { error: 'video_pending', message: pendingRefusal(verdict), sourceUrl: verdict.sourceUrl },
+        { status: 422 },
+      );
+    }
     mode = 'scheduled';
     nextStatus = APPROVED_STATUS;
   }
@@ -290,7 +443,12 @@ export async function PATCH(req: Request) {
   // sheet stays the record without anyone retyping. Best-effort: the post is
   // already approved in Metricool, so a sheet hiccup is reported, not fatal.
   if (nextStatus) {
-    void recordApproval({
+    // Awaited, for the reason lib/autopilot.ts records: on Vercel the lambda
+    // can freeze once the response is returned, so a fire-and-forget insert is
+    // lost non-deterministically. recordApproval is already fail-soft, so this
+    // costs nothing. (The same construct was fixed in approveRun; leaving the
+    // sibling half-done is how one of the two gates stays broken.)
+    await recordApproval({
       publishDate: nextDate,
       networks: (existing.providers || []) as string[],
       caption: String(existing.text || ''),
@@ -299,7 +457,12 @@ export async function PATCH(req: Request) {
       postId: id,
     });
   }
-  return NextResponse.json({ post: data });
+  return NextResponse.json({
+    post: data,
+    // So the caller can tell the two apart without inspecting the row: an
+    // attach leaves the post exactly where it was, waiting for a person.
+    ...(action === 'attach_video' ? { attached: true, mediaUrl: media[0] || null } : {}),
+  });
 }
 
 // DELETE /api/posts?id=...

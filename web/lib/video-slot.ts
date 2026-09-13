@@ -13,6 +13,7 @@
 // Pure, so it is unit-tested; lib/video-autopilot.ts supplies the real clock
 // and the slots already taken.
 import { upcomingSlots } from './timezone.ts';
+import { NETWORKS_NEEDING_MEDIA } from './composer.ts';
 
 /** Monday–Friday. The clinic does not post at weekends. */
 export const POST_WEEKDAYS = [1, 2, 3, 4, 5];
@@ -93,7 +94,15 @@ export function reserveSlots(count: number, taken: Iterable<string>, now: Date =
  * for one, rather than drafted empty: a TikTok post with no video is not a
  * draft a person can approve, it is a chore.
  */
-export const NEEDS_VIDEO = new Set(['tiktok', 'instagram', 'youtube']);
+/**
+ * Networks that will not take a post without an attachment.
+ *
+ * Re-exported from lib/composer.ts rather than declared again. There were three
+ * of these — here, in lib/composer.ts and in components/VideoPrepare.tsx — and
+ * they disagreed about Instagram, so the sweep dropped an Instagram post for
+ * want of a video while the composer happily sent one without.
+ */
+export const NEEDS_VIDEO = NETWORKS_NEEDING_MEDIA;
 
 /** Where a video goes when the row does not say otherwise. */
 export const DEFAULT_VIDEO_NETWORKS = ['youtube', 'linkedin', 'tiktok'];

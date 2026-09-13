@@ -115,6 +115,15 @@ export async function draftAndQueue(
     });
     pack = (result?.pack || result) as Record<string, any>;
     text = pickText(pack, network).trim();
+    // NO VIDEO GATE HERE, and deliberately.
+    //
+    // The video rule (lib/video-required.ts) refuses a post whose copy was
+    // transcribed from a video and has none attached. This pack is written from
+    // a topic string, right here, by generateContentPack — it can never carry
+    // kind:'video' or kind:'clip', so the gate would be unreachable code. Every
+    // path that CAN reach a video-prepared draft is gated: /api/posts PATCH
+    // (approve, publish_now) and approveRun. Recorded so the absence reads as a
+    // decision rather than an oversight.
   } catch (e) {
     reportError('batch:generate', e, { topic });
     return { ...base, problem: 'The copy could not be written for this one. Nothing was queued.' };

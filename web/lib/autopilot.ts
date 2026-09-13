@@ -24,6 +24,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { appliesTo, checkCompliance, complianceMessage, ensureAviso } from '@/lib/compliance';
 import { avisoForUser } from '@/lib/compliance-gate';
 import { recordApproval } from '@/lib/approval-log';
+import { loadBrandContext } from '@/lib/brand-context';
 import {
   chatAssistant,
   generateContentPack,
@@ -47,6 +48,8 @@ import { metricoolSchedulePost, readPostId, type Provider as McProvider } from '
 import { ensureDraftImage, type PackImage } from '@/lib/images';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
+import { usableLeadHours, leadProblem } from '@/lib/lead-window';
+import { videoVerdict, pendingRefusal, type PackLike } from '@/lib/video-required';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -398,18 +401,29 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
   const db = supabaseAdmin();
 
   // Occurrence index: how many runs of this template came before this slot.
-  const { count } = await db
+  const { count, error: countError } = await db
     .from('template_runs')
     .select('id', { count: 'exact', head: true })
     .eq('template_id', run.template_id)
     .lt('scheduled_for', run.scheduled_for);
+  // THE ONE THAT MAKES ROTATION COLLAPSE. Unread, a failed count gives null →
+  // occurrenceIndex 0 → pickSeedTopic always returns seedPool[0] and decideAngle
+  // always starts at the same angle type. Every post, every week, the same
+  // pillar — and nothing anywhere says why. The index is otherwise structurally
+  // sound: rows are never deleted and planRuns only ever creates future slots,
+  // so this dropped error was the sole way it could go constant.
+  if (countError) reportError('autopilot:occurrence-count', countError, { runId: run.id });
   const occurrenceIndex = count ?? 0;
 
   // Brand keywords as pillar fallback.
   let brandKeywords: string[] = [];
   try {
-    const { data: bp } = await db
+    const { data: bp, error: bpError } = await db
       .from('brand_profiles').select('keywords').eq('user_id', run.user_id).maybeSingle();
+    // supabase-js RESOLVES a failed read, so this catch never fired for a
+    // database error. Losing the brand keywords drops the pillar fallback, and
+    // pickSeedTopic then falls all the way through to a hardcoded topic.
+    if (bpError) reportError('autopilot:brand-keywords', bpError, { runId: run.id });
     if (bp && Array.isArray((bp as { keywords?: string[] }).keywords)) {
       brandKeywords = ((bp as { keywords?: string[] }).keywords || []).filter(Boolean);
     }
@@ -427,26 +441,39 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
   const recent = new Set<string>();
   try {
     const since = new Date(Date.now() - ANTI_REPEAT_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    const { data: used } = await db
+    // `topic`, not `keyword`.
+    //
+    // decideAngle filters candidate angle.query values against this set, and
+    // angle.query is what recordDraftKeywords stores in the TOPIC column
+    // (lib/semrush.ts): `role: 'primary'` marks the brief's own primary keyword,
+    // which is a different string chosen from the research. So comparing
+    // queries against keywords almost never matched, and the anti-repeat was
+    // inert on the normal Semrush path — every fourth occurrence re-ran the
+    // identical query with the identical rationale, indefinitely. It appeared to
+    // work only in the degraded cache-only branch, which does store the query.
+    const { data: used, error: usedError } = await db
       .from('draft_keywords')
-      .select('keyword')
+      .select('topic')
       .eq('user_id', run.user_id)
-      .eq('role', 'primary')
       .gte('created_at', since)
-      .limit(200);
-    for (const r of used || []) recent.add(String((r as { keyword: string }).keyword || '').toLowerCase());
+      .limit(400);
+    if (usedError) reportError('autopilot:draft-keywords', usedError, { runId: run.id });
+    for (const r of used || []) recent.add(String((r as { topic: string }).topic || '').toLowerCase());
   } catch (err) { /* table optional */ reportError('autopilot:draft-keywords', err); }
 
   // Learning loop: measured engagement per primary keyword (view joins
   // draft_keywords × post_metrics). Empty until posts get measured — fail-soft.
   const learned = new Map<string, number>();
   try {
-    const { data: perf } = await db
+    const { data: perf, error: perfError } = await db
       .from('keyword_performance')
       .select('keyword, total_engagement')
       .eq('user_id', run.user_id)
       .order('total_engagement', { ascending: false })
       .limit(50);
+    // Unread, this silently reverted the whole measured-engagement learning
+    // loop to a plain volume/difficulty sort, with provenPerformer always false.
+    if (perfError) reportError('autopilot:keyword-performance', perfError, { runId: run.id });
     for (const r of perf || []) {
       const kw = String((r as { keyword: string }).keyword || '').toLowerCase();
       const eng = Number((r as { total_engagement: number }).total_engagement) || 0;
@@ -461,7 +488,13 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
     movers = await keywordMovers(primaryDomain());
   } catch { movers = null; }
 
-  const angle = decideAngle(occurrenceIndex, seedTopic, bundle.brief, bundle.brief.questions, movers, recent, learned);
+  // bundle.questions, not bundle.brief.questions.
+  //
+  // The 4th parameter is concatenated with `brief.questions` inside decideAngle,
+  // so passing the brief's own slice meant the SAME array joined to itself: the
+  // six question keywords fetched and paid for were narrowed back to three, and
+  // the wider `related` set never reached the angle picker at all.
+  const angle = decideAngle(occurrenceIndex, seedTopic, bundle.brief, bundle.questions, movers, recent, learned);
 
   // AI strategist note: 2-3 sentences of editorial direction for the writer,
   // grounded in the chosen angle. Purely additive — skipped without API keys.
@@ -518,13 +551,16 @@ async function findMatchingClip(
 ): Promise<{ url: string; title: string } | null> {
   try {
     const db = supabaseAdmin();
-    const { data: rows } = await db
+    const { data: rows, error: rowsError } = await db
       .from('clips')
       .select('result')
       .eq('user_id', userId)
       .not('result', 'is', null)
       .order('created_at', { ascending: false })
       .limit(10);
+    // Unread, a failed read looked identical to "there are no clips" and the
+    // post shipped without one.
+    if (rowsError) reportError('autopilot:clip-match', rowsError, { userId });
     const words = angle.query.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
     let best: { url: string; title: string; score: number } | null = null;
     for (const row of rows || []) {
@@ -568,23 +604,28 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   // Brand voice.
   let brand: BrandContext | undefined;
   try {
-    const { data: bp } = await db
+    const { data: bp, error: brandError } = await db
       .from('brand_profiles')
       .select('*')
       .eq('user_id', run.user_id)
       .maybeSingle();
+    // Unread, this generated the post with NO brand voice at all and said
+    // nothing. (The catch also carried the wrong label — 'media-match' — so even
+    // a thrown error was filed under another operation.)
+    if (brandError) reportError('autopilot:brand-load', brandError, { runId: run.id });
     if (bp) brand = bp as BrandContext;
-  } catch (err) { /* optional */ reportError('autopilot:media-match', err); }
+  } catch (err) { /* optional */ reportError('autopilot:brand-load', err); }
 
   // Performance hint from measured posts.
   let performanceHint: string | undefined;
   try {
-    const { data: rows } = await db
+    const { data: rows, error: metricsError } = await db
       .from('post_metrics')
       .select('network, external_id, text, published_at, impressions, engagement')
       .eq('user_id', run.user_id)
       .order('engagement', { ascending: false })
       .limit(5);
+    if (metricsError) reportError('autopilot:performance-hint', metricsError, { runId: run.id });
     if (rows && rows.length) {
       const metrics: NormalizedMetric[] = (rows as Record<string, unknown>[]).map((r) => ({
         network: String(r.network || ''),
@@ -633,8 +674,11 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
     // approval regenerated from variant 0 (burning a second image credit and
     // breaking the "every reroll is a visibly different take" guarantee).
     // The angle is unchanged by a redraft, so the image stays on-topic.
-    const { data: prior } = await db
+    const { data: prior, error: priorError } = await db
       .from('drafts').select('pack').eq('id', draftId).eq('user_id', run.user_id).maybeSingle();
+    // Unread, this dropped _image on every redraft — exactly the bug the comment
+    // above says it fixes.
+    if (priorError) reportError('autopilot:prior-image', priorError, { runId: run.id });
     const priorImage = (prior as { pack?: { _image?: unknown } } | null)?.pack?._image;
     const nextPack = priorImage && !(pack as { _image?: unknown })._image
       ? { ...(pack as Record<string, unknown>), _image: priorImage }
@@ -716,9 +760,12 @@ export function scorePack(pack: ContentPack, providers: string[], angle: Angle):
   const breakdown: Record<string, number> = {};
 
   // Keyword coverage (0-30): primary phrase (or most of its words) present.
-  const words = angle.query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+  const query = angle.query.toLowerCase().trim();
+  const words = query.split(/\s+/).filter((w) => w.length > 2);
   const covered = words.length ? words.filter((w) => joined.includes(w)).length / words.length : 0;
-  breakdown.keyword = Math.round(30 * (joined.includes(angle.query.toLowerCase()) ? 1 : covered));
+  // `joined.includes('')` is TRUE, so a blank query — reachable from a Semrush
+  // row with an empty keyword — scored a perfect 30/30 for covering nothing.
+  breakdown.keyword = !query ? 0 : Math.round(30 * (joined.includes(query) ? 1 : covered));
   if (breakdown.keyword < 18) critique.push('Work the exact phrase "' + angle.query + '" naturally into the opening.');
 
   // Channel completeness (0-25): every requested channel has real copy.
@@ -766,20 +813,39 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
         topicPromptFor(angle, strategy) +
         ' Previous attempt scored ' + score.total + '/100. Fix exactly these issues: ' +
         score.critique.join(' ');
+      // WITH the brand voice, and without suppressing the keyword brief.
+      //
+      // The retry passed neither, while the first pass passes both. scorePack
+      // measures keyword coverage, channel completeness, hook length, CTA and
+      // safety — it does NOT measure voice. So a retry that was off-brand but
+      // repeated the phrase more often scored higher, won the comparison below,
+      // and replaced the on-brand draft with something the rubric was blind to.
+      //
+      // keywordHint is left UNDEFINED rather than '': generateContentPack runs
+      // its own auto-brief when the field is absent and skips it when the field
+      // is an empty string, so '' was explicitly turning the research off.
+      const brand = await loadBrandContext(db, run.user_id);
       const { pack: retry } = await generateContentPack({
         topic: critiqueNote,
         contentType: strategy.format || 'social',
         channels: template.providers,
-        keywordHint: '',
+        brand,
       });
       const retryScore = scorePack(retry, template.providers || [], angle);
       if (retryScore.total > score.total) {
         (retry as ContentPack & { _autopilot?: unknown })._autopilot =
           (pack as ContentPack & { _autopilot?: unknown })._autopilot;
-        await db.from('drafts').update({ pack: retry })
+        const { error: saveError } = await db.from('drafts').update({ pack: retry })
           .eq('id', run.draft_id).eq('user_id', run.user_id);
-        pack = retry;
-        score = retryScore;
+        // Read, not assumed. Unread, the SCORE was persisted while the pack was
+        // not: the review card showed 81 and the copy stored — and later
+        // published — was the one that scored 52.
+        if (saveError) {
+          reportError('autopilot:regen-save', saveError, { runId: run.id });
+        } else {
+          pack = retry;
+          score = retryScore;
+        }
       }
     } catch (err) { /* keep the original pack+score */ reportError('autopilot:regen-rescore', err); }
   }
@@ -812,6 +878,75 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
  * UI already surfaces as "Needs attention", and `regenerateRun` accepts it, so
  * the reviewer can retry it by hand.
  */
+/**
+ * Rescue runs stranded in `approved`.
+ *
+ * `approved` is claimed BEFORE the expensive work — an image generation, media
+ * normalisation and the Metricool POST. A thrown error releases the claim; a
+ * PLATFORM KILL does not. And nothing else can reach the run afterwards:
+ * approveRun requires ready_for_review, regenerateRun rejects it, skipRun
+ * refuses it, and neither advanceRuns nor expireStaleRuns selects it. So the run
+ * disappears from the queue with nothing published and no way back short of SQL.
+ *
+ * A run that got far enough to record a Metricool post is NOT rescued — that one
+ * really was approved, and putting it back would invite a second post for the
+ * same slot.
+ */
+export async function rescueStrandedApprovals(scopeUserId?: string): Promise<number> {
+  const db = supabaseAdmin();
+  // Comfortably longer than the approve path's own ceiling, so a slow-but-alive
+  // approval is never interrupted by this.
+  const cutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  let q = db
+    .from('template_runs')
+    // draft_id too: the check below needs it to tell a genuinely-approved run
+    // from one that died before reaching Metricool.
+    .select('id, log, state, updated_at, draft_id')
+    .eq('state', 'approved')
+    .lt('updated_at', cutoff)
+    .limit(50);
+  if (scopeUserId) q = q.eq('user_id', scopeUserId);
+  const { data, error } = await q;
+  if (error) {
+    reportError('autopilot:rescue-read', error);
+    return 0;
+  }
+
+  let rescued = 0;
+  type Stranded = { id: string; log: RunRow['log']; state: string; draft_id: string | null };
+  for (const row of (data || []) as unknown as Stranded[]) {
+    // Did this one actually reach Metricool? If a posts row exists for the run's
+    // draft, the approval went through and the run is correctly terminal.
+    const { data: post, error: postError } = await db
+      .from('posts')
+      .select('id')
+      .eq('draft_id', row.draft_id || '')
+      .limit(1)
+      .maybeSingle();
+    if (postError) {
+      reportError('autopilot:rescue-post-check', postError, { runId: row.id });
+      continue;
+    }
+    if (post) continue;
+
+    const { data: updated, error: writeError } = await db
+      .from('template_runs')
+      .update({
+        state: 'ready_for_review',
+        log: logLine(row as unknown as RunRow, 'rescued', 'Approval stopped part-way through and left nothing published, so this is back in your queue. Approve it again.'),
+      })
+      .eq('id', row.id)
+      .eq('state', 'approved')
+      .select('id');
+    if (writeError) {
+      reportError('autopilot:rescue-write', writeError, { runId: row.id });
+      continue;
+    }
+    if (Array.isArray(updated) && updated.length) rescued++;
+  }
+  return rescued;
+}
+
 export async function expireStaleRuns(scopeUserId?: string): Promise<number> {
   const db = supabaseAdmin();
   // A couple of hours of grace: a slot that just passed may still be mid-tick.
@@ -828,7 +963,7 @@ export async function expireStaleRuns(scopeUserId?: string): Promise<number> {
 
   let expired = 0;
   for (const row of (data || []) as RunRow[]) {
-    const { data: updated } = await db
+    const { data: updated, error: expireError } = await db
       .from('template_runs')
       .update({
         state: 'failed',
@@ -838,6 +973,7 @@ export async function expireStaleRuns(scopeUserId?: string): Promise<number> {
       .eq('state', row.state)
       .select('id')
       .maybeSingle();
+    if (expireError) reportError('autopilot:expire', expireError, { runId: row.id });
     if (updated) expired++;
   }
   return expired;
@@ -879,30 +1015,64 @@ export async function advanceRuns(opts: {
   let advanced = 0, ready = 0, errors = 0;
   for (const raw of (runs || []) as RunRow[]) {
     if (Date.now() > deadline) break;
-    const { data: t } = await db
+    const { data: t, error: tError } = await db
       .from('schedule_templates')
       .select('id, user_id, name, providers, text, weekdays, time_of_day, active, strategy')
       .eq('id', raw.template_id)
       .maybeSingle();
+    // Unread, a database blip made this `continue` — the run silently skipped
+    // with no attempt and no log line, and the tick returned {advanced: 0},
+    // indistinguishable from a quiet day. That is the exact complaint the tick
+    // route's own header records.
+    if (tError) {
+      reportError('autopilot:template-read', tError, { runId: raw.id });
+      errors++;
+      continue;
+    }
     if (!t) continue;
     const template = t as TemplateRow;
     const strategy = normalizeStrategy(template.strategy);
     if (strategy.mode === 'off' || !template.active) continue;
 
     // Respect the lead window unless this is an explicit run-now.
-    const leadMs = (strategy.lead_hours ?? 24) * 60 * 60 * 1000;
-    if (!opts.runId && new Date(raw.scheduled_for).getTime() - leadMs > Date.now()) continue;
+    //
+    // RAISED to whatever the daily tick can actually reach. The cron fires once
+    // a day and expireStaleRuns retires anything two hours past its slot, so a
+    // lead shorter than the gap between the tick and the slot means this
+    // `continue` fires on every tick that could still help — and by the next
+    // morning the run is already stale and marked failed. Every occurrence,
+    // forever, with a message blaming the slot time. lib/lead-window.ts works
+    // out the floor; honouring a too-short lead is the one choice that produces
+    // a template which silently never runs.
+    const slotAt = new Date(raw.scheduled_for);
+    const effectiveLead = usableLeadHours(
+      strategy.lead_hours ?? 24,
+      slotAt.getUTCHours() * 60 + slotAt.getUTCMinutes(),
+    );
+    const leadMs = effectiveLead * 60 * 60 * 1000;
+    if (!opts.runId && slotAt.getTime() - leadMs > Date.now()) continue;
 
     let run = raw;
     // Explicit retry of a failed run: restart the pipeline from research.
     if (run.state === 'failed') {
-      const { data: reset } = await db
+      const { data: reset, error: resetError } = await db
         .from('template_runs')
         .update({ state: 'planned', attempts: 0, log: logLine(run, 'retry', 'Manual retry — restarting from research.') })
         .eq('id', run.id)
+        // Predicated, so a run somebody else has already moved is left alone.
+        .eq('state', 'failed')
         .select('*')
-        .single();
-      if (reset) run = reset as RunRow;
+        .maybeSingle();
+      // Read, not dropped. Without this a failed reset left run.state as
+      // 'failed', the while-guard below (which only admits ACTIVE_STATES) never
+      // fired, and "Run now" on a failed run silently did nothing while
+      // returning {ok: true, advanced: 0} — indistinguishable from a quiet day.
+      if (resetError) {
+        reportError('autopilot:retry-reset', resetError, { runId: run.id });
+        continue;
+      }
+      if (!reset) continue;
+      run = reset as RunRow;
     }
     // Step until ready (or budget/attempt limits hit) so a single tick can
     // take one run all the way to review.
@@ -959,13 +1129,26 @@ export async function advanceRuns(opts: {
         errors++;
         // The attempt was already recorded by the claim above.
         const attempts = run.attempts ?? claimedAttempts;
-        await db
+        // CONDITIONAL, like every other transition in this file. This was the
+        // one blind write, and it resurrected work a person had cancelled: a
+        // reviewer pressing Skip during a long step sets 'skipped', then this
+        // handler wrote 'drafted' straight over it — and the run advanced,
+        // became approvable, and published. The same race clobbered a
+        // concurrent regenerateRun, discarding the reviewer's feedback note.
+        //
+        // Predicated on the state this loop believes it holds, so a run that
+        // somebody else has moved is left exactly where they put it.
+        const { error: failError } = await db
           .from('template_runs')
           .update({
             state: attempts >= MAX_ATTEMPTS ? 'failed' : startedFrom,
             log: logLine(run, 'error', e instanceof Error ? e.message : 'step failed'),
           })
-          .eq('id', run.id);
+          .eq('id', run.id)
+          // startedFrom, which the claim above left untouched (it writes only
+          // `attempts`) and which the success path predicates on identically.
+          .eq('state', startedFrom);
+        if (failError) reportError('autopilot:step-error-write', failError, { runId: run.id });
         break;
       }
     }
@@ -992,10 +1175,43 @@ export type ApproveOptions = {
   schedule?: boolean;
 };
 
+/**
+ * Put a run that has already been CLAIMED back in the queue.
+ *
+ * Every early exit after the claim must come through here. `approved` is a
+ * one-way trapdoor otherwise: approveRun requires ready_for_review,
+ * regenerateRun rejects it, skipRun refuses it, and neither advanceRuns nor
+ * expireStaleRuns selects it — so a run left there disappears from the queue
+ * with nothing published and no way to reach it short of SQL.
+ */
+async function releaseClaim(
+  db: ReturnType<typeof supabaseAdmin>,
+  run: RunRow,
+  step: string,
+  note: string,
+): Promise<void> {
+  const { error } = await db
+    .from('template_runs')
+    .update({ state: 'ready_for_review', log: logLine(run, step, note) })
+    .eq('id', run.id)
+    .eq('state', 'approved');
+  // Read, not assumed. A failed release is exactly the stranding this function
+  // exists to prevent, and it must be visible rather than silently leaving the
+  // run in `approved` while the caller reports a tidy refusal.
+  if (error) reportError('autopilot:release-claim', error, { runId: run.id, step });
+}
+
 export async function approveRun(runId: string, userId: string, opts: ApproveOptions = {}): Promise<{ ok: boolean; note: string }> {
   const db = supabaseAdmin();
-  const { data: r } = await db
+  const { data: r, error: readError } = await db
     .from('template_runs').select('*').eq('id', runId).eq('user_id', userId).maybeSingle();
+  // supabase-js RESOLVES a failed read, so an unread error here returned
+  // "run not found" for a run that exists — a lie that makes a reviewer stop
+  // trying.
+  if (readError) {
+    reportError('autopilot:approve-read', readError, { runId });
+    return { ok: false, note: 'Could not read that run just now. Nothing was sent; try again in a moment.' };
+  }
   const run = r as RunRow | null;
   if (!run) return { ok: false, note: 'run not found' };
   if (run.state !== 'ready_for_review') return { ok: false, note: 'run is not ready for review' };
@@ -1011,37 +1227,57 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // spent nothing. State is set before the handoff rather than after, which
   // matches the existing semantics — a failed Metricool call already left the
   // run approved with an explanatory note.
-  const { data: claimed } = await db
+  const { data: claimed, error: claimError } = await db
     .from('template_runs')
     .update({ state: 'approved' })
     .eq('id', run.id)
     .eq('state', 'ready_for_review')
     .select('id');
+  // "Somebody else got there first" and "the write failed" are different
+  // answers. Reporting the second as the first told a reviewer their post was
+  // already handled when nothing had happened at all.
+  if (claimError) {
+    reportError('autopilot:approve-claim', claimError, { runId: run.id });
+    return { ok: false, note: 'Could not take hold of that run just now. Nothing was sent; try again in a moment.' };
+  }
   if (!Array.isArray(claimed) || claimed.length === 0) {
     return { ok: false, note: 'this run was already actioned' };
   }
 
-  const { data: t } = await db
+  // THE READ THAT COULD NOT FAIL QUIETLY.
+  //
+  // supabase-js resolves a failed query, so an unread error here gave `t = null`
+  // and therefore `providers = []`. Everything downstream then reads as a
+  // deliberate no-op: appliesTo([]) is false so the COFEPRIS advertising gate is
+  // SKIPPED, `if (mcProviders.length)` is false so NOTHING is sent to Metricool,
+  // handoffFailed stays false so no compensating write runs — and a posts row is
+  // inserted and `{ok: true, note: 'Staged for publishing review.'}` returned.
+  // The post sits on the calendar saying "waiting for your approval" and can
+  // never publish. This is the exact invariant the comment below claims.
+  const { data: t, error: templateError } = await db
     .from('schedule_templates').select('providers, name').eq('id', run.template_id).maybeSingle();
+  if (templateError) {
+    reportError('autopilot:approve-template', templateError, { runId: run.id });
+    await releaseClaim(db, run, 'approve-failed', 'Approval could not proceed: the template could not be read. Returned for review.');
+    return { ok: false, note: 'Could not read the template for that run, so nothing was sent. It is back in your queue.' };
+  }
   const providers: string[] = (t && Array.isArray((t as { providers?: string[] }).providers))
     ? ((t as { providers?: string[] }).providers as string[])
     : [];
-  const { data: d } = await db.from('drafts').select('pack').eq('id', run.draft_id).eq('user_id', run.user_id).maybeSingle();
+  // A template with no usable network is not something to stage silently.
+  if (!providers.length) {
+    await releaseClaim(db, run, 'approve-failed', 'Approval could not proceed: the template has no networks selected. Returned for review.');
+    return { ok: false, note: 'That template has no networks selected, so there was nowhere to send it. It is back in your queue.' };
+  }
+  const { data: d, error: draftError } = await db.from('drafts').select('pack').eq('id', run.draft_id).eq('user_id', run.user_id).maybeSingle();
+  if (draftError) {
+    reportError('autopilot:approve-draft', draftError, { runId: run.id });
+    await releaseClaim(db, run, 'approve-failed', 'Approval could not proceed: the draft could not be read. Returned for review.');
+    return { ok: false, note: 'Could not read that draft just now, so nothing was sent. It is back in your queue.' };
+  }
   const pack = (d as { pack?: ContentPack } | null)?.pack;
   if (!pack) {
-    // The claim above already moved this run to `approved`. Leaving it there
-    // with nothing published is a dead end: approveRun needs ready_for_review,
-    // regenerateRun accepts only ready_for_review|drafted|failed, and skipRun
-    // refuses terminal states - the run becomes unreachable without SQL. Put it
-    // back so a human can act on it.
-    await db
-      .from('template_runs')
-      .update({
-        state: 'ready_for_review',
-        log: logLine(run, 'approve-failed', 'Approval could not proceed: the draft has no content. Returned for review.'),
-      })
-      .eq('id', run.id)
-      .eq('state', 'approved');
+    await releaseClaim(db, run, 'approve-failed', 'Approval could not proceed: the draft has no content. Returned for review.');
     return { ok: false, note: 'The draft has no content, so nothing was sent. The run is back in your queue.' };
   }
 
@@ -1073,6 +1309,25 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
         .eq('state', 'approved');
       return { ok: false, note: complianceMessage(check) + ' The run is back in your queue.' };
     }
+  }
+
+  // And the video rule, at the same door as the advertising rule above.
+  //
+  // The Autopilot writes its own drafts and none of them is transcribed from a
+  // video, so on the ordinary path this never fires. It is here because
+  // `template_runs.draft_id` is a column the RLS policy lets a user UPDATE on
+  // their own row — the same hole that once made this route hand back another
+  // user's pack — so a run CAN be pointed at a video-prepared draft, and with
+  // `schedule: true` this function publishes LIVE. A gate that is dead on the
+  // happy path and load-bearing on the one that is not is worth its four lines.
+  //
+  // "Has the video" here means the matched clip, not the hero image: `angle
+  // .media.url` is the only video this path can attach, and the image below is
+  // a picture.
+  const videoRule = videoVerdict(pack as PackLike, Boolean(run.angle?.media?.url));
+  if (videoRule.pending) {
+    await releaseClaim(db, run, 'approve-refused', 'Not sent: ' + pendingRefusal(videoRule));
+    return { ok: false, note: pendingRefusal(videoRule) + ' The run is back in your queue.' };
   }
 
   // Image enrichment: make sure the draft carries its AI hero image before
@@ -1149,7 +1404,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     return { ok: false, note };
   }
 
-  const { data: inserted } = await db.from('posts').insert({
+  const { data: inserted, error: insertError } = await db.from('posts').insert({
     user_id: userId,
     draft_id: run.draft_id,
     providers,
@@ -1162,24 +1417,46 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     // yes to this".
     status: opts.schedule && mcProviders.length ? 'approved' : 'pending_review',
   }).select('id').maybeSingle();
+  // READ, not assumed. The Metricool post already exists at this point — with
+  // opts.schedule it is in the LIVE queue with autoPublish: true — so a
+  // swallowed error here leaves a post that will publish and that this
+  // dashboard has no row for: nothing to approve, reschedule or delete, and
+  // `ok: true` returned. templates/apply handles this exact case correctly and
+  // says so in a comment; this did not.
+  let bookkeeping = '';
+  if (insertError) {
+    reportError('autopilot:approve-posts-insert', insertError, { runId: run.id, metricoolPostId: metricoolPostId || '' });
+    bookkeeping = metricoolPostId
+      ? ' NOTE: it is in Metricool but could not be saved to this dashboard, so it will not appear on your calendar here — manage it in Metricool.'
+      : ' NOTE: it could not be saved to this dashboard.';
+  }
   // A run approved straight to a live slot is also recorded on the team's
   // calendar sheet (best-effort; see lib/approval-log.ts).
   if (opts.schedule && mcProviders.length) {
-    void recordApproval({
+    // AWAITED, not fire-and-forget. This same file says so 500 lines earlier
+    // about recordDraftKeywords: "on Vercel the lambda can freeze once the
+    // response is returned, so this insert was lost non-deterministically".
+    // Identical construct, same runtime — and this is the audit record for the
+    // LIVE-scheduled posts specifically. recordApproval is already fail-soft
+    // (it catches and returns false), so awaiting it costs nothing.
+    await recordApproval({
       publishDate: run.scheduled_for,
       networks: providers,
       caption: text,
       mediaUrl: run.angle?.media?.url || packImage?.url || '',
       source: 'Autopilot · approve & schedule',
-      postId: String((inserted as { id?: string } | null)?.id || run.id),
+      // The run id is NOT a post id. Falling back to it silently mixed two id
+      // spaces in the audit column; an empty cell is honest, a wrong id is not.
+      postId: String((inserted as { id?: string } | null)?.id || ''),
     });
   }
-  await db
+  const { error: logError } = await db
     .from('template_runs')
     // State was already set by the claim above; this records the outcome.
     .update({ log: logLine(run, 'approve', note) })
     .eq('id', run.id);
-  return { ok: true, note };
+  if (logError) reportError('autopilot:approve-log', logError, { runId: run.id });
+  return { ok: true, note: note + bookkeeping };
 }
 
 // Reviewer feedback loop: send a run back for a redraft that MUST address
@@ -1187,12 +1464,16 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
 // draft step with the feedback embedded in the prompt.
 export async function regenerateRun(runId: string, userId: string, note?: string): Promise<boolean> {
   const db = supabaseAdmin();
-  const { data: r } = await db
+  const { data: r, error: readError } = await db
     .from('template_runs')
     .select('*')
     .eq('id', runId)
     .eq('user_id', userId)
     .maybeSingle();
+  if (readError) {
+    reportError('autopilot:regenerate-read', readError, { runId });
+    return false;
+  }
   const run = r as RunRow | null;
   if (!run || !run.angle) return false;
   if (!['ready_for_review', 'drafted', 'failed'].includes(run.state)) return false;
@@ -1204,7 +1485,7 @@ export async function regenerateRun(runId: string, userId: string, note?: string
   // handoff. The run then came back for review and got approved a second time -
   // two Metricool drafts and two `posts` rows for one slot, with no unique
   // constraint and no compensating path (skipRun refuses terminal runs).
-  const { data: claimed } = await db
+  const { data: claimed, error: claimError } = await db
     .from('template_runs')
     .update({
       state: 'researched',
@@ -1217,14 +1498,22 @@ export async function regenerateRun(runId: string, userId: string, note?: string
     .eq('user_id', userId)
     .eq('state', run.state)
     .select('id');
+  if (claimError) {
+    reportError('autopilot:regenerate-claim', claimError, { runId });
+    return false;
+  }
   // Lost the race: something else moved this run between our read and write.
   return Array.isArray(claimed) && claimed.length > 0;
 }
 
 export async function skipRun(runId: string, userId: string): Promise<boolean> {
   const db = supabaseAdmin();
-  const { data: r } = await db
+  const { data: r, error: readError } = await db
     .from('template_runs').select('id, log, state').eq('id', runId).eq('user_id', userId).maybeSingle();
+  if (readError) {
+    reportError('autopilot:skip-read', readError, { runId });
+    return false;
+  }
   if (!r) return false;
   // `state` was selected and then never checked, so a stale second tab could
   // skip a run that had ALREADY been approved — the dashboard then reported
@@ -1233,12 +1522,22 @@ export async function skipRun(runId: string, userId: string): Promise<boolean> {
   // refuse instead: a terminal run cannot be skipped.
   const priorState = (r as RunRow).state;
   if (priorState === 'approved' || priorState === 'skipped') return false;
-  await db
+  const { data: skipped, error } = await db
     .from('template_runs')
     .update({ state: 'skipped', log: logLine(r as RunRow, 'skip', 'Skipped by reviewer.') })
     .eq('id', runId)
     // Conditional write: if another tab approved it between the read and
     // here, this matches nothing rather than clobbering the approval.
-    .eq('state', priorState);
-  return true;
+    .eq('state', priorState)
+    .select('id');
+  // AND THE RESULT IS RETURNED. The compare-and-swap above was written
+  // correctly and then thrown away: `return true` regardless meant that when
+  // another tab had already approved the run — the precise case the CAS exists
+  // to catch — the reviewer was told "Skipped" for a post that was in Metricool
+  // and would ship. A guard whose outcome nobody reads is not a guard.
+  if (error) {
+    reportError('autopilot:skip', error, { runId });
+    return false;
+  }
+  return Array.isArray(skipped) && skipped.length > 0;
 }
