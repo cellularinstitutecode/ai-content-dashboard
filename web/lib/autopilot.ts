@@ -49,6 +49,7 @@ import { ensureDraftImage, type PackImage } from '@/lib/images';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
 import { usableLeadHours, leadProblem } from '@/lib/lead-window';
+import { videoVerdict, pendingRefusal, type PackLike } from '@/lib/video-required';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1308,6 +1309,25 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
         .eq('state', 'approved');
       return { ok: false, note: complianceMessage(check) + ' The run is back in your queue.' };
     }
+  }
+
+  // And the video rule, at the same door as the advertising rule above.
+  //
+  // The Autopilot writes its own drafts and none of them is transcribed from a
+  // video, so on the ordinary path this never fires. It is here because
+  // `template_runs.draft_id` is a column the RLS policy lets a user UPDATE on
+  // their own row — the same hole that once made this route hand back another
+  // user's pack — so a run CAN be pointed at a video-prepared draft, and with
+  // `schedule: true` this function publishes LIVE. A gate that is dead on the
+  // happy path and load-bearing on the one that is not is worth its four lines.
+  //
+  // "Has the video" here means the matched clip, not the hero image: `angle
+  // .media.url` is the only video this path can attach, and the image below is
+  // a picture.
+  const videoRule = videoVerdict(pack as PackLike, Boolean(run.angle?.media?.url));
+  if (videoRule.pending) {
+    await releaseClaim(db, run, 'approve-refused', 'Not sent: ' + pendingRefusal(videoRule));
+    return { ok: false, note: pendingRefusal(videoRule) + ' The run is back in your queue.' };
   }
 
   // Image enrichment: make sure the draft carries its AI hero image before

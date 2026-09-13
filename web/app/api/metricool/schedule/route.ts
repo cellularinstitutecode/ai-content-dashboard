@@ -8,6 +8,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { isAllowedEmail, ALLOWED_BLOG_IDS, DEFAULT_BLOG_ID } from '@/lib/access';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { normalizePublishAt, METRICOOL_TIMEZONE } from '@/lib/metricool-time';
+import { mediaProblem } from '@/lib/composer';
 
 export const runtime = 'nodejs';
 // This route makes TWO sequential calls to Metricool now — normalise the media,
@@ -106,6 +107,18 @@ export async function POST(req: NextRequest) {
   // scientific reference before it goes anywhere near the account.
   const gate = await complianceGate(user.id, text, network);
   if (!gate.ok) return NextResponse.json(gateRefusal(gate), { status: 422 });
+
+  // AND THE MEDIA REQUIREMENT, on the server.
+  //
+  // mediaProblem existed only in the browser — app/page.tsx and
+  // app/calendar/page.tsx — so this route accepted { network: 'tiktok',
+  // text: '…' } with no mediaUrl and answered ok: true. The post then sat in
+  // Metricool as something the network will refuse. A rule enforced only in the
+  // page that happens to call it is not enforced.
+  const needsMedia = mediaProblem([network], typeof payload.mediaUrl === 'string' ? payload.mediaUrl : '');
+  if (needsMedia) {
+    return NextResponse.json({ error: 'media_required', message: needsMedia }, { status: 422 });
+  }
 
   const body: any = {
     text: text,

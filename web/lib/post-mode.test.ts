@@ -8,7 +8,7 @@
 // would mean dragging an unapproved post to another day published it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { modeOfStatus, isAwaitingApproval, APPROVED_STATUS } from './post-mode.ts';
+import { modeOfStatus, isAwaitingApproval, videoPending, APPROVED_STATUS } from './post-mode.ts';
 
 test('only an approved post is sent to the live queue', () => {
   assert.equal(modeOfStatus(APPROVED_STATUS), 'scheduled');
@@ -49,5 +49,48 @@ test('the button and the wire agree', () => {
   // review. Disagreement here is how a post publishes without being approved.
   for (const s of ['pending_review', 'draft', 'scheduled', 'queued', 'approved', '', 'wat']) {
     assert.equal(isAwaitingApproval(s), modeOfStatus(s) === 'review', s);
+  }
+});
+
+// --- videoPending -----------------------------------------------------------
+// The chip. Three inputs, and the one that is easy to get wrong is the third:
+// it must mean "has the VIDEO", not "has an attachment".
+
+const VIDEO_PACK = { kind: 'video', sourceUrl: 'https://drive.google.com/file/d/abc/view', linkedin: 'x' };
+
+test('a video-derived post with no video is pending', () => {
+  assert.equal(videoPending('pending_review', VIDEO_PACK, false), true);
+  assert.equal(videoPending('scheduled', VIDEO_PACK, false), true);
+  assert.equal(videoPending('draft', { kind: 'clip' }, false), true);
+});
+
+test('attaching the video clears it', () => {
+  assert.equal(videoPending('pending_review', VIDEO_PACK, true), false);
+});
+
+test('a post that was never video-derived is never pending', () => {
+  assert.equal(videoPending('pending_review', { kind: 'blog' }, false), false);
+  assert.equal(videoPending('pending_review', {}, false), false);
+  // No draft at all — a hand-written post.
+  assert.equal(videoPending('pending_review', null, false), false);
+});
+
+test('a post nobody can still act on is not painted PENDING', () => {
+  // Approved or gone. Whatever happened to its video, saying "pending" now
+  // would contradict the record.
+  for (const s of [APPROVED_STATUS, 'published', 'sent', 'live', 'failed', 'rejected']) {
+    assert.equal(videoPending(s, VIDEO_PACK, false), false, s + ' was painted pending');
+  }
+});
+
+test('pending is exactly the states that still owe a person a decision', () => {
+  // The chip and the Approve button must agree: anything still awaiting
+  // approval can be pending, and nothing else can.
+  for (const s of ['pending_review', 'draft', 'queued', '', 'wat']) {
+    assert.equal(
+      videoPending(s, VIDEO_PACK, false),
+      isAwaitingApproval(s),
+      s + ' disagreed with isAwaitingApproval',
+    );
   }
 });

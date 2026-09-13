@@ -16,7 +16,7 @@ import { useWorkspace } from "@/components/workspace";
 import { appliesTo as complianceApplies, checkCompliance, ensureAviso, DEFAULT_AVISO_NUMBER } from "@/lib/compliance";
 import { PanelLoader } from "@/components/LoadingScreen";
 import { friendlyError, friendlyErrorFromResponse, friendlyImageError } from '@/lib/friendly-error';
-import { isAwaitingApproval } from '@/lib/post-mode';
+import { postStatusMeta } from '@/lib/post-mode';
 import { semrushDraftNote } from '@/lib/semrush-reason';
 import { fmtScheduleDateTime, scheduleTzLabel, schedulePresetValue } from '@/lib/schedule-clock';
 
@@ -100,23 +100,6 @@ function semrushUrl(keyword: string): string {
   const kw = (keyword || '').trim();
   const base = 'https://www.semrush.com/analytics/keywordmagic/';
   return kw ? (base + '?q=' + encodeURIComponent(kw) + '&db=us') : (base + '?db=us');
-}
-
-// Human-readable status for a scheduled post row from /api/posts.
-//
-// This label decides whether the Approve button is offered, so it asks the
-// same question the API asks before it sends anything — lib/post-mode.ts.
-// 'scheduled' is not an approval: it is the column default in schema.sql and
-// Metricool's own word for a post it is holding for review. Labelling those
-// rows "Scheduled" hid the one control that could actually send them, on
-// precisely the posts nobody had ever approved.
-function postStatusMeta(status: string): { label: string; tone: string } {
-const s = String(status || '').toLowerCase();
-if (s === 'published' || s === 'sent' || s === 'live') return { label: 'Published', tone: 'green' };
-if (s === 'failed' || s === 'error' || s === 'rejected') return { label: 'Needs attention', tone: 'red' };
-return isAwaitingApproval(s)
-? { label: 'Waiting for your approval', tone: 'amber' }
-: { label: 'Scheduled', tone: 'blue' };
 }
 
 
@@ -210,6 +193,10 @@ const [keywordSource, setKeywordSource] = useState<string>('none');
 // note under the output can state the true reason instead of assuming one.
 const [keywordReason, setKeywordReason] = useState<string | undefined>(undefined);
 const [approvingId, setApprovingId] = useState<string | null>(null);
+// The post whose video is being fetched right now. Separate from
+// approvingId because attaching is NOT approving — the post stays exactly
+// where it is in the queue, waiting for a person.
+const [attachingId, setAttachingId] = useState<string | null>(null);
 const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string; verification?: { status?: string; score?: number | null; issues?: string[]; advisory?: string[]; textDetected?: boolean } } | null>(null);
 const [genImageLoading, setGenImageLoading] = useState(false);
 const [lastDraftId, setLastDraftId] = useState<string | null>(null);
@@ -466,6 +453,11 @@ const [mBusy, setMBusy] = useState(false);
 // status and a link to approve it in Metricool.
 const [posts, setPosts] = useState<any[]>([]);
 const [postsLoading, setPostsLoading] = useState(false);
+// The queue is showing posts, but it could not read the drafts behind them —
+// so it cannot know which are waiting on a video, and every "Pending video"
+// chip is missing. Said out loud, because a missing chip reads as "nothing is
+// pending" and that is the opposite of what is known.
+const [packsWarning, setPacksWarning] = useState(false);
 const [rescheduleId, setRescheduleId] = useState<string | null>(null);
 const [rescheduleAt, setRescheduleAt] = useState('');
 
@@ -713,6 +705,7 @@ if (!r.ok) { setLoadError(await friendlyErrorFromResponse(r, 'We could not load 
 const j = await r.json().catch(() => null);
 const rows = (j && Array.isArray(j.posts)) ? j.posts : toArray(j);
 setPosts(Array.isArray(rows) ? rows : []);
+setPacksWarning(j?.packsUnavailable === true);
 setLoadError(null);
 } catch (e) { setLoadError(friendlyError(e, 'We could not reach the server. Check your connection.')); } finally { setPostsLoading(false); }
 }
@@ -771,6 +764,36 @@ setActionMsg(null);
 refreshPosts(); announce('posts', 'stats', 'insights');
 } catch (e) { setActionMsg(friendlyError(e, 'We could not approve that post.')); }
 finally { setApprovingId(null); }
+}
+
+// What the "Pending video" chip does.
+//
+// The post's copy was written from a video, so it may not go out without one.
+// This makes the world-readable copy of that video and attaches it. It does not
+// approve anything: the post stays in the review queue and somebody still has
+// to read it and press Approve.
+//
+// While the copies folder is not in a Shared Drive this will fail every time,
+// and that is the intended behaviour of the chip today — the refusal it shows
+// names the Google cause and says clearing space will not help, which is more
+// use per post than one banner at the top of the page.
+async function attachVideo(p: any) {
+const id = String(p?.id || '');
+if (!id) return;
+setAttachingId(id);
+try {
+const r = await fetch('/api/posts', {
+method: 'PATCH',
+headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({ id, action: 'attach_video' }),
+});
+if (!r.ok) { setActionMsg(await friendlyErrorFromResponse(r, 'We could not attach the video to that post.')); return; }
+// No success banner: actionMsg is "the thing you just clicked did not
+// happen". The chip disappearing is the confirmation.
+setActionMsg(null);
+refreshPosts(); announce('posts');
+} catch (e) { setActionMsg(friendlyError(e, 'We could not attach the video to that post.')); }
+finally { setAttachingId(null); }
 }
 
 async function deleteDraft(id: string) {
@@ -1777,6 +1800,11 @@ return (
 {loadError && (
 <div className="mt-2 rounded-2xl bg-amber-50 p-4 text-[12px] text-amber-800 ring-1 ring-amber-200" role="status">{loadError}</div>
 )}
+{packsWarning && (
+<div className="mt-2 rounded-2xl bg-amber-50 p-4 text-[12px] text-amber-800 ring-1 ring-amber-200" role="status">
+We could not read the drafts behind these posts just now, so any post waiting on its video is not marked here. Approving is still blocked for those — refresh in a moment to see them.
+</div>
+)}
 {safePosts.length === 0 && !postsLoading && !loadError && (
 <div className="mt-2 rounded-2xl bg-subtle p-4 text-center text-[12px] text-ink-faint ring-1 ring-line">Nothing in the queue yet. Anything you schedule here, on the calendar or from a template lands in this list.</div>
 )}
@@ -1786,10 +1814,27 @@ return (
 const meta = postStatusMeta(p?.status);
 const tone = meta.tone === 'amber' ? 'bg-amber-50 text-amber-700 ring-amber-100' : meta.tone === 'green' ? 'bg-emerald-50 text-emerald-700 ring-emerald-100' : 'bg-blue-50 text-blue-700 ring-blue-100';
 const id = String(p?.id || '');
+// Waiting on its video. Computed by the API from the linked draft's pack —
+// the only record anywhere that this copy was transcribed from a video —
+// and it replaces the status chip rather than sitting beside it, because
+// "waiting for your approval" is not what this post is waiting for.
+const pending = p?.videoPending === true;
 return (
 <li key={id || i} className="rounded-2xl bg-white p-3 ring-1 ring-line">
 <div className="flex items-center justify-between gap-2">
+{pending ? (
+<button
+type="button"
+disabled={attachingId === id}
+onClick={() => attachVideo(p)}
+title="This copy was written from a video and has none attached. Click to attach it."
+className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700 ring-1 ring-rose-200 transition hover:bg-rose-100 disabled:opacity-50"
+>
+{attachingId === id ? 'Attaching video…' : 'Pending video'}
+</button>
+) : (
 <span className={'rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ' + tone}>{meta.label}</span>
+)}
 <span className="text-[11px] tabular-nums text-ink-faint">{fmtDateTime(p?.publication_date)}</span>
 </div>
 <p className="mt-1.5 line-clamp-2 text-[13px] text-ink">{p?.text || 'Scheduled post'}</p>
@@ -1799,7 +1844,7 @@ return (
 ))}
 {id && rescheduleId !== id && (
 <span className="ml-auto flex items-center gap-3">
-{meta.label === 'Waiting for your approval' && (
+{meta.label === 'Waiting for your approval' && !pending && (
 <>
 <button type="button" disabled={approvingId === id} onClick={() => approvePost(p)} className="rounded-full bg-accent px-2.5 py-0.5 text-[11px] font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50">{approvingId === id ? 'Approving…' : 'Approve'}</button>
 <button type="button" disabled={approvingId === id} onClick={() => approvePost(p, true)} className="text-[11px] font-medium text-accent hover:underline disabled:opacity-50">Publish now</button>

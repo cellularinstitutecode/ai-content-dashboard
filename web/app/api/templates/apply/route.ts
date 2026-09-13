@@ -161,6 +161,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // No video gate here, for the same reason lib/batch-draft.ts records: every
+  // post this route creates carries the TEMPLATE's own text and no draft_id at
+  // all, so there is no draft pack to be video-derived and nothing for the rule
+  // to read. The gate lives on the paths that can reach a video-prepared draft
+  // — /api/posts PATCH and approveRun.
   const started = Date.now();
   const created: any[] = [];
   const failures: string[] = [];

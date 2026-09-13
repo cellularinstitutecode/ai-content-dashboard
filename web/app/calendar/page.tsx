@@ -9,7 +9,7 @@ import { useWorkspace } from '@/components/workspace';
 import { PanelLoader } from '@/components/LoadingScreen';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 // The Approve button must agree with the API about what may go out.
-import { isAwaitingApproval } from '@/lib/post-mode';
+import { isAwaitingApproval, postStatusMeta } from '@/lib/post-mode';
 import { fmtScheduleTime, scheduleDateKey, scheduleWallClock, isoAtScheduleWallClock, scheduleTzLabel } from '@/lib/schedule-clock';
 
 type Post = {
@@ -19,6 +19,8 @@ type Post = {
   publication_date?: string;
   status?: string;
   metricool_post_id?: string | null;
+  /** Set by GET /api/posts: this copy came from a video and has none attached. */
+  videoPending?: boolean;
 };
 
 function toArray(x: any): any[] {
@@ -36,13 +38,6 @@ const NETWORKS = PUBLISH_NETWORKS;
 
 // Shared with lib/composer so the rule has one home and one test.
 const dateKey = localDateKey;
-
-function statusWord(status?: string): string {
-  const s = String(status || '').toLowerCase();
-  if (s === 'published' || s === 'sent' || s === 'live') return 'Published';
-  if (s === 'failed' || s === 'error' || s === 'rejected') return 'Needs attention';
-  return 'Scheduled';
-}
 
 // Which calendar square a post belongs in, and the time printed on it — both
 // on the SCHEDULE clock. Bucketing by the viewer's clock put a late-evening
@@ -176,6 +171,11 @@ export default function CalendarPage() {
       if (!r.ok) throw new Error('Failed to load posts (' + r.status + ')');
       const j = await r.json().catch(() => null);
       setPosts(toArray(j));
+      // The packs behind these posts could not be read, so nothing can be
+      // marked "Pending video" and an absent chip would read as "all fine".
+      if (j?.packsUnavailable === true) {
+        setErr('We could not read the drafts behind these posts, so any post waiting on its video is not marked here. Approving is still blocked for those — reload in a moment.');
+      }
     } catch (e: any) {
       setErr(e && e.message ? e.message : 'Failed to load');
     } finally {
@@ -268,6 +268,31 @@ export default function CalendarPage() {
       announce('posts', 'stats', 'insights');
     } catch (e: any) {
       setErr(friendlyError(e, 'We could not approve that post.'));
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  // What the "Pending video" square does.
+  //
+  // Copy transcribed from a video may not go out without that video, so this
+  // makes the world-readable copy and attaches it. It is NOT an approval: the
+  // post stays exactly where it is and still needs a person to read it.
+  async function attachVideo(post: Post) {
+    if (!post.id) return;
+    setSaving(post.id);
+    try {
+      const r = await fetch('/api/posts', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: post.id, action: 'attach_video' }),
+      });
+      if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'We could not attach the video to that post.'));
+      setErr(null);
+      await refresh();
+      announce('posts');
+    } catch (e: any) {
+      setErr(friendlyError(e, 'We could not attach the video to that post.'));
     } finally {
       setSaving(null);
     }
@@ -448,7 +473,20 @@ export default function CalendarPage() {
                     >
                       <div className="flex items-center justify-between gap-1">
                         <span className="font-medium text-accent">{timeLabel(p.publication_date)}</span>
-                        {isAwaitingApproval(p.status) ? (
+                        {p.videoPending === true ? (
+                          // Waiting on its video, not on a reviewer. Approve is
+                          // refused server-side for this post, so the square
+                          // offers the thing that would actually unblock it.
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); void attachVideo(p); }}
+                            disabled={saving === p.id}
+                            title="This copy was written from a video and has none attached. Click to attach it."
+                            className="rounded-full bg-rose-100 px-1.5 py-[1px] text-[9px] font-semibold text-rose-700 hover:bg-rose-200 disabled:opacity-50"
+                          >
+                            {saving === p.id ? 'Attaching…' : 'Pending video'}
+                          </button>
+                        ) : isAwaitingApproval(p.status) ? (
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); void approve(p); }}
@@ -459,7 +497,7 @@ export default function CalendarPage() {
                             Approve
                           </button>
                         ) : (
-                          <span className="text-[9px] font-medium text-emerald-700">{statusWord(p.status)}</span>
+                          <span className="text-[9px] font-medium text-emerald-700">{postStatusMeta(p.status).label}</span>
                         )}
                       </div>
                       <div className="truncate">{p.text || 'Untitled post'}</div>
@@ -495,18 +533,24 @@ export default function CalendarPage() {
             <ol className="max-h-[70vh] space-y-2 overflow-y-auto pr-1">
               {upcomingList.map((p) => {
                 const waiting = isAwaitingApproval(p.status);
+                // Waiting on its video rather than on a reviewer. Approve is
+                // refused server-side for these, so the list offers the attach
+                // instead of a button that cannot work.
+                const pending = p.videoPending === true;
                 const d = p.publication_date ? new Date(p.publication_date) : null;
                 return (
                   <li key={p.id} className={'rounded-xl border p-3 text-[12px] ' + (waiting ? 'border-amber-200 bg-amber-50/60' : 'border-black/5 bg-canvas')}>
                     <button type="button" onClick={() => jumpTo(p)} className="flex w-full items-center justify-between gap-2 text-left">
                       <span className="font-semibold text-ink">{d ? d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : '—'} · {timeLabel(p.publication_date)}</span>
-                      <span className={'rounded-full px-2 py-[2px] text-[10px] font-semibold ' + (waiting ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800')}>{waiting ? 'Waiting for approval' : statusWord(p.status)}</span>
+                      <span className={'rounded-full px-2 py-[2px] text-[10px] font-semibold ' + (pending ? 'bg-rose-100 text-rose-700' : waiting ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800')}>{pending ? 'Pending video' : waiting ? 'Waiting for approval' : postStatusMeta(p.status).label}</span>
                     </button>
                     <div className="mt-1 line-clamp-2 text-ink/80" title={p.text || ''}>{p.text || 'Untitled post'}</div>
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                       {(p.providers || []).map((n) => <span key={n} className="rounded-full bg-black/5 px-2 py-[1px] text-[10px] text-ink/60">{networkLabel(n)}</span>)}
                       <span className="flex-1" />
-                      {waiting && (
+                      {pending ? (
+                        <button type="button" disabled={saving === p.id} onClick={() => void attachVideo(p)} title="This copy was written from a video and has none attached. Click to attach it." className="rounded-full bg-rose-600 px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{saving === p.id ? 'Attaching…' : 'Attach video'}</button>
+                      ) : waiting && (
                         <button type="button" disabled={saving === p.id} onClick={() => void approve(p)} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Approve</button>
                       )}
                       <button type="button" disabled={saving === p.id} onClick={() => { const day = d ? new Date(d.getTime() + 86400000) : null; if (day) void reschedule(String(p.id), day); }} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/60 hover:bg-black/5" title="Move one day later">+1 day</button>
