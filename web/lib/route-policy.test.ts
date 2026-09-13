@@ -190,10 +190,32 @@ test('a batch cannot be run without a signature the server issued', () => {
   // on without verification is a forged list of posts plus the word "yes".
   assert.match(route!.source, /batchIsAuthentic\s*\(/, 'pendingBatch must be verified before it runs');
   assert.match(route!.source, /signBatch\s*\(/, 'pendingBatch must be signed on the way out');
-  // Cleared before the work, so a timed-out batch cannot be re-run from the top
-  // by a second "yes" and duplicate whatever the first pass already queued.
-  const confirm = route!.source.slice(route!.source.indexOf('session.pendingBatch = null;\n        const out = await runBatch'));
-  assert.ok(confirm.startsWith('session.pendingBatch = null;'), 'the ticket must be cleared before runBatch, not after');
+  // SPENT before the work, not merely cleared.
+  //
+  // The first version of this asserted that `session.pendingBatch = null` sat
+  // immediately above `runBatch` — which is a fact about statement order, not
+  // about safety, and it was satisfied by code that protected nothing: the
+  // session round-trips through the browser, so clearing the server's copy
+  // leaves the client holding a still-valid signed ticket it can re-post.
+  const claimAt = route!.source.indexOf('claimBatch(');
+  const runAt = route!.source.indexOf('await runBatch(');
+  assert.ok(claimAt > -1, 'the batch ticket must be claimed single-use before it runs');
+  assert.ok(runAt > -1, 'expected runBatch to be called');
+  assert.ok(claimAt < runAt, 'the ticket must be claimed BEFORE the work, or a concurrent replay gets past it');
+});
+
+test('a batch ticket is single-use and its optional fields are signed', () => {
+  // Guards the two ways past the gate the audit found. Behavioural, not a grep:
+  // lib/assistant-token.ts is importable by the test runner precisely so this
+  // can be checked rather than asserted about its source text.
+  const tokenSrc = readFileSync(join(WEB_ROOT, 'lib', 'assistant-token.ts'), 'utf8');
+  assert.doesNotMatch(tokenSrc, /^import 'server-only';/m,
+    'marking it server-only is what put the consent gate outside the test runner');
+  assert.match(tokenSrc, /jti/, 'a ticket needs an identity to be spendable once');
+  // The encoding itself — absent must not sign the same as empty — is checked
+  // behaviourally in lib/assistant-token.test.ts. Not grepped for here: the
+  // first attempt matched the comment that EXPLAINS the old bug, which is the
+  // standing hazard with asserting against source text.
 });
 
 test('every route that spends money on a third party is rate limited', () => {

@@ -18,8 +18,11 @@
 //  2. The planner's numbers are INTERPOLATED from lib/planner-constants.ts, not
 //     typed out. Prose about a constant drifts from the constant; this cannot.
 //
-// It is appended as its own static system block so it prompt-caches, which is
-// why editing it is cheap in tokens but not free — keep it dense.
+// chatWithTools sends it as its own system block, marked cache_control, AFTER
+// the tool instructions and BEFORE the live situation — the boundary matters:
+// anything static that ends up inside the live block cannot be cached at all,
+// because that block changes every turn. Editing this file invalidates the cache
+// for the next request, so keep it dense but do not fear touching it.
 //
 // No imports beyond the constants: the test runner strips types and runs this
 // file directly.
@@ -107,23 +110,32 @@ template says: which networks, which weekdays, what time of day, and a strategy.
 
 A strategy has a mode — \`off\` (a static template, the old Apply flow),
 \`fixed_topic\` (always this subject), \`pillars\` (rotate through a list of
-subjects), or \`auto\` — plus a format (social, blog, email, video, ad), a goal
-(rank, traffic, engagement, authority), a lead time, and how many rewrites a weak
-draft gets.
+subjects), or \`auto\` — plus a format (social, blog, email, video, ad) and a
+goal (rank, traffic, engagement, authority). It also carries a lead time and a
+rewrite allowance, which are set on the Templates page rather than by you; leave
+them alone and they keep their stored values.
 
 How a slot becomes a post:
 
-- A daily tick materialises every active template's upcoming slots
-  ${HORIZON_DAYS} days ahead.
-- Each run then advances one step per tick: research → choose an angle → draft →
-  score. A draft scoring under ${SCORE_THRESHOLD} is rewritten once, within the
+- A daily tick materialises the upcoming slots, ${HORIZON_DAYS} days ahead, for
+  every active template that has a strategy. A template in \`off\` mode is left
+  alone — it belongs to the older Apply flow, which posts its stored text.
+- A tick then takes each run as far as it can in one go: research → choose an
+  angle → draft → score, usually all the way to ready-for-review in the same
+  pass. A draft scoring under ${SCORE_THRESHOLD} is rewritten once, within the
   template's rewrite allowance.
-- The angle picker avoids anything covered in the last ${ANTI_REPEAT_DAYS} days,
-  so a rotation does not circle back onto its own ground.
+- The angle picker avoids KEYWORDS used in the last ${ANTI_REPEAT_DAYS} days, so
+  two posts do not chase the same search term. Note the limit: this filters the
+  keyword, not the subject, so two templates sharing a pillar can still cover
+  that pillar on the same day from different angles. Give each template its own
+  pillars if you want them genuinely apart.
 - A run that keeps failing stops after ${MAX_ATTEMPTS} attempts and shows up as
   needing a person.
-- Runs stop at **ready for review**. Approval — a human action — is what pushes
-  the Metricool draft.
+- Runs stop at **ready for review**. Nothing past that point is automatic: a
+  person approves, and that approval is what sends it to Metricool. (In the
+  Autopilot screen a person approving can also choose to schedule it live rather
+  than as a draft. That is their choice and their button; you have no tool that
+  does it.)
 
 Times are CLINIC-LOCAL wall clock (America/Cancún), not server time.
 
@@ -142,8 +154,9 @@ Give each the SAME weekdays and a DIFFERENT time_of_day, each with
 - 13:00 — pillars: NK cells, immune support, immunotherapy
 - 18:00 — pillars: the patient journey, travelling to Cancún, what a stay involves
 
-Three different subjects, three different times, one shared ${ANTI_REPEAT_DAYS}-day
-anti-repeat window keeping them off each other's ground. Use \`list_schedule\` to
+Three different subjects, three different times. Give each its OWN pillars —
+that separation is what keeps them apart; the ${ANTI_REPEAT_DAYS}-day window only
+stops them reusing each other's keywords, not each other's subjects. Use \`list_schedule\` to
 see what already exists before adding more, and \`create_schedule\` to build them
 — do not just describe the shape when the user has asked for it to be set up.
 

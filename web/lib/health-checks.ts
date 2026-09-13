@@ -22,6 +22,7 @@ import { sheetWriteAccess } from '@/lib/google-sources';
 import { driveFolderReport } from '@/lib/drive';
 import { serviceKeyVerdict } from '@/lib/supabase-key';
 import { schemaDetail, type SchemaProbe } from '@/lib/schema-probe';
+import { reportError } from '@/lib/report';
 
 export type Check = {
   name: string;
@@ -334,6 +335,14 @@ export async function runHealthChecks(): Promise<HealthReport> {
 // Sixty seconds: long enough that a conversation costs one round of probes,
 // short enough that fixing a variable and re-asking shows the fix.
 const TTL_MS = 60_000;
+/**
+ * How long a failing probe may keep serving the last good answer.
+ *
+ * Long enough to ride out a blip, short enough that a dependency which is
+ * genuinely gone stops being reported as healthy. Nothing here can tell those
+ * two apart, so the bound is what makes the difference visible.
+ */
+const STALE_LIMIT_MS = 10 * 60_000;
 let cached: { at: number; report: HealthReport } | null = null;
 let inFlight: Promise<HealthReport> | null = null;
 
@@ -351,5 +360,26 @@ export async function cachedHealthReport(): Promise<HealthReport> {
         inFlight = null;
       });
   }
-  return inFlight;
+  // STALE ON ERROR, rather than letting the rejection reach the caller.
+  //
+  // Seven probes run here and not all of them are individually guarded, so one
+  // transient Supabase or Google error rejects the whole round. The assistant's
+  // catch then yields an empty health list, no note is marked blocking, and the
+  // greeting says "Everything in the video pipeline is either done or moving" —
+  // reinstating, through a different door, the exact failure this module was
+  // written to end. A minute-old answer is worth far more than no answer.
+  try {
+    return await inFlight;
+  } catch (e) {
+    // Bounded. Serving the last good answer indefinitely is how a permanent
+    // failure — a rotated key, a revoked Drive grant — stays invisible for the
+    // life of the container while the assistant keeps saying everything is
+    // fine. Past the bound the rejection is allowed through, so the caller can
+    // say it does not know rather than guess from stale facts.
+    if (cached && Date.now() - cached.at < STALE_LIMIT_MS) {
+      reportError('health:probe-failed-serving-stale', e);
+      return cached.report;
+    }
+    throw e;
+  }
 }

@@ -156,11 +156,23 @@ export async function normalizeMediaList(
   const media: string[] = [];
   let degraded = false;
   for (const u of urls) {
-    const n = await normalizeMedia(u);
-    if (!n) continue;
+    // Compared against the TRIMMED input, because normalizeMedia trims before it
+    // does anything. Comparing against the raw string made a URL with a trailing
+    // newline look normalised when it had not been: n !== u, degraded false, and
+    // the post queued with a raw URL that Metricool drops in silence — which is
+    // the one case this flag exists to catch.
+    const trimmed = String(u || '').trim();
+    const n = await normalizeMedia(trimmed);
+    if (!n) {
+      // An input we cannot normalise to anything is not "no media requested" —
+      // it is media that will not arrive. Skipping it quietly produced a post
+      // with an empty media list, reported as a success.
+      if (trimmed) degraded = true;
+      continue;
+    }
     // Unchanged means normalise did not happen — every success path returns
     // Metricool's own reference, never the URL it was given.
-    if (n === u) degraded = true;
+    if (n === trimmed) degraded = true;
     media.push(n);
   }
   return { media, degraded };

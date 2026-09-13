@@ -10,6 +10,7 @@ import { researchBundle, briefPromptFrom, type KeywordBrief } from '@/lib/semrus
 import { attemptPlan } from '@/lib/ai-attempts';
 import { packKeyContract } from '@/lib/pack-keys';
 import { readAnthropicStream } from '@/lib/sse-stream';
+import { PLAYBOOK } from '@/lib/playbook';
 
 export type Provider = 'anthropic' | 'openai';
 
@@ -603,7 +604,7 @@ What you may do without asking, and what you may not:
 - You MAY retry, re-prepare and rewrite a video, and write the caption into the Google Sheet, as many times as needed. Do it, then say what happened. Do not ask permission first.
 - You MAY create, change and pause schedule templates when the user asks for a schedule. Do it rather than describing how they could.
 - You MAY queue Metricool DRAFTS with draft_batch — but ask once for the BATCH first. Show the list you intend to write (topics, networks, dates), get a yes, then run it. Never queue a batch nobody asked for, and never expand one you were given.
-- You may NEVER publish anything, or ask for anything to be published. There is no autoPublish here and no route that sets it: everything stops as a draft in Metricool and a person presses Approve. Say so plainly when someone asks you to "post" something.
+- You may NEVER publish anything, or ask for anything to be published. NONE of the tools you have can publish: every one of them stops at a draft in Metricool, and a person presses Approve there. (Elsewhere in this dashboard a human approving a run can choose to schedule it live — that is their button, not yours, and you never have it.) Say so plainly when someone asks you to "post" something.
 - A draft refused by the advertising check is REPORTED, never quietly reworded and queued anyway. Say which rule it failed. Never invent an AVISO number or a REF citation to get past the check.
 - retry_video deliberately queues nothing at all, and will tell you so; that is separate from draft_batch and is not a rule you can route around by calling the other one.
 - Never claim a video was fixed unless the tool result says so. A tool that reports "still needs a transcript" means a person has to paste one; say that plainly instead of offering to try again.
@@ -726,7 +727,7 @@ const TOOL_DEFS = [
   },
   {
     name: "update_schedule",
-    description: "Change an existing schedule template. Give the id from list_schedule. Fields you do not send are reset to their defaults, so send the whole template as you want it to end up.",
+    description: "Change an existing schedule template. Give the id from list_schedule and ONLY the fields you are changing — everything you leave out keeps its current value. Do not resend a whole template from memory: a field you mis-remember overwrites the stored one.",
     input_schema: {
       type: "object",
       properties: {
@@ -816,9 +817,20 @@ export async function chatWithTools(messages: ToolMessage[], systemExtra?: strin
     body: JSON.stringify({
       model,
       max_tokens: 1500,
-      system: systemExtra
-        ? [{ type: 'text', text: TOOLS_SYSTEM }, { type: 'text', text: systemExtra }]
-        : TOOLS_SYSTEM,
+      // Three blocks, in order of how often they change, with the cache break
+      // after the second.
+      //
+      // The static half is TOOLS_SYSTEM plus the playbook: byte-identical on
+      // every turn of every conversation, and about 2,000 tokens that were
+      // being re-sent on each of up to four tool-loop iterations per message.
+      // `systemExtra` changes every turn by design (it carries the live
+      // situation), so anything static concatenated into it can never be
+      // cached — which is exactly what putting the playbook in there did.
+      system: [
+        { type: 'text', text: TOOLS_SYSTEM },
+        { type: 'text', text: PLAYBOOK, cache_control: { type: 'ephemeral' } },
+        ...(systemExtra ? [{ type: 'text', text: systemExtra }] : []),
+      ],
       tools: TOOL_DEFS,
       messages,
     }),

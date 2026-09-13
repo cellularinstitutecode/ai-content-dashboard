@@ -16,7 +16,8 @@ import 'server-only';
 import { generateContentPack, type BrandContext, type ContentType } from '@/lib/ai';
 import { complianceGate } from '@/lib/compliance-gate';
 import { ensureAviso } from '@/lib/compliance';
-import { apiBase as metricoolApiBase, normalizeMedia } from '@/lib/metricool';
+import { apiBase as metricoolApiBase, normalizeMediaList } from '@/lib/metricool';
+import { postRowFor } from '@/lib/batch-row';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { normalizePublishAt, METRICOOL_TIMEZONE } from '@/lib/metricool-time';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -168,12 +169,22 @@ export async function draftAndQueue(
     // Normalised first and sent as a URL STRING. Both halves matter: Metricool
     // answers 200 and silently drops an un-normalised URL, so "attached" meant
     // nothing until a person opened the draft and read "Add at least 1 image".
-    try {
-      body.media = [await normalizeMedia(String(item.mediaUrl))];
-    } catch (e) {
-      reportError('batch:normalize-media', e, { topic });
-      return { ...base, draftId, problem: 'The video could not be prepared for Metricool, so this was not queued without it.' };
+    //
+    // normalizeMediaList, not normalizeMedia. The plain one CANNOT THROW — every
+    // path returns the input URL, including the timeout and the non-2xx — so the
+    // try/catch that used to be here was dead code guarding nothing, and a failed
+    // normalise queued a video-less draft that this function then reported as a
+    // success. `degraded` is the signal that the normalise did not happen, and
+    // metricoolSchedulePost already reads it.
+    const norm = await normalizeMediaList([String(item.mediaUrl)]);
+    if (norm.degraded) {
+      return {
+        ...base,
+        draftId,
+        problem: 'Metricool could not take the video for this one, and queuing it anyway would have produced a post with no video. Nothing was queued; the copy is saved as a draft here.',
+      };
     }
+    body.media = norm.media;
   }
 
   if (provider === 'youtube') {
@@ -216,16 +227,13 @@ export async function draftAndQueue(
   // --- bookkeeping ---------------------------------------------------------
   let untracked = false;
   try {
-    const { error } = await supabaseAdmin().from('posts').insert({
-      user_id: userId,
-      providers: [provider],
-      text,
-      publication_date: when.wallClock,
-      metricool_post_id: metricoolId ?? null,
-      // Never 'scheduled': Metricool says that about a post it is HOLDING for
-      // review, and storing its word made our rows claim an approval nobody gave.
-      status: 'pending_review',
-    });
+    // Built by lib/batch-row.ts, which is pure and tested. draft_id is safe to
+    // write unchecked here — unlike the single-post route, which takes it from
+    // the request — because this id was created by this function, for this user,
+    // four steps ago.
+    const { error } = await supabaseAdmin().from('posts').insert(
+      postRowFor({ userId, provider, text, instant: when.instant, metricoolId, draftId }),
+    );
     if (error) throw error;
   } catch (e) {
     reportError('batch:posts-insert', e, { topic });

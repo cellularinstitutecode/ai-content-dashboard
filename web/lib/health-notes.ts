@@ -29,17 +29,31 @@ export type CheckLike = {
  * right for "the copy cannot be written anywhere" and wrong for "keyword research
  * is paused". Degraded-but-working belongs in the aside, not the headline.
  *
- * audio_extractor is the close call and is deliberately absent: a video with
- * captions still goes through, so it costs quality, not the pipeline.
+ * Three were here and have been taken out, each for the same reason — their own
+ * plain wording says the pipeline keeps running:
+ *
+ *  - drive: severity `optional`, and "clips stop playing after a few days" is a
+ *    slow degradation. It is also redundant — drive_storage fails whenever drive
+ *    does, and the dedupe below drops it — so nothing is lost by demoting it.
+ *
+ * audio_extractor stays OUT but is the genuine close call, and the old reasoning
+ * for it was wrong for this clinic: "a video with captions still goes through"
+ * does not hold for private Drive footage, which has none. It is excluded only
+ * because a pasted transcript is still a working route, and the aside names it.
  */
 const BLOCKS_VIDEO = new Set([
   'supabase',
   'supabase_service_role',
   'sweep_owner',
-  'sheet_write',
   'ai_provider',
-  'drive',
   'drive_storage',
+  // Back in the set, but ranked LAST — which is the distinction that was
+  // missing. Demoting it entirely meant a total sheet outage could only reach a
+  // person through greetingFor's aside, and the aside prints health[0] alone:
+  // any note ahead of it, including a non-blocking schema note, hid it
+  // completely. Blocking is position-independent; the aside is not. Ranking it
+  // below drive_storage keeps the stronger claim in the headline when both fail.
+  'sheet_write',
 ]);
 
 /**
@@ -53,9 +67,8 @@ const PRIORITY = [
   'supabase_service_role',
   'ai_provider',
   'sweep_owner',
-  'sheet_write',
   'drive_storage',
-  'drive',
+  'sheet_write',
 ];
 
 /**

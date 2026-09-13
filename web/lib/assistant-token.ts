@@ -11,9 +11,11 @@
 // is now a caller rather than an owner: two copies of a fallback chain is how a
 // deployment ends up with the two halves of one feature signing with different
 // keys and no error anywhere.
-import 'server-only';
-
-import { createHmac, timingSafeEqual } from 'crypto';
+// Deliberately NOT 'server-only'. It needs nothing but node crypto and an
+// environment variable, and marking it server-only put the consent logic for the
+// one path that spends money and writes to the clinic's Metricool queue outside
+// what `node --test` can load — which is why the whole of it shipped untested.
+import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 
 let warnedAboutBorrowedKey = false;
 
@@ -58,20 +60,41 @@ export type BatchTicket = {
   /** The exact items the user was shown and agreed to. */
   items: { topic: string; network: string; publishAt: string; format?: string; mediaUrl?: string }[];
   expiresAt: number;
+  /**
+   * This ticket's identity, so it can be spent exactly once.
+   *
+   * The session round-trips through the BROWSER. Clearing `session.pendingBatch`
+   * server-side only edits the copy in the current response — the client still
+   * holds the pre-confirmation body, signature intact, and re-posting it with
+   * "yes" ran the whole batch again. Five replays of a ten-item batch is fifty
+   * posts in the clinic's Metricool queue, every one of them signature-valid.
+   * Expiry alone cannot fix that; an id the server records as spent can.
+   */
+  jti: string;
 };
+
+/** A fresh ticket id. Random, not derived — two identical batches must be spendable separately. */
+export function newTicketId(): string {
+  return randomBytes(16).toString('hex');
+}
 
 /**
  * Canonical bytes for a ticket.
  *
- * Every field that changes what gets WRITTEN is in here. Leaving mediaUrl out,
- * for instance, would let an approved batch be replayed with a different video
- * attached to the clinic's approved copy.
+ * Every field that changes what gets WRITTEN is in here, and each is encoded so
+ * that ABSENT and EMPTY are different bytes. `i.mediaUrl ?? ''` mapped
+ * undefined, null and '' onto the same string while draftAndQueue branches on
+ * truthiness — so a ticket approved as "reel with video" could have its
+ * mediaUrl deleted and still verify, queueing the approved copy as a text-only
+ * post. Substitution was covered; removal and downgrade were not.
  */
 function canonical(t: BatchTicket): string {
+  const tag = (v: unknown): string => (v === undefined ? '\u0000undefined' : v === null ? '\u0000null' : String(v));
   return JSON.stringify([
     t.userId,
     t.expiresAt,
-    t.items.map((i) => [i.topic, i.network, i.publishAt, i.format ?? '', i.mediaUrl ?? '']),
+    t.jti ?? '',
+    t.items.map((i) => [i.topic, i.network, i.publishAt, tag(i.format), tag(i.mediaUrl)]),
   ]);
 }
 
@@ -91,6 +114,7 @@ export function signBatch(ticket: BatchTicket): string | null {
 export function batchIsAuthentic(ticket: BatchTicket | null | undefined, signature: string, userId: string): boolean {
   if (!ticket) return false;
   if (ticket.userId !== userId) return false;
+  if (!ticket.jti) return false;
   if (!ticket.expiresAt || Date.now() > ticket.expiresAt) return false;
   const expect = signBatch(ticket);
   const got = String(signature || '');
@@ -100,4 +124,49 @@ export function batchIsAuthentic(ticket: BatchTicket | null | undefined, signatu
   } catch {
     return false;
   }
+}
+
+// --- spent tickets ----------------------------------------------------------
+//
+// In-process, because that is honest about what it is: one Lambda's memory. It
+// stops the replay that actually happens — a browser re-posting the same body,
+// a double-click, a retry after a timeout — which all land on a warm instance
+// within seconds. A determined attacker with a valid signed ticket could wait
+// for a cold start, so this is a guard rail, not a vault; the ticket also
+// expires, is bound to one user, and every post it can create is a draft that a
+// human still has to approve.
+//
+// Deliberately not a database table: that needs a migration, and asking someone
+// to paste SQL before their assistant stops double-posting is the wrong trade.
+const spent = new Map<string, number>();
+
+/**
+ * Claim this ticket. True exactly once per id; false every time after.
+ *
+ * Call it BEFORE doing the work — a ticket claimed after the batch runs is a
+ * ticket that a concurrent second request has already got past.
+ */
+export function claimBatch(jti: string, ttlMs = BATCH_TTL_MS): boolean {
+  const id = String(jti || '');
+  if (!id) return false;
+  const now = Date.now();
+  // Opportunistic sweep, with a hard ceiling behind it.
+  //
+  // Dropping only expired entries is not a bound: entries are stored as
+  // now + ttlMs, so once 500 UNEXPIRED ids accumulate the sweep deletes nothing
+  // and runs a full scan on every claim while the map keeps growing. The
+  // oldest-first eviction below is what actually caps it. Evicting a live ticket
+  // only means that one could be replayed — the same exposure a cold start
+  // already carries — and a thousand live tickets on one instance is far outside
+  // anything this feature produces.
+  if (spent.size > 500) {
+    for (const [k, at] of spent) if (at <= now) spent.delete(k);
+    if (spent.size > 1000) {
+      for (const k of [...spent.keys()].slice(0, spent.size - 1000)) spent.delete(k);
+    }
+  }
+  const seen = spent.get(id);
+  if (seen !== undefined && seen > now) return false;
+  spent.set(id, now + ttlMs);
+  return true;
 }
