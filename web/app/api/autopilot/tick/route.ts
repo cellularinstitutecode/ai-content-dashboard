@@ -6,7 +6,7 @@
 // Steps are idempotent and resumable, so overlapping or repeated ticks are safe.
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
-import { advanceRuns, expireStaleRuns, planRuns } from '@/lib/autopilot';
+import { advanceRuns, expireStaleRuns, rescueStrandedApprovals, planRuns } from '@/lib/autopilot';
 import { reportError } from '@/lib/report';
 import { checkRateLimit } from '@/lib/rate-limit';
 
@@ -65,16 +65,30 @@ async function handle(req: NextRequest) {
   try {
     const planned = await planRuns(scopeUserId);
     const expired = await expireStaleRuns(scopeUserId);
+    // Runs whose approval was killed mid-flight. `approved` is claimed before
+    // the expensive work and released only by a thrown error, so a platform kill
+    // leaves the run somewhere nothing else selects.
+    const rescued = await rescueStrandedApprovals(scopeUserId);
     const remaining = 300_000 - (Date.now() - started);
     // 45s of headroom for the step in flight to finish and write back.
-    const advanceBudget = Math.max(40_000, remaining - 45_000);
+    //
+    // Math.min, not a bare floor. The old `Math.max(40_000, remaining - 45_000)`
+    // handed advanceRuns 40s even when `remaining` was NEGATIVE — turning "too
+    // little budget left" into "guaranteed kill mid-write", which is the worse
+    // of the two. Below the floor there is genuinely no time to start a step, so
+    // the honest answer is zero and advanceRuns stops before it begins.
+    const usable = remaining - 45_000;
+    const advanceBudget = usable < 40_000 ? 0 : usable;
+    if (advanceBudget === 0) {
+      console.warn('autopilot:tick — planning and expiry used the whole budget; no runs advanced this tick.');
+    }
     const advancedResult = await advanceRuns({
       scopeUserId,
       runId,
       budgetMs: advanceBudget,
       maxRuns: runId ? 1 : 4,
     });
-    return NextResponse.json({ ok: true, expired, ...planned, ...advancedResult });
+    return NextResponse.json({ ok: true, expired, rescued, ...planned, ...advancedResult });
   } catch (e) {
     reportError('autopilot:tick', e);
     return NextResponse.json(

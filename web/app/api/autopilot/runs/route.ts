@@ -13,7 +13,12 @@ import { advanceRuns, approveRun, regenerateRun, skipRun } from '@/lib/autopilot
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+// 300, not 60. The approve path runs ensureDraftImage — which lib/images.ts
+// itself documents as taking 30-60s — and then Metricool media normalisation and
+// the scheduler POST. A 60s ceiling against that is not a rare overrun, it is the
+// expected case on a cold draft, and a platform kill mid-approve strands the run
+// in `approved` where nothing can reach it.
+export const maxDuration = 300;
 
 export async function GET(req: NextRequest) {
   const sb = await supabaseServer();
@@ -139,6 +144,18 @@ export async function POST(req: NextRequest) {
   if (!id || !action) return NextResponse.json({ error: 'id and action required' }, { status: 400 });
 
   if (action === 'approve') {
+    // CAPPED, like run_now and regenerate below. Approve is the most expensive
+    // action in the app — it runs a paid image generation, Metricool media
+    // normalisation and the scheduler POST — and it was the one left uncapped,
+    // so holding the button was an uncapped spend loop whose repeats could also
+    // each create another live Metricool post.
+    const rl = await checkRateLimit(user.id, 'autopilot-action');
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: 'rate_limited', limit: rl.limit },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } },
+      );
+    }
     // `schedule: true` is the reviewer's explicit "Approve & schedule" — the
     // post goes into Metricool's live queue instead of its review queue. It is
     // read only from the request a signed-in reviewer sent; the engine has no
