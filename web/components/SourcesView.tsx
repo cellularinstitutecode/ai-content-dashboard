@@ -18,6 +18,7 @@ import type { Route } from 'next';
 import PageNav from '@/components/PageNav';
 import { useWorkspace } from '@/components/workspace';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
+import VideoRegister from '@/components/VideoRegister';
 import VideoPrepare, { type Prepared } from '@/components/VideoPrepare';
 import { ensureVideoAttachable, fetchShareableVideos } from '@/components/MediaPicker';
 import { runPrepare } from '@/lib/prepare-request';
@@ -895,7 +896,8 @@ export default function SourcesView({ kind }: { kind: Tab }) {
 
         {tab === 'videos' && (
           <div style={{ display: 'grid', gap: 20 }}>
-            <VideoPrepare result={shown ? results[shown] ?? null : null} batch={liveTally} batchReasons={liveReasons} batchRunning={running} />
+            <VideoRegister />
+          <VideoPrepare result={shown ? results[shown] ?? null : null} batch={liveTally} batchReasons={liveReasons} batchRunning={running} />
             <section style={{ ...card, padding: 0, overflow: 'hidden' }}>
               {ids && <SheetFrame id={ids.videos} title="Distribución RRSS CHI" height={sheetHeight - 60} />}
             </section>

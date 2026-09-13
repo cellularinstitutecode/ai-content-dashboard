@@ -139,6 +139,16 @@ export const REQUIRED_SCHEMA: SchemaProbe[] = [
     file: 'supabase/autopilot.sql',
     breaks: 'Autopilot',
   },
+  // NOT here on purpose: public.video_register.
+  //
+  // Every entry in this list is treated as `severity: 'required'` by
+  // app/api/health — one missing object turns System Status red and makes
+  // /api/health answer 503. The register is designed to be absent: the code
+  // ships before the migration, notices the missing table once, and no-ops.
+  // Adding it here would turn "you have not switched the register on yet" into
+  // "this deployment is degraded", which is both untrue and the opposite of the
+  // point. If this list ever grows a severity of its own, the register belongs
+  // in it as optional.
   {
     table: 'provider_status',
     column: 'provider',

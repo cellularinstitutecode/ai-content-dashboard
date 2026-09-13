@@ -555,11 +555,11 @@ async function retryVideos(
     // the one outcome that tells the user nothing at all.
     if (!canWriteCopy(deadlineAt - Date.now())) {
       notes.push('"' + (run.video_title || "Untitled") + '" — not enough time left in this request; it is back in the queue and the next pass will take it.');
-      await rearmRun(userId, run.id);
+      await rearmRun(userId, run.id, "assistant");
       continue;
     }
 
-    const rearmed = await rearmRun(userId, run.id);
+    const rearmed = await rearmRun(userId, run.id, "assistant");
     if (!rearmed) {
       notes.push('"' + (run.video_title || "Untitled") + '" — could not be put back in the queue.');
       continue;
@@ -599,6 +599,8 @@ async function retryVideos(
           videoLink: link,
           // Never negotiable. See the note above this function.
           skipMetricool: true,
+          // So the register can say the assistant did this, not a person.
+          actor: "assistant",
         });
         wrote = "written into the sheet (" + sheet.status + ")";
       } catch (e) {

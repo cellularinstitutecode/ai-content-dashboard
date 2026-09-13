@@ -52,6 +52,8 @@ import { cachedPublicCopy, rememberPublicCopy } from '@/lib/transcript-cache';
 import { parseDriveFileId } from '@/lib/drive-url';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
+import { recordFirstSeen, recordVideoEvent } from '@/lib/video-register';
+import { videoKeyFor, type VideoActor } from '@/lib/video-event';
 
 export type SweepOptions = {
   /** Whose brand voice to write in, and who owns the drafts. */
@@ -91,6 +93,8 @@ export type SweepResult = {
   metricoolDrafts: number;
   rows: SweepRowOutcome[];
   stoppedEarly: boolean;
+  /** How many videos the register had never seen before this sweep. */
+  newlySeen: number;
   /**
    * What the revive pass handed back to the queue before this sweep started.
    *
@@ -145,7 +149,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
   const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
   const admin = supabaseAdmin();
 
-  const result: SweepResult = { ok: true, scanned: 0, candidates: 0, prepared: 0, needsTranscript: 0, failed: 0, metricoolDrafts: 0, rows: [], stoppedEarly: false };
+  const result: SweepResult = { ok: true, scanned: 0, candidates: 0, prepared: 0, needsTranscript: 0, failed: 0, metricoolDrafts: 0, rows: [], stoppedEarly: false, newlySeen: 0 };
   if (!sourcesConfigured()) {
     return { ...result, ok: false };
   }
@@ -164,6 +168,10 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
       reportError('video-sweep:revive', e);
     }
   }
+
+  // Every row the sweep walks past, for the register. Not a set of things to do
+  // — the sweep's own budget decides that — just a record that they exist.
+  const seenRows: { videoKey: string; title: string; link: string; tab: string; row: number }[] = [];
 
   const tabs = await listTabs(spreadsheetId);
   for (const tab of tabs) {
@@ -202,12 +210,26 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
       const videoLink = firstLinkIn(pick(rec, 'link video', 'link', 'video link'));
       const copy = pick(rec, 'copy', 'caption');
       const youtubeLink = (String(pick(rec, 'youtube')).match(/https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/\S+/i) || [''])[0];
+      const rowKey = rowKeyFor(title, videoLink);
+
+      // THE REGISTER. Recorded before the candidate filter, because a row that
+      // already has copy is still a video that is in the library — it is just
+      // not work to do. Collected here and written once at the end of the sweep,
+      // so walking two hundred rows costs one statement rather than two hundred.
+      if (videoLink) {
+        seenRows.push({
+          videoKey: videoKeyFor(spreadsheetId, tab.title, rowKey),
+          title,
+          link: videoLink,
+          tab: tab.title,
+          row,
+        });
+      }
+
       if (!isCandidate({ videoLink, copy })) continue;
       // Where the clinic has said this video goes. Ticks only — a FALSE
       // checkbox is Google's default, not a destination.
       const rowNetworks = VIDEO_NETWORKS.filter(([col]) => YES_TICK.test(pick(rec, col))).map(([, n]) => n);
-
-      const rowKey = rowKeyFor(title, videoLink);
 
       // Has this row been dealt with before? A prepared row is done. A failed
       // one is retried a few times and then left alone, so a video that simply
@@ -387,6 +409,19 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
             updated_at: new Date().toISOString(),
           });
           if (state === 'needs_transcript') result.needsTranscript++; else result.failed++;
+          // THE REGISTER. video_runs keeps only the LATEST error and nulls it on
+          // the next retry, so without this the third failure erases the first
+          // two and a row that has never once worked looks like a row that
+          // failed today.
+          void recordVideoEvent({
+            userId: opts.userId,
+            videoKey: videoKeyFor(spreadsheetId, tab.title, rowKey),
+            event: 'failed',
+            actor: 'sweep',
+            title: title || videoLink,
+            link: videoLink,
+            detail: { state, reason: prepared.error, error: prepared.message },
+          });
           outcome = { tab: tab.title, row, rowKey, title: title || videoLink, state, message: prepared.message };
           result.rows.push(outcome);
           continue;
@@ -450,6 +485,31 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
 
         result.prepared++;
         result.metricoolDrafts += posted.filter((p) => p.ok).length;
+        {
+          const key = videoKeyFor(spreadsheetId, tab.title, rowKey);
+          void recordVideoEvent({
+            userId: opts.userId,
+            videoKey: key,
+            event: 'prepared',
+            actor: 'sweep',
+            title: prepared.title,
+            link: videoLink,
+            detail: { transcriptSource: prepared.transcript.source, hasKeywords: prepared.hasKeywords, wrote },
+          });
+          const sent = posted.filter((p) => p.ok).map((p) => p.network);
+          const refused = posted.filter((p) => !p.ok);
+          if (sent.length || refused.length) {
+            void recordVideoEvent({
+              userId: opts.userId,
+              videoKey: key,
+              event: 'queued',
+              actor: 'sweep',
+              title: prepared.title,
+              link: videoLink,
+              detail: { networks: sent, refused: refused.map((p) => ({ network: p.network, reason: p.reason })) },
+            });
+          }
+        }
         outcome = { tab: tab.title, row, rowKey, title: prepared.title, state: 'prepared', wrote, draftId: prepared.draftId, metricool: posted };
         result.rows.push(outcome);
       } catch (e) {
@@ -465,10 +525,24 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
           updated_at: new Date().toISOString(),
         });
         result.failed++;
+        void recordVideoEvent({
+          userId: opts.userId,
+          videoKey: videoKeyFor(spreadsheetId, tab.title, rowKey),
+          event: 'failed',
+          actor: 'sweep',
+          title: title || videoLink,
+          link: videoLink,
+          detail: { state: 'failed', reason: 'unreachable', error: message },
+        });
         result.rows.push({ tab: tab.title, row, rowKey, title: title || videoLink, state: 'failed', message });
       }
     }
   }
+
+  // One statement, after the work. Never awaited for its result beyond a count,
+  // never able to fail the sweep: recordFirstSeen does not throw, and returns 0
+  // when the register's table has not been created yet.
+  result.newlySeen = await recordFirstSeen(opts.userId, seenRows, 'sweep');
 
   return result;
 }
@@ -563,6 +637,15 @@ export async function completeRow(opts: {
    * each row arrives holding the slot it owns.
    */
   publicationDate?: string;
+  /**
+   * Which mechanism is doing this, for the register.
+   *
+   * Optional and defaulted, so every existing caller keeps compiling — but a
+   * caller that leaves it out records 'unknown', which is the honest answer and
+   * not a guess. video_runs.user_id cannot carry this: it is the tenant, and on
+   * this single-clinic deployment every path writes the same id.
+   */
+  actor?: VideoActor;
 }): Promise<{ wrote: Partial<Record<VideoField, boolean>>; metricool: PublishOutcome[]; status: string }> {
   const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
   const rows = await readTab(spreadsheetId, opts.tab);
@@ -640,6 +723,43 @@ export async function completeRow(opts: {
     }, { onConflict: 'spreadsheet_id,tab,row_key' });
   } catch (e) {
     reportError('video-complete:run', e);
+  }
+
+  // THE REGISTER. Two separate facts, because they fail separately: the copy was
+  // written, and (sometimes) drafts reached Metricool. Neither is awaited for
+  // anything — recordVideoEvent does not throw, and the row above is already
+  // saved either way.
+  const registerKey = videoKeyFor(spreadsheetId, opts.tab, rowKey);
+  void recordVideoEvent({
+    userId: opts.userId,
+    videoKey: registerKey,
+    event: 'prepared',
+    actor: opts.actor ?? 'unknown',
+    title: opts.prepared.title,
+    link: opts.videoLink,
+    detail: {
+      transcriptSource: opts.prepared.transcript.source,
+      hasKeywords: opts.prepared.hasKeywords,
+      // What reached the sheet, and what was left alone because a person had
+      // already written there — the distinction `wrote` exists to record.
+      wrote,
+      status,
+    },
+  });
+  const sent = metricool.filter((m) => m.ok).map((m) => m.network);
+  const refused = metricool.filter((m) => !m.ok);
+  if (sent.length || refused.length) {
+    void recordVideoEvent({
+      userId: opts.userId,
+      videoKey: registerKey,
+      event: 'queued',
+      actor: opts.actor ?? 'unknown',
+      title: opts.prepared.title,
+      link: opts.videoLink,
+      // A compliance refusal reads very differently from an outage, and both
+      // need to still be visible next week.
+      detail: { networks: sent, refused: refused.map((m) => ({ network: m.network, reason: m.reason })) },
+    });
   }
 
   return { wrote, metricool, status };
