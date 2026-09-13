@@ -11,6 +11,8 @@ import { announce, onRefresh } from '@/components/refreshBus';
 import { PanelLoader } from '@/components/LoadingScreen';
 import { friendlyError, friendlyErrorFromResponse, friendlyImageError } from '@/lib/friendly-error';
 import { fmtScheduleSlot } from '@/lib/schedule-clock';
+import { describeFailure, historyForDisplay, type RunLogEntry } from '@/lib/run-failure';
+import { MAX_ATTEMPTS } from '@/lib/planner-constants';
 
 // The visible pipeline an engine run walks through. The tick call does all of
 // this server-side in one request; the tracker paces the display so the viewer
@@ -72,6 +74,13 @@ type Run = {
   score: RunScore | null;
   pack: (Record<string, string> & { _image?: PackImage }) | null;
   recent_angles?: { query: string; type: string }[];
+  // The engine's own record of what happened to this run, and how many tries it
+  // has spent. Both were already fetched by /api/autopilot/runs (log) or
+  // trivially available (attempts) and neither reached the screen — so a failed
+  // run showed a hardcoded "check API keys" while the real reason sat unread in
+  // the payload. See lib/run-failure.ts.
+  log?: RunLogEntry[] | null;
+  attempts?: number | null;
 };
 
 const ANGLE_META: Record<Angle['type'], { label: string; cls: string }> = {
@@ -86,6 +95,90 @@ const CHANNEL_KEYS = ['instagram', 'facebook', 'linkedin', 'blog'] as const;
 // On the schedule clock, like every other time in the app — an Autopilot slot
 // planned for 09:00 Cancun must not read as 07:00 to a viewer in Tijuana.
 const fmtSlot = fmtScheduleSlot;
+
+/**
+ * One row under "Needs attention".
+ *
+ * This card used to render a single hardcoded sentence — "repeated errors;
+ * check API keys, then retry" — for every failed run, whatever had actually
+ * happened. Three unrelated things reach state 'failed' and only one of them is
+ * ever plausibly a key; an expired run, which errored at nothing, was told to go
+ * check its credentials. Meanwhile the engine's own account of the failure was
+ * already in the payload and was being discarded one line before display.
+ *
+ * The decision and the wording live in lib/run-failure.ts, which is pure and
+ * tested. This component only draws them.
+ */
+function FailedRun({ run, busy, onRetry }: { run: Run; busy: boolean; onRetry: () => void }) {
+  const [open, setOpen] = useState(false);
+  const failure = describeFailure(run.log, run.attempts, MAX_ATTEMPTS);
+  const history = historyForDisplay(run.log);
+
+  return (
+    <div className="rounded-xl bg-red-50 px-4 py-2.5 text-[13px] ring-1 ring-red-100">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 text-red-700">
+          <div>
+            <span className="font-medium">{run.template_name}</span>
+            <span className="text-red-700/80"> · {fmtSlot(run.scheduled_for)}</span>
+            <span className="text-red-700/80"> — {failure.headline}</span>
+            {/* Which step it died at, taken from the engine's own log[].step.
+                NOT ProcessTracker/runStageSteps: those map `state`, and a failed
+                run's state is just 'failed', which falls through that ternary to
+                activeId 'review' — so a run that died in research would be drawn
+                as active at Review. A wrong stage is worse than no stage, and
+                the log already records the right one. */}
+            {failure.step && failure.step !== 'expired' && (
+              <span className="ml-1.5 rounded-full bg-red-100 px-1.5 py-[1px] text-[11px] font-medium">
+                at {failure.step}
+              </span>
+            )}
+          </div>
+          {/* The engine's own sentence, not ours. */}
+          <p className="mt-1 break-words text-[12px] text-red-700/90">{failure.advice}</p>
+        </div>
+        {/* Retry is offered only where it can work. On an expired run it would
+            restart the pipeline and hand Metricool a post dated in the past. */}
+        {failure.retryable && (
+          <button
+            type="button"
+            onClick={onRetry}
+            disabled={busy}
+            className="shrink-0 rounded-full px-3 py-1 text-[12px] font-medium text-red-700 ring-1 ring-red-200 transition hover:bg-white disabled:opacity-50"
+          >
+            {busy ? 'Retrying…' : 'Retry'}
+          </button>
+        )}
+      </div>
+
+      {/* The last entry says what broke. The thirty before it say whether it was
+          always broken — which is the question you ask on the second failure. */}
+      {history.length > 0 && (
+        <>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            className="mt-1.5 text-[11px] font-medium text-red-700/80 underline decoration-red-300 underline-offset-2 hover:text-red-800"
+          >
+            {open ? 'Hide history' : 'Show what happened'}
+          </button>
+          {open && (
+            <ol className="mt-1.5 space-y-1 border-t border-red-100 pt-1.5">
+              {history.map((e, i) => (
+                <li key={i} className="flex gap-2 text-[11px] text-red-700/90">
+                  <span className="shrink-0 font-medium">{e.step}</span>
+                  <span className="shrink-0 tabular-nums text-red-700/60">{e.at ? fmtSlot(e.at) : '—'}</span>
+                  <span className="min-w-0 break-words">{e.note}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 export default function AutopilotQueue() {
   const [runs, setRuns] = useState<Run[]>([]);
@@ -544,21 +637,7 @@ export default function AutopilotQueue() {
         {failed.length > 0 && (
           <div className="mt-6 space-y-2">
             <div className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">Needs attention</div>
-            {failed.map((r) => (
-              <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-red-50 px-4 py-2.5 text-[13px] ring-1 ring-red-100">
-                <div className="text-red-700">
-                  <span className="font-medium">{r.template_name}</span> · {fmtSlot(r.scheduled_for)} — repeated errors; check API keys, then retry.
-                </div>
-                <button
-                  type="button"
-                  onClick={() => act(r.id, 'run_now')}
-                  disabled={busyId === r.id}
-                  className="rounded-full px-3 py-1 text-[12px] font-medium text-red-700 ring-1 ring-red-200 transition hover:bg-white disabled:opacity-50"
-                >
-                  Retry
-                </button>
-              </div>
-            ))}
+            {failed.map((r) => <FailedRun key={r.id} run={r} busy={busyId === r.id} onRetry={() => act(r.id, 'run_now')} />)}
           </div>
         )}
       </div>

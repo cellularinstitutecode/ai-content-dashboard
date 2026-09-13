@@ -38,7 +38,12 @@ export async function GET(req: NextRequest) {
   const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 50);
 
   const db = supabaseAdmin();
-  const COLUMNS = 'id, template_id, scheduled_for, state, brief, angle, score, draft_id, log, updated_at';
+  // `attempts` is here because the card has to tell a stalled run from an
+  // expired one, and that turns on whether the attempts were spent. It was the
+  // one field the engine decides on (autopilot.ts: `attempts >= MAX_ATTEMPTS ?
+  // 'failed' : startedFrom`) that never reached the screen, so the screen could
+  // not reach the same conclusion the engine had.
+  const COLUMNS = 'id, template_id, scheduled_for, state, attempts, brief, angle, score, draft_id, log, updated_at';
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
   // Two reads, then merge: everything in the recent window, PLUS every failed
