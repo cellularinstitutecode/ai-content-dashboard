@@ -167,6 +167,10 @@ export async function POST(req: NextRequest) {
         // Given by a batch that reserved one slot per row from a single reading of the
         // calendar. Absent for a single Prepare, which chooses its own as it always has.
         publicationDate: typeof body?.publicationDate === 'string' ? body.publicationDate : undefined,
+        // A reserved slot is what a BATCH sends; a single Prepare chooses its
+        // own. That is already the difference between the two, so the register
+        // can tell them apart without a new flag.
+        actor: typeof body?.publicationDate === 'string' ? 'batch' : 'button',
         // Write the sheet, queue nothing.
         //
         // completeRow has always supported this and the door never opened it, so there

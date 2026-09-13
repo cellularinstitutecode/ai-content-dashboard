@@ -21,6 +21,8 @@ import { cachedPublicCopy, rememberPublicCopy } from '@/lib/transcript-cache';
 import { parseDriveFileId } from '@/lib/drive-url';
 import { copyFailureAdvice, storageAdvice } from '@/lib/drive-copy-error';
 import { reportError } from '@/lib/report';
+import { recordVideoEvent } from '@/lib/video-register';
+import { driveVideoKey, type VideoActor } from '@/lib/video-event';
 
 export type ShareableVideo = {
   /** The SOURCE video's id — a Drive file id, or a YouTube video id. */
@@ -94,7 +96,12 @@ export async function listShareableVideos(limit = 40): Promise<{ videos: Shareab
  * once per source video and remembered, so pressing the button twice costs one
  * database read.
  */
-export async function ensureShareableVideo(videoLink: string, title?: string | null): Promise<
+export async function ensureShareableVideo(
+  videoLink: string,
+  title?: string | null,
+  /** Who to credit in the register. Optional so existing callers keep compiling. */
+  who?: { userId?: string; actor?: VideoActor },
+): Promise<
   | { ok: true; url: string; fileId: string; created: boolean }
   | { ok: false; reason: 'not_drive' | 'failed'; code?: string; message: string }
 > {
@@ -108,6 +115,9 @@ export async function ensureShareableVideo(videoLink: string, title?: string | n
   }
 
   const known = await cachedPublicCopy(fileId);
+  // Not registered: nothing happened. The copy already existed, and a register
+  // that records "nothing happened" every time somebody opens the picker is a
+  // register nobody can read.
   if (known?.url) return { ok: true, url: known.url, fileId: known.id, created: false };
 
   try {
@@ -116,6 +126,19 @@ export async function ensureShareableVideo(videoLink: string, title?: string | n
     // Remembered immediately: without this, the next press makes ANOTHER
     // world-readable copy of the clinic's footage, and nothing here can delete one.
     await rememberPublicCopy(fileId, { id: made.fileId, url: made.url });
+    // THE REGISTER. A copy being made is the moment a video becomes attachable
+    // at all, and until now the only evidence was a column quietly changing.
+    if (who?.userId) {
+      void recordVideoEvent({
+        userId: who.userId,
+        videoKey: driveVideoKey(fileId),
+        event: 'copy_made',
+        actor: who.actor ?? 'unknown',
+        title,
+        link: videoLink,
+        detail: { copyId: made.fileId },
+      });
+    }
     return { ok: true, url: made.url, fileId: made.fileId, created: true };
   } catch (e) {
     reportError('media-library:ensure-copy', e, { fileId });
@@ -130,6 +153,20 @@ export async function ensureShareableVideo(videoLink: string, title?: string | n
     if (advice.reason === 'out_of_space') {
       const folder = await driveFolderReport();
       if (!folder.error) advice = storageAdvice(folder.inSharedDrive);
+    }
+    // Registered with the CAUSE. While the copies folder is not in a Shared
+    // Drive this is the single most common thing that happens to a video, and
+    // the only record of it has been a banner that says the latest one.
+    if (who?.userId) {
+      void recordVideoEvent({
+        userId: who.userId,
+        videoKey: driveVideoKey(fileId),
+        event: 'copy_failed',
+        actor: who.actor ?? 'unknown',
+        title,
+        link: videoLink,
+        detail: { reason: advice.reason, error: advice.message },
+      });
     }
     return { ok: false, reason: 'failed', code: advice.reason, message: advice.message };
   }

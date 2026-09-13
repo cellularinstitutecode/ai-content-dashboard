@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
   const run = await getRun(auth.userId, id);
   if (!run) return NextResponse.json({ error: 'not_found', message: 'No such video row.' }, { status: 404 });
 
-  const ok = await rearmRun(auth.userId, run.id);
+  const ok = await rearmRun(auth.userId, run.id, 'button');
   if (!ok) {
     return NextResponse.json(
       { error: 'not_rearmed', message: 'That row could not be put back in the queue.' },

@@ -17,6 +17,8 @@ import { SOURCE_IDS } from '@/lib/google-sources';
 import { rowKeyFor } from '@/lib/video-row';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
+import { recordVideoEvent } from '@/lib/video-register';
+import { videoKeyFor, type VideoActor } from '@/lib/video-event';
 // The canonical Drive-link parser. A hand-rolled regex lived here instead, with
 // no host check and a looser id pattern — and because the WRITER side keys the
 // public-copy cache by this function, any disagreement between the two showed a
@@ -39,6 +41,12 @@ const OPEN_STATES = ['failed', 'needs_transcript', 'preparing', 'discovered'];
 
 export type VideoRun = {
   id: string;
+  /**
+   * Which document the row belongs to. Declared at last: the column has existed
+   * since video-autopilot.sql and `listRuns` selects '*', but the type omitted
+   * it, so nothing could reconstruct a row's identity from a run.
+   */
+  spreadsheet_id: string | null;
   tab: string | null;
   row_key: string;
   row_number: number | null;
@@ -120,8 +128,12 @@ export async function getRun(userId: string, ref: string): Promise<VideoRun | nu
  * by a bad afternoon was stopped for the life of the deployment. Clearing the
  * count is what makes "retry it" mean anything.
  */
-export async function rearmRun(userId: string, id: string): Promise<boolean> {
+export async function rearmRun(userId: string, id: string, actor: VideoActor = 'unknown'): Promise<boolean> {
   const admin = supabaseAdmin();
+  // Read BEFORE the update, because the update is what erases the evidence:
+  // rearm nulls last_error and resets attempts to zero, which is its job and is
+  // also why a retried row afterwards looks like one that never failed.
+  const before = await getRun(userId, id);
   const patch: Record<string, unknown> = {
     state: 'discovered',
     attempts: 0,
@@ -130,8 +142,23 @@ export async function rearmRun(userId: string, id: string): Promise<boolean> {
     updated_at: new Date().toISOString(),
   };
 
+  const noteRetry = () => {
+    if (!before?.tab) return;
+    void recordVideoEvent({
+      userId,
+      videoKey: videoKeyFor(before.spreadsheet_id || '', before.tab || '', before.row_key || ''),
+      event: 'retried',
+      actor,
+      title: before.video_title,
+      link: before.video_link,
+      // The state it was rescued FROM, and the error being cleared — the two
+      // facts the update is about to destroy.
+      detail: { from: before.state, attempts: before.attempts, clearedError: before.last_error },
+    });
+  };
+
   const { error } = await admin.from('video_runs').update(patch).eq('user_id', userId).eq('id', id);
-  if (!error) return true;
+  if (!error) { noteRetry(); return true; }
 
   // A database that predates last_error_code refuses the whole statement,
   // which would leave the attempts count exactly where it was while the caller
@@ -140,6 +167,7 @@ export async function rearmRun(userId: string, id: string): Promise<boolean> {
   delete fallback.last_error_code;
   const { error: retry } = await admin.from('video_runs').update(fallback).eq('user_id', userId).eq('id', id);
   if (retry) { reportError('video-runs:rearm', retry, { id }); return false; }
+  noteRetry();
   return true;
 }
 

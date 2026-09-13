@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const out = await ensureShareableVideo(videoLink, title);
+    const out = await ensureShareableVideo(videoLink, title, { userId: auth.userId, actor: 'picker' });
     if (!out.ok) {
       // `message` for the person, `error` for the machine — the house rule in
       // lib/friendly-error.ts. Putting the sentence in `error` instead got it
