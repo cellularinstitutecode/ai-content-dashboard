@@ -14,11 +14,11 @@ import 'server-only';
 
 import { ALLOWED_EMAILS, ALLOWED_BLOG_IDS } from '@/lib/access';
 import { keywordCapability } from '@/lib/semrush';
-import { lastImageOutcome } from '@/lib/provider-status';
+import { lastImageOutcome, lastProviderOutcome, type ProviderName } from '@/lib/provider-status';
 import { resolveFfmpeg } from '@/lib/audio-extract';
 import { missingSchema } from '@/lib/schema-check';
 import { resolveOwner } from '@/lib/sweep-owner';
-import { sheetWriteAccess } from '@/lib/google-sources';
+import { sheetWriteAccess, serviceAccountEmail } from '@/lib/google-sources';
 import { driveFolderReport } from '@/lib/drive';
 import { serviceKeyVerdict } from '@/lib/supabase-key';
 import { schemaDetail, type SchemaProbe } from '@/lib/schema-probe';
@@ -49,6 +49,30 @@ export type HealthReport = {
 
 function has(name: string): boolean {
   return Boolean(process.env[name]);
+}
+
+/**
+ * Does this recorded refusal mean a PERSON has to do something?
+ *
+ * `ai_provider` and `metricool` are severity: 'required', so anything that
+ * flips them red also makes /api/health answer 503 and paints the banner. Only
+ * two causes deserve that: a key the provider rejects, and an account with no
+ * credit. Both need a human and neither clears itself.
+ *
+ * A 429 explicitly does NOT. Rate limiting is transient and self-clearing, and
+ * the stored outcome survives for 24h — so counting it would let one busy
+ * minute hold the dashboard red for a day, on the two checks that can least
+ * afford a false alarm. `other` is excluded for the same reason: a one-off 500
+ * from a provider is not a configuration fault, and a required check is the
+ * wrong place to guess.
+ *
+ * Anything excluded here is still recorded, still visible in the detail line,
+ * and still turns the optional `images` check amber — it simply does not
+ * declare the deployment broken.
+ */
+function blocksWork(outcome: { ok: boolean; reason: string | null } | null): boolean {
+  if (!outcome || outcome.ok) return false;
+  return outcome.reason === 'bad_key' || outcome.reason === 'no_credit';
 }
 
 /**
@@ -94,6 +118,33 @@ export async function runHealthChecks(): Promise<HealthReport> {
   const imagesConfigured = has('OPENAI_API_KEY') && process.env.IMAGE_GEN !== 'off';
   const lastImage = imagesConfigured ? await lastImageOutcome() : null;
   const imagesFailing = Boolean(lastImage && !lastImage.ok);
+
+  // TEXT: the same correction, for the provider that writes every post.
+  //
+  // `ai_provider` asked `has('ANTHROPIC_API_KEY') || has('OPENAI_API_KEY')` —
+  // is a variable non-empty — so a revoked, expired or unpaid key reported
+  // healthy indefinitely while every draft failed. That is the identical
+  // failure this file's `images` check was rewritten to catch, left in place
+  // for the provider that matters most.
+  //
+  // "No record" is NOT a fault: a deployment that has not generated anything
+  // yet is not broken, so the check only goes red on a RECENT recorded refusal
+  // by the provider that would actually be used.
+  const textProvider: ProviderName =
+    (process.env.AI_PROVIDER || '').toLowerCase() === 'openai' || !has('ANTHROPIC_API_KEY')
+      ? 'openai_text'
+      : 'anthropic_text';
+  const textConfigured = has('ANTHROPIC_API_KEY') || has('OPENAI_API_KEY');
+  const lastText = textConfigured ? await lastProviderOutcome(textProvider) : null;
+  const textFailing = blocksWork(lastText);
+  const textLabel = textProvider === 'openai_text' ? 'OpenAI' : 'Anthropic';
+
+  // Metricool: the same again. Three non-empty variables said nothing about
+  // whether the token still works, and a rotated token fails every schedule.
+  const metricoolConfigured =
+    has('METRICOOL_USER_TOKEN') && has('METRICOOL_BLOG_ID') && has('METRICOOL_USER_ID');
+  const lastMetricool = metricoolConfigured ? await lastProviderOutcome('metricool') : null;
+  const metricoolFailing = blocksWork(lastMetricool);
 
   const checks: Check[] = [
     {
@@ -195,15 +246,30 @@ export async function runHealthChecks(): Promise<HealthReport> {
     },
     {
       name: 'ai_provider',
-      ok: has('ANTHROPIC_API_KEY') || has('OPENAI_API_KEY'),
+      ok: textConfigured && !textFailing,
+      code: !textConfigured ? 'not_configured' : textFailing ? (lastText?.reason ?? 'other') : undefined,
       severity: 'required',
-      detail: 'At least one generation provider must be configured.',
+      detail: !textConfigured
+        ? 'At least one generation provider must be configured.'
+        : textFailing
+          ? textLabel + ' refused the last generation (' + (lastText?.reason ?? 'other') +
+            '). Nothing can be drafted until that key is working again.'
+          : lastText
+            ? textLabel + ' answered the last generation normally.'
+            : textLabel + ' is configured. Nothing has been generated recently, so there is nothing recorded against it.',
     },
     {
       name: 'metricool',
-      ok: has('METRICOOL_USER_TOKEN') && has('METRICOOL_BLOG_ID') && has('METRICOOL_USER_ID'),
+      ok: metricoolConfigured && !metricoolFailing,
+      code: !metricoolConfigured ? 'not_configured' : metricoolFailing ? (lastMetricool?.reason ?? 'other') : undefined,
       severity: 'required',
-      detail: ALLOWED_BLOG_IDS.size + ' brand profile(s) allowlisted for scheduling.',
+      detail: !metricoolConfigured
+        ? 'Scheduling is not configured: METRICOOL_USER_TOKEN, METRICOOL_BLOG_ID and METRICOOL_USER_ID must all be set.'
+        : metricoolFailing
+          ? 'Metricool refused the last post (' + (lastMetricool?.reason ?? 'other') +
+            '). Nothing can be scheduled until that is resolved. ' +
+            ALLOWED_BLOG_IDS.size + ' brand profile(s) allowlisted.'
+          : ALLOWED_BLOG_IDS.size + ' brand profile(s) allowlisted for scheduling.',
     },
     {
       name: 'semrush',
@@ -311,7 +377,17 @@ export async function runHealthChecks(): Promise<HealthReport> {
         : driveFolder.inSharedDrive
           ? 'Copies folder “' + driveFolder.folderName + '” is inside a Shared Drive, so the organisation owns the copies and the service account’s own 0-byte quota never applies.'
           : 'Copies folder “' + driveFolder.folderName + '” is NOT in a Shared Drive. A service account owns no storage of its own, so every video copy is refused there however empty it looks, and no video can be attached to any post. '
-            + 'Create a Shared Drive, add the service account as Content manager, and point DRIVE_FOLDER_ID at a folder inside it.',
+            // NAMES THE ACCOUNT. "Add the service account as Content manager" is
+            // not an instruction anybody can follow without knowing which
+            // address to type, and the only place that address appeared was the
+            // Sources page — a different screen from the banner reporting the
+            // fault. The email is an identity, not a credential (it is already
+            // shown on Sources, and this endpoint is allowlisted anyway), so
+            // putting it here costs nothing and removes the one lookup standing
+            // between reading this sentence and fixing it.
+            + 'Create a Shared Drive, add '
+            + (serviceAccountEmail() || 'the service account')
+            + ' as Content manager, and point DRIVE_FOLDER_ID at a folder inside it.',
     },
     {
       name: 'rate_limiting',

@@ -273,7 +273,11 @@ export default function AutopilotQueue() {
         body: JSON.stringify({ id, action, note: extraNote, schedule }),
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j?.error || 'Action failed (' + r.status + ')');
+      // `message` first, `error` second. `error` is the machine code — the
+      // route answers { error: 'not_advanced', message: 'The template “X” is
+      // switched off…' } — so reading `error` alone showed a reviewer the bare
+      // token `not_advanced` and threw away the sentence written for them.
+      if (!r.ok) throw new Error(j?.message || j?.error || 'Action failed (' + r.status + ')');
       if (j?.note) setNote(String(j.note));
       await load();
       // Interconnection: approving queues a Metricool draft (posts row) and

@@ -20,7 +20,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { normalizeStrategy } from '@/lib/autopilot';
 import { cleanTime, cleanWeekdays, isUsableTime } from '@/lib/template-input';
 import { reportError } from '@/lib/report';
-import { leadProblem } from '@/lib/lead-window';
+import { leadProblem, retryBudgetProblem } from '@/lib/lead-window';
 import { SCHEDULE_TZ, tzOffsetMs } from '@/lib/timezone';
 
 
@@ -216,8 +216,20 @@ export async function saveTemplate(
     // depend on that).
     const offsetMin = tzOffsetMs(new Date(), SCHEDULE_TZ) / 60000;
     const slotUtc = ((Math.round(hh * 60 + mm - offsetMin) % 1440) + 1440) % 1440;
-    const bad = leadProblem(strat.lead_hours ?? 24, slotUtc);
+    const lead = strat.lead_hours ?? 24;
+    const bad = leadProblem(lead, slotUtc);
     if (bad) notes.push(bad.message);
+    // A second, quieter note — and only when the lead is not already broken,
+    // because saying "this can never run" and "this has no second attempt" in
+    // the same breath buries the first. Below this floor the occurrence gets
+    // exactly one daily pass, so one transient failure costs the whole post:
+    // attempts stops at 1, under MAX_ATTEMPTS, so the run is never marked
+    // failed and never retried — it just quietly expires. The engine's own
+    // justification for MAX_ATTEMPTS = 2 assumes this floor is met.
+    else {
+      const thin = retryBudgetProblem(lead, slotUtc);
+      if (thin) notes.push(thin.message);
+    }
   }
 
   // The other silent dead end: mode 'off' means the Apply flow posts the stored

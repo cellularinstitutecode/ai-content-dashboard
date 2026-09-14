@@ -37,7 +37,41 @@ export const PLAIN: Record<string, PlainSaid> = {
   audio_extractor: { down: 'Speech-to-text is unavailable — a video with no YouTube captions cannot be read.', stillWorks: 'A video with captions, or a transcript you paste, still works.' },
   database_schema: { down: 'The database is missing an update — ask whoever set this up to run the migration.', stillWorks: 'Writing and scheduling still work; Autopilot does not.' },
   ai_provider: { down: 'Writing is unavailable — no AI is connected.' },
+  // Narrowed by the reason the provider actually gave, the same way the image
+  // entries below are. "No AI is connected" is wrong and actively misleading
+  // for a key that IS connected and is being refused — the difference between
+  // someone plugging a key in and someone paying a bill.
+  'ai_provider:not_configured': { down: 'Writing is unavailable — no AI is connected.' },
+  'ai_provider:no_credit': {
+    down: 'The AI account is out of credit, so nothing can be written.',
+    stillWorks: 'Drafts already written are unaffected, and scheduling still works.',
+  },
+  'ai_provider:bad_key': {
+    down: 'The AI provider rejected its key on the last attempt, so nothing can be written.',
+    stillWorks: 'Drafts already written are unaffected, and scheduling still works.',
+  },
+  'ai_provider:rate_limited': {
+    down: 'The AI provider is refusing calls for going too fast; writing may be intermittent.',
+    stillWorks: 'It usually clears on its own — try again in a few minutes.',
+  },
+  'ai_provider:other': {
+    down: 'The last attempt to write anything was refused by the AI provider.',
+    stillWorks: 'Drafts already written are unaffected, and scheduling still works.',
+  },
   metricool: { down: 'Scheduling is unavailable.', stillWorks: 'You can still write and save drafts.' },
+  'metricool:not_configured': { down: 'Scheduling is not connected.', stillWorks: 'You can still write and save drafts.' },
+  'metricool:bad_key': {
+    down: 'Metricool rejected its token on the last attempt, so nothing can be scheduled.',
+    stillWorks: 'You can still write and save drafts here.',
+  },
+  'metricool:rate_limited': {
+    down: 'Metricool is refusing posts for going too fast; scheduling may be intermittent.',
+    stillWorks: 'It usually clears on its own — try again in a few minutes.',
+  },
+  'metricool:other': {
+    down: 'Metricool refused the last post, so scheduling may not be working.',
+    stillWorks: 'You can still write and save drafts here.',
+  },
   allowed_emails: { down: 'Sign-in access is not configured.' },
   cron_secret: { down: 'Autopilot and performance tracking are not running.', stillWorks: 'Writing and scheduling by hand are unaffected.' },
   rate_limiting: { down: 'Usage limits are not being applied.' },

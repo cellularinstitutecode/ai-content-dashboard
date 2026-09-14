@@ -18,6 +18,7 @@
 // place we were before, never a false alarm.
 import 'server-only';
 import { supabaseAdmin } from '@/lib/supabase-admin';
+import { redact } from '@/lib/report';
 import { classifyImageFailure, OUTCOME_WINDOW_MS, type ImageFailureReason } from './image-failure-reason.ts';
 
 // Re-exported so callers have one import for "what do we know about images".
@@ -30,39 +31,70 @@ export type ImageOutcome = {
   at: number;
 };
 
-const PROVIDER = 'openai_images';
+/**
+ * The providers this module can speak for.
+ *
+ * It began life hardcoded to `openai_images` — `const PROVIDER =
+ * 'openai_images'` — despite the general name, so a revoked ANTHROPIC_API_KEY
+ * or a rejected Metricool token reported healthy forever while the health check
+ * asked only "is the variable set". That is the exact question the module's own
+ * header says nobody was asking. The table is already keyed by provider, so
+ * naming more of them costs no migration.
+ */
+export type ProviderName = 'openai_images' | 'anthropic_text' | 'openai_text' | 'metricool';
 
-// A process that just generated an image knows the answer without a round
-// trip; the row is for the OTHER instance that serves /api/health.
-let lastSeen: ImageOutcome | null = null;
+const IMAGE_PROVIDER: ProviderName = 'openai_images';
 
-/** Remember how an image generation went. Never throws, never awaited. */
-export function recordImageOutcome(input: { ok: boolean; message?: string }): void {
-  const outcome: ImageOutcome = {
+/** An outcome for any provider. Same shape the image path always used. */
+export type ProviderOutcome = ImageOutcome;
+
+// A process that just called a provider knows the answer without a round trip;
+// the row is for the OTHER instance that serves /api/health.
+const lastSeen = new Map<ProviderName, ProviderOutcome>();
+
+/**
+ * Remember how a call to a provider went. Never throws, never awaited.
+ *
+ * Same discipline as before: recording must never fail the thing being
+ * recorded, because the call has already happened and this is evidence, not a
+ * checkpoint.
+ */
+export function recordProviderOutcome(
+  provider: ProviderName,
+  input: { ok: boolean; message?: string },
+): void {
+  const outcome: ProviderOutcome = {
     ok: input.ok,
     reason: input.ok ? null : classifyImageFailure(input.message || ''),
     at: Date.now(),
   };
-  lastSeen = outcome;
+  lastSeen.set(provider, outcome);
   void (async () => {
     try {
       await supabaseAdmin()
         .from('provider_status')
         .upsert(
           {
-            provider: PROVIDER,
+            provider,
             ok: outcome.ok,
             reason: outcome.reason,
-            detail: input.message ? String(input.message).slice(0, 300) : null,
+            // Redacted: this is a provider's own error text, which is exactly
+            // where a vendor has been seen echoing a live key back.
+            detail: input.message ? redact(String(input.message)).slice(0, 300) : null,
             updated_at: new Date(outcome.at).toISOString(),
           },
           { onConflict: 'provider' },
         );
     } catch {
-      // Health degrades to "no record". A generation must never fail because
-      // we could not write a note about it.
+      // Health degrades to "no record". A call must never fail because we could
+      // not write a note about it.
     }
   })();
+}
+
+/** Remember how an image generation went. Never throws, never awaited. */
+export function recordImageOutcome(input: { ok: boolean; message?: string }): void {
+  recordProviderOutcome(IMAGE_PROVIDER, input);
 }
 
 /**
@@ -71,13 +103,28 @@ export function recordImageOutcome(input: { ok: boolean; message?: string }): vo
  * @param windowMs how far back an attempt still counts (default 24h)
  */
 export async function lastImageOutcome(windowMs: number = OUTCOME_WINDOW_MS): Promise<ImageOutcome | null> {
-  const fresh = (o: ImageOutcome | null) => (o && Date.now() - o.at <= windowMs ? o : null);
-  let stored: ImageOutcome | null = null;
+  return lastProviderOutcome(IMAGE_PROVIDER, windowMs);
+}
+
+/**
+ * The last attempt against any provider, if it is recent enough to mean
+ * anything.
+ *
+ * Returns null for "nothing known", which every caller must read as "no reason
+ * to complain" rather than as a fault — a deployment that has not called a
+ * provider yet is not a broken one.
+ */
+export async function lastProviderOutcome(
+  provider: ProviderName,
+  windowMs: number = OUTCOME_WINDOW_MS,
+): Promise<ProviderOutcome | null> {
+  const fresh = (o: ProviderOutcome | null) => (o && Date.now() - o.at <= windowMs ? o : null);
+  let stored: ProviderOutcome | null = null;
   try {
     const { data } = await supabaseAdmin()
       .from('provider_status')
       .select('ok, reason, updated_at')
-      .eq('provider', PROVIDER)
+      .eq('provider', provider)
       .maybeSingle();
     if (data && data.updated_at) {
       stored = {
@@ -90,13 +137,14 @@ export async function lastImageOutcome(windowMs: number = OUTCOME_WINDOW_MS): Pr
     // Missing table or an unreachable database: fall back to this instance's
     // own memory rather than inventing a verdict.
   }
-  // Whichever is newer. This instance may have generated an image a second
+  // Whichever is newer. This instance may have called the provider a second
   // ago; the row may have been written by a different instance a minute ago.
-  const best = !stored ? lastSeen : !lastSeen ? stored : stored.at >= lastSeen.at ? stored : lastSeen;
+  const mine = lastSeen.get(provider) ?? null;
+  const best = !stored ? mine : !mine ? stored : stored.at >= mine.at ? stored : mine;
   return fresh(best);
 }
 
 /** Test seam: forget what this process has seen. */
 export function __resetImageOutcome(): void {
-  lastSeen = null;
+  lastSeen.clear();
 }
