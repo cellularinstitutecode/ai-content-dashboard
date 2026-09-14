@@ -1,6 +1,10 @@
 // web/app/api/drafts/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
+import { IMAGE_BUCKET, removeStoredObjects } from '@/lib/images';
+import { referencedKeys } from '@/lib/storage-prune';
+import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
 
@@ -91,11 +95,60 @@ export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
 
+  // Read the pack BEFORE the row goes: its images go with it. This used to be
+  // a bare row delete, which left the hero image and the whole carousel in the
+  // public bucket for good — one click, several megabytes, unreachable and
+  // still billed. The read is best-effort: a draft that cannot be read is
+  // still deleted, it just leaves its images for the nightly sweep to find.
+  const { data: before } = await sb
+    .from('drafts')
+    .select('pack')
+    .eq('id', id)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
   const { error } = await sb
     .from('drafts')
     .delete()
     .eq('id', id)
     .eq('user_id', user.id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Awaited, not fired-and-forgotten: a serverless function is frozen the
+  // moment it answers, and work left running then may simply never happen.
+  const pack = (before as { pack?: unknown } | null)?.pack;
+  if (pack) await removeDraftImages(pack).catch((e) => reportError('drafts:delete-images', e, { id }));
   return NextResponse.json({ ok: true });
+}
+
+/**
+ * Remove the objects a deleted draft referenced — unless another draft still
+ * points at one of them.
+ *
+ * Sharing is not something the app does today (every generation and every
+ * card render writes its own object), but a delete is permanent and the check
+ * is one indexed read per key, so it is made rather than assumed. Cards are
+ * rendered per draft by construction; the hero is the field a copy would
+ * carry, so that is the field checked. Anything skipped here is still caught
+ * by the nightly sweep once nothing references it.
+ */
+async function removeDraftImages(pack: unknown): Promise<void> {
+  const keys = [...referencedKeys([pack], IMAGE_BUCKET)];
+  if (!keys.length) return;
+  const admin = supabaseAdmin();
+  const free: string[] = [];
+  for (const key of keys) {
+    // `like` treats `_` as a wildcard, which can only over-match — and an
+    // over-match here means "keep the file", the safe direction.
+    const { data, error } = await admin
+      .from('drafts')
+      .select('id')
+      .like('pack->_image->>url', '%/' + key)
+      .limit(1);
+    // Cannot tell → do not delete. The sweep decides later, with the whole picture.
+    if (error) continue;
+    if (Array.isArray(data) && data.length) continue;
+    free.push(key);
+  }
+  await removeStoredObjects(free);
 }

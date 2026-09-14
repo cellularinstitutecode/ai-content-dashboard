@@ -129,6 +129,11 @@ test('a model-access failure falls through to the fallback model', async () => {
   ];
   const img = await generatePackImage({ topic: 'cell culture' });
   assert.equal(img.model, 'gpt-image-1-mini');
+  // The middle rung drops `quality` but keeps asking for JPEG: a PNG from this
+  // rung is 2-5 MB against the JPEG's 250-500 KB, kept for the draft's life.
+  const middle = calls.find((c) => c.label === 'gen-minimal');
+  assert.equal(middle.body.output_format, 'jpeg', 'the second rung must still ask for JPEG');
+  assert.equal('quality' in middle.body, false, 'the second rung drops `quality`');
 });
 
 test('exhausted credit surfaces a real error rather than a silent no-op', async () => {

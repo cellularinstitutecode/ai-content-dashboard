@@ -11,6 +11,10 @@
     {
       "path": "/api/videos/watch",
       "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/maintenance/prune",
+      "schedule": "0 5 * * *"
     }
   ]
 }

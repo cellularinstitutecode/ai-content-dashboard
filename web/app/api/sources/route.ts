@@ -25,6 +25,7 @@ import {
   sourcesConfigured,
 } from '@/lib/google-sources';
 import { storeBytes } from '@/lib/images';
+import { fitImage } from '@/lib/image-downscale';
 import { reportError } from '@/lib/report';
 import { checkRateLimit } from '@/lib/rate-limit';
 
@@ -273,8 +274,12 @@ export async function POST(req: NextRequest) {
   try {
     const file = await downloadDriveFile(body.fileId);
     const ext = file.contentType === 'image/png' ? 'png' : file.contentType === 'image/webp' ? 'webp' : file.contentType === 'image/gif' ? 'gif' : 'jpg';
-    const url = await storeBytes(file.bytes, file.contentType, ext, file.name.replace(/\.[a-z0-9]+$/i, ''));
-    return NextResponse.json({ url, name: file.name });
+    // Stored at the size it will be shown at, not the size the camera made it.
+    // A 25 MB original was kept in the public bucket for good; every network
+    // re-encodes to a couple of megapixels on arrival anyway.
+    const fit = await fitImage(file.bytes, file.contentType, ext);
+    const url = await storeBytes(fit.bytes, fit.contentType, fit.ext, file.name.replace(/\.[a-z0-9]+$/i, ''));
+    return NextResponse.json({ url, name: file.name, resized: fit.resized });
   } catch (e) {
     if (e instanceof GoogleSourceError && (e.status === 413 || e.status === 415)) {
       return NextResponse.json({ error: 'unusable_file', message: e.status === 413 ? 'That image is larger than 25 MB.' : 'That file is not an image.' }, { status: 422 });

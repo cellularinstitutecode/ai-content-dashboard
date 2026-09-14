@@ -15,7 +15,7 @@ import { requireAllowlistedUser } from '@/lib/auth';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { supabaseServer } from '@/lib/supabase';
 import { reportError } from '@/lib/report';
-import { storeBytes, type PackImage } from '@/lib/images';
+import { removeSuperseded, storeBytes, type PackImage } from '@/lib/images';
 import { renderBrandCard, setStoredFontReader } from '@/lib/brand-card';
 import { readStoredFonts } from '@/lib/brand-fonts';
 import { normalizeVisual } from '@/lib/brand-visual';
@@ -143,6 +143,11 @@ export async function POST(req: NextRequest) {
   }
   const { error } = await sb.from('drafts').update({ pack: next }).eq('id', id).eq('user_id', auth.userId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // A re-render REPLACES the set: the previous cards (and a previous hero, when
+  // setHero swapped it) are unreferenced now and go. The set difference keeps
+  // anything the new pack still points at.
+  await removeSuperseded(current, next);
 
   return NextResponse.json({ ok: true, cards, width, height, note, hero: setHero ? next._image : null });
 }

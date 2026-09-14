@@ -34,6 +34,17 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
 const MAX_TRANSCRIPT = 12000; // characters handed to the writer
+/**
+ * Characters of transcript KEPT ON THE DRAFT, for the library's preview.
+ *
+ * The pack used to carry the whole 12,000-character excerpt the writer was
+ * given — a second copy of text already stored in full in video_transcripts,
+ * written again on every Prepare, and rewritten with every image regenerate
+ * and card render because the pack is one JSON column. The draft needs enough
+ * for a person to recognise the video; the full text is one lookup away by
+ * `videoId`, which the pack has always carried.
+ */
+const KEPT_TRANSCRIPT = 1500;
 
 export type VideoPack = ContentPack & {
   kind: 'video';
@@ -157,6 +168,72 @@ function retryAdvice(banked: boolean): string {
 
 function hasSemrushData(stamp: SemrushStamp | null | undefined): boolean {
   return stamp?.source === 'semrush' && Boolean(stamp.primary);
+}
+
+/**
+ * Put the pack in the library — on the draft this video ALREADY has, when it has one.
+ *
+ * This was a bare insert. Pressing Prepare twice on the same video — which is
+ * what a person does after a timeout, and what the retry advice above tells
+ * them to do — made a second draft row with its own copy of everything, while
+ * video_runs.draft_id and any post still pointed at the first. The library
+ * filled with near-duplicates and the database paid for each one.
+ *
+ * Keyed on the video (the Drive file id or the YouTube id, which the pack
+ * carries as `videoId`) and the owner. A pasted transcript has no id and gets
+ * a fresh row as before. The previous draft's hero image and cards are kept
+ * — they were made for this video and cost real money — unless the new pack
+ * brings its own.
+ *
+ * Returns the draft id, or null when nothing could be saved. The `error` half
+ * matters throughout: supabase-js RESOLVES a failed write rather than
+ * throwing, so a try/catch alone catches nothing and a draft that never saved
+ * leaves no trace anywhere — the row is written, Metricool gets the post, and
+ * only the library is quietly missing it.
+ */
+async function saveVideoDraft(userId: string, title: string, videoPack: VideoPack): Promise<string | null> {
+  const admin = supabaseAdmin();
+  const row = { topic: 'Video · ' + title, channels: ['linkedin', 'tiktok'], provider: 'anthropic' };
+  const videoId = String(videoPack.videoId || '').trim();
+
+  if (videoId) {
+    const { data: prior, error: findError } = await admin
+      .from('drafts')
+      .select('id, pack')
+      .eq('user_id', userId)
+      .eq('pack->>kind', 'video')
+      .eq('pack->>videoId', videoId)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (findError) reportError('videos:prepare-find', findError, { userId });
+    const existing = prior as { id?: string; pack?: Record<string, unknown> | null } | null;
+    if (existing?.id) {
+      const kept = (existing.pack && typeof existing.pack === 'object' ? existing.pack : {}) as Record<string, unknown>;
+      const carried: Record<string, unknown> = {};
+      for (const key of ['_image', '_cards']) {
+        if (kept[key] !== undefined && (videoPack as Record<string, unknown>)[key] === undefined) carried[key] = kept[key];
+      }
+      const { error: updateError } = await admin
+        .from('drafts')
+        .update({ ...row, pack: { ...videoPack, ...carried }, updated_at: new Date().toISOString() })
+        .eq('id', existing.id)
+        .eq('user_id', userId);
+      if (!updateError) return existing.id;
+      // Could not update the one it has: fall through and make a new one
+      // rather than lose the copy. The duplicate is the lesser harm.
+      reportError('videos:prepare-update', updateError, { userId, draftId: existing.id });
+    }
+  }
+
+  const saved = await admin
+    .from('drafts')
+    .insert({ user_id: userId, ...row, pack: videoPack })
+    .select('id')
+    .single()
+    .then((r) => r, (e: unknown) => ({ data: null, error: e as { message?: string } }));
+  if (saved.error) reportError('videos:prepare-save', saved.error, { userId });
+  return (saved.data as { id?: string } | null)?.id || null;
 }
 
 export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | PrepareFail> {
@@ -563,7 +640,7 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     title,
     sourceUrl: url,
     videoId: t.videoId || '',
-    transcript: excerpt,
+    transcript: transcriptExcerpt(transcript, KEPT_TRANSCRIPT),
     transcriptSource: t.origin,
     transcriptLanguage: t.language,
     linkedin,
@@ -573,18 +650,7 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   // 4) Save as a draft so it is in the library and editable.
   let draftId: string | null = null;
   if (input.saveDraft !== false) {
-    // The `error` half matters: supabase-js RESOLVES a failed insert rather
-    // than throwing, so a try/catch alone catches nothing and a draft that
-    // never saved leaves no trace anywhere — the row is written, Metricool
-    // gets the post, and only the library is quietly missing it.
-    const saved = await supabaseAdmin()
-      .from('drafts')
-      .insert({ user_id: input.userId, topic: 'Video · ' + title, channels: ['linkedin', 'tiktok'], pack: videoPack, provider: 'anthropic' })
-      .select('id')
-      .single()
-      .then((r) => r, (e: unknown) => ({ data: null, error: e as { message?: string } }));
-    if (saved.error) reportError('videos:prepare-save', saved.error, { userId: input.userId });
-    draftId = (saved.data as { id?: string } | null)?.id || null;
+    draftId = await saveVideoDraft(input.userId, title, videoPack);
   }
 
   return {

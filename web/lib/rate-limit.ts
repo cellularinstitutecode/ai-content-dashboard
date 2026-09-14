@@ -80,6 +80,9 @@ const POLICIES: Record<string, Policy> = {
   // job, but not unbounded: on the ready path each call can download clips from
   // Opus and upload them to Drive.
   'opus-poll': { limit: 900, windowSec: 3600 },
+  // The nightly sweep, when a person asks for its report by hand. Lists the
+  // whole bucket and reads every draft; nobody needs that twelve times an hour.
+  'maintenance-prune': { limit: 12, windowSec: 3600 },
 };
 
 const DEFAULT_POLICY: Policy = { limit: 60, windowSec: 3600 };
