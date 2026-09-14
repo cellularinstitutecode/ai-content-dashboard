@@ -14,6 +14,8 @@ import { reportError } from '@/lib/report';
 import { deleteDriveFile } from '@/lib/drive';
 import { forgetPublicCopy } from '@/lib/transcript-cache';
 import { modeOfStatus, videoPending, APPROVED_STATUS } from '@/lib/post-mode';
+import { tabGid } from '@/lib/google-sources';
+import type { PostSource } from '@/lib/sheet-link';
 
 export const runtime = 'nodejs';
 // Both mutating paths now make an upstream Metricool call before they touch the
@@ -115,12 +117,59 @@ export async function GET() {
     }
   }
 
+  // WHICH ROW OF WHICH TAB this post was written from.
+  //
+  // Every post in the publishing list came from a specific row of the sheet,
+  // and the app has always known which: video_runs records spreadsheet_id, tab
+  // and row_number — refreshed on every sweep precisely so the copy can be
+  // written back to it — and its draft_id is the same draft posts.draft_id
+  // points at. The join existed; nothing ever showed it, so editing the copy
+  // behind a queued post meant opening the sheet and hunting for a caption you
+  // could only half-remember from a two-line preview.
+  //
+  // ONE more query for the whole page, keyed by the draft ids already gathered
+  // above. Posts with no draft (a hand-written one, a template) simply have no
+  // source, and get no button.
+  const sources: Record<string, PostSource> = {};
+  if (draftIds.length) {
+    const { data: runs, error: runErr } = await sb
+      .from('video_runs')
+      .select('draft_id, spreadsheet_id, tab, row_number, video_title')
+      .in('draft_id', draftIds)
+      .eq('user_id', user.id);
+    if (runErr) {
+      // Not fatal and not hidden. The row link is a convenience; the queue
+      // itself is not. A missing video_runs table (its migration is pasted by
+      // hand like every other) lands here too, and must not take the page down.
+      reportError('posts:source-read', runErr, { userId: user.id });
+    }
+    // Resolve each tab's gid once, not once per post: gids never change, and
+    // lib/google-sources caches them for an hour. Failure yields null and the
+    // button still opens the right document.
+    const gids = new Map<string, number | null>();
+    for (const r of runs || []) {
+      const row = r as { draft_id: string | null; spreadsheet_id: string; tab: string; row_number: number | null; video_title: string | null };
+      const key = String(row.draft_id || '');
+      if (!key || !row.spreadsheet_id) continue;
+      const gidKey = row.spreadsheet_id + '\u0000' + row.tab;
+      if (!gids.has(gidKey)) gids.set(gidKey, await tabGid(row.spreadsheet_id, row.tab));
+      sources[key] = {
+        spreadsheetId: row.spreadsheet_id,
+        tab: String(row.tab || ''),
+        row: typeof row.row_number === 'number' ? row.row_number : null,
+        gid: gids.get(gidKey) ?? null,
+        title: row.video_title ?? null,
+      };
+    }
+  }
+
   return NextResponse.json({
     posts: posts.map((p) => ({
       ...p,
       videoPending: packsUnavailable
         ? false
         : videoPending(p.status, packs[String(p.draft_id || '')] ?? null, Boolean(p.media_drive_file_id)),
+      source: sources[String(p.draft_id || '')] ?? null,
     })),
     ...(packsUnavailable ? { packsUnavailable: true } : {}),
   });
