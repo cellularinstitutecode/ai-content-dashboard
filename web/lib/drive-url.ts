@@ -33,3 +33,40 @@ export function parseDriveFileId(raw: string): string | null {
 export function isDriveUrl(raw: string): boolean {
   return parseDriveFileId(raw) !== null;
 }
+
+/**
+ * The folder (or Shared Drive) id in whatever was pasted into DRIVE_FOLDER_ID.
+ *
+ * The setting asks for an id, and the address bar hands out a URL — so the
+ * whole URL got pasted, Drive was asked for a file literally named
+ * "https://drive.google.com/drive/folders/…", and the banner read "File not
+ * found: https://…" while every video stayed unattached. Accepting what a
+ * person actually copies is cheaper than explaining the difference.
+ *
+ * Handles: a bare id (a folder's `1…` or a Shared Drive's own `0A…` root id,
+ * which is a valid parent), `/drive/folders/<id>`, `/drive/u/0/folders/<id>`,
+ * `/drive/shared-drives/<id>`... and `?id=<id>`. Query strings and fragments
+ * (`?usp=sharing`, `#…`) are ignored. Anything else is null, never a guess.
+ */
+export function parseDriveFolderId(raw: string | null | undefined): string | null {
+  const value = String(raw || '').trim();
+  if (!value) return null;
+  // Shared Drive root ids are shorter than file ids (19 chars, start with 0A);
+  // folder ids look like file ids. Accept both, bare — but a real id always
+  // carries a digit or a capital, which is what keeps the .env.example
+  // placeholder ("replace-with-a-folder-id…") from passing as one.
+  if (/^[A-Za-z0-9_-]{15,80}$/.test(value) && /[A-Z0-9]/.test(value)) return value;
+  let url: URL;
+  try {
+    url = new URL(/^https?:\/\//i.test(value) ? value : 'https://' + value);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.replace(/^www\./, '').toLowerCase();
+  if (host !== 'drive.google.com' && host !== 'docs.google.com') return null;
+  const m = /\/(?:folders|shared-drives)\/([A-Za-z0-9_-]{15,80})/.exec(url.pathname);
+  if (m) return m[1];
+  const q = url.searchParams.get('id');
+  if (q && /^[A-Za-z0-9_-]{15,80}$/.test(q)) return q;
+  return null;
+}

@@ -35,3 +35,29 @@ test('anything that is not a Drive file is not one', () => {
   assert.equal(parseDriveFileId('https://drive.google.com.evil.test/file/d/1s0d6e44yh6hNObVAzbdkBRclx_Pe8g7N/view'), null);
   assert.equal(isDriveUrl('https://vimeo.com/123456'), false);
 });
+
+// --- DRIVE_FOLDER_ID: what people paste, not what the setting asked for -------
+import { parseDriveFolderId } from './drive-url.ts';
+
+test('a pasted folder URL yields the folder id', () => {
+  assert.equal(parseDriveFolderId('https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345'), '1AbCdEfGhIjKlMnOpQrStUvWxYz012345');
+  assert.equal(parseDriveFolderId('https://drive.google.com/drive/u/0/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345?usp=sharing'), '1AbCdEfGhIjKlMnOpQrStUvWxYz012345');
+});
+
+test('a Shared Drive root — the exact value that was pasted — works as a URL and bare', () => {
+  // Shared Drive ids are shorter than file ids and start with 0A.
+  assert.equal(parseDriveFolderId('https://drive.google.com/drive/folders/0AOhU0lRLPgJYUk9PVA'), '0AOhU0lRLPgJYUk9PVA');
+  assert.equal(parseDriveFolderId('https://drive.google.com/drive/shared-drives/0AOhU0lRLPgJYUk9PVA'), '0AOhU0lRLPgJYUk9PVA');
+  assert.equal(parseDriveFolderId('0AOhU0lRLPgJYUk9PVA'), '0AOhU0lRLPgJYUk9PVA');
+  assert.equal(parseDriveFolderId('  0AOhU0lRLPgJYUk9PVA \n'), '0AOhU0lRLPgJYUk9PVA');
+});
+
+test('a bare folder id passes through unchanged', () => {
+  assert.equal(parseDriveFolderId('1AbCdEfGhIjKlMnOpQrStUvWxYz012345'), '1AbCdEfGhIjKlMnOpQrStUvWxYz012345');
+});
+
+test('nothing usable is null, never a guess', () => {
+  for (const v of ['', '   ', null, undefined, 'replace-with-a-folder-id-inside-a-shared-drive', 'https://example.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345', 'https://drive.google.com/drive/my-drive']) {
+    assert.equal(parseDriveFolderId(v as string), null, JSON.stringify(v));
+  }
+});

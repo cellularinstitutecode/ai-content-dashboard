@@ -18,6 +18,18 @@
 import { drive } from 'googleapis/build/src/apis/drive';
 import { JWT } from 'google-auth-library';
 import { Readable } from 'stream';
+import { parseDriveFolderId } from './drive-url.ts';
+
+/**
+ * The copies folder, as an id — whatever shape DRIVE_FOLDER_ID was pasted in.
+ *
+ * A full folder URL used to be handed to Drive as a file id, and Drive's answer
+ * — "File not found: https://drive.google.com/…" — sat in the status banner
+ * while no video could be attached. See parseDriveFolderId.
+ */
+export function driveFolderId(): string {
+  return parseDriveFolderId(process.env.DRIVE_FOLDER_ID) || '';
+}
 
 function driveClient() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -37,7 +49,7 @@ export async function persistToDrive(
   sourceUrl: string,
   filename: string
 ): Promise<{ fileId: string; url: string }> {
-  const folderId = process.env.DRIVE_FOLDER_ID;
+  const folderId = driveFolderId();
   if (!folderId) throw new Error('DRIVE_FOLDER_ID missing');
 
   const res = await fetch(sourceUrl);
@@ -83,7 +95,7 @@ const url =
  * two of wall clock.
  */
 export async function publicVideoCopy(fileId: string, filename: string): Promise<{ fileId: string; url: string }> {
-  const folderId = process.env.DRIVE_FOLDER_ID;
+  const folderId = driveFolderId();
   if (!folderId) throw new Error('DRIVE_FOLDER_ID missing');
   const drive = driveClient();
 
@@ -210,7 +222,7 @@ export async function driveFolderReport(): Promise<{
   quota: { limit: string | null; usage: string | null };
   error: string;
 }> {
-  const folderId = String(process.env.DRIVE_FOLDER_ID || '').trim();
+  const folderId = driveFolderId();
   const blank = {
     ok: false, folderId, folderName: '', inSharedDrive: false,
     quota: { limit: null as string | null, usage: null as string | null },
@@ -262,7 +274,7 @@ export async function driveSelfTest(): Promise<{
   steps: { step: 'create' | 'share' | 'fetch' | 'cleanup'; ok: boolean; detail: string }[];
 }> {
   const steps: { step: 'create' | 'share' | 'fetch' | 'cleanup'; ok: boolean; detail: string }[] = [];
-  const folderId = process.env.DRIVE_FOLDER_ID;
+  const folderId = driveFolderId();
   if (!folderId) {
     return { ok: false, steps: [{ step: 'create', ok: false, detail: 'DRIVE_FOLDER_ID is not set.' }] };
   }
