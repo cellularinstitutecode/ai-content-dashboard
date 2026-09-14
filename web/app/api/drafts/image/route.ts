@@ -10,7 +10,7 @@ import { isAllowedEmail } from '@/lib/access';
 import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
-import { generatePackImage, imagesEnabled, type PackImage } from '@/lib/images';
+import { generatePackImage, imagesEnabled, removeSuperseded, type PackImage } from '@/lib/images';
 import { checkRateLimit } from '@/lib/rate-limit';
 import type { BrandContext } from '@/lib/ai';
 
@@ -121,12 +121,17 @@ export async function POST(req: NextRequest) {
     const currentPack = (fresh as { pack?: Record<string, unknown> } | null)?.pack ?? pack;
 
     // Owner update passes RLS via the session client.
+    const nextPack = { ...currentPack, _image: image };
     const { error } = await sb
       .from('drafts')
-      .update({ pack: { ...currentPack, _image: image } })
+      .update({ pack: nextPack })
       .eq('id', id)
       .eq('user_id', user.id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    // "New image" REPLACES. The object the draft just stopped pointing at goes
+    // — after the write, so a failed write never orphans the image on screen.
+    await removeSuperseded(currentPack, nextPack);
 
     return NextResponse.json({ image });
   } catch (e) {

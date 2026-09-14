@@ -97,6 +97,8 @@ const nextConfig = {
     '/api/drafts/card': ['./public/fonts/**/*'],
     '/api/videos/prepare': ['./node_modules/ffmpeg-static/ffmpeg'],
     '/api/videos/watch': ['./node_modules/ffmpeg-static/ffmpeg'],
+    // import_image downscales a Drive photo before storing it (lib/image-downscale.ts).
+    '/api/sources': ['./node_modules/ffmpeg-static/ffmpeg'],
   },
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];

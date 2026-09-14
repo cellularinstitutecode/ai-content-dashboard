@@ -24,6 +24,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import type { BrandContext } from '@/lib/ai';
 import { normalizeVisual, visualPromptBlock, brandFitRubric, type BrandVisual } from '@/lib/brand-visual';
 import { classifyVerdict } from './image-verdict.ts';
+import { supersededKeys } from './storage-prune.ts';
 import { recordImageOutcome } from '@/lib/provider-status';
 
 // Machine verification: every generated image is inspected by a vision model
@@ -70,6 +71,8 @@ export type PackImage = {
 };
 
 const BUCKET = process.env.IMAGE_BUCKET || 'content-images';
+/** The public bucket every generated, painted or imported image lands in. */
+export const IMAGE_BUCKET = BUCKET;
 const PRIMARY_MODEL = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1';
 // Live testing (Aug 2026) showed 'dall-e-3' no longer exists on the Images
 // API — the fallback is now the cheaper gpt-image tier, overridable by env.
@@ -231,11 +234,18 @@ async function generateImageBytes(prompt: string): Promise<GeneratedImage> {
         output_compression: 80,
       },
     },
-    // Same model, minimal parameter set — survives parameter deprecations.
-    { model: PRIMARY_MODEL, body: { model: PRIMARY_MODEL, prompt, n: 1, size: '1536x1024' } },
-    // Different model, minimal parameter set — survives model-access issues.
-    // (1536x1024 is the valid landscape size for the gpt-image family; the
-    // old 1792x1024 was a DALL·E-3-only size and got this rung rejected.)
+    // Same model without `quality` — the parameter whose accepted values have
+    // moved between model generations — but STILL asking for JPEG. The format
+    // matters more than it looks: a rung that omits output_format gets PNG
+    // back, and a 1536x1024 PNG is 2-5 MB where the JPEG is 250-500 KB — ten
+    // times the storage for every image made on a day the first rung was
+    // refused, kept for as long as the draft lives.
+    { model: PRIMARY_MODEL, body: { model: PRIMARY_MODEL, prompt, n: 1, size: '1536x1024', output_format: 'jpeg', output_compression: 80 } },
+    // Different model, minimal parameter set — survives model-access issues AND
+    // any output_* deprecation, which is why this last rung stays bare even
+    // though it can come back as PNG. (1536x1024 is the valid landscape size
+    // for the gpt-image family; the old 1792x1024 was a DALL·E-3-only size and
+    // got this rung rejected.)
     { model: FALLBACK_MODEL, body: { model: FALLBACK_MODEL, prompt: prompt.slice(0, 3900), n: 1, size: '1536x1024' } },
   ];
 
@@ -383,6 +393,40 @@ export async function storeBytes(bytes: Buffer, contentType: string, ext: string
   return data.publicUrl;
 }
 
+/**
+ * Remove objects from the bucket. Best-effort, never throws.
+ *
+ * Every write above lands under a unique name, so nothing is ever replaced by
+ * a later write — without this, every regenerated hero and every re-rendered
+ * carousel stayed in the bucket for good. Callers pass the keys a pack stopped
+ * referencing (lib/storage-prune.ts decides which those are); a failure here
+ * costs storage, not a post, so it is reported and swallowed.
+ *
+ * Returns how many keys were asked to go, for the caller's log line.
+ */
+export async function removeStoredObjects(keys: string[]): Promise<number> {
+  const list = keys.map((k) => String(k || '').trim()).filter(Boolean);
+  if (!list.length) return 0;
+  try {
+    const { error } = await supabaseAdmin().storage.from(BUCKET).remove(list);
+    if (error) reportError('images:remove', error, { count: list.length });
+  } catch (e) {
+    reportError('images:remove', e, { count: list.length });
+  }
+  return list.length;
+}
+
+/**
+ * Remove whatever `prev` pointed at in the bucket that `next` no longer does.
+ *
+ * The step that turns "store the new image" into "replace the old one". Called
+ * AFTER the new pack is written, so a failed write never orphans the picture
+ * the draft still shows.
+ */
+export async function removeSuperseded(prev: unknown, next: unknown): Promise<number> {
+  return removeStoredObjects(supersededKeys(prev, next, BUCKET));
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -528,9 +572,13 @@ export async function ensureDraftImage(draftId: string, ownerId: string): Promis
   const { data: fresh } = await db
     .from('drafts').select('pack').eq('id', draftId).eq('user_id', ownerId).maybeSingle();
   const currentPack = (fresh as { pack?: Record<string, unknown> } | null)?.pack ?? pack;
+  const nextPack = { ...currentPack, _image: image };
   const { error } = await db
-    .from('drafts').update({ pack: { ...currentPack, _image: image } })
+    .from('drafts').update({ pack: nextPack })
     .eq('id', draftId).eq('user_id', ownerId);
   if (error) throw new Error('draft image stamp failed: ' + error.message);
+  // A text-flagged image was regenerated over: the old object is now
+  // unreferenced, and without this it stayed in the bucket for good.
+  await removeSuperseded(currentPack, nextPack);
   return image;
 }

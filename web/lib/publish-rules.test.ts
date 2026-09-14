@@ -100,10 +100,10 @@ test("the Autopilot's live publish is reachable only through an explicit request
 
 // --- 3. NOTHING AUTOMATIC ---------------------------------------------------
 
-test('neither daily cron can publish anything', () => {
-  // The crons run unattended, on a schedule, with no person watching. If either
+test('no daily cron can publish anything', () => {
+  // The crons run unattended, on a schedule, with no person watching. If any
   // could reach a live publish, "only once I have approved" would be false.
-  for (const cron of ['app/api/autopilot/tick/route.ts', 'app/api/videos/watch/route.ts']) {
+  for (const cron of ['app/api/autopilot/tick/route.ts', 'app/api/videos/watch/route.ts', 'app/api/maintenance/prune/route.ts']) {
     const body = src(cron);
     for (const forbidden of ['approveRun', 'autoPublish', "'scheduled'"]) {
       assert.ok(
