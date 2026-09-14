@@ -68,6 +68,10 @@ const securityHeaders = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // The container image (Dockerfile at the repo root) runs Next's standalone
+  // server: a self-contained .next/standalone/ with only the traced files.
+  // Set ONLY by the Dockerfile, so the Vercel build is unchanged.
+  ...(process.env.DOCKER_BUILD === '1' ? { output: 'standalone' } : {}),
   // Next 16 promoted this out of `experimental`.
   typedRoutes: true,
   // The brand-card route reads font files from disk at request time (the
