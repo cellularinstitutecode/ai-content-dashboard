@@ -25,6 +25,7 @@ import { runPrepare } from '@/lib/prepare-request';
 import { mapLimit } from '@/lib/map-limit';
 import { mayStartBatch, reasons, tally, type BatchReasons, type BatchState } from '@/lib/batch-plan';
 import { isDriveUrl, parseDriveFileId } from '@/lib/drive-url';
+import { ZOOM_MAX, ZOOM_MIN, frameGeometry, readStoredZoom, zoomIn, zoomLabel, zoomOut, zoomStorageKey } from '@/lib/sheet-zoom';
 
 /** How a batched row is getting on, in words rather than a spinner. */
 const BATCH_LABEL: Record<string, string> = {
@@ -114,25 +115,89 @@ function SheetFrame({ id, title, height }: { id: string; title: string; height: 
   // button before the sheet could be read the way people actually talk about
   // it. The toggle stays, for the case where the embed comes up blank.
   const [tryEditor, setTryEditor] = useState(true);
+
+  // The frame takes every wheel event under the cursor, and it is as tall as
+  // the window — so scrolling the PAGE with the mouse anywhere over it scrolled
+  // the SHEET instead. Inert until clicked into, inert again when the mouse
+  // leaves: the page scrolls when you mean the page, the sheet when you are
+  // in the sheet. See lib/sheet-zoom.ts.
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setArmed(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [armed]);
+
+  // The magnifier. Remembered per sheet, read after mount so the server and
+  // the first client render agree.
+  const [zoom, setZoom] = useState(1);
+  useEffect(() => {
+    try { setZoom(readStoredZoom(window.localStorage.getItem(zoomStorageKey(id)))); } catch { /* not essential */ }
+  }, [id]);
+  function applyZoom(next: number) {
+    setZoom(next);
+    try { window.localStorage.setItem(zoomStorageKey(id), String(next)); } catch { /* not essential */ }
+  }
+  const geometry = frameGeometry(zoom, height);
+  const zoomBtn: React.CSSProperties = { ...ghost, padding: '4px 9px', minWidth: 30, fontVariantNumeric: 'tabular-nums' };
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.08)', fontSize: 12, flexWrap: 'wrap' }}>
         <span style={{ opacity: .7 }}>
           {title} — {tryEditor ? 'Google’s editor, embedded — column letters and row numbers as they are in the sheet. If this panel is blank, switch to the read-only view.' : 'the live sheet, read-only. Edit with the fields beside it, or open it in Google.'}
         </span>
-        <span style={{ display: 'flex', gap: 8 }}>
+        <span style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }} aria-label="Zoom">
+            <span aria-hidden="true" style={{ opacity: .6, marginRight: 2 }}>{'\u{1F50D}'}</span>
+            <button type="button" style={zoomBtn} onClick={() => applyZoom(zoomOut(zoom))} disabled={zoom <= ZOOM_MIN} title="Zoom out" aria-label="Zoom out">−</button>
+            <button type="button" style={zoomBtn} onClick={() => applyZoom(1)} title="Reset to 100%" aria-label={'Zoom ' + zoomLabel(zoom) + ', reset to 100%'}>{zoomLabel(zoom)}</button>
+            <button type="button" style={zoomBtn} onClick={() => applyZoom(zoomIn(zoom))} disabled={zoom >= ZOOM_MAX} title="Zoom in" aria-label="Zoom in">+</button>
+          </span>
           <button type="button" style={ghost} onClick={() => setTryEditor(!tryEditor)}>
             {tryEditor ? 'Read-only view' : 'Edit here'}
           </button>
           <a href={sheetOpen(id)} target="_blank" rel="noreferrer" style={{ ...ghost, textDecoration: 'none' }}>Open in Google Sheets ↗</a>
         </span>
       </div>
-      <iframe
-        key={tryEditor ? 'edit' : 'preview'}
-        title={title + ' (Google Sheets)'}
-        src={tryEditor ? sheetEditEmbed(id) : sheetEmbed(id)}
-        style={{ width: '100%', height, border: 0, display: 'block' }}
-      />
+      <div
+        style={{ position: 'relative', height, overflow: 'hidden' }}
+        onMouseLeave={() => setArmed(false)}
+      >
+        <iframe
+          key={tryEditor ? 'edit' : 'preview'}
+          title={title + ' (Google Sheets)'}
+          src={tryEditor ? sheetEditEmbed(id) : sheetEmbed(id)}
+          style={{
+            width: geometry.widthPercent + '%',
+            height: geometry.height,
+            border: 0,
+            display: 'block',
+            transform: geometry.transform,
+            transformOrigin: '0 0',
+            pointerEvents: armed ? 'auto' : 'none',
+          }}
+        />
+        {!armed && (
+          <button
+            type="button"
+            onClick={() => setArmed(true)}
+            title="Click to scroll and work inside the sheet"
+            aria-label="Click to scroll and work inside the sheet"
+            style={{ position: 'absolute', inset: 0, background: 'transparent', border: 0, cursor: 'pointer', padding: 0 }}
+          >
+            <span style={{ position: 'absolute', left: '50%', bottom: 14, transform: 'translateX(-50%)', background: 'rgba(28,28,30,0.82)', color: '#fff', fontSize: 12, padding: '6px 12px', borderRadius: 999, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
+              Click to scroll inside the sheet
+            </span>
+          </button>
+        )}
+        {armed && (
+          <span style={{ position: 'absolute', left: '50%', bottom: 14, transform: 'translateX(-50%)', background: 'rgba(0,113,227,0.9)', color: '#fff', fontSize: 12, padding: '6px 12px', borderRadius: 999, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
+            Sheet active — move the mouse out (or press Esc) to scroll the page
+          </span>
+        )}
+      </div>
     </div>
   );
 }
