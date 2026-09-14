@@ -130,3 +130,43 @@ test('the Shared Drive refusal names the account to share with', () => {
   assert.match(after, /Content manager/);
   assert.match(after, /DRIVE_FOLDER_ID/);
 });
+
+// --- the status banner must never silently disappear -------------------------
+//
+// The panel carrying the Shared Drive setup and its test button lives inside
+// components/SystemStatus, which renders NOTHING when it cannot read
+// /api/health. That endpoint makes live Google, Semrush and Supabase calls, and
+// had no try/catch — so one transient blip removed the entire banner, and an
+// absent banner is indistinguishable from "every check passed". The page you
+// open BECAUSE something is broken must not be the page that breaks.
+
+test('the health route always answers with a valid checks array', () => {
+  const src = readFileSync(new URL('../app/api/health/route.ts', import.meta.url), 'utf8');
+  assert.match(src, /try \{\s*\(\{ checks \} = await runHealthChecks\(\)\);/, 'runHealthChecks is still unwrapped');
+  assert.match(src, /name: 'health_report'/, 'a throw produces no substitute check');
+  assert.match(src, /code: 'unreadable'/);
+});
+
+test('an unreadable status reads as unknown, never as an outage or as silence', () => {
+  const said = plainFor('health_report', 'unreadable');
+  assert.match(said.down, /could not check its own status/i);
+  // It must NOT claim anything is broken — nothing is known to be.
+  assert.match(String(said.stillWorks), /Nothing is known to be broken/i);
+});
+
+test('SystemStatus tells an unreadable status apart from a healthy one', () => {
+  const src = readFileSync(new URL('../components/SystemStatus.tsx', import.meta.url), 'utf8');
+  assert.match(src, /setUnreadable\(true\)/, 'a failed health fetch is still swallowed');
+  assert.match(src, /if \(!checks && unreadable\)/, 'there is no distinct unreadable rendering');
+  // And the Drive test stays reachable in that state: it is the one control a
+  // person can act on, and it does not depend on the health endpoint.
+  const at = src.indexOf('if (!checks && unreadable)');
+  assert.match(src.slice(at, at + 1400), /Test the Drive setup/);
+});
+
+test('the health endpoint does not queue its Supabase reads', () => {
+  // Every sequential round trip is borrowed from the same duration ceiling that
+  // a timeout would blow — and a timeout is one of the ways the banner vanished.
+  const src = readSrc('health-checks.ts');
+  assert.match(src, /await Promise\.all\(\[\s*imagesFailingPromise/);
+});

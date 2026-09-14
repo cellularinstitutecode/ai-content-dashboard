@@ -10,6 +10,7 @@ import { PanelLoader } from '@/components/LoadingScreen';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 // The Approve button must agree with the API about what may go out.
 import { isAwaitingApproval, postStatusMeta } from '@/lib/post-mode';
+import { sheetRowUrl, sheetRowLabel, sheetRowTitle, type PostSource } from '@/lib/sheet-link';
 import { fmtScheduleTime, scheduleDateKey, scheduleWallClock, isoAtScheduleWallClock, scheduleTzLabel } from '@/lib/schedule-clock';
 
 type Post = {
@@ -21,6 +22,8 @@ type Post = {
   metricool_post_id?: string | null;
   /** Set by GET /api/posts: this copy came from a video and has none attached. */
   videoPending?: boolean;
+  /** Set by GET /api/posts: which row of which tab this copy was written from. */
+  source?: PostSource | null;
 };
 
 function toArray(x: any): any[] {
@@ -545,6 +548,24 @@ export default function CalendarPage() {
                       <span className={'rounded-full px-2 py-[2px] text-[10px] font-semibold ' + (pending ? 'bg-rose-100 text-rose-700' : waiting ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800')}>{pending ? 'Pending video' : waiting ? 'Waiting for approval' : postStatusMeta(p.status).label}</span>
                     </button>
                     <div className="mt-1 line-clamp-2 text-ink/80" title={p.text || ''}>{p.text || 'Untitled post'}</div>
+                    {/* WHICH ROW this post was written from. A two-line caption
+                        preview does not identify a post in a forty-row tab; a
+                        row number does, and it is the thing somebody needs in
+                        order to go and edit the copy. Opens the sheet at that
+                        exact cell. Absent for posts with no sheet behind them
+                        (hand-written, or from a template). */}
+                    {sheetRowUrl(p.source) && (
+                      <a
+                        href={sheetRowUrl(p.source) as string}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        title={sheetRowTitle(p.source)}
+                        className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-accent hover:underline"
+                      >
+                        <span aria-hidden>{'\u{1F4C4}'}</span> {sheetRowLabel(p.source)} {'\u2197'}
+                      </a>
+                    )}
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                       {(p.providers || []).map((n) => <span key={n} className="rounded-full bg-black/5 px-2 py-[1px] text-[10px] text-ink/60">{networkLabel(n)}</span>)}
                       <span className="flex-1" />

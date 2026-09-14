@@ -841,3 +841,45 @@ export async function downloadDriveFile(fileId: string): Promise<{ bytes: Buffer
   const bytes = Buffer.from(await res.arrayBuffer());
   return { bytes, contentType: meta.mimeType, name: meta.name };
 }
+
+/**
+ * A tab's numeric id (`gid`), resolved from its NAME and cached.
+ *
+ * video_runs records the tab by name, because that is what the sweep reads and
+ * writes. A Sheets URL cannot address a tab by name — only by gid — so linking
+ * a post to its row needs this translation.
+ *
+ * Cached hard, and deliberately: gids never change for the life of a tab, while
+ * this is called from /api/posts, which both the dashboard and the calendar
+ * poll. One metadata call per spreadsheet per hour, not one per page load.
+ *
+ * NEVER THROWS. A link to the right row is a convenience; failing the whole
+ * publishing list because Google was slow is not a trade worth making. On any
+ * failure the answer is null, the caller omits the gid, and the button still
+ * opens the correct document.
+ */
+const gidCache = new Map<string, { at: number; tabs: Record<string, number> }>();
+const GID_TTL_MS = 60 * 60 * 1000;
+
+export async function tabGid(spreadsheetId: string, tab: string): Promise<number | null> {
+  const id = String(spreadsheetId || '').trim();
+  const name = String(tab || '').trim();
+  if (!id || !name) return null;
+
+  const cached = gidCache.get(id);
+  if (cached && Date.now() - cached.at < GID_TTL_MS) {
+    return cached.tabs[name] ?? null;
+  }
+  try {
+    const tabs = await listTabs(id);
+    const map: Record<string, number> = {};
+    for (const t of tabs) map[t.title] = t.sheetId;
+    gidCache.set(id, { at: Date.now(), tabs: map });
+    return map[name] ?? null;
+  } catch (e) {
+    // Keep any stale map rather than discarding it: a gid that was right an
+    // hour ago is still right, and losing it costs a person the row link.
+    reportError('sources:tab-gid', e, { spreadsheetId: id });
+    return cached?.tabs[name] ?? null;
+  }
+}

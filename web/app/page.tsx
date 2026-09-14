@@ -17,6 +17,7 @@ import { appliesTo as complianceApplies, checkCompliance, ensureAviso, DEFAULT_A
 import { PanelLoader } from "@/components/LoadingScreen";
 import { friendlyError, friendlyErrorFromResponse, friendlyImageError } from '@/lib/friendly-error';
 import { postStatusMeta } from '@/lib/post-mode';
+import { sheetRowUrl, sheetRowLabel, sheetRowTitle } from '@/lib/sheet-link';
 import { semrushDraftNote } from '@/lib/semrush-reason';
 import { fmtScheduleDateTime, scheduleTzLabel, schedulePresetValue } from '@/lib/schedule-clock';
 
@@ -1838,6 +1839,14 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 <span className="text-[11px] tabular-nums text-ink-faint">{fmtDateTime(p?.publication_date)}</span>
 </div>
 <p className="mt-1.5 line-clamp-2 text-[13px] text-ink">{p?.text || 'Scheduled post'}</p>
+{/* Which row of which tab wrote this post. The same link the calendar's
+    publishing list carries — a caption truncated to two lines does not
+    identify a post in the sheet, and the row number does. */}
+{sheetRowUrl(p?.source) && (
+<a href={sheetRowUrl(p?.source) as string} target="_blank" rel="noopener noreferrer" title={sheetRowTitle(p?.source)} className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-accent hover:underline">
+<span aria-hidden>{'\u{1F4C4}'}</span> {sheetRowLabel(p?.source)} {'\u2197'}
+</a>
+)}
 <div className="mt-2 flex flex-wrap items-center gap-2">
 {(p?.providers || []).map((n: string) => (
 <span key={n} className="rounded-full bg-subtle px-2 py-0.5 text-[11px] text-ink-muted ring-1 ring-line">{n}</span>
