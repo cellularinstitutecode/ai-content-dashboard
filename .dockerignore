@@ -1,0 +1,12 @@
+# Only web/ is built; keep the context small and secrets out of the image.
+*
+!web/
+web/node_modules
+web/.next
+web/.env
+web/.env.*
+web/test
+web/e2e
+web/**/*.test.ts
+web/**/*.test.tsx
+web/public/fonts/brand/*

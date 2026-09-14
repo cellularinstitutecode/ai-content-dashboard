@@ -1,0 +1,30 @@
+{
+  "_comment": "The four daily crons from vercel.json, as Dokploy Schedule Jobs that run inside the app container. lib/deploy-schedules.test.ts asserts this list and vercel.json never drift apart. Create each one DISABLED until cutover: both copies share the same database, and a cron that runs twice prepares every video twice.",
+  "timezone": "UTC",
+  "schedules": [
+    {
+      "name": "metricool-sync",
+      "path": "/api/metricool/sync",
+      "cronExpression": "0 6 * * *",
+      "command": "node scripts/cron-tick.mjs metricool/sync"
+    },
+    {
+      "name": "autopilot-tick",
+      "path": "/api/autopilot/tick",
+      "cronExpression": "30 6 * * *",
+      "command": "node scripts/cron-tick.mjs autopilot/tick"
+    },
+    {
+      "name": "videos-watch",
+      "path": "/api/videos/watch",
+      "cronExpression": "0 7 * * *",
+      "command": "node scripts/cron-tick.mjs videos/watch"
+    },
+    {
+      "name": "maintenance-prune",
+      "path": "/api/maintenance/prune",
+      "cronExpression": "0 5 * * *",
+      "command": "node scripts/cron-tick.mjs maintenance/prune"
+    }
+  ]
+}
