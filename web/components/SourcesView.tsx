@@ -118,15 +118,35 @@ function SheetFrame({ id, title, height }: { id: string; title: string; height: 
 
   // The frame takes every wheel event under the cursor, and it is as tall as
   // the window — so scrolling the PAGE with the mouse anywhere over it scrolled
-  // the SHEET instead. Inert until clicked into, inert again when the mouse
-  // leaves: the page scrolls when you mean the page, the sheet when you are
-  // in the sheet. See lib/sheet-zoom.ts.
+  // the SHEET instead. Shielded by an overlay until clicked into, shielded
+  // again when the mouse leaves: the page scrolls when you mean the page, the
+  // sheet when you are in the sheet — and while the sheet has the mouse the
+  // page is locked, so nothing the sheet cannot use leaks out to it. Verified
+  // in headless Chromium against a same-origin frame: unarmed wheel scrolls the
+  // page only; armed wheel scrolls the frame only, even at the frame's end;
+  // leaving or Esc hands the wheel back. See lib/sheet-zoom.ts.
   const [armed, setArmed] = useState(false);
   useEffect(() => {
     if (!armed) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setArmed(false); };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // While the sheet has the mouse, the PAGE does not scroll at all. Without
+    // this, a wheel the sheet cannot use (its grid at an edge, a horizontal
+    // flick) chains out of the frame and moves the page under it — which is
+    // "it still keeps scrolling everywhere". The lock is the same one a
+    // modal uses: hide the document's scrollbar and pad by its width so the
+    // layout does not jump. Undone the moment the sheet lets go.
+    const root = document.documentElement;
+    const gutter = window.innerWidth - root.clientWidth;
+    const prevOverflow = root.style.overflow;
+    const prevPadding = root.style.paddingRight;
+    root.style.overflow = 'hidden';
+    if (gutter > 0) root.style.paddingRight = gutter + 'px';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      root.style.overflow = prevOverflow;
+      root.style.paddingRight = prevPadding;
+    };
   }, [armed]);
 
   // The magnifier. Remembered per sheet, read after mount so the server and
@@ -176,7 +196,12 @@ function SheetFrame({ id, title, height }: { id: string; title: string; height: 
             display: 'block',
             transform: geometry.transform,
             transformOrigin: '0 0',
-            pointerEvents: armed ? 'auto' : 'none',
+            // NOT pointer-events. The first version of this toggled the frame's
+            // pointer-events none→auto on arming, and Chromium then never
+            // delivered another wheel event to the frame — every scroll went to
+            // the page, which is "it still keeps scrolling everywhere". The
+            // overlay button below is the only shield: present while inert,
+            // gone while armed; the frame itself is never touched.
           }}
         />
         {!armed && (
