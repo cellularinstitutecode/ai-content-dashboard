@@ -24,6 +24,9 @@ type TestStep = { step: string; ok: boolean; detail: string };
 
 export default function SystemStatus() {
   const [checks, setChecks] = useState<Check[] | null>(null);
+  // Distinguishes "the status could not be read" from "nothing is wrong" — two
+  // states this component used to render identically, as nothing at all.
+  const [unreadable, setUnreadable] = useState(false);
   // The Drive round-trip, run on demand. Create → share → fetch as a stranger →
   // delete: four separate permissions that fail at four different moments, and
   // only the last is visible to the read-only checks above. A Shared Drive can
@@ -59,10 +62,52 @@ export default function SystemStatus() {
     // enough to stop a page ever reaching network idle.
     fetch('/api/health')
       .then((r) => r.json().catch(() => null))
-      .then((j) => { if (live && j && Array.isArray(j.checks)) setChecks(j.checks); })
-      .catch(() => { /* a health check that cannot report is not worth an alarm */ });
+      .then((j) => {
+        if (!live) return;
+        if (j && Array.isArray(j.checks)) setChecks(j.checks);
+        // A status that cannot be READ is not a status with nothing in it, and
+        // the two must not look the same. Rendering null here meant one blip
+        // reaching Google or the database silently removed this entire banner —
+        // the Shared Drive setup panel and its test button included — leaving a
+        // screen that looks exactly like "everything passed".
+        else setUnreadable(true);
+      })
+      .catch(() => { if (live) setUnreadable(true); });
     return () => { live = false; };
   }, []);
+
+  // Could not read the status at all. Say so, and still offer the Drive test:
+  // it is the one thing on this banner a person can act on, it re-verifies in
+  // seconds, and it does not depend on the health endpoint working.
+  if (!checks && unreadable) {
+    return (
+      <div role="status" className="mb-6 rounded-2xl bg-amber-50 px-5 py-4 text-amber-900 ring-1 ring-amber-200">
+        <p className="text-[13px] font-semibold">The dashboard could not check its own status</p>
+        <p className="mt-1 text-[13px]">
+          Nothing here is known to be broken — the status check itself did not answer, so nothing could be verified. Reload in a moment.
+        </p>
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => void runDriveTest()}
+            disabled={testing}
+            className="rounded-full bg-white/80 px-3 py-1.5 text-[12px] font-semibold ring-1 ring-current/20 transition hover:bg-white disabled:opacity-50"
+          >
+            {testing ? 'Testing Drive…' : 'Test the Drive setup'}
+          </button>
+          {steps && (
+            <ul className="mt-2 space-y-0.5 text-[12px]">
+              {steps.map((s, i) => (
+                <li key={i}>
+                  <span aria-hidden>{s.ok ? '\u2705' : '\u274C'}</span> <strong>{s.step}</strong> — {s.detail}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (!checks) return null;
 

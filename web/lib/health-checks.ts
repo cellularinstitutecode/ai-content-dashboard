@@ -116,8 +116,7 @@ export async function runHealthChecks(): Promise<HealthReport> {
 
   // Images: what the account last DID, not what is in the environment.
   const imagesConfigured = has('OPENAI_API_KEY') && process.env.IMAGE_GEN !== 'off';
-  const lastImage = imagesConfigured ? await lastImageOutcome() : null;
-  const imagesFailing = Boolean(lastImage && !lastImage.ok);
+  const imagesFailingPromise = imagesConfigured ? lastImageOutcome() : Promise.resolve(null);
 
   // TEXT: the same correction, for the provider that writes every post.
   //
@@ -135,15 +134,25 @@ export async function runHealthChecks(): Promise<HealthReport> {
       ? 'openai_text'
       : 'anthropic_text';
   const textConfigured = has('ANTHROPIC_API_KEY') || has('OPENAI_API_KEY');
-  const lastText = textConfigured ? await lastProviderOutcome(textProvider) : null;
-  const textFailing = blocksWork(lastText);
   const textLabel = textProvider === 'openai_text' ? 'OpenAI' : 'Anthropic';
 
   // Metricool: the same again. Three non-empty variables said nothing about
   // whether the token still works, and a rotated token fails every schedule.
   const metricoolConfigured =
     has('METRICOOL_USER_TOKEN') && has('METRICOOL_BLOG_ID') && has('METRICOOL_USER_ID');
-  const lastMetricool = metricoolConfigured ? await lastProviderOutcome('metricool') : null;
+  // IN PARALLEL, not one after another. runHealthChecks already awaits a string
+  // of live calls — Google Drive, Google Sheets, the Semrush balance — and this
+  // endpoint has no maxDuration of its own, so every sequential round trip
+  // added here is borrowed from the same ceiling. Three independent Supabase
+  // reads have no reason to queue behind each other, and a health endpoint that
+  // times out takes the whole status banner down with it.
+  const [lastImage, lastText, lastMetricool] = await Promise.all([
+    imagesFailingPromise,
+    textConfigured ? lastProviderOutcome(textProvider) : Promise.resolve(null),
+    metricoolConfigured ? lastProviderOutcome('metricool') : Promise.resolve(null),
+  ]);
+  const imagesFailing = Boolean(lastImage && !lastImage.ok);
+  const textFailing = blocksWork(lastText);
   const metricoolFailing = blocksWork(lastMetricool);
 
   const checks: Check[] = [

@@ -93,6 +93,19 @@ export const PLAIN: Record<string, PlainSaid> = {
     stillWorks: 'Captions are still written into the sheet, and text-only posts still go out.',
   },
   assistant_session_secret: { down: 'The assistant is using a shared key instead of its own.', stillWorks: 'Everything works; this is a housekeeping item.' },
+  // The synthetic check /api/health substitutes when the checks themselves
+  // could not be run. It must not read as an outage: nothing is known to be
+  // broken, which is a different and much less alarming thing than something
+  // being broken — and before this the banner simply vanished, which read as
+  // "everything passed".
+  health_report: {
+    down: 'The dashboard could not check its own status.',
+    stillWorks: 'Nothing here is known to be broken — reload in a moment to check again.',
+  },
+  'health_report:unreadable': {
+    down: 'The dashboard could not check its own status, so nothing below could be verified.',
+    stillWorks: 'Nothing is known to be broken. This is usually a temporary problem reaching Google or the database — reload in a moment.',
+  },
 };
 
 /**

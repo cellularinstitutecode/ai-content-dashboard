@@ -22,7 +22,8 @@
 // real calls use (a FREE balance read, cached ten minutes, stale-on-error).
 import { NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
-import { runHealthChecks } from '@/lib/health-checks';
+import { runHealthChecks, type Check } from '@/lib/health-checks';
+import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,7 +37,36 @@ export async function GET() {
   // Uncached on purpose. This is the page a person opens BECAUSE they have just
   // changed something; serving it a minute-old answer is how "I fixed it and it
   // still says it is broken" happens. The assistant uses the cached read.
-  const { checks } = await runHealthChecks();
+  // WRAPPED, because this endpoint failing takes the banner down with it.
+  //
+  // runHealthChecks makes live calls — Google Drive, Google Sheets, the Semrush
+  // balance, several Supabase reads — so it CAN throw or time out for reasons
+  // that have nothing to do with the deployment being unhealthy. Unwrapped, any
+  // of those returned a 500 with no `checks` array, and components/SystemStatus
+  // renders NOTHING when it cannot read one. So a transient Google blip made
+  // the whole status banner disappear — including the Shared Drive setup panel
+  // and its test button — and an absent banner is indistinguishable from "every
+  // check passed".
+  //
+  // That is the failure mode this whole file exists to prevent, one level up:
+  // the page you open BECAUSE something is broken must not be the page that
+  // breaks. A synthetic failing check keeps the shape valid, so the banner
+  // still renders and says plainly that the status could not be read.
+  let checks: Check[];
+  try {
+    ({ checks } = await runHealthChecks());
+  } catch (e) {
+    reportError('health:run', e);
+    checks = [{
+      name: 'health_report',
+      ok: false,
+      severity: 'required',
+      code: 'unreadable',
+      detail: 'The status checks could not be completed just now, so nothing below could be verified. '
+        + 'This is usually a temporary problem reaching Google or the database — reload in a moment. '
+        + (e instanceof Error ? e.message.slice(0, 200) : ''),
+    }];
+  }
 
   const failing = checks.filter((c) => !c.ok);
   const requiredFailing = failing.filter((c) => c.severity === 'required');
