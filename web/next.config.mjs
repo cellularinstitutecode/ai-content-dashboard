@@ -83,22 +83,37 @@ const nextConfig = {
   // build machine and nowhere in the Lambda. The file was traced in correctly
   // the whole time; the code was looking in the wrong place for it.
   //
-  // Left external, it stays a real require() out of node_modules at runtime,
-  // __dirname is the directory the file actually sits in, and the traced
-  // binary below is found.
+  // Left external, it stays a real require() out of node_modules at runtime
+  // and __dirname is the directory the file actually sits in. (The binary
+  // itself is no longer traced in at all — see outputFileTracingExcludes —
+  // so in production that path is absent and lib/audio-extract.ts fetches
+  // the binary instead; the package still has to resolve for that decision
+  // to be made in the right place.)
   serverExternalPackages: ['ffmpeg-static'],
-  // File tracing follows imports, and these two are files rather than imports:
-  //   the brand-card route reads font files from disk at request time (the
-  //   licensed brand faces when present, the open stand-ins otherwise), and
-  //   the video routes shell out to ffmpeg-static's binary to lift the audio
-  //   track out of a Drive video before transcribing it. Named here, or the
-  //   deployed functions would have no type to set cards in and no ffmpeg.
+  // File tracing follows imports, and the fonts are files rather than imports:
+  // the brand-card route reads them from disk at request time (the licensed
+  // brand faces when present, the open stand-ins otherwise). Named here, or
+  // the deployed function would have no type to set cards in.
   outputFileTracingIncludes: {
     '/api/drafts/card': ['./public/fonts/**/*'],
-    '/api/videos/prepare': ['./node_modules/ffmpeg-static/ffmpeg'],
-    '/api/videos/watch': ['./node_modules/ffmpeg-static/ffmpeg'],
-    // import_image downscales a Drive photo before storing it (lib/image-downscale.ts).
-    '/api/sources': ['./node_modules/ffmpeg-static/ffmpeg'],
+  },
+  // What the functions must NOT carry. Vercel stores every function of every
+  // deployment it keeps, and the free plan's Function Storage allowance is
+  // 10 GB — which ran out, because:
+  //
+  //  - ffmpeg-static's binary is 77 MB, and tracing copied it into every
+  //    function whose imports reached lib/audio-extract.ts: six of them, on
+  //    every push. It is now excluded everywhere and fetched at first use
+  //    instead (lib/audio-extract.ts resolveFfmpeg, lib/ffmpeg-source.ts).
+  //  - sharp and libvips (54 MB) were traced into the two card routes through
+  //    Next's image optimiser, which those routes never call — ImageResponse
+  //    renders with @vercel/og's resvg and yoga wasm, which stay traced.
+  //
+  // Keys are route globs (picomatch): '/**' is every route.
+  outputFileTracingExcludes: {
+    '/**': ['./node_modules/ffmpeg-static/ffmpeg'],
+    '/api/drafts/card': ['./node_modules/sharp/**', './node_modules/@img/**'],
+    '/api/brand/fonts': ['./node_modules/sharp/**', './node_modules/@img/**'],
   },
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];

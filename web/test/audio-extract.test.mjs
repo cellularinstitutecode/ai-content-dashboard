@@ -41,8 +41,105 @@ async function bodyOf(file) {
 before(async () => { dir = await mkdtemp(path.join(tmpdir(), 'chi-audio-test-')); });
 after(async () => { await rm(dir, { recursive: true, force: true }).catch(() => undefined); });
 
-test('ffmpeg ships with the app', () => {
+test('ffmpeg is installed for development and the tests', () => {
   assert.equal(ffmpegAvailable(), true, 'without the binary every Drive video is untranscribable');
+});
+
+// ---------------------------------------------------------------------------
+// The production path: the binary is NOT in the deployment. It is fetched at
+// first use from a pinned URL, verified by hash, cached in /tmp. Served here
+// from a local server so the test never touches the network.
+// ---------------------------------------------------------------------------
+
+import { createHash, randomBytes } from 'node:crypto';
+import { resolveFfmpeg } from '../lib/audio-extract.ts';
+import { cachedBinaryName } from '../lib/ffmpeg-source.ts';
+
+/** Serve `bytes` at /ffmpeg, behind one redirect the way GitHub release assets are. */
+async function serveBinary(bytes, { status = 200 } = {}) {
+  const server = createServer((req, res) => {
+    if (req.url === '/ffmpeg') { res.writeHead(302, { location: '/asset' }).end(); return; }
+    if (status !== 200) { res.writeHead(status).end('no'); return; }
+    res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(bytes.length) }).end(bytes);
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const url = 'http://127.0.0.1:' + server.address().port + '/ffmpeg';
+  return { url, close: () => new Promise((r) => server.close(r)) };
+}
+
+/** Run `fn` with the packaged binary hidden and the download pointed at `url`. */
+async function withDownload({ url, sha256 }, fn) {
+  const saved = { FFMPEG_PATH: process.env.FFMPEG_PATH, FFMPEG_DOWNLOAD_URL: process.env.FFMPEG_DOWNLOAD_URL, FFMPEG_SHA256: process.env.FFMPEG_SHA256 };
+  process.env.FFMPEG_PATH = path.join(dir, 'not-shipped');
+  process.env.FFMPEG_DOWNLOAD_URL = url;
+  process.env.FFMPEG_SHA256 = sha256;
+  resetFfmpegBinary();
+  try {
+    return await fn();
+  } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    resetFfmpegBinary();
+    await rm(path.join(tmpdir(), cachedBinaryName(sha256)), { force: true }).catch(() => undefined);
+  }
+}
+
+test('when the binary is not shipped, it is fetched, verified, made executable and cached', async () => {
+  // Big enough to pass the error-page floor; not ffmpeg, because nothing runs it here.
+  const fake = randomBytes(1_200_000);
+  const sha256 = createHash('sha256').update(fake).digest('hex');
+  const server = await serveBinary(fake);
+  try {
+    await withDownload({ url: server.url, sha256 }, async () => {
+      const first = await resolveFfmpeg();
+      assert.equal(first.ok, true, JSON.stringify(first));
+      assert.equal(first.source, 'downloaded');
+      assert.equal(path.basename(first.path), cachedBinaryName(sha256), 'cached under a name that carries the hash');
+      const info = await stat(first.path);
+      assert.equal(info.size, fake.length);
+      assert.ok(info.mode & 0o100, 'executable by the owner');
+      assert.deepEqual(await readFile(first.path), fake, 'byte-for-byte what was served');
+      // A second resolve on the same instance costs nothing and hits no server.
+      await server.close();
+      resetFfmpegBinary();
+      const second = await resolveFfmpeg();
+      assert.equal(second.ok, true);
+      assert.equal(second.path, first.path);
+    });
+  } finally {
+    await server.close().catch(() => undefined);
+  }
+});
+
+test('a download whose hash does not match is refused and leaves nothing behind', async () => {
+  const fake = randomBytes(1_200_000);
+  const wrong = 'b'.repeat(64);
+  const server = await serveBinary(fake);
+  try {
+    await withDownload({ url: server.url, sha256: wrong }, async () => {
+      const r = await resolveFfmpeg();
+      assert.equal(r.ok, false);
+      assert.equal(r.reason, 'absent');
+      assert.match(r.detail, /SHA-256/);
+      assert.equal(existsSync(path.join(tmpdir(), cachedBinaryName(wrong))), false, 'nothing was marked executable');
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test('a server that answers with an error is reported as such, with the host', async () => {
+  const sha256 = 'c'.repeat(64);
+  const server = await serveBinary(Buffer.alloc(0), { status: 503 });
+  try {
+    await withDownload({ url: server.url, sha256 }, async () => {
+      const r = await resolveFfmpeg();
+      assert.equal(r.ok, false);
+      assert.equal(r.reason, 'absent');
+      assert.match(r.detail, /HTTP 503 from 127\.0\.0\.1/);
+    });
+  } finally {
+    await server.close();
+  }
 });
 
 test('a spoken .mp4 becomes a small audio file', async () => {
@@ -149,20 +246,17 @@ test('a binary stripped of its execute bit is still usable', async () => {
 test('a failure that produced no stderr says why anyway', async () => {
   // The message that cost a deployment's worth of guessing: ffmpeg never
   // started, so stderr was empty, so the reason was simply omitted.
-  const before = process.env.FFMPEG_PATH;
-  process.env.FFMPEG_PATH = path.join(dir, 'does-not-exist');
-  resetFfmpegBinary();
   // The previous test left a working copy in /tmp, and a warm instance is
   // SUPPOSED to reuse it — so it has to go for this case to be reachable.
   await rm(path.join(tmpdir(), 'ffmpeg-static-bin'), { force: true });
-  try {
+  // With the binary absent the resolver now tries to FETCH one, so the fetch
+  // has to fail too — at a port nothing listens on, under a hash no cached
+  // download could carry — or this test would download 77 MB from GitHub.
+  await withDownload({ url: 'http://127.0.0.1:9/ffmpeg', sha256: 'd'.repeat(64) }, async () => {
     const got = await extractAudio(await bodyOf(path.join(dir, 'perm.mp4')), 'perm.mp4');
     assert.equal(got.ok, false);
     assert.match(got.message, /not runnable|could not be started/i);
-  } finally {
-    if (before === undefined) delete process.env.FFMPEG_PATH; else process.env.FFMPEG_PATH = before;
-    resetFfmpegBinary();
-  }
+  });
 });
 
 
