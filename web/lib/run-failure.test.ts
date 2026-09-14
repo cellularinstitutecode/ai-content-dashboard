@@ -160,3 +160,32 @@ test('MAX_ATTEMPTS here matches the engine', () => {
   assert.ok(m, 'MAX_ATTEMPTS not found in planner-constants.ts');
   assert.equal(Number(m[1]), MAX, 'these tests are calibrated to the wrong MAX_ATTEMPTS');
 });
+
+// --- what reaches the column, and therefore the screen -----------------------
+//
+// The error path stores a provider's RAW response body
+// (`anthropic ${status}: ${await res.text()}`) in template_runs.log, and this
+// card now renders it. lib/report.ts's own header records a real incident of a
+// vendor echoing a live key back inside an error body, so the note has to be
+// redacted before it is stored — not merely before it is console-logged, which
+// was the only place that claim actually held.
+
+test('the engine redacts a log note before storing it', () => {
+  const src = readFileSync(new URL('./autopilot.ts', import.meta.url), 'utf8');
+  assert.match(
+    src,
+    /note: redact\(note\)\.slice\(/,
+    'logLine stores the raw note — a provider body with a key in it would be persisted and then displayed',
+  );
+});
+
+test('redaction actually covers the shapes a provider body can carry', async () => {
+  const { redact } = await import('./report.ts');
+  // The documented real case: a vendor page quoting the key back.
+  assert.doesNotMatch(redact('semrush error for key=abc123secret&foo=1'), /abc123secret/);
+  assert.doesNotMatch(redact('semrtkn-AAAAAAAAAAAA rejected'), /semrtkn-AAAAAAAAAAAA/);
+  assert.doesNotMatch(redact('openai 401: bad key sk-abcdefghijklmnop'), /sk-abcdefghijklmnop/);
+  // And it leaves an ordinary diagnosis legible, or the fix would trade one
+  // unreadable card for another.
+  assert.equal(redact('draft insert failed: timeout'), 'draft insert failed: timeout');
+});

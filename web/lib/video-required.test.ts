@@ -120,3 +120,42 @@ test('the video wins over a hero image when both could be sent', () => {
   assert.ok(imageAt > 0, 'the hero-image fallback was not found');
   assert.ok(videoAt < imageAt, 'the hero image is resolved before the video');
 });
+
+// --- the two pack shapes -----------------------------------------------------
+//
+// prepareVideo writes `sourceUrl`; the Opus clip path writes `video`. This
+// module gates BOTH kinds, so reading only one field made every clip-derived
+// post permanently unapprovable: video-derived, no recorded source, so neither
+// the attach button nor Approve could ever succeed.
+
+test('a clip pack records its source under `video`, and is still attachable', () => {
+  // The real shape from app/api/opus/clip/route.ts.
+  const clip = { kind: 'clip', video: 'https://youtu.be/abc', thumb: null, projectId: 'p1', clips: [] };
+  assert.equal(videoDerived(clip), true);
+  assert.equal(videoSourceOf(clip), 'https://youtu.be/abc');
+
+  const v = videoVerdict(clip, false);
+  assert.equal(v.pending, true);
+  assert.equal(v.sourceUrl, 'https://youtu.be/abc');
+  // The refusal must offer the attach, not the dead end that tells somebody to
+  // re-prepare a row in a Video Library the clip never came from.
+  assert.match(pendingRefusal(v), /Pending video/);
+  assert.doesNotMatch(pendingRefusal(v), /Video Library/);
+});
+
+test('sourceUrl still wins when both fields are present', () => {
+  const pack = { kind: 'video', sourceUrl: 'https://drive.google.com/file/d/x/view', video: 'https://other' };
+  assert.equal(videoSourceOf(pack), 'https://drive.google.com/file/d/x/view');
+});
+
+test('a pack with neither field still reads as no source', () => {
+  assert.equal(videoSourceOf({ kind: 'clip' }), null);
+  assert.equal(videoSourceOf({ kind: 'video', sourceUrl: '   ' }), null);
+});
+
+test('an empty sourceUrl falls through to the clip field rather than stranding the post', () => {
+  // The `??` trap: it falls through on null/undefined but NOT on ''. A pack
+  // carrying both, with the first one blank, must still be attachable.
+  assert.equal(videoSourceOf({ kind: 'clip', sourceUrl: '', video: 'https://youtu.be/z' }), 'https://youtu.be/z');
+  assert.equal(videoSourceOf({ kind: 'clip', sourceUrl: '   ', video: 'https://youtu.be/z' }), 'https://youtu.be/z');
+});

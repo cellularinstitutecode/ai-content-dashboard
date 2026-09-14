@@ -17,7 +17,7 @@
 //   scheduled_for) makes planning re-entrant.
 // - Fail-soft: a missing key or empty report degrades the angle choice, it
 //   never throws the whole tick.
-import { reportError } from '@/lib/report';
+import { reportError, redact } from '@/lib/report';
 import 'server-only';
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -161,7 +161,17 @@ export function normalizeStrategy(raw: unknown): TemplateStrategy {
 }
 
 function logLine(run: RunRow, step: string, note: string): { at: string; step: string; note: string }[] {
-  const entry = { at: new Date().toISOString(), step, note: note.slice(0, 400) };
+  // REDACTED before it is stored, not merely before it is logged.
+  //
+  // The error path writes a provider's raw response body into this column
+  // (`anthropic ${status}: ${await res.text()}`), and lib/report.ts's own header
+  // records a REAL incident of a vendor echoing a live key back in an error
+  // body. Its claim that every message "passes through this before it is
+  // written anywhere" was true only of console logging: this column was the
+  // exception, and it is durable storage that the queue now renders on screen.
+  // Redacting here covers the column, the card, and every future reader at
+  // once — cheaper and safer than redacting at each display site.
+  const entry = { at: new Date().toISOString(), step, note: redact(note).slice(0, 400) };
   const prior = Array.isArray(run.log) ? run.log : [];
   return [...prior.slice(-30), entry];
 }

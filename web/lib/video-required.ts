@@ -41,10 +41,36 @@ export function videoDerived(pack: PackLike): boolean {
   return (VIDEO_PACK_KINDS as readonly string[]).includes(kind);
 }
 
-/** The source video's link, for the one-click attach. */
+/**
+ * The source video's link, for the one-click attach.
+ *
+ * TWO field names, because the two video pack shapes disagree and this module
+ * gates both. `prepareVideo` writes `sourceUrl` (lib/video-prepare.ts); the
+ * Opus clip path writes `video` (app/api/opus/clip/route.ts). Reading only
+ * `sourceUrl` meant every clip-derived post was judged video-derived, found to
+ * have no recorded source, and became impossible to attach OR approve — a
+ * permanent dead end whose on-screen advice ("re-prepare that row from the
+ * Video Library") does not even apply to clips.
+ *
+ * That is latent rather than live today: the only caller that sends a draftId
+ * to the scheduler is components/VideoPrepare.tsx, which always sends a
+ * `kind: 'video'` draft. But `/api/metricool/schedule` accepts `draftId` from
+ * anyone and persists it, so a second caller would spring the trap — and a gate
+ * that is correct only by accident is the exact failure this file was written
+ * to stop.
+ */
 export function videoSourceOf(pack: PackLike): string | null {
-  const url = String((pack as { sourceUrl?: unknown } | null)?.sourceUrl ?? '').trim();
-  return url || null;
+  const p = pack as { sourceUrl?: unknown; video?: unknown } | null;
+  // First field that actually holds a link, not first that is merely defined.
+  // `p?.sourceUrl ?? p?.video` would look right and be wrong: `??` falls
+  // through only on null/undefined, so a pack carrying `sourceUrl: ''` beside a
+  // real `video` would answer "no source" and strand the post exactly the way
+  // this function was changed to prevent.
+  for (const candidate of [p?.sourceUrl, p?.video]) {
+    const url = String(candidate ?? '').trim();
+    if (url) return url;
+  }
+  return null;
 }
 
 export type VideoVerdict = {
