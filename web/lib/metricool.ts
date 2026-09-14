@@ -5,6 +5,7 @@
 import { formatForMetricool, SCHEDULE_TZ } from '@/lib/timezone';
 import { modeFlags, replacePostBody, type PostMode, type ReplacePostInput } from '@/lib/metricool-post';
 import type { YoutubeData } from '@/lib/youtube-meta';
+import { recordProviderOutcome } from '@/lib/provider-status';
 export { modeFlags, replacePostBody, type PostMode, type ReplacePostInput };
 
 export type Provider =
@@ -227,8 +228,15 @@ export async function metricoolSchedulePost(input: SchedulePostInput, mode: Post
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error('Metricool ' + res.status + ': ' + JSON.stringify(data));
+    const message = 'Metricool ' + res.status + ': ' + JSON.stringify(data);
+    // Capability, not configuration. The `metricool` health check asks only
+    // whether three environment variables are non-empty, so a rotated or
+    // rejected token reported healthy indefinitely while every schedule failed
+    // — the same blind spot the images check was rewritten to close.
+    recordProviderOutcome('metricool', { ok: false, message });
+    throw new Error(message);
   }
+  recordProviderOutcome('metricool', { ok: true });
   return data;
 }
 

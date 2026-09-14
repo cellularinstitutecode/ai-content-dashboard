@@ -998,9 +998,24 @@ export async function advanceRuns(opts: {
   runId?: string;
   budgetMs?: number;
   maxRuns?: number;
-} = {}): Promise<{ advanced: number; ready: number; errors: number }> {
+} = {}): Promise<{ advanced: number; ready: number; errors: number; skipped: string[] }> {
   const db = supabaseAdmin();
   const deadline = Date.now() + (opts.budgetMs ?? 40_000);
+
+  // WHY NOTHING HAPPENED, when nothing happens.
+  //
+  // Every `continue` below used to end the run's turn in silence, and the
+  // caller answered {ok: true, advanced: 0} — a shape indistinguishable from a
+  // quiet day. For the daily tick that is merely unhelpful. For the Retry
+  // button it is a lie: a reviewer presses Retry on a red card, the request
+  // succeeds, and nothing whatsoever has happened, with no log line and no
+  // message. The worst case is a template switched off, where Retry is a
+  // PERMANENT no-op that reports success every single time.
+  //
+  // Sentences, not codes, because they are shown to a person verbatim. Capped
+  // so a 50-run tick cannot return an essay.
+  const skipped: string[] = [];
+  const skip = (why: string) => { if (skipped.length < 10) skipped.push(why); };
 
   let q = db
     .from('template_runs')
@@ -1039,10 +1054,23 @@ export async function advanceRuns(opts: {
       errors++;
       continue;
     }
-    if (!t) continue;
+    if (!t) {
+      skip('The template this occurrence belongs to no longer exists, so there is nothing to prepare from.');
+      continue;
+    }
     const template = t as TemplateRow;
     const strategy = normalizeStrategy(template.strategy);
-    if (strategy.mode === 'off' || !template.active) continue;
+    // THE PERMANENT NO-OP. Deactivating a template, or setting its mode to
+    // 'off', makes Retry do nothing forever while still answering ok — which is
+    // the single most likely reason a red card survives a week of retries.
+    if (strategy.mode === 'off' || !template.active) {
+      skip(
+        'The template “' + (template.name || 'Untitled template') + '” is switched ' +
+        (template.active ? 'to manual (Autopilot off)' : 'off') +
+        ', so the engine will not prepare this occurrence. Turn it back on under Templates, then retry.',
+      );
+      continue;
+    }
 
     // Respect the lead window unless this is an explicit run-now.
     //
@@ -1079,9 +1107,14 @@ export async function advanceRuns(opts: {
       // returning {ok: true, advanced: 0} — indistinguishable from a quiet day.
       if (resetError) {
         reportError('autopilot:retry-reset', resetError, { runId: run.id });
+        skip('This occurrence could not be reset for another attempt just now — try again in a moment.');
+        errors++;
         continue;
       }
-      if (!reset) continue;
+      if (!reset) {
+        skip('Somebody else moved this occurrence while the retry was starting, so it was left where they put it.');
+        continue;
+      }
       run = reset as RunRow;
     }
     // Step until ready (or budget/attempt limits hit) so a single tick can
@@ -1109,7 +1142,12 @@ export async function advanceRuns(opts: {
         .select('*')
         .maybeSingle();
       if (claimErr) throw new Error('advanceRuns: could not claim run - ' + claimErr.message);
-      if (!claimed) break; // another worker holds this run
+      if (!claimed) {
+        // Another worker holds this run. Only worth saying when nothing at all
+        // happened; the caller decides, because on a busy tick this is normal.
+        skip('This occurrence was already being prepared by another run of the engine.');
+        break;
+      }
       run = claimed as RunRow;
 
       try {
@@ -1163,7 +1201,7 @@ export async function advanceRuns(opts: {
       }
     }
   }
-  return { advanced, ready, errors };
+  return { advanced, ready, errors, skipped };
 }
 
 // ---------------------------------------------------------------------------

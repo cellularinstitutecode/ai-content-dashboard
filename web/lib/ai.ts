@@ -11,6 +11,36 @@ import { attemptPlan } from '@/lib/ai-attempts';
 import { packKeyContract } from '@/lib/pack-keys';
 import { readAnthropicStream } from '@/lib/sse-stream';
 import { PLAYBOOK } from '@/lib/playbook';
+import { recordProviderOutcome } from '@/lib/provider-status';
+
+/**
+ * Record what a provider just did, then throw if it refused.
+ *
+ * Every text call in this file ended in the same line — `if (!res.ok) throw new
+ * Error(\`anthropic ${res.status}: ${await res.text()}\`)` — and nothing
+ * anywhere remembered the answer. So /api/health went on reporting
+ * `ai_provider: ok` for as long as ANTHROPIC_API_KEY was a non-empty string,
+ * which is the exact failure lib/provider-status.ts was written for and then
+ * only ever fixed for images.
+ *
+ * SUCCESS is recorded too, and that is not optional: the health check reads the
+ * most recent outcome inside a 24h window, so without a success write a single
+ * bad minute would keep the dashboard red for a day after the key was fixed.
+ *
+ * The thrown message keeps its exact shape, because lib/friendly-error.ts and
+ * lib/image-failure-reason.ts both read the status and the provider's own error
+ * codes out of that string.
+ */
+async function noteProvider(provider: 'anthropic' | 'openai', res: Response): Promise<void> {
+  const name = provider === 'anthropic' ? 'anthropic_text' : 'openai_text';
+  if (res.ok) {
+    recordProviderOutcome(name, { ok: true });
+    return;
+  }
+  const message = `${provider} ${res.status}: ${await res.text()}`;
+  recordProviderOutcome(name, { ok: false, message });
+  throw new Error(message);
+}
 
 export type Provider = 'anthropic' | 'openai';
 
@@ -297,11 +327,18 @@ async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
       if (!res.ok) {
         const body = await res.text();
         const err = new Error(`anthropic ${res.status}: ${body}`);
+        // Instrumented by hand rather than through noteProvider, because this
+        // path wraps 4xx in HardError and that distinction must survive. It is
+        // also the one that matters most: this is generateContentPack, the call
+        // the Autopilot and the generator both run, so a dead key shows up here
+        // first.
+        recordProviderOutcome('anthropic_text', { ok: false, message: err.message });
         // A 4xx that is not in RETRYABLE is the request being wrong, not the
         // network being unlucky. Sending it twice more buys the same refusal
         // and reports it as "failed after 3 attempts".
         throw res.status < 500 ? Object.assign(new HardError(err.message), { cause: err }) : err;
       }
+      recordProviderOutcome('anthropic_text', { ok: true });
       return readAnthropicStream(res);
     },
   );
@@ -334,7 +371,7 @@ async function callOpenAI(input: GenerateInput): Promise<ContentPack> {
       ],
     }),
   }, plan ? { retries: plan.attempts - 1, timeoutMs: plan.timeoutMs } : {});
-  if (!res.ok) throw new Error(`openai ${res.status}: ${await res.text()}`);
+  await noteProvider('openai', res);
   const data = await res.json();
   const text = data?.choices?.[0]?.message?.content ?? '';
   return parseJsonStrict(text);
@@ -531,7 +568,7 @@ export async function chatAssistant(
       headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 1024, system: ASSISTANT_SYSTEM, messages: trimmed }),
     });
-    if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
+    await noteProvider('anthropic', res);
     const data = await res.json();
     return String(data?.content?.[0]?.text ?? '').trim();
   }
@@ -541,7 +578,7 @@ export async function chatAssistant(
     headers: { 'content-type': 'application/json', authorization: `Bearer ${openaiKey}` },
     body: JSON.stringify({ model: 'gpt-4o-mini', max_tokens: 1024, messages: [{ role: 'system', content: ASSISTANT_SYSTEM }, ...trimmed] }),
   });
-  if (!res.ok) throw new Error(`openai ${res.status}: ${await res.text()}`);
+  await noteProvider('openai', res);
   const data = await res.json();
   return String(data?.choices?.[0]?.message?.content ?? '').trim();
 }
@@ -835,7 +872,7 @@ export async function chatWithTools(messages: ToolMessage[], systemExtra?: strin
       messages,
     }),
   });
-  if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
+  await noteProvider('anthropic', res);
   const data = await res.json();
   const blocks: any[] = Array.isArray(data?.content) ? data.content : [];
   let message = "";
@@ -933,7 +970,7 @@ export async function researchTopic(
       headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 2048, system: RESEARCH_SYSTEM, messages: [{ role: 'user', content: userPrompt }] }),
     }, { retries: 0, timeoutMs: 50000 });
-    if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
+    await noteProvider('anthropic', res);
     const data = await res.json();
     raw = String(data?.content?.[0]?.text ?? '');
     provider = 'anthropic';
@@ -944,7 +981,7 @@ export async function researchTopic(
       headers: { 'content-type': 'application/json', authorization: `Bearer ${openaiKey}` },
       body: JSON.stringify({ model: 'gpt-4o-mini', max_tokens: 2048, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: RESEARCH_SYSTEM }, { role: 'user', content: userPrompt }] }),
     }, { retries: 0, timeoutMs: 50000 });
-    if (!res.ok) throw new Error(`openai ${res.status}: ${await res.text()}`);
+    await noteProvider('openai', res);
     const data = await res.json();
     raw = String(data?.choices?.[0]?.message?.content ?? '');
     provider = 'openai';

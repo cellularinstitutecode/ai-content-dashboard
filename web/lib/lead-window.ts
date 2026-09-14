@@ -80,3 +80,51 @@ export function leadProblem(
 export function usableLeadHours(leadHours: number, slotUtcMinutes: number): number {
   return Math.max(leadHours, minimumLeadHours(slotUtcMinutes));
 }
+
+/**
+ * The lead that puts TWO daily ticks inside the window, not merely one.
+ *
+ * `minimumLeadHours` answers "can this template ever run at all" — one tick
+ * inside the window. That is the floor below which a template is broken, and it
+ * is not the same as the floor at which a template is RESILIENT.
+ *
+ * MAX_ATTEMPTS is 2, and lib/autopilot.ts justifies that number with "an
+ * eligibility window that is only ever a couple of ticks wide." That assumption
+ * does not hold at the default lead of 24h: a 09:00 Cancún slot is 15:00 UTC, so
+ * the window opens 15:00 the day before and exactly ONE 06:30 tick falls inside
+ * it. One bad morning leaves attempts at 1 — below the limit, so the run stays
+ * `planned` — and no second tick ever comes, so it expires unattempted. The
+ * retry budget can never be spent, and a single transient failure silently
+ * costs the whole occurrence.
+ *
+ * A day of extra lead adds exactly one more tick. Preparing a draft earlier
+ * costs nothing and is invisible; losing a week's post to one blip is not.
+ */
+export function twoTickLeadHours(slotUtcMinutes: number): number {
+  return minimumLeadHours(slotUtcMinutes) + 24;
+}
+
+/**
+ * Does this lead give the occurrence a second chance?
+ *
+ * Distinct from `leadProblem`, and deliberately NOT merged into it: a lead
+ * below the one-tick floor is BROKEN (the template can never run), while a lead
+ * below the two-tick floor merely has no retry budget. Reporting them with one
+ * sentence would either overstate the first or understate the second, and the
+ * caller shows them differently — a refusal versus a warning.
+ */
+export function retryBudgetProblem(
+  leadHours: number,
+  slotUtcMinutes: number,
+): { recommended: number; message: string } | null {
+  const recommended = twoTickLeadHours(slotUtcMinutes);
+  if (leadHours >= recommended) return null;
+  return {
+    recommended,
+    message:
+      'A lead of ' + leadHours + (leadHours === 1 ? ' hour' : ' hours') +
+      ' gives this slot only one daily pass to get the draft ready, so a single failed morning loses the whole occurrence — ' +
+      'it is never retried, and it is reported as having missed its time. Use at least ' + recommended +
+      ' hours to give it a second attempt.',
+  };
+}

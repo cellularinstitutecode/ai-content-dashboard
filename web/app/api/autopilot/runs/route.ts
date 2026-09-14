@@ -188,6 +188,16 @@ export async function POST(req: NextRequest) {
   }
   if (action === 'run_now') {
     const result = await advanceRuns({ scopeUserId: user.id, runId: id, budgetMs: 45_000, maxRuns: 1 });
+    // A Retry that moved nothing is not a success, and saying `ok: true` for it
+    // is how a switched-off template swallowed every retry a reviewer pressed —
+    // silently, and for as long as they kept pressing. advanceRuns now reports
+    // why it stood down; the only honest thing to do is pass that on.
+    if (!result.advanced && result.skipped.length) {
+      return NextResponse.json(
+        { error: 'not_advanced', message: result.skipped.join(' '), ...result },
+        { status: 409 },
+      );
+    }
     return NextResponse.json({ ok: true, ...result });
   }
   if (action === 'regenerate') {
@@ -196,6 +206,14 @@ export async function POST(req: NextRequest) {
     if (!ok) return NextResponse.json({ error: 'run cannot be regenerated' }, { status: 400 });
     // Redraft immediately so the reviewer gets the new version in one click.
     const result = await advanceRuns({ scopeUserId: user.id, runId: id, budgetMs: 45_000, maxRuns: 1 });
+    // Same rule as run_now: regenerateRun succeeded, but if the redraft then
+    // stood down the reviewer is owed the reason rather than a tidy ok.
+    if (!result.advanced && result.skipped.length) {
+      return NextResponse.json(
+        { error: 'not_advanced', message: result.skipped.join(' '), ...result },
+        { status: 409 },
+      );
+    }
     return NextResponse.json({ ok: true, ...result });
   }
   return NextResponse.json({ error: 'unknown action' }, { status: 400 });
