@@ -84,10 +84,11 @@ function blocksWork(outcome: { ok: boolean; reason: string | null } | null): boo
 export async function runHealthChecks(): Promise<HealthReport> {
   const keywords = await keywordCapability();
 
-  // Can this deployment actually read a Drive video? ffmpeg-static fetches its
-  // binary in an install script and does not ship it in the tarball, so a
-  // build that skips lifecycle scripts installs the package and leaves nothing
-  // behind it — and the first sign of that was a person pressing Prepare.
+  // Can this deployment actually read a Drive video? The binary is not shipped
+  // in the functions any more (it filled the account's Function Storage); it
+  // is fetched at first use and cached on the instance. This resolve is that
+  // first use when nothing else has been — so the banner, not a person
+  // pressing Prepare, is where a broken download shows up first.
   const ffmpeg = await resolveFfmpeg();
 
   // Did anyone actually run the .sql files? Nothing checked, ever.
@@ -348,12 +349,11 @@ export async function runHealthChecks(): Promise<HealthReport> {
       code: ffmpeg.ok ? undefined : ffmpeg.reason,
       severity: 'optional',
       detail: ffmpeg.ok
-        ? 'Drive videos can be transcribed: ffmpeg runs from ' + ffmpeg.path + '.'
+        ? 'Drive videos can be transcribed: ffmpeg runs from ' + ffmpeg.path +
+          (ffmpeg.source === 'downloaded' ? ' (fetched at first use and cached on this instance).' : '.')
         : ffmpeg.reason === 'absent'
-          ? 'The ffmpeg binary was never fetched by the build. ffmpeg-static downloads it in an ' +
-            'install script and does not ship it in the package, so a build that skips lifecycle ' +
-            'scripts leaves nothing behind the path. Drive videos cannot be transcribed until this ' +
-            'is fixed; the Video Library will ask for a pasted transcript. ' + ffmpeg.detail
+          ? 'Drive videos cannot be transcribed until this is fixed; the Video Library will ask for a ' +
+            'pasted transcript. ' + ffmpeg.detail
           : ffmpeg.reason === 'copy_failed'
             ? 'The binary is present but not executable, and it could not be copied somewhere it ' +
               'would be. ' + ffmpeg.detail

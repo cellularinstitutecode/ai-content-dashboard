@@ -13,19 +13,22 @@
 //   DRIVE_FOLDER_ID              - target Drive folder id (shared with the SA)
 // NOTE: connect/authorize this credential yourself - never commit the JSON.
 
-import { google } from 'googleapis';
+// The Drive client alone, not the `googleapis` index: the index loads every
+// Google API and was a 13 MB chunk in each function that reached this file.
+import { drive } from 'googleapis/build/src/apis/drive';
+import { JWT } from 'google-auth-library';
 import { Readable } from 'stream';
 
 function driveClient() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!raw) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON missing');
   const creds = JSON.parse(raw);
-  const auth = new google.auth.JWT({
+  const auth = new JWT({
     email: creds.client_email,
     key: creds.private_key,
     scopes: ['https://www.googleapis.com/auth/drive'],
   });
-  return google.drive({ version: 'v3', auth });
+  return drive({ version: 'v3', auth });
 }
 
 // Download the source (signed) URL and upload to Drive. Returns a stable

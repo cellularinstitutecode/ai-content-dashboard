@@ -22,7 +22,10 @@
 import 'server-only';
 import { randomUUID } from 'crypto';
 
-import { google } from 'googleapis';
+// The auth client alone, not `googleapis`: every call in this file is plain
+// REST over fetch, and importing the googleapis index bundles every Google
+// API (a 13 MB chunk) into each of the twelve functions that reach this file.
+import { JWT } from 'google-auth-library';
 import { reportError } from '@/lib/report';
 import { VIDEO_NETWORK_COLUMNS, publishedNetworks, tickedNetworks } from '@/lib/sheet-ticks';
 import { classifyGoogleError, type GoogleFailure } from './google-error.ts';
@@ -70,7 +73,7 @@ async function accessToken(): Promise<string> {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!raw) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON missing');
   const creds = JSON.parse(raw);
-  const jwt = new google.auth.JWT({
+  const jwt = new JWT({
     email: creds.client_email,
     key: creds.private_key,
     // drive.file, not the full drive scope: it grants access only to files

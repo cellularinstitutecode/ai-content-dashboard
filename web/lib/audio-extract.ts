@@ -17,49 +17,63 @@
 import 'server-only';
 
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { constants as FS, createWriteStream } from 'node:fs';
-import { access, chmod, copyFile, mkdtemp, rm, stat } from 'node:fs/promises';
+import { access, chmod, copyFile, mkdtemp, rename, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 
 import ffmpegStatic from 'ffmpeg-static';
 
 import { redact, reportError } from '@/lib/report';
+import { cachedBinaryName, downloadVerdict, ffmpegSource } from './ffmpeg-source.ts';
 
 const run = promisify(execFile);
 
 /**
  * The ffmpeg binary, at a path it can actually be RUN from.
  *
- * ffmpeg-static installs an executable file, and next.config.mjs traces it
- * into the deployed function — but the serverless bundler does not always
- * carry the execute bit across, and the application directory is read-only at
- * runtime, so it cannot simply be chmod'ed where it lies. The symptom is
- * brutal to diagnose: spawn fails with EACCES before ffmpeg starts, so there
- * is no ffmpeg stderr at all and the failure reads as "the audio could not be
- * read" with nothing after it.
+ * Three places it can come from, tried in order:
  *
- * So: use it in place when it is executable, and otherwise copy it once into
- * /tmp — the one writable directory — and mark it executable there. Cached per
- * process, so the copy happens at most once per cold start.
+ *  1. Where ffmpeg-static installed it (or FFMPEG_PATH), when that file exists
+ *     and is executable. Local development and the tests.
+ *  2. A copy of that file in /tmp, when it exists but lost its execute bit in
+ *     bundling — the application directory is read-only at runtime, so it
+ *     cannot be chmod'ed where it lies. The symptom of skipping this was
+ *     brutal to diagnose: spawn fails with EACCES before ffmpeg starts, so
+ *     there is no ffmpeg stderr at all.
+ *  3. A DOWNLOAD into /tmp, when the file is not in the deployment at all.
+ *     This is the production path, by design: the binary is 77 MB and the
+ *     bundler was copying it into every function whose imports reached this
+ *     file — six of them — so every push stored half a gigabyte of function
+ *     bundles and the account's Function Storage allowance ran out. Now
+ *     next.config.mjs excludes it from every function and it is fetched once
+ *     per warm instance from the pinned release asset (lib/ffmpeg-source.ts),
+ *     verified by SHA-256 before it is ever marked executable.
+ *
+ * Cached per process, so whichever path it took happens at most once per
+ * cold start.
  */
 let resolvedBinary: string | null = null;
+/** The download in flight, so two concurrent first uses share one fetch. */
+let inflight: Promise<DownloadResult> | null = null;
 
 /** Forget the cached path. Only the test needs this; a process never changes binaries. */
 export function resetFfmpegBinary(): void {
   resolvedBinary = null;
+  inflight = null;
 }
 
 export type BinaryResult =
-  | { ok: true; path: string }
+  | { ok: true; path: string; source: 'packaged' | 'copied' | 'downloaded' }
   /** Why it cannot be run — the three causes look identical from the outside. */
   | { ok: false; reason: 'no_path' | 'absent' | 'copy_failed'; detail: string };
 
 export async function resolveFfmpeg(): Promise<BinaryResult> {
-  if (resolvedBinary) return { ok: true, path: resolvedBinary };
+  if (resolvedBinary) return { ok: true, path: resolvedBinary, source: 'packaged' };
   // FFMPEG_PATH is the escape hatch for a deployment where the packaged binary
   // never arrived — ffmpeg-static fetches it in an install script, and a build
   // that skips scripts leaves the package exporting a path to nothing.
@@ -69,7 +83,7 @@ export async function resolveFfmpeg(): Promise<BinaryResult> {
   try {
     await access(src, FS.X_OK);
     resolvedBinary = src;
-    return { ok: true, path: src };
+    return { ok: true, path: src, source: 'packaged' };
   } catch { /* either absent, or present without the execute bit */ }
 
   const dest = path.join(tmpdir(), 'ffmpeg-static-bin');
@@ -77,26 +91,107 @@ export async function resolveFfmpeg(): Promise<BinaryResult> {
     // A previous invocation on this same warm instance already did the copy.
     await access(dest, FS.X_OK);
     resolvedBinary = dest;
-    return { ok: true, path: dest };
+    return { ok: true, path: dest, source: 'copied' };
   } catch { /* first time on this instance */ }
 
   // Is the source there at all? "Present but not executable" is a bundling
-  // problem this can fix; "not there" is a BUILD problem it cannot, and
-  // reporting them the same way sent us hunting for the wrong one.
+  // problem the copy below can fix; "not there" is the normal production
+  // case, where the binary is fetched instead.
+  let present = true;
   try {
     await access(src, FS.F_OK);
   } catch {
-    return { ok: false, reason: 'absent', detail: 'No file at ' + src + '. The build never fetched it — see scripts/ensure-ffmpeg.mjs.' };
+    present = false;
+  }
+  if (!present) {
+    const fetched = await downloadFfmpeg();
+    if (fetched.ok) {
+      resolvedBinary = fetched.path;
+      return { ok: true, path: fetched.path, source: 'downloaded' };
+    }
+    return {
+      ok: false,
+      reason: 'absent',
+      detail:
+        'The deployment does not carry the binary (by design — it is fetched at first use) and the download failed: ' +
+        fetched.detail + '. Set FFMPEG_DOWNLOAD_URL to a copy you host, or FFMPEG_PATH to a binary on the image.',
+    };
   }
 
   try {
     await copyFile(src, dest);
     await chmod(dest, 0o755);
     resolvedBinary = dest;
-    return { ok: true, path: dest };
+    return { ok: true, path: dest, source: 'copied' };
   } catch (e) {
     reportError('audio-extract:binary', e, { src, dest });
     return { ok: false, reason: 'copy_failed', detail: 'Could not make a runnable copy at ' + dest + '.' };
+  }
+}
+
+type DownloadResult = { ok: true; path: string } | { ok: false; detail: string };
+
+/** Long enough for 77 MB from a CDN on a slow day; short enough to fail inside any caller's budget. */
+const DOWNLOAD_TIMEOUT_MS = 60_000;
+
+/** One download at a time per process; concurrent first uses wait for the same one. */
+function downloadFfmpeg(): Promise<DownloadResult> {
+  if (!inflight) {
+    inflight = fetchAndVerify().finally(() => { inflight = null; });
+  }
+  return inflight;
+}
+
+/**
+ * Fetch the pinned asset into /tmp and verify it before trusting it.
+ *
+ * Written to a part-file and renamed into place only after the hash matches,
+ * so a half-download or a wrong file can never be what the next request
+ * finds and runs. The cache name carries the hash (lib/ffmpeg-source.ts), so
+ * a changed pin never reuses a stale binary on a reused instance.
+ */
+async function fetchAndVerify(): Promise<DownloadResult> {
+  const { url, sha256 } = ffmpegSource(process.env);
+  const dest = path.join(tmpdir(), cachedBinaryName(sha256));
+  try {
+    await access(dest, FS.X_OK);
+    return { ok: true, path: dest };
+  } catch { /* not cached on this instance yet */ }
+
+  const part = dest + '.part-' + process.pid + '-' + Date.now().toString(36);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+  const host = (() => { try { return new URL(url).host; } catch { return 'the configured URL'; } })();
+  try {
+    const res = await fetch(url, { signal: controller.signal, redirect: 'follow' });
+    if (!res.ok || !res.body) return { ok: false, detail: 'HTTP ' + res.status + ' from ' + host };
+    const hash = createHash('sha256');
+    let bytes = 0;
+    const counter = new Transform({
+      transform(chunk: Buffer, _enc, cb) {
+        hash.update(chunk);
+        bytes += chunk.length;
+        cb(null, chunk);
+      },
+    });
+    await pipeline(Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]), counter, createWriteStream(part));
+    const verdict = downloadVerdict({ bytes, sha256: hash.digest('hex'), expected: sha256 });
+    if (!verdict.ok) {
+      await rm(part, { force: true }).catch(() => undefined);
+      reportError('audio-extract:download', new Error(verdict.reason), { host, bytes });
+      return { ok: false, detail: verdict.detail + ' (from ' + host + ')' };
+    }
+    await chmod(part, 0o755);
+    await rename(part, dest);
+    return { ok: true, path: dest };
+  } catch (e) {
+    await rm(part, { force: true }).catch(() => undefined);
+    const aborted = (e as { name?: string })?.name === 'AbortError';
+    const why = aborted ? 'timed out after ' + DOWNLOAD_TIMEOUT_MS / 1000 + 's' : redact(e instanceof Error ? e.message : String(e));
+    reportError('audio-extract:download', e, { host });
+    return { ok: false, detail: why + ' fetching from ' + host };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

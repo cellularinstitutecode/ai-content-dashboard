@@ -29,10 +29,14 @@
 /**
  * The largest video worth staging on disk.
  *
- * 450 MB inside a 512 MB /tmp — the margin covers the mp3 written alongside it
- * and anything else sharing the scratch directory.
+ * 360 MB inside a 512 MB /tmp. The scratch directory is shared with the ffmpeg
+ * binary itself now (77 MB, fetched at first use — see lib/audio-extract.ts)
+ * as well as the mp3 written alongside the video, so the ceiling came down
+ * from 450 MB by the binary's size plus margin. Nothing is lost: a video
+ * between the two ceilings simply takes the URL path below, as larger ones
+ * always have.
  */
-export const DISK_SAFE_BYTES = 450 * 1024 * 1024;
+export const DISK_SAFE_BYTES = 360 * 1024 * 1024;
 
 /**
  * The point past which a file is refused outright.
