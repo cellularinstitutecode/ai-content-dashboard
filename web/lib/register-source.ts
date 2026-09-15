@@ -40,7 +40,7 @@ function wholeNumber(v: unknown): number | null {
  */
 export function registerSource(entry: RegisterLike | null | undefined): PostSource | null {
   const key = String(entry?.videoKey ?? '').trim();
-  if (!key || key.startsWith('drive|')) return null;
+  if (!key || key.startsWith('drive|') || key.startsWith('sweep|')) return null;
   const [spreadsheetId, keyTab] = key.split('|');
   if (!spreadsheetId) return null;
 

@@ -39,6 +39,7 @@ const TONE: Record<string, string> = {
   copy_failed: '#b91c1c',
   retried: '#a16207',
   skipped: '#6b7280',
+  sweep_ran: '#9ca3af',
 };
 
 function whenWords(iso: string, now: number): string {
@@ -92,7 +93,11 @@ export default function VideoRegister() {
   // all rather than an empty box that reads as "nothing has ever happened".
   if (off || (!error && !entries.length)) return null;
 
-  const shown = open ? entries : entries.slice(0, 6);
+  // One line per sweep is what the register writes; one line per PANEL is
+  // what a person needs — the latest run. Older runs stay in the table.
+  const latestSweep = entries.find((e) => e.event === 'sweep_ran');
+  const list = entries.filter((e) => e.event !== 'sweep_ran' || e === latestSweep);
+  const shown = open ? list : list.slice(0, 6);
   const arrivals = entries.filter((e) => e.event === 'first_seen').length;
 
   return (
@@ -157,26 +162,33 @@ export default function VideoRegister() {
                       <span aria-hidden>{'\u{1F4C4}'}</span> {rowLabel} {'\u2197'}
                     </a>
                   )}
-                  {e.link ? (
-                    <a href={e.link} target="_blank" rel="noreferrer" style={{ fontWeight: 500 }}>
-                      {e.title || 'Untitled video'}
-                    </a>
+                  {e.event === 'sweep_ran' ? (
+                    // The run's own line: the sentence is the whole of it.
+                    <span style={{ color: 'var(--muted, #6b7280)' }}>{e.said}</span>
                   ) : (
-                    <strong style={{ fontWeight: 500 }}>{e.title || 'Untitled video'}</strong>
-                  )}{' '}
-                  <span style={{ color: 'var(--muted, #6b7280)' }}>{e.said}</span>
+                    <>
+                      {e.link ? (
+                        <a href={e.link} target="_blank" rel="noreferrer" style={{ fontWeight: 500 }}>
+                          {e.title || 'Untitled video'}
+                        </a>
+                      ) : (
+                        <strong style={{ fontWeight: 500 }}>{e.title || 'Untitled video'}</strong>
+                      )}{' '}
+                      <span style={{ color: 'var(--muted, #6b7280)' }}>{e.said}</span>
+                    </>
+                  )}
                 </span>
               </li>
               );
             })}
           </ul>
-          {entries.length > 6 && (
+          {list.length > 6 && (
             <button
               type="button"
               onClick={() => setOpen((v) => !v)}
               style={{ marginTop: 6, fontSize: 12, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent, #2563eb)' }}
             >
-              {open ? 'Show less' : 'Show all ' + entries.length}
+              {open ? 'Show less' : 'Show all ' + list.length}
             </button>
           )}
         </>

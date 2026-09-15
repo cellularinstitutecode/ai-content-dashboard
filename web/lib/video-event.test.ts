@@ -98,3 +98,22 @@ test('every event has wording — none falls through to the raw name', () => {
     assert.doesNotMatch(said, new RegExp('^' + ev.replace(/_/g, ' ')), ev + ' has no wording of its own');
   }
 });
+
+// --- the sweep reports itself --------------------------------------------------
+import { SWEEP_KEY } from './video-event.ts';
+
+test('a sweep_ran line says what the run saw and did', () => {
+  assert.ok((VIDEO_EVENTS as readonly string[]).includes('sweep_ran'));
+  assert.equal(registerEntry({ userId: 'u', videoKey: SWEEP_KEY, event: 'sweep_ran', actor: 'sweep' }).event, 'sweep_ran');
+  const said = describeEntry({
+    event: 'sweep_ran', actor: 'sweep',
+    detail: { scanned: 302, hidden: 178, belowStart: 0, startRow: 179, queuedExisting: 20, prepared: 0, needsTranscript: 19, failed: 0, stoppedEarly: true },
+  });
+  assert.equal(said, 'Sweep ran: 302 rows seen · 178 hidden · 0 below row 179 · 20 queued with copy · 0 prepared · 19 need a transcript · 0 failed · stopped early.');
+  assert.match(describeEntry({ event: 'sweep_ran', detail: { dryRun: true, scanned: 5 } }), /^Dry run: 5 rows seen/);
+});
+
+test('a sweep that stopped says why, and never reads as a video', () => {
+  assert.equal(describeEntry({ event: 'sweep_ran', detail: { error: 'The posting calendar could not be read.' } }), 'Sweep stopped: The posting calendar could not be read.');
+  assert.ok(SWEEP_KEY.startsWith('sweep|'));
+});
