@@ -34,6 +34,8 @@ export const STATUS_TEXT = {
   needs_transcript: 'Falta transcripción',
   // Not an error: the slow half succeeded and the next pass writes the copy.
   transcript_ready: 'Transcripción lista — copy pendiente',
+  /** The copy a person wrote was sent to Metricool as a draft with the video, unchanged. */
+  queued_existing: 'En cola — copy existente',
   failed: 'Error — revisar',
 } as const;
 

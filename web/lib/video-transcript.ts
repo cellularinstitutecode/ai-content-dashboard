@@ -19,7 +19,8 @@ import { fetchYouTubeTranscript } from '@/lib/youtube-transcript';
 import { transcribeDriveMedia, type MediaFailure } from '@/lib/media-transcript';
 import { cacheTranscript, cachedTranscript } from '@/lib/transcript-cache';
 
-export type TranscriptOrigin = 'pasted' | 'youtube' | 'drive';
+/** `sheet`: no transcript at all — the draft carries copy a person already wrote in the sheet. */
+export type TranscriptOrigin = 'pasted' | 'youtube' | 'drive' | 'sheet';
 
 export type ResolvedTranscript =
   | {

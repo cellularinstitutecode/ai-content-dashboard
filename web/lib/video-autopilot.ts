@@ -44,7 +44,8 @@ import { canWriteCopy } from '@/lib/prepare-budget';
 import { isMissingSchema } from '@/lib/schema-probe';
 import { columnFor, pick, tableFromRows } from '@/lib/sheet-table';
 import { VIDEO_NETWORK_COLUMNS, publishedNetworks } from '@/lib/sheet-ticks';
-import { prepareVideo, type PrepareOk } from '@/lib/video-prepare';
+import { prepareVideo, saveVideoDraft, type PrepareOk } from '@/lib/video-prepare';
+import { EXISTING_COPY_PER_RUN, existingCopyText, isExistingCopyRow, queueExistingEnabled } from '@/lib/existing-copy';
 import { STATUS_TEXT, claimIsStale, firstLinkIn, fitsNetwork, isCandidate, preparedStatus, rowKeyFor } from '@/lib/video-row';
 import { NEEDS_VIDEO, networksFor, nextFreeSlot } from '@/lib/video-slot';
 import { belowStart, parseQuota, parseStartRow, remainingQuota, startOfDayIso } from '@/lib/daily-pace';
@@ -78,7 +79,7 @@ export type SweepRowOutcome = {
   row: number;
   rowKey: string;
   title: string;
-  state: 'prepared' | 'needs_transcript' | 'transcript_ready' | 'failed' | 'skipped' | 'would_prepare';
+  state: 'prepared' | 'needs_transcript' | 'transcript_ready' | 'failed' | 'skipped' | 'would_prepare' | 'queued_existing' | 'would_queue_existing';
   wrote?: Partial<Record<VideoField, boolean>>;
   draftId?: string | null;
   /** One entry per network a draft was attempted for. */
@@ -101,6 +102,8 @@ export type SweepResult = {
   newlySeen: number;
   /** Rows hidden in the sheet, walked past untouched — not even registered. */
   hidden: number;
+  /** Rows whose copy was already written, sent to Metricool as drafts with the video, unchanged. */
+  queuedExisting: number;
   /**
    * The day's pace, when VIDEO_DAILY_QUOTA is set: how many rows the day
    * allows, how many were already prepared today (by any run or any button)
@@ -162,7 +165,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
   const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
   const admin = supabaseAdmin();
 
-  const result: SweepResult = { ok: true, scanned: 0, candidates: 0, prepared: 0, needsTranscript: 0, failed: 0, metricoolDrafts: 0, rows: [], stoppedEarly: false, newlySeen: 0, hidden: 0 };
+  const result: SweepResult = { ok: true, scanned: 0, candidates: 0, prepared: 0, needsTranscript: 0, failed: 0, metricoolDrafts: 0, rows: [], stoppedEarly: false, newlySeen: 0, hidden: 0, queuedExisting: 0 };
   if (!sourcesConfigured()) {
     return { ...result, ok: false };
   }
@@ -215,7 +218,11 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
   // otherwise it would list every row to the end as "would prepare" and say
   // nothing about where the day's pair actually stops.
   let wouldPrepare = 0;
-  const quotaReached = () => dayAllows != null && result.prepared + wouldPrepare >= dayAllows;
+  const quotaReached = () => dayAllows != null && result.prepared + result.queuedExisting + wouldPrepare >= dayAllows;
+  // Rows whose copy a person already wrote are queued, not written — with
+  // their own per-run cap, because they cost seconds rather than minutes.
+  const queueExisting = queueExistingEnabled(process.env);
+  let existingThisRun = 0;
 
   // ONE SLOT PER ROW. The calendar is read once here; each prepared row takes
   // the next free instant and every network of that row shares it, so a row
@@ -309,7 +316,12 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
       // a title is recognisable, a row number is findable.
       const where = { tab: tab.title, row, gid: Number.isFinite(tab.sheetId) ? tab.sheetId : null };
 
-      if (!isCandidate({ videoLink, copy })) continue;
+      // A row with a video AND copy already written is not the sweep's to
+      // WRITE — but it is still a draft that needs its video. With queuing
+      // on (the default) such a row goes to Metricool with the copy exactly
+      // as the sheet has it; lib/existing-copy.ts holds the rule.
+      const existingCopy = queueExisting && isExistingCopyRow({ videoLink, copy });
+      if (!isCandidate({ videoLink, copy }) && !existingCopy) continue;
       // Before the start row: in the library and registered as seen, but not
       // this sweep's to prepare. Said in the report so a dry run shows exactly
       // which rows the rule is holding back.
@@ -365,6 +377,93 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
       // video takes minutes — without this both would do it, and pay twice.
       // A claim older than the longest a request can live is stale, not held.
       if (prior && prior.state === 'preparing' && !claimIsStale(prior.updated_at)) continue;
+
+      if (existingCopy) {
+        // QUEUE, DO NOT WRITE. The copy is the person's; it goes out verbatim.
+        // The dashboard draft exists so the publishing list, the PENDING chip
+        // and Approve treat this row like any other; the video_runs row exists
+        // so a run fifteen minutes from now does not queue it again.
+        if (existingThisRun >= EXISTING_COPY_PER_RUN) { result.stoppedEarly = true; continue; }
+        result.candidates++;
+        const draftTitle = title || videoLink;
+        if (opts.dryRun) {
+          result.rows.push({ tab: tab.title, row, rowKey, title: draftTitle, state: 'would_queue_existing', message: 'Copy already written — would be sent to Metricool as a draft with the video, unchanged.' });
+          wouldPrepare++;
+          existingThisRun++;
+          continue;
+        }
+        let columns: Partial<Record<VideoField, string>>;
+        try {
+          columns = await columnsFor();
+        } catch (e) {
+          if (!columnsFailed) { reportError('video-sweep:columns', e, { tab: tab.title }); columnsFailed = true; }
+          break;
+        }
+        const text = existingCopyText(copy);
+        const fileId = parseDriveFileId(videoLink);
+        let draftId: string | null = null;
+        try {
+          draftId = await saveVideoDraft(opts.userId, draftTitle, {
+            instagram: text, facebook: text, linkedin: text, blog: '',
+            kind: 'video', title: draftTitle, sourceUrl: videoLink, videoId: fileId || videoLink,
+            transcript: '', transcriptSource: 'sheet', transcriptLanguage: null, tiktok: text,
+          });
+        } catch (e) {
+          reportError('video-sweep:existing-draft', e, { tab: tab.title, row: String(row) });
+        }
+        const posted = opts.skipMetricool ? [] : await handOffToMetricool({
+          userId: opts.userId,
+          prepared: { linkedin: text, tiktok: text, draftId },
+          networks: rowNetworks,
+          videoLink,
+          title: draftTitle,
+          format: pick(rec, 'formato', 'format'),
+          sheetYoutube: pick(rec, 'youtube'),
+          published: publishedNetworks(VIDEO_NETWORK_COLUMNS, (col: string) => pick(rec, col)),
+          publicationDate: await slotForNextRow(),
+        });
+        // ESTADO IA only. COPY is not even named here, and writeRowBack never
+        // fills a cell that has something in it.
+        try {
+          await writeRowBack(spreadsheetId, tab.title, row, columns, { aiStatus: STATUS_TEXT.queued_existing });
+        } catch (e) {
+          reportError('video-sweep:existing-status', e, { tab: tab.title, row: String(row) });
+        }
+        const { error: runError } = await admin.from('video_runs').upsert({
+          ...(prior ? { id: prior.id } : {}),
+          user_id: opts.userId,
+          spreadsheet_id: spreadsheetId,
+          tab: tab.title,
+          row_key: rowKey,
+          row_number: row,
+          video_title: title || null,
+          video_link: videoLink || null,
+          state: 'prepared',
+          attempts: (prior?.attempts ?? 0) + 1,
+          transcript_source: 'sheet',
+          draft_id: draftId,
+          metricool: posted,
+          last_error: null,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'spreadsheet_id,tab,row_key' });
+        if (runError) reportError('video-sweep:existing-run', runError, { tab: tab.title, row: String(row) });
+        existingThisRun++;
+        result.queuedExisting++;
+        result.metricoolDrafts += posted.filter((p) => p.ok).length;
+        const sent = posted.filter((p) => p.ok).map((p) => p.network);
+        const refused = posted.filter((p) => !p.ok);
+        void recordVideoEvent({
+          userId: opts.userId,
+          videoKey: videoKeyFor(spreadsheetId, tab.title, rowKey),
+          event: 'queued',
+          actor: 'sweep',
+          title: draftTitle,
+          link: videoLink,
+          detail: { ...where, existingCopy: true, networks: sent, refused: refused.map((p) => ({ network: p.network, reason: p.reason })) },
+        });
+        result.rows.push({ tab: tab.title, row, rowKey, title: draftTitle, state: 'queued_existing', draftId, metricool: posted });
+        continue;
+      }
 
       result.candidates++;
       if (opts.dryRun) {
