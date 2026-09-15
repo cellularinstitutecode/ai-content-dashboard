@@ -274,6 +274,11 @@ const [mText, setMText] = useState('');
 const [mDate, setMDate] = useState('');
 const [mStatus, setMStatus] = useState<string | null>(null);
 const [mBusy, setMBusy] = useState(false);
+// What was last sent, so the same text is not sent twice by a second press —
+// and so the text can STAY in the box after a send. It used to be cleared on
+// success, with the confirmation in grey below the button: the person saw
+// their post vanish and an amber "Write the post first." take its place.
+const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(null);
   // Auto-publish was removed deliberately. The dashboard's contract is that
   // nothing reaches a live channel without a human approving it inside
   // Metricool, and a "Publish now" button in this composer contradicted that
@@ -340,7 +345,11 @@ const [mBusy, setMBusy] = useState(false);
     : mediaProblem(mNetworks, mMedia) ? mediaProblem(mNetworks, mMedia)
     : mCompliance && !mCompliance.ok ? (mCompliance.missing.includes('ref') ? 'Instagram and Facebook posts need a REF line citing a scientific study.' : 'Add the AVISO DE PUBLICIDAD line before sending.')
     : null;
-  const mCanSend = !mProblem && !mBusy;
+  // The composer as one string: the same post, to the same channels, at the
+  // same time, with the same video. Change any of it and Send is live again.
+  const mKey = JSON.stringify([mText.trim(), [...mNetworks].sort(), mDate, mMedia]);
+  const mAlreadySent = mSent !== null && mSent.key === mKey;
+  const mCanSend = !mProblem && !mBusy && !mAlreadySent;
   function platformsForFormat(fmt: string): string[] {
     // A video draft went to Instagram and Facebook — the two channels that are
     // not what the clinic's video work is for. Same default the sweep uses.
@@ -1139,8 +1148,10 @@ return { network, ok: r.ok, status: r.status, data };
 const ok = results.filter((x) => x.ok).map((x) => x.network);
 const failed = results.filter((x) => !x.ok).map((x) => x.network);
 if (failed.length === 0) {
-setMStatus('Saved as a draft on ' + ok.join(', ') + ' — press Approve in your queue below to publish.');
-setMText('');
+// Kept, not cleared: the text stays where the person can see it, the button
+// turns into "Sent", and the green line above it says where the drafts went.
+setMStatus(null);
+setMSent({ key: mKey, networks: ok });
 } else if (ok.length === 0) {
 setMStatus('Error: failed on ' + failed.join(', ') + '.');
 } else {
@@ -1655,7 +1666,7 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 tex
 <div className="flex items-center gap-3">
 <span aria-hidden className="flex h-9 w-9 items-center justify-center rounded-2xl bg-accent/10 text-accent text-[18px]">📣</span>
 <div>
-<span className="mb-1 inline-block rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">{isDraft ? 'Step 4 · Schedule' : 'Approvals'}</span><h2 className="text-[18px] font-semibold text-ink">{isDraft ? 'Publishing' : 'Your publishing queue'}</h2>
+<span className="mb-1 inline-block rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">{isDraft ? 'Step 4 · Schedule' : 'Approvals'}</span><h2 id="publishing-queue" className="text-[18px] font-semibold text-ink">{isDraft ? 'Publishing' : 'Your publishing queue'}</h2>
 <p className="text-[13px] text-ink-muted">{isDraft ? 'Plan, schedule, and track your posts across every channel.' : 'Posts waiting for your approval, and the accounts they go to. Write new posts under Draft.'}</p>
 </div>
 </div>
@@ -1768,13 +1779,22 @@ Too long for {networkLabel(mLimit.network)} by {mOverBy.toLocaleString()} charac
 {/* The only reason the Send button was disabled used to be 12px grey text
     UNDER it, which reads as "the button is broken" rather than "one thing is
     missing". Same sentence, above the button, in a colour, naming the fix. */}
-{mProblem && !mBusy && (
+{mProblem && !mBusy && !mAlreadySent && (
 <p role="status" className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[13px] font-medium text-amber-900 ring-1 ring-amber-200">
 {mProblem}{!mDate ? ' The three time chips above set one in a click.' : ''}
 </p>
 )}
+{mAlreadySent && mSent && (
+<div role="status" className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-[13px] font-medium text-emerald-900 ring-1 ring-emerald-200">
+<span>✓ Sent as {mSent.networks.length === 1 ? 'a draft' : 'drafts'} on {mSent.networks.map((n) => networkLabel(n)).join(', ')}. {mSent.networks.length === 1 ? 'It is' : 'They are'} in your queue below — nothing publishes until you press Approve there.</span>
+<span className="mt-1.5 flex flex-wrap gap-3">
+<button type="button" className="font-semibold text-emerald-900 underline" onClick={() => { const el = typeof document !== 'undefined' ? document.getElementById('publishing-queue') : null; if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Show the queue</button>
+<button type="button" className="font-semibold text-emerald-900 underline" onClick={() => { setMText(''); setMMedia(''); setMMediaLabel(''); setMSent(null); setMStatus(null); }}>Write another post</button>
+</span>
+</div>
+)}
 <div className="mt-4 flex flex-wrap items-center gap-3">
-<button onClick={schedulePost} disabled={!mCanSend} title={mProblem || undefined} className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">{mBusy ? 'Sending…' : 'Send to Metricool for review'}</button>
+<button onClick={schedulePost} disabled={!mCanSend} title={mAlreadySent ? 'This exact post was already sent. Change the text, channels or time to send again.' : (mProblem || undefined)} className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">{mBusy ? 'Sending…' : mAlreadySent ? 'Sent ✓' : 'Send to Metricool for review'}</button>
 <a href={metricoolPlannerUrl(activeBlogId)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:ring-accent">Open in Metricool ↗</a>
 </div>
 {mStatus && <p className="mt-3 rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink-muted ring-1 ring-line">{mStatus}</p>}
