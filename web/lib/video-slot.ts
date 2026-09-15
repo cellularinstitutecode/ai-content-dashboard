@@ -24,6 +24,9 @@ export const EVERY_DAY = [0, 1, 2, 3, 4, 5, 6];
 /** Clinic morning. Matches the Video Library composer's own default. */
 export const POST_TIME_OF_DAY = process.env.VIDEO_AUTOPILOT_TIME || '09:00';
 
+/** Two slots a day, morning and late afternoon on the clinic's clock, unless a setting says otherwise. */
+export const DEFAULT_POST_TIMES = ['09:00', '17:00'];
+
 /**
  * Which days carry slots, read at call time so a setting changed on the
  * host takes effect without a restart — and so a test can set it.
@@ -34,16 +37,18 @@ export const POST_TIME_OF_DAY = process.env.VIDEO_AUTOPILOT_TIME || '09:00';
  */
 export function postWeekdays(env: Record<string, string | undefined> = process.env): number[] {
   const v = String(env.VIDEO_POST_DAYS || '').trim().toLowerCase();
-  return v === 'all' || v === 'daily' || v === 'everyday' ? EVERY_DAY : POST_WEEKDAYS;
+  // Every day is the default: the clinic posts through the weekend. `weekdays`
+  // is the one word that brings the Monday–Friday grid back.
+  return v === 'weekdays' || v === 'weekday' || v === 'mon-fri' ? POST_WEEKDAYS : EVERY_DAY;
 }
 
 /**
  * The times of day that carry a slot, in order.
  *
  * VIDEO_AUTOPILOT_TIMES is a comma list ("09:00,17:00"); the older singular
- * VIDEO_AUTOPILOT_TIME still works as a one-entry list, so nothing already
- * configured changes. Unreadable entries are dropped, never guessed; an empty
- * result falls back to 09:00 so the grid can never be empty.
+ * VIDEO_AUTOPILOT_TIME still works as a one-entry list, so anything already
+ * configured keeps its meaning. Unreadable entries are dropped, never guessed;
+ * with nothing readable at all the grid is the clinic default, two a day.
  */
 export function postTimes(env: Record<string, string | undefined> = process.env): string[] {
   const raw = String(env.VIDEO_AUTOPILOT_TIMES || env.VIDEO_AUTOPILOT_TIME || '').trim();
@@ -56,7 +61,7 @@ export function postTimes(env: Record<string, string | undefined> = process.env)
     if (hh > 23 || mm > 59) continue;
     seen.add(String(hh).padStart(2, '0') + ':' + m[2]);
   }
-  return seen.size ? [...seen] : ['09:00'];
+  return seen.size ? [...seen] : [...DEFAULT_POST_TIMES];
 }
 
 /** How far ahead a backlog may be spread before it is somebody's decision, not this rule's. */

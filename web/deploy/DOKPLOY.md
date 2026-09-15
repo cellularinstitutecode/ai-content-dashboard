@@ -2,7 +2,7 @@
 
 A second, identical copy of the app, alongside Vercel. Same database, same
 Google Sheets, same Metricool account — so **anything a person does on either
-copy is real**, and **the four daily crons must run on one copy only**.
+copy is real**, and **the four crons must run on one copy only**.
 
 ## What is in the repo
 
@@ -62,7 +62,7 @@ Dokploy → the application → **Schedules → Create**, one per entry in
 | `maintenance-prune` | `0 5 * * *` | `node scripts/cron-tick.mjs maintenance/prune` |
 | `metricool-sync` | `0 6 * * *` | `node scripts/cron-tick.mjs metricool/sync` |
 | `autopilot-tick` | `30 6 * * *` | `node scripts/cron-tick.mjs autopilot/tick` |
-| `videos-watch` | `0 7 * * *` | `node scripts/cron-tick.mjs videos/watch` |
+| `videos-watch` | `*/15 * * * *` | `node scripts/cron-tick.mjs videos/watch` |
 
 Shell type `sh`, timezone `UTC`, and **leave each one disabled**. They exist so
 that cutover is a toggle. While Vercel is live, Vercel's crons are the ones

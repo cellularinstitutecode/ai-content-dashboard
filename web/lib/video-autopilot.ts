@@ -205,7 +205,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
       return { ...result, ok: false };
     }
     preparedToday = counted.count ?? 0;
-    result.pace = { quota, preparedToday, startRow: process.env.VIDEO_START_ROW || null };
+    result.pace = { quota, preparedToday, startRow: startRow ? (startRow.tab ? startRow.tab + '!' : '') + startRow.row : null };
   }
   const dayAllows = remainingQuota(quota, preparedToday);
   // A dry run prepares nothing, so it counts what it WOULD have prepared —
@@ -301,7 +301,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
       // this sweep's to prepare. Said in the report so a dry run shows exactly
       // which rows the rule is holding back.
       if (belowStart(tab.title, row, startRow)) {
-        result.rows.push({ tab: tab.title, row, rowKey, title: title || videoLink, state: 'skipped', message: 'Below the start row (' + String(process.env.VIDEO_START_ROW) + ').' });
+        result.rows.push({ tab: tab.title, row, rowKey, title: title || videoLink, state: 'skipped', message: 'Below the start row (' + String(startRow?.row) + ').' });
         continue;
       }
       // The day's quota is full: this row waits for tomorrow's run. The walk
