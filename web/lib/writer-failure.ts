@@ -66,6 +66,15 @@ export function describeWriterFailure(err: unknown): WriterFailure {
   }
 
   // fetchWithRetry's own wording when every attempt aborted or the socket died.
+  // Said before the attempt-count rule: a dropped stream is retried and then
+  // reported as "failed after 3 attempts: … the stream ended early", and the
+  // inner sentence is the one that says what happened.
+  if (/stream ended early/i.test(message)) {
+    return { said: 'the connection to the writer dropped mid-answer', retryable: true };
+  }
+  if (/declined this request|\(refusal\)/i.test(message)) {
+    return { said: 'the model declined to write this one \u2014 a person should read the transcript and write it', retryable: false };
+  }
   if (/failed after \d+ attempts/i.test(message) || /abort/i.test(message)) {
     return { said: 'it ran out of time before the model replied', retryable: true };
   }
@@ -78,7 +87,10 @@ export function describeWriterFailure(err: unknown): WriterFailure {
   // is a ceiling somebody can raise, the second is the prompt not being
   // followed, and only one of them gets better by asking again.
   if (/malformed JSON/i.test(message)) {
-    return { said: 'the model\u2019s answer came back incomplete or garbled, twice running', retryable: true };
+    // The diagnostic parseJsonStrict appends — "(312 chars, cut off before
+    // the closing brace: …)" — is the difference between a mystery and a clue.
+    const diag = /\(([^()]*chars[^()]*|empty answer)\)/i.exec(message);
+    return { said: 'the model\u2019s answer came back incomplete or garbled, twice running' + (diag ? ' (' + diag[1] + ')' : ''), retryable: true };
   }
   if (/returned no /i.test(message)) {
     return { said: 'the model left the instagram or linkedin copy empty, twice running', retryable: true };

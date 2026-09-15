@@ -70,3 +70,22 @@ test('running out of room is not the same as garbled output', () => {
   assert.match(empty.said, /left the instagram or linkedin copy empty/);
   assert.equal(empty.retryable, true);
 });
+
+test('a dropped stream is a dropped stream, even wrapped in the attempt count', () => {
+  const dropped = describeWriterFailure(new Error('request to https://api.anthropic.com/v1/messages failed after 3 attempts: anthropic: the stream ended early after 812 characters'));
+  assert.match(dropped.said, /connection to the writer dropped/);
+  assert.equal(dropped.retryable, true);
+});
+
+test('a refusal is not worth pressing again', () => {
+  const no = describeWriterFailure(new Error('anthropic: the model declined this request (refusal)'));
+  assert.match(no.said, /declined to write this one/);
+  assert.equal(no.retryable, false);
+});
+
+test('malformed JSON carries its diagnostic when there is one', () => {
+  const cut = describeWriterFailure(new Error('AI returned malformed JSON; please try again. (312 chars, cut off before the closing brace: \u2026and that is)'));
+  assert.match(cut.said, /garbled, twice running \(312 chars, cut off before the closing brace/);
+  const plain = describeWriterFailure(new Error('AI returned malformed JSON; please try again.'));
+  assert.equal(plain.said, 'the model\u2019s answer came back incomplete or garbled, twice running');
+});

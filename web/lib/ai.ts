@@ -10,6 +10,9 @@ import { researchBundle, briefPromptFrom, type KeywordBrief } from '@/lib/semrus
 import { attemptPlan } from '@/lib/ai-attempts';
 import { packKeyContract } from '@/lib/pack-keys';
 import { readAnthropicStream } from '@/lib/sse-stream';
+import { PACK_SCHEMA, supportsJsonOutput } from '@/lib/anthropic-models';
+import { jsonDiagnostic, repairJsonText } from '@/lib/json-repair';
+import { reportError } from '@/lib/report';
 import { PLAYBOOK } from '@/lib/playbook';
 import { recordProviderOutcome } from '@/lib/provider-status';
 
@@ -285,43 +288,49 @@ async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
   const model = input.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
   const type = input.contentType || 'social';
   const plan = input.budgetMs != null ? attemptPlan(input.budgetMs) : null;
-  const text = await withRetry(
-    (process.env.ANTHROPIC_API_BASE || 'https://api.anthropic.com').replace(/\/$/, '') + '/v1/messages',
-    {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': key,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokensFor(type),
-        // Stated rather than left to the provider's default. This writes to a fixed house
-        // style against a transcript it must not depart from; the room to be inventive is
-        // in which specifics it picks, not in how far it wanders.
-        temperature: 0.4,
-        // Cached, because it is the one part that never changes.
-        //
-        // Caching is a PREFIX match and the render order is tools, system,
-        // messages — so the system prompt is the only stable thing to anchor
-        // on here; the user prompt carries the transcript and differs every
-        // time. Per video that saves the input cost of re-reading the voice
-        // and the brand profile, and a little of the time to first token.
-        //
-        // Silently a no-op when the prefix is below the model's minimum
-        // cacheable length, which is the correct failure: nothing breaks, the
-        // saving simply does not appear.
-        system: [{ type: 'text', text: systemPrompt(type, input.brand, input.channels), cache_control: { type: 'ephemeral' } }],
-        messages: [{ role: 'user', content: buildUserPrompt(input) }],
-        // Streamed. A non-streaming request holds the socket silent until the
-        // whole answer is composed, which for two 800-1100 character posts is
-        // exactly the shape that trips a request timeout. Streaming keeps the
-        // connection producing, so the only thing that can end it is the
-        // deadline the caller actually set.
-        stream: true,
-      }),
-    },
+  const url = (process.env.ANTHROPIC_API_BASE || 'https://api.anthropic.com').replace(/\/$/, '') + '/v1/messages';
+  const headers = {
+    'content-type': 'application/json',
+    'x-api-key': key,
+    'anthropic-version': '2023-06-01',
+  };
+  // The request, with or without the schema. Structured output makes the
+  // answer exactly the four-string object the parser expects — no raw line
+  // breaks inside strings, no prose around it, no missing key — which is
+  // where "incomplete or garbled, twice running" came from. Only sent to a
+  // model documented as accepting it (lib/anthropic-models.ts); anything else
+  // gets the request exactly as before.
+  const bodyFor = (jsonOutput: boolean) => JSON.stringify({
+    model,
+    max_tokens: maxTokensFor(type),
+    // Stated rather than left to the provider's default. This writes to a fixed house
+    // style against a transcript it must not depart from; the room to be inventive is
+    // in which specifics it picks, not in how far it wanders.
+    temperature: 0.4,
+    // Cached, because it is the one part that never changes.
+    //
+    // Caching is a PREFIX match and the render order is tools, system,
+    // messages — so the system prompt is the only stable thing to anchor
+    // on here; the user prompt carries the transcript and differs every
+    // time. Per video that saves the input cost of re-reading the voice
+    // and the brand profile, and a little of the time to first token.
+    //
+    // Silently a no-op when the prefix is below the model's minimum
+    // cacheable length, which is the correct failure: nothing breaks, the
+    // saving simply does not appear.
+    system: [{ type: 'text', text: systemPrompt(type, input.brand, input.channels), cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: buildUserPrompt(input) }],
+    // Streamed. A non-streaming request holds the socket silent until the
+    // whole answer is composed, which for two 800-1100 character posts is
+    // exactly the shape that trips a request timeout. Streaming keeps the
+    // connection producing, so the only thing that can end it is the
+    // deadline the caller actually set.
+    stream: true,
+    ...(jsonOutput ? { output_config: { format: { type: 'json_schema', schema: PACK_SCHEMA } } } : {}),
+  });
+  const run = (jsonOutput: boolean) => withRetry(
+    url,
+    { method: 'POST', headers, body: bodyFor(jsonOutput) },
     plan ? { retries: plan.attempts - 1, timeoutMs: plan.timeoutMs } : {},
     async (res) => {
       if (!res.ok) {
@@ -339,9 +348,31 @@ async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
         throw res.status < 500 ? Object.assign(new HardError(err.message), { cause: err }) : err;
       }
       recordProviderOutcome('anthropic_text', { ok: true });
-      return readAnthropicStream(res);
+      try {
+        return await readAnthropicStream(res);
+      } catch (e) {
+        // A refusal is the model's decision about THIS text; asking twice
+        // more reaches it twice more. A dropped stream is worth the retry.
+        if (e instanceof Error && /\(refusal\)/.test(e.message)) throw new HardError(e.message);
+        throw e;
+      }
     },
   );
+  const wantJson = supportsJsonOutput(model);
+  let text: string;
+  try {
+    text = await run(wantJson);
+  } catch (e) {
+    // A model that turns out not to accept the schema says so with a 400
+    // naming the parameter. One more try, the old way, rather than a run lost
+    // to a setting.
+    if (wantJson && e instanceof HardError && /output_config|json_schema|structured/i.test(e.message)) {
+      reportError('ai:json-output-unsupported', e, { model });
+      text = await run(false);
+    } else {
+      throw e;
+    }
+  }
   return parseJsonStrict(text);
 }
 
@@ -390,7 +421,12 @@ function parseJsonStrict(text: string): ContentPack {
   }
   let obj: any;
   try { obj = JSON.parse(cleaned); }
-  catch { throw new Error('AI returned malformed JSON; please try again.'); }
+  catch {
+    // A raw line break inside a string, a trailing comma: the copy is all
+    // there. Read it anyway before calling the whole answer garbled.
+    try { obj = JSON.parse(repairJsonText(cleaned)); }
+    catch { throw new Error('AI returned malformed JSON; please try again. (' + jsonDiagnostic(cleaned) + ')'); }
+  }
   const pack = {
     instagram: String(obj.instagram ?? ''),
     facebook: String(obj.facebook ?? ''),
@@ -512,6 +548,9 @@ export async function generateContentPack(
     // in this file: the request was fine, the model just returned an empty
     // field, and asking once more almost always fills it.
     if (e instanceof Error && /malformed JSON|returned no /i.test(e.message)) {
+      // The first answer's own diagnostic goes to the log before the re-roll
+      // hides it behind "twice running".
+      reportError('ai:writer-first-attempt', e, { provider });
       pack = await call();
     } else {
       throw e;

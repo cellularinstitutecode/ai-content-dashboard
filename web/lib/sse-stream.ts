@@ -47,6 +47,10 @@ export async function readAnthropicStream(res: Response): Promise<string> {
   let buffered = '';
   let text = '';
   let stopReason = '';
+  // message_stop is the stream's own "that was all". Without it, and without
+  // a stop reason, the socket closed on us — the answer is whatever got
+  // through, which is not an answer.
+  let sawStop = false;
 
   for (;;) {
     const { done, value } = await reader.read();
@@ -73,6 +77,7 @@ export async function readAnthropicStream(res: Response): Promise<string> {
         if (event.type === 'message_delta' && event.delta?.stop_reason) {
           stopReason = String(event.delta.stop_reason);
         }
+        if (event.type === 'message_stop') sawStop = true;
         if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
           text += event.delta.text ?? '';
         }
@@ -85,6 +90,18 @@ export async function readAnthropicStream(res: Response): Promise<string> {
   // body by asking again, at full price, for the same truncation.
   if (stopReason === 'max_tokens') {
     throw new Error('anthropic: the answer was cut off at max_tokens after ' + text.length + ' characters');
+  }
+  // Declined, not garbled. The classifier can stop a medical text with an
+  // empty or partial body; parsing that reads as "malformed" and is re-rolled
+  // to reach the same decision. lib/ai.ts turns this into a hard failure.
+  if (stopReason === 'refusal') {
+    throw new Error('anthropic: the model declined this request (refusal)');
+  }
+  // Dropped, not garbled. A connection the platform or a proxy closed
+  // mid-answer ends the reader cleanly, with no error event and no stop —
+  // and the half object it leaves used to be reported as the model's fault.
+  if (!stopReason && !sawStop) {
+    throw new Error('anthropic: the stream ended early after ' + text.length + ' characters');
   }
   return text;
 }
