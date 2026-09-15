@@ -1,5 +1,5 @@
 {
-  "_comment": "The four daily crons from vercel.json, as Dokploy Schedule Jobs that run inside the app container. lib/deploy-schedules.test.ts asserts this list and vercel.json never drift apart. Create each one DISABLED until cutover: both copies share the same database, and a cron that runs twice prepares every video twice.",
+  "_comment": "The four crons from vercel.json, as Dokploy Schedule Jobs that run inside the app container. lib/deploy-schedules.test.ts asserts this list and vercel.json never drift apart. Create each one DISABLED until cutover: both copies share the same database, and a cron that runs twice prepares every video twice.",
   "timezone": "UTC",
   "schedules": [
     {
@@ -17,7 +17,7 @@
     {
       "name": "videos-watch",
       "path": "/api/videos/watch",
-      "cronExpression": "0 7 * * *",
+      "cronExpression": "*/15 * * * *",
       "command": "node scripts/cron-tick.mjs videos/watch"
     },
     {

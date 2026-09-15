@@ -21,19 +21,32 @@
 export type StartRow = { tab: string | null; row: number };
 
 /**
+ * Where the sweep starts when nothing says otherwise.
+ *
+ * A default in code rather than a setting somebody has to type into a host:
+ * the clinic's instruction was "from row 179 onward", and the rows above it
+ * are finished months that must not be re-done. VIDEO_START_ROW still wins
+ * when set; `VIDEO_START_ROW=none` (or `0`) switches the rule off entirely.
+ */
+export const DEFAULT_START_ROW = 179;
+
+/**
  * Read VIDEO_START_ROW. `179` applies to every tab; `Marzo!179` to that tab
- * only (other tabs are unrestricted). Anything unreadable is null — no rule,
- * never a guessed one.
+ * only (other tabs are unrestricted). Unset → the default above. `none` or
+ * `0` → no rule. Anything else unreadable → the default, never a guess at a
+ * different number.
  */
 export function parseStartRow(raw: string | null | undefined): StartRow | null {
-  const value = String(raw ?? '').trim();
-  if (!value) return null;
+  if (raw === undefined || raw === null) return { tab: null, row: DEFAULT_START_ROW };
+  const value = String(raw).trim();
+  if (!value) return { tab: null, row: DEFAULT_START_ROW };
+  if (/^(none|off|0)$/i.test(value)) return null;
   const bang = value.lastIndexOf('!');
   const tabPart = bang >= 0 ? value.slice(0, bang).trim().replace(/^'(.*)'$/, '$1') : '';
   const rowPart = bang >= 0 ? value.slice(bang + 1).trim() : value;
-  if (!/^\d+$/.test(rowPart)) return null;
+  if (!/^\d+$/.test(rowPart)) return { tab: null, row: DEFAULT_START_ROW };
   const row = Number(rowPart);
-  if (!Number.isInteger(row) || row < 2) return null;
+  if (!Number.isInteger(row) || row < 2) return { tab: null, row: DEFAULT_START_ROW };
   return { tab: tabPart || null, row };
 }
 

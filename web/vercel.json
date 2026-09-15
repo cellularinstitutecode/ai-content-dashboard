@@ -15,7 +15,7 @@
     },
     {
       "path": "/api/videos/watch",
-      "schedule": "0 7 * * *"
+      "schedule": "*/15 * * * *"
     },
     {
       "path": "/api/maintenance/prune",

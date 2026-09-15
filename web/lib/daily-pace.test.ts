@@ -1,15 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { belowStart, parseQuota, parseStartRow, remainingQuota, startOfDayIso } from './daily-pace.ts';
+import { DEFAULT_START_ROW, belowStart, parseQuota, parseStartRow, remainingQuota, startOfDayIso } from './daily-pace.ts';
 
 test('the start row is read bare or with a tab', () => {
-  assert.deepEqual(parseStartRow('179'), { tab: null, row: 179 });
-  assert.deepEqual(parseStartRow(' 179 '), { tab: null, row: 179 });
+  assert.deepEqual(parseStartRow('200'), { tab: null, row: 200 });
+  assert.deepEqual(parseStartRow(' 200 '), { tab: null, row: 200 });
   assert.deepEqual(parseStartRow('Marzo!179'), { tab: 'Marzo', row: 179 });
   assert.deepEqual(parseStartRow("'Videos 2026'!12"), { tab: 'Videos 2026', row: 12 });
-  for (const bad of ['', null, undefined, 'abc', '0', '1', '-5', '12.5', 'Marzo!', 'Marzo!x']) {
-    assert.equal(parseStartRow(bad), null, JSON.stringify(bad));
+});
+
+test('unset means the clinic default, 179 on every tab; unreadable never becomes a different number', () => {
+  assert.equal(DEFAULT_START_ROW, 179);
+  for (const unset of ['', null, undefined, 'abc', '1', '-5', '12.5', 'Marzo!', 'Marzo!x']) {
+    assert.deepEqual(parseStartRow(unset), { tab: null, row: 179 }, JSON.stringify(unset));
   }
+});
+
+test('the rule can be switched off explicitly', () => {
+  for (const off of ['none', 'NONE', 'off', '0']) assert.equal(parseStartRow(off), null, off);
 });
 
 test('rows below the start are not the sweep’s to prepare; rows at or after it are', () => {

@@ -2,11 +2,13 @@
 //
 // The trigger for the video sweep (lib/video-autopilot.ts). Three callers:
 //
-//   1. The Vercel cron, DAILY at 07:00 UTC (vercel.json), with
-//      Authorization: Bearer CRON_SECRET. Daily rather than hourly because
-//      Hobby rejects a more frequent cron expression at deploy time — that
-//      one is proven, by a real deployment failure. The safety net, not the
-//      mechanism: the Apps Script push below is what keeps up.
+//   1. The Vercel cron, EVERY 15 MINUTES (vercel.json), with
+//      Authorization: Bearer CRON_SECRET. It was daily at 07:00 UTC while the
+//      project was on Hobby, which rejects a more frequent expression at
+//      deploy time (proven by a real deployment failure); on Pro the sweep
+//      keeps up with a backlog on its own — five rows a run, a section of the
+//      sheet in a couple of hours. Runs never overlap: a row is claimed in
+//      video_runs before any work starts, and a run lasts under five minutes.
 //   2. A Google Apps Script trigger on the sheet itself, with the same bearer,
 //      fired when somebody pastes a link. This is what makes it feel instant.
 //      See docs/video-autopilot.md for the script.

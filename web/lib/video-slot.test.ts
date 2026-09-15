@@ -7,6 +7,13 @@ const TZ = 'America/Cancun';
 // A Wednesday, mid-afternoon in Cancun (UTC-5).
 const WED_AFTERNOON = new Date('2026-09-09T20:00:00Z');
 
+// The tests below describe the ORIGINAL grid — one slot, weekday mornings —
+// which is now the explicit setting rather than the default (the default is
+// two a day, every day; see the "two a day" tests at the end, which set their
+// own values and restore these).
+process.env.VIDEO_POST_DAYS = 'weekdays';
+process.env.VIDEO_AUTOPILOT_TIMES = '09:00';
+
 test('the next slot is the next weekday morning', () => {
   const slot = nextFreeSlot([], WED_AFTERNOON, TZ);
   assert.ok(slot);
@@ -40,15 +47,21 @@ test('posts already in the queue are not doubled up on', () => {
   assert.equal(slot?.toISOString(), '2026-09-11T14:00:00.000Z');
 });
 
-test('weekends are never scheduled', () => {
+test('with VIDEO_POST_DAYS=weekdays, weekends are never scheduled', () => {
   assert.deepEqual(POST_WEEKDAYS, [1, 2, 3, 4, 5]);
-  const taken: string[] = [];
-  for (let i = 0; i < 12; i++) {
-    const slot = nextFreeSlot(taken, WED_AFTERNOON, TZ);
-    assert.ok(slot);
-    const day = new Date(slot).getUTCDay();
-    assert.ok(day >= 1 && day <= 5, 'scheduled on day ' + day);
-    taken.push(slot.toISOString());
+  const before = process.env.VIDEO_POST_DAYS;
+  process.env.VIDEO_POST_DAYS = 'weekdays';
+  try {
+    const taken: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      const slot = nextFreeSlot(taken, WED_AFTERNOON, TZ);
+      assert.ok(slot);
+      const day = new Date(slot).getUTCDay();
+      assert.ok(day >= 1 && day <= 5, 'scheduled on day ' + day);
+      taken.push(slot.toISOString());
+    }
+  } finally {
+    if (before === undefined) delete process.env.VIDEO_POST_DAYS; else process.env.VIDEO_POST_DAYS = before;
   }
 });
 
@@ -156,21 +169,21 @@ test('nothing published leaves the default exactly as it was', () => {
 import { EVERY_DAY, postTimes, postWeekdays } from './video-slot.ts';
 
 test('the times of day are read from the setting, singular or plural', () => {
-  assert.deepEqual(postTimes({}), ['09:00']);
+  assert.deepEqual(postTimes({}), ['09:00', '17:00']);
   assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIME: '10:30' }), ['10:30']);
   assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIMES: '09:00,17:00' }), ['09:00', '17:00']);
   // The plural wins when both are set; spaces, semicolons and a bare hour are tolerated.
   assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIMES: '9:00; 17:00 ', VIDEO_AUTOPILOT_TIME: '11:00' }), ['09:00', '17:00']);
   // Junk is dropped, never guessed; nothing readable falls back to the morning.
-  assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIMES: '25:00,abc,09:60' }), ['09:00']);
+  assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIMES: '25:00,abc,09:60' }), ['09:00', '17:00']);
   assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIMES: '17:00,17:00,09:00' }), ['17:00', '09:00']);
 });
 
-test('the days are weekdays unless the setting says every day', () => {
-  assert.deepEqual(postWeekdays({}), POST_WEEKDAYS);
-  assert.deepEqual(postWeekdays({ VIDEO_POST_DAYS: 'weekdays' }), POST_WEEKDAYS);
+test('the days are every day unless the setting says weekdays', () => {
+  assert.deepEqual(postWeekdays({}), EVERY_DAY);
   assert.deepEqual(postWeekdays({ VIDEO_POST_DAYS: 'all' }), EVERY_DAY);
-  assert.deepEqual(postWeekdays({ VIDEO_POST_DAYS: 'ALL ' }), EVERY_DAY);
+  assert.deepEqual(postWeekdays({ VIDEO_POST_DAYS: 'weekdays' }), POST_WEEKDAYS);
+  assert.deepEqual(postWeekdays({ VIDEO_POST_DAYS: ' Weekdays' }), POST_WEEKDAYS);
 });
 
 test('two times a day, every day: morning, afternoon, next morning — weekend included', () => {
