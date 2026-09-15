@@ -32,6 +32,8 @@ export const VIDEO_EVENTS = [
   'copy_failed',
   /** One or more Metricool drafts were created for this video. */
   'queued',
+  /** Drafts that were waiting for this video now carry it. `detail.attached` says how many. */
+  'video_attached',
   /** Somebody or something put a stopped row back in the queue. */
   'retried',
   /** The row was passed over deliberately — already done, or not a candidate. */
@@ -180,6 +182,12 @@ export function describeEntry(e: { event: string; actor?: string; detail?: Recor
       const nets = Array.isArray(d.networks) ? (d.networks as unknown[]).map(String) : [];
       return 'Sent to Metricool as a draft' + (nets.length ? ' for ' + nets.join(', ') : '') + ', awaiting approval.';
     }
+    case 'video_attached': {
+      const n = typeof d.attached === 'number' ? d.attached : 0;
+      const left = typeof d.failed === 'number' ? d.failed : 0;
+      return 'The video was attached to ' + n + ' draft' + (n === 1 ? '' : 's') + ' that ' + (n === 1 ? 'was' : 'were') + ' waiting for it' +
+        (left ? ' — ' + left + ' could not be updated' + because : '') + '.';
+    }
     case 'retried':
       return 'Put back in the queue by ' + who + '.';
     case 'skipped':
@@ -192,6 +200,7 @@ export function describeEntry(e: { event: string; actor?: string; detail?: Recor
         n('hidden') + ' hidden',
         n('belowStart') + ' below row ' + (typeof d.startRow === 'string' || typeof d.startRow === 'number' ? String(d.startRow) : '?'),
         n('queuedExisting') + ' queued with copy',
+        n('attached') + ' videos attached to waiting drafts',
         n('prepared') + ' prepared',
         n('needsTranscript') + ' need a transcript',
         n('failed') + ' failed',

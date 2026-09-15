@@ -46,6 +46,10 @@ import { columnFor, pick, tableFromRows } from '@/lib/sheet-table';
 import { VIDEO_NETWORK_COLUMNS, publishedNetworks } from '@/lib/sheet-ticks';
 import { prepareVideo, saveVideoDraft, type PrepareOk } from '@/lib/video-prepare';
 import { EXISTING_COPY_PER_RUN, existingCopyText, isExistingCopyRow, queueExistingEnabled } from '@/lib/existing-copy';
+import { attachPendingVideos, pendingVideoPosts } from '@/lib/video-attach';
+
+/** Rows whose waiting drafts get their video per run — same order of cost as queuing. */
+const ATTACH_PER_RUN = 20;
 import { STATUS_TEXT, claimIsStale, firstLinkIn, fitsNetwork, isCandidate, preparedStatus, rowKeyFor } from '@/lib/video-row';
 import { NEEDS_VIDEO, networksFor, nextFreeSlot } from '@/lib/video-slot';
 import { belowStart, parseQuota, parseStartRow, remainingQuota, startOfDayIso } from '@/lib/daily-pace';
@@ -79,7 +83,7 @@ export type SweepRowOutcome = {
   row: number;
   rowKey: string;
   title: string;
-  state: 'prepared' | 'needs_transcript' | 'transcript_ready' | 'failed' | 'skipped' | 'would_prepare' | 'queued_existing' | 'would_queue_existing';
+  state: 'prepared' | 'needs_transcript' | 'transcript_ready' | 'failed' | 'skipped' | 'would_prepare' | 'queued_existing' | 'would_queue_existing' | 'attached';
   wrote?: Partial<Record<VideoField, boolean>>;
   draftId?: string | null;
   /** One entry per network a draft was attempted for. */
@@ -106,6 +110,8 @@ export type SweepResult = {
   queuedExisting: number;
   /** Rows with a video that sit above the start row — seen, never prepared. */
   belowStart: number;
+  /** Drafts that were waiting for their video and got it on this run. */
+  attached: number;
   /**
    * The day's pace, when VIDEO_DAILY_QUOTA is set: how many rows the day
    * allows, how many were already prepared today (by any run or any button)
@@ -190,6 +196,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
     candidates: result.candidates,
     prepared: result.prepared,
     queuedExisting: result.queuedExisting,
+    attached: result.attached,
     needsTranscript: result.needsTranscript,
     failed: result.failed,
     metricoolDrafts: result.metricoolDrafts,
@@ -210,7 +217,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
   const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
   const admin = supabaseAdmin();
 
-  const result: SweepResult = { ok: true, scanned: 0, candidates: 0, prepared: 0, needsTranscript: 0, failed: 0, metricoolDrafts: 0, rows: [], stoppedEarly: false, newlySeen: 0, hidden: 0, queuedExisting: 0, belowStart: 0 };
+  const result: SweepResult = { ok: true, scanned: 0, candidates: 0, prepared: 0, needsTranscript: 0, failed: 0, metricoolDrafts: 0, rows: [], stoppedEarly: false, newlySeen: 0, hidden: 0, queuedExisting: 0, belowStart: 0, attached: 0 };
   if (!sourcesConfigured()) {
     return { ...result, ok: false };
   }
@@ -268,6 +275,9 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
   // their own per-run cap, because they cost seconds rather than minutes.
   const queueExisting = queueExistingEnabled(process.env);
   let existingThisRun = 0;
+  // Rows prepared earlier whose drafts still wait for the video: attached
+  // in the walk, a few per run — one copy and a few Metricool calls each.
+  let attachedThisRun = 0;
 
   // ONE SLOT PER ROW. The calendar is read once here; each prepared row takes
   // the next free instant and every network of that row shares it, so a row
@@ -408,8 +418,33 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
         reportError('video-sweep:prior', priorError, { tab: tab.title, row: String(row) });
         continue;
       }
-      const prior = existing as { id: string; state: string; attempts: number; updated_at?: string; last_error_code?: string | null } | null;
-      if (prior && (prior.state === 'prepared' || prior.state === 'skipped')) continue;
+      const prior = existing as { id: string; state: string; attempts: number; updated_at?: string; last_error_code?: string | null; draft_id?: string | null } | null;
+      if (prior && prior.state === 'prepared') {
+        // DONE — but is it? A row prepared before the Shared Drive existed
+        // has drafts with no video (the copy could not be made then), and
+        // the publishing list shows them PENDING. The row is finished as far
+        // as COPY goes; the video is still owed. Attach it, the way the
+        // PENDING chip would, then move on. Cheap when nothing is pending:
+        // one read of the row's posts.
+        if (prior.draft_id && parseDriveFileId(videoLink) && attachedThisRun < ATTACH_PER_RUN) {
+          if (opts.dryRun) {
+            const pending = await pendingVideoPosts(opts.userId, prior.draft_id);
+            if (pending.length) result.rows.push({ tab: tab.title, row, rowKey, title: title || videoLink, state: 'skipped', message: 'Prepared earlier; ' + pending.length + ' draft' + (pending.length === 1 ? '' : 's') + ' still waiting for the video — would attach it.' });
+          } else {
+            const out = await attachPendingVideos({
+              userId: opts.userId, draftId: prior.draft_id, videoKey: videoKeyFor(spreadsheetId, tab.title, rowKey),
+              videoLink, title: title || videoLink, actor: 'sweep', where,
+            });
+            if (out.pending) {
+              attachedThisRun++;
+              result.attached += out.attached;
+              result.rows.push({ tab: tab.title, row, rowKey, title: title || videoLink, state: out.attached ? 'attached' : 'failed', message: out.error || ('Video attached to ' + out.attached + ' of ' + out.pending + ' waiting draft' + (out.pending === 1 ? '' : 's') + '.') });
+            }
+          }
+        }
+        continue;
+      }
+      if (prior && prior.state === 'skipped') continue;
       // How many passes this row is worth depends on WHY it stopped.
       //
       // This used to be a flat `attempts >= 3`, which retired a row that had

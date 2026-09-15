@@ -35,6 +35,7 @@ const TONE: Record<string, string> = {
   prepared: '#15803d',
   queued: '#15803d',
   copy_made: '#15803d',
+  video_attached: '#15803d',
   failed: '#b91c1c',
   copy_failed: '#b91c1c',
   retried: '#a16207',
