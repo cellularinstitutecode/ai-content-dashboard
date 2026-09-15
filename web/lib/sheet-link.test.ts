@@ -73,8 +73,8 @@ test('a spreadsheet id is escaped rather than interpolated raw', () => {
 import { readFileSync } from 'node:fs';
 const readSrc = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 
-test('both publishing lists carry the row link', () => {
-  for (const p of ['app/calendar/page.tsx', 'app/page.tsx']) {
+test('both publishing lists and the video register carry the row link', () => {
+  for (const p of ['app/calendar/page.tsx', 'app/page.tsx', 'components/VideoRegister.tsx']) {
     const src = readSrc(p);
     assert.match(src, /sheetRowUrl\(/, p + ' has no row link');
     assert.match(src, /sheetRowLabel\(/, p + ' shows no row number');

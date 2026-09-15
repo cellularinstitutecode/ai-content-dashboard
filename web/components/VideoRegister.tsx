@@ -13,6 +13,8 @@
 // or empty, so dropping this in front of an unmigrated deployment changes the
 // page not at all.
 import { useEffect, useRef, useState } from 'react';
+import { registerSource } from '@/lib/register-source';
+import { sheetRowLabel, sheetRowTitle, sheetRowUrl } from '@/lib/sheet-link';
 
 type Entry = {
   id: string;
@@ -23,6 +25,8 @@ type Entry = {
   actor: string;
   said: string;
   createdAt: string;
+  /** Whatever the writer recorded — the sheet coordinates live in here. */
+  detail?: Record<string, unknown> | null;
 };
 
 /** The events worth a line in a summary, and how to colour them. */
@@ -116,7 +120,15 @@ export default function VideoRegister() {
       ) : (
         <>
           <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 4 }}>
-            {shown.map((e) => (
+            {shown.map((e) => {
+              // WHERE it is in the sheet. The row number is the one thing that
+              // identifies a video to somebody looking at the spreadsheet — the
+              // same chip the publishing lists draw, from the same helpers, so
+              // the register cannot describe a row differently from the list.
+              const source = registerSource(e);
+              const rowUrl = sheetRowUrl(source);
+              const rowLabel = sheetRowLabel(source);
+              return (
               <li key={e.id} style={{ fontSize: 12, display: 'flex', gap: 8, alignItems: 'baseline' }}>
                 <span
                   aria-hidden
@@ -130,6 +142,21 @@ export default function VideoRegister() {
                   {whenWords(e.createdAt, now)}
                 </span>
                 <span style={{ minWidth: 0 }}>
+                  {rowUrl && rowLabel && (
+                    <a
+                      href={rowUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={sheetRowTitle(source)}
+                      style={{
+                        display: 'inline-flex', alignItems: 'baseline', gap: 3, marginRight: 6,
+                        padding: '0 6px', borderRadius: 999, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+                        border: '1px solid var(--line, #e5e7eb)', color: 'var(--accent, #2563eb)', textDecoration: 'none',
+                      }}
+                    >
+                      <span aria-hidden>{'\u{1F4C4}'}</span> {rowLabel} {'\u2197'}
+                    </a>
+                  )}
                   {e.link ? (
                     <a href={e.link} target="_blank" rel="noreferrer" style={{ fontWeight: 500 }}>
                       {e.title || 'Untitled video'}
@@ -140,7 +167,8 @@ export default function VideoRegister() {
                   <span style={{ color: 'var(--muted, #6b7280)' }}>{e.said}</span>
                 </span>
               </li>
-            ))}
+              );
+            })}
           </ul>
           {entries.length > 6 && (
             <button
