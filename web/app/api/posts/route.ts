@@ -16,6 +16,8 @@ import { forgetPublicCopy } from '@/lib/transcript-cache';
 import { modeOfStatus, videoPending, APPROVED_STATUS } from '@/lib/post-mode';
 import { tabGid } from '@/lib/google-sources';
 import type { PostSource } from '@/lib/sheet-link';
+import { supabaseAdmin } from '@/lib/supabase-admin';
+import { resolvePostSources, type RegisterEntryLike, type RunLike } from '@/lib/post-source';
 
 export const runtime = 'nodejs';
 // Both mutating paths now make an upstream Metricool call before they touch the
@@ -123,43 +125,76 @@ export async function GET() {
   // and the app has always known which: video_runs records spreadsheet_id, tab
   // and row_number — refreshed on every sweep precisely so the copy can be
   // written back to it — and its draft_id is the same draft posts.draft_id
-  // points at. The join existed; nothing ever showed it, so editing the copy
-  // behind a queued post meant opening the sheet and hunting for a caption you
-  // could only half-remember from a two-line preview.
-  //
-  // ONE more query for the whole page, keyed by the draft ids already gathered
-  // above. Posts with no draft (a hand-written one, a template) simply have no
-  // source, and get no button.
-  const sources: Record<string, PostSource> = {};
-  if (draftIds.length) {
-    const { data: runs, error: runErr } = await sb
+  // points at. That join alone left every composer post, every pasted-link
+  // post and every batch post without a row. lib/post-source.ts resolves the
+  // rest from what is read here: the user's runs (by draft, then by video),
+  // the public copy → source video map, and the register's own row lines.
+  // Three reads for the whole page, each best-effort: a failure is reported
+  // and that tier is skipped; the queue itself never depends on them.
+  const copyIds = Array.from(new Set(posts.map((p) => String(p.media_drive_file_id || '')).filter(Boolean)));
+
+  let runs: RunLike[] = [];
+  {
+    const { data, error: runErr } = await sb
       .from('video_runs')
-      .select('draft_id, spreadsheet_id, tab, row_number, video_title')
-      .in('draft_id', draftIds)
-      .eq('user_id', user.id);
-    if (runErr) {
-      // Not fatal and not hidden. The row link is a convenience; the queue
-      // itself is not. A missing video_runs table (its migration is pasted by
-      // hand like every other) lands here too, and must not take the page down.
-      reportError('posts:source-read', runErr, { userId: user.id });
+      .select('draft_id, spreadsheet_id, tab, row_number, video_title, video_link, updated_at')
+      .eq('user_id', user.id)
+      .order('updated_at', { ascending: false })
+      .limit(1000);
+    if (runErr) reportError('posts:source-read', runErr, { userId: user.id });
+    runs = (data || []) as RunLike[];
+  }
+
+  const copyToVideo: Record<string, string> = {};
+  if (copyIds.length) {
+    // video_transcripts has no user column and no read policy: admin, scoped
+    // by the copy ids just read from this user's own posts (the same shape
+    // forgetPublicCopy uses).
+    const { data, error: copyErr } = await supabaseAdmin()
+      .from('video_transcripts')
+      .select('video_id, public_copy_id')
+      .in('public_copy_id', copyIds)
+      .then((x) => x, (e: unknown) => ({ data: null, error: e as { message?: string } }));
+    if (copyErr) reportError('posts:copy-read', copyErr, { userId: user.id });
+    for (const r of (data || []) as { video_id?: string; public_copy_id?: string }[]) {
+      if (r.public_copy_id && r.video_id) copyToVideo[String(r.public_copy_id)] = String(r.video_id);
     }
-    // Resolve each tab's gid once, not once per post: gids never change, and
-    // lib/google-sources caches them for an hour. Failure yields null and the
-    // button still opens the right document.
-    const gids = new Map<string, number | null>();
-    for (const r of runs || []) {
-      const row = r as { draft_id: string | null; spreadsheet_id: string; tab: string; row_number: number | null; video_title: string | null };
-      const key = String(row.draft_id || '');
-      if (!key || !row.spreadsheet_id) continue;
-      const gidKey = row.spreadsheet_id + '\u0000' + row.tab;
-      if (!gids.has(gidKey)) gids.set(gidKey, await tabGid(row.spreadsheet_id, row.tab));
-      sources[key] = {
-        spreadsheetId: row.spreadsheet_id,
-        tab: String(row.tab || ''),
-        row: typeof row.row_number === 'number' ? row.row_number : null,
-        gid: gids.get(gidKey) ?? null,
-        title: row.video_title ?? null,
-      };
+  }
+
+  let register: RegisterEntryLike[] = [];
+  {
+    const { data, error: regErr } = await sb
+      .from('video_register')
+      .select('video_key, title, link, event, detail, created_at')
+      .eq('user_id', user.id)
+      .in('event', ['first_seen', 'queued', 'prepared', 'video_attached'])
+      .order('created_at', { ascending: false })
+      .limit(3000)
+      .then((x) => x, (e: unknown) => ({ data: null, error: e as { message?: string } }));
+    if (regErr) reportError('posts:register-read', regErr, { userId: user.id });
+    register = ((data || []) as { video_key?: string; title?: string | null; link?: string | null; event?: string; detail?: Record<string, unknown> | null; created_at?: string }[])
+      .map((e) => ({ videoKey: e.video_key, title: e.title, link: e.link, event: e.event, detail: e.detail, created_at: e.created_at }));
+  }
+
+  const resolved = resolvePostSources({
+    posts: posts.map((p) => ({ id: p.id, draft_id: p.draft_id, media_drive_file_id: p.media_drive_file_id })),
+    packs,
+    runs,
+    copyToVideo,
+    register,
+  });
+  // Resolve each tab's gid once, not once per post: gids never change, and
+  // lib/google-sources caches them for an hour. Failure yields null and the
+  // button still opens the right document.
+  const gids = new Map<string, number | null>();
+  const sources: Record<string, PostSource> = {};
+  for (const [postId, src] of resolved) {
+    if (src.gid == null && src.spreadsheetId && src.tab) {
+      const gidKey = src.spreadsheetId + '\u0000' + src.tab;
+      if (!gids.has(gidKey)) gids.set(gidKey, await tabGid(src.spreadsheetId, src.tab));
+      sources[postId] = { ...src, gid: gids.get(gidKey) ?? null };
+    } else {
+      sources[postId] = src;
     }
   }
 
@@ -169,7 +204,7 @@ export async function GET() {
       videoPending: packsUnavailable
         ? false
         : videoPending(p.status, packs[String(p.draft_id || '')] ?? null, Boolean(p.media_drive_file_id)),
-      source: sources[String(p.draft_id || '')] ?? null,
+      source: sources[String(p.id || '')] ?? null,
     })),
     ...(packsUnavailable ? { packsUnavailable: true } : {}),
   });

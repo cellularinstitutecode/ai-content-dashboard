@@ -9,6 +9,11 @@ import { isAllowedEmail, ALLOWED_BLOG_IDS, DEFAULT_BLOG_ID } from '@/lib/access'
 import { checkRateLimit } from '@/lib/rate-limit';
 import { normalizePublishAt, METRICOOL_TIMEZONE } from '@/lib/metricool-time';
 import { mediaProblem } from '@/lib/composer';
+import { parseDriveFileId } from '@/lib/drive-url';
+import { recordVideoEvent } from '@/lib/video-register';
+import { videoKeyFor } from '@/lib/video-event';
+import { rowKeyFor } from '@/lib/video-row';
+import { SOURCE_IDS } from '@/lib/google-sources';
 
 export const runtime = 'nodejs';
 // This route makes TWO sequential calls to Metricool now — normalise the media,
@@ -222,6 +227,10 @@ export async function POST(req: NextRequest) {
     let bookkeeping: string | null = null;
     try {
       const admin = supabaseAdmin();
+      // The copy that went out with the post, when there was one: the queue
+      // reads media_drive_file_id to know the post carries its video, and
+      // lib/post-source.ts follows it back to the sheet row.
+      const mediaCopyId = typeof payload.mediaUrl === 'string' ? parseDriveFileId(payload.mediaUrl) : null;
       const { error: insertError } = await admin.from('posts').insert({
         user_id: user.id,
         draft_id: ownedDraftId,
@@ -232,6 +241,7 @@ export async function POST(req: NextRequest) {
         publication_date: when.instant,
         metricool_post_id: id,
         status: status || 'pending_review',
+        ...(mediaCopyId ? { media_drive_file_id: mediaCopyId } : {}),
       });
       if (insertError) throw insertError;
     } catch (err) {
@@ -240,6 +250,29 @@ export async function POST(req: NextRequest) {
       // this dashboard has no record of it, which is the one situation where a
       // person must go and look there instead of here.
       bookkeeping = 'The draft is in Metricool, but it could not be saved to this dashboard — it will not appear in your queue or calendar. Open it in Metricool to approve or remove it.';
+    }
+
+    // WHERE it came from. A post handed over from a sheet row carries the
+    // row with it; said in the register, keyed like the sweep's own lines for
+    // that row, so the queue can name the row and Recently added threads it.
+    // Validated, not trusted: a tab name and a data row, with a Drive link.
+    {
+      const sheetTab = typeof payload.sheetTab === 'string' ? payload.sheetTab.trim().slice(0, 120) : '';
+      const sheetRow = Number(payload.sheetRow);
+      const sourceUrl = typeof payload.sourceUrl === 'string' ? payload.sourceUrl.trim().slice(0, 500) : '';
+      const sheetId = SOURCE_IDS.videosSheet();
+      if (sheetTab && Number.isInteger(sheetRow) && sheetRow >= 2 && parseDriveFileId(sourceUrl) && sheetId) {
+        const title = typeof payload.title === 'string' ? payload.title.trim().slice(0, 200) : '';
+        void recordVideoEvent({
+          userId: user.id,
+          videoKey: videoKeyFor(sheetId, sheetTab, rowKeyFor(title, sourceUrl)),
+          event: 'queued',
+          actor: 'button',
+          title: title || null,
+          link: sourceUrl,
+          detail: { tab: sheetTab, row: sheetRow, networks: [provider], composer: true, metricoolId: id },
+        }).catch((e: unknown) => reportError('schedule:register', e, { tab: sheetTab, row: String(sheetRow) }));
+      }
     }
 
     return NextResponse.json({
