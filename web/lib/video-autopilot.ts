@@ -58,7 +58,7 @@ import { parseDriveFileId } from '@/lib/drive-url';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 import { recordFirstSeen, recordVideoEvent } from '@/lib/video-register';
-import { videoKeyFor, type VideoActor } from '@/lib/video-event';
+import { SWEEP_KEY, videoKeyFor, type VideoActor } from '@/lib/video-event';
 
 export type SweepOptions = {
   /** Whose brand voice to write in, and who owns the drafts. */
@@ -104,6 +104,8 @@ export type SweepResult = {
   hidden: number;
   /** Rows whose copy was already written, sent to Metricool as drafts with the video, unchanged. */
   queuedExisting: number;
+  /** Rows with a video that sit above the start row — seen, never prepared. */
+  belowStart: number;
   /**
    * The day's pace, when VIDEO_DAILY_QUOTA is set: how many rows the day
    * allows, how many were already prepared today (by any run or any button)
@@ -156,7 +158,50 @@ async function updateRun(
   reportError('video-sweep:update-run', error, { tab: where.tab });
 }
 
+/**
+ * The sweep, plus ONE register line about the run itself.
+ *
+ * Five quarter-hour runs once produced nothing and nobody could say whether
+ * the cron was not reaching the app, the owner could not be resolved, the
+ * sheet read failed, or the walk skipped every row: the register recorded
+ * rows, never runs. Now every run — including one that throws — leaves a
+ * line saying what it saw and did, or why it stopped. Fire-and-forget like
+ * every register write; it can never gate the sweep or change its result.
+ */
 export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
+  const heartbeat = (detail: Record<string, unknown>) => {
+    if (!opts.userId) return;
+    void recordVideoEvent({ userId: opts.userId, videoKey: SWEEP_KEY, event: 'sweep_ran', actor: 'sweep', title: 'Video sweep', detail });
+  };
+  let result: SweepResult;
+  try {
+    result = await sweepVideosInner(opts);
+  } catch (e) {
+    heartbeat({ dryRun: opts.dryRun === true, error: e instanceof Error ? e.message : String(e) });
+    throw e;
+  }
+  const startRow = parseStartRow(process.env.VIDEO_START_ROW);
+  heartbeat({
+    dryRun: opts.dryRun === true,
+    ok: result.ok,
+    scanned: result.scanned,
+    hidden: result.hidden,
+    belowStart: result.belowStart,
+    candidates: result.candidates,
+    prepared: result.prepared,
+    queuedExisting: result.queuedExisting,
+    needsTranscript: result.needsTranscript,
+    failed: result.failed,
+    metricoolDrafts: result.metricoolDrafts,
+    newlySeen: result.newlySeen,
+    stoppedEarly: result.stoppedEarly,
+    startRow: startRow ? (startRow.tab ? startRow.tab + '!' : '') + startRow.row : 'none',
+    ...(result.ok ? {} : { error: 'Google access is not set up, so the sheet cannot be read.' }),
+  });
+  return result;
+}
+
+async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
   const started = Date.now();
   // Stop STARTING work here so the video already in flight has time to finish
   // and write back. The caller sizes it against its own maxDuration.
@@ -165,7 +210,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
   const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
   const admin = supabaseAdmin();
 
-  const result: SweepResult = { ok: true, scanned: 0, candidates: 0, prepared: 0, needsTranscript: 0, failed: 0, metricoolDrafts: 0, rows: [], stoppedEarly: false, newlySeen: 0, hidden: 0, queuedExisting: 0 };
+  const result: SweepResult = { ok: true, scanned: 0, candidates: 0, prepared: 0, needsTranscript: 0, failed: 0, metricoolDrafts: 0, rows: [], stoppedEarly: false, newlySeen: 0, hidden: 0, queuedExisting: 0, belowStart: 0 };
   if (!sourcesConfigured()) {
     return { ...result, ok: false };
   }
@@ -326,6 +371,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
       // this sweep's to prepare. Said in the report so a dry run shows exactly
       // which rows the rule is holding back.
       if (belowStart(tab.title, row, startRow)) {
+        result.belowStart++;
         result.rows.push({ tab: tab.title, row, rowKey, title: title || videoLink, state: 'skipped', message: 'Below the start row (' + String(startRow?.row) + ').' });
         continue;
       }

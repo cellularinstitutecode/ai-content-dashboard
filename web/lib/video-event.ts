@@ -36,7 +36,16 @@ export const VIDEO_EVENTS = [
   'retried',
   /** The row was passed over deliberately — already done, or not a candidate. */
   'skipped',
+  /**
+   * A sweep RAN — what it saw and did, or why it stopped. One line per run,
+   * because a run that finds nothing to do used to be indistinguishable from
+   * a run that never started, and both from a cron that never fired.
+   */
+  'sweep_ran',
 ] as const;
+
+/** The key every sweep_ran line carries: not a video, so no row chip. */
+export const SWEEP_KEY = 'sweep|run';
 
 export type VideoEvent = (typeof VIDEO_EVENTS)[number];
 
@@ -175,6 +184,21 @@ export function describeEntry(e: { event: string; actor?: string; detail?: Recor
       return 'Put back in the queue by ' + who + '.';
     case 'skipped':
       return 'Passed over by ' + who + (typeof d.reason === 'string' && d.reason ? ' — ' + d.reason : '') + '.';
+    case 'sweep_ran': {
+      if (typeof d.error === 'string' && d.error) return 'Sweep stopped: ' + d.error;
+      const n = (k: string) => (typeof d[k] === 'number' ? (d[k] as number) : 0);
+      const parts = [
+        n('scanned') + ' rows seen',
+        n('hidden') + ' hidden',
+        n('belowStart') + ' below row ' + (typeof d.startRow === 'string' || typeof d.startRow === 'number' ? String(d.startRow) : '?'),
+        n('queuedExisting') + ' queued with copy',
+        n('prepared') + ' prepared',
+        n('needsTranscript') + ' need a transcript',
+        n('failed') + ' failed',
+      ];
+      if (d.stoppedEarly === true) parts.push('stopped early');
+      return (d.dryRun === true ? 'Dry run: ' : 'Sweep ran: ') + parts.join(' · ') + '.';
+    }
     default:
       return String(e.event).replace(/_/g, ' ') + ' (' + who + ')';
   }
