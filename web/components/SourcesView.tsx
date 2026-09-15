@@ -573,6 +573,8 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   /** Optional last row of the range; empty means to the end. */
   const [toRow, setToRow] = useState('');
   const [fromTab, setFromTab] = useState('');
+  const fromRef = useRef<HTMLInputElement>(null);
+  const toRef = useRef<HTMLInputElement>(null);
 
   const rowKey = (v: VideoEntry) => v.tab + ':' + v.row;
 
@@ -634,6 +636,19 @@ export default function SourcesView({ kind }: { kind: Tab }) {
       window.localStorage.setItem(BASKET_KEY, JSON.stringify({ picked: Array.from(picked), batch, sheetOnly, fromRow, toRow, fromTab }));
     } catch { /* storage full or blocked; the basket simply will not survive a reload */ }
   }, [picked, batch, sheetOnly, fromRow, toRow, fromTab]);
+
+  // The browser can put what was typed back into the boxes on a reload
+  // WITHOUT telling React (form-state restoration), so the box reads "179"
+  // while the state is still '' — and the button stays off with a hint that
+  // says "type the first row" under a box that plainly has one. Adopt what
+  // the boxes show, once, after mount; a stored basket value still wins.
+  useEffect(() => {
+    const shown = (el: HTMLInputElement | null) => String(el?.value || '').replace(/[^0-9]/g, '');
+    const f = shown(fromRef.current);
+    const t = shown(toRef.current);
+    if (f) setFromRow((cur) => cur || f);
+    if (t) setToRow((cur) => cur || t);
+  }, []);
 
   function togglePick(v: VideoEntry) {
     const k = rowKey(v);
@@ -1185,8 +1200,11 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span>From row</span>
                     <input
+                      ref={fromRef}
                       value={fromRow}
                       onChange={(e) => setFromRow(e.target.value.replace(/[^0-9]/g, ''))}
+                      onBlur={(e) => setFromRow(e.target.value.replace(/[^0-9]/g, ''))}
+                      autoComplete="off"
                       inputMode="numeric"
                       placeholder="179"
                       aria-label="First row to select"
@@ -1197,8 +1215,11 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span>to</span>
                     <input
+                      ref={toRef}
                       value={toRow}
                       onChange={(e) => setToRow(e.target.value.replace(/[^0-9]/g, ''))}
+                      onBlur={(e) => setToRow(e.target.value.replace(/[^0-9]/g, ''))}
+                      autoComplete="off"
                       inputMode="numeric"
                       placeholder="end"
                       aria-label="Last row to select (empty = to the end)"
