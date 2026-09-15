@@ -1214,39 +1214,32 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                       </select>
                     </label>
                   )}
-                  <button
-                    type="button"
-                    style={{ ...ghost, opacity: fromRowKeys.length ? 1 : .5 }}
-                    disabled={running || !fromRowKeys.length}
-                    onClick={() => setPicked((prev) => { const next = new Set(prev); for (const k of fromRowKeys) next.add(k); return next; })}
-                  >
-                    {parseFromRow(fromRow) == null
-                      ? 'Select to prepare'
-                      : fromRowKeys.length
-                        ? 'Select ' + fromRowKeys.length + ' row' + (fromRowKeys.length === 1 ? '' : 's') + ' to prepare'
-                        : 'Nothing to prepare in that range'}
-                  </button>
                   {/*
-                    "Attach videos": every draft in the range ends up with its
-                    video. Per row, lib/attach-plan.ts picks one of three
-                    existing paths — attach to posts waiting for the video,
-                    queue copy already written, or prepare a row with no copy
-                    — and rows that already carry it are reported as done
-                    without a call. Additive: nothing here removes or rewrites.
+                    ONE button for the range. "Attach videos" already covers
+                    what a separate "select to prepare" led to: per row,
+                    lib/attach-plan.ts picks one of three existing paths —
+                    prepare a row with no copy (the same Prepare as the ticked
+                    batch), queue copy already written, or attach to posts
+                    still waiting for the video — and rows that already carry
+                    it are reported as done without a call. Ticking rows by
+                    hand (the header checkbox, "Prepare N videos") is untouched.
                   */}
                   <button
                     type="button"
                     style={{ ...btn, opacity: rangeKeys.length && !running ? 1 : .6 }}
                     disabled={running || !rangeKeys.length}
                     onClick={() => void attachRange()}
-                    title="Make sure every draft in this range carries its video: attach where a draft is waiting for it, queue rows whose copy is written, prepare rows with no copy. Nothing publishes."
+                    title="Every draft in this range ends up with its video: rows with no copy are prepared, rows with copy are queued with the video unchanged, drafts waiting for their video get it. Nothing publishes."
                   >
                     {running ? 'Working…' : parseFromRow(fromRow) == null
                       ? 'Attach videos'
                       : 'Attach videos · ' + Math.min(rangeKeys.length, BATCH_MAX) + ' row' + (Math.min(rangeKeys.length, BATCH_MAX) === 1 ? '' : 's')}
                   </button>
                   <span style={{ opacity: .6 }}>
-                    Rows {parseFromRow(fromRow) ?? '…'} to {parseFromRow(toRow) ?? 'the end'}{tabsWithWork.length > 1 ? ' on ' + fromTabInUse : ''}: “Select” ticks the ones still needing copy; “Attach videos” covers every row with a video.
+                    {parseFromRow(fromRow) == null
+                      ? 'Type the first row (and, if you want, the last). Every row with a video in that range gets its draft and its video; nothing publishes.'
+                      : 'Rows ' + parseFromRow(fromRow) + ' to ' + (parseFromRow(toRow) ?? 'the end') + (tabsWithWork.length > 1 ? ' on ' + fromTabInUse : '') + ': ' +
+                        rangeKeys.length + ' with a video' + (fromRowKeys.length ? ', ' + fromRowKeys.length + ' still without copy (prepared first)' : '') + '.'}
                     {rangeKeys.length > BATCH_MAX ? ' The first ' + BATCH_MAX + ' run now; press again for the rest.' : ''}
                   </span>
                 </div>
