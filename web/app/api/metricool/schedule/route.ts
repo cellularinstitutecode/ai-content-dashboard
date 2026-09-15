@@ -14,6 +14,8 @@ import { recordVideoEvent } from '@/lib/video-register';
 import { videoKeyFor } from '@/lib/video-event';
 import { rowKeyFor } from '@/lib/video-row';
 import { SOURCE_IDS } from '@/lib/google-sources';
+import { awaitingPostsForVideo } from '@/lib/awaiting-posts';
+import { alreadyQueuedMessage, networksAlreadyQueued } from '@/lib/queue-guard';
 
 export const runtime = 'nodejs';
 // This route makes TWO sequential calls to Metricool now — normalise the media,
@@ -123,6 +125,24 @@ export async function POST(req: NextRequest) {
   const needsMedia = mediaProblem([network], typeof payload.mediaUrl === 'string' ? payload.mediaUrl : '');
   if (needsMedia) {
     return NextResponse.json({ error: 'media_required', message: needsMedia }, { status: 422 });
+  }
+
+  // ONE DRAFT PER VIDEO AND NETWORK while it waits for approval — the same
+  // rule the sweep's hand-off applies (lib/queue-guard.ts). A post carrying a
+  // video that already has a draft on this network waiting in the queue is
+  // refused with the row named, instead of becoming the fourth copy.
+  {
+    const copyId = typeof payload.mediaUrl === 'string' ? parseDriveFileId(payload.mediaUrl) : null;
+    const sourceId = typeof payload.sourceUrl === 'string' ? parseDriveFileId(payload.sourceUrl) : null;
+    if (copyId || sourceId) {
+      const already = await awaitingPostsForVideo(user.id, { fileId: sourceId, copyId });
+      const split = networksAlreadyQueued(already, [network]);
+      if (split.queued.length) {
+        const rowNum = Number(payload.sheetRow);
+        const rowLabel = typeof payload.sheetTab === 'string' && payload.sheetTab && Number.isInteger(rowNum) && rowNum >= 2 ? payload.sheetTab.trim() + ' \u00b7 row ' + rowNum : null;
+        return NextResponse.json({ error: 'already_queued', message: alreadyQueuedMessage(network, rowLabel) }, { status: 409 });
+      }
+    }
   }
 
   const body: any = {

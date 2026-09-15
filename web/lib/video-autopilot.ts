@@ -58,6 +58,9 @@ import { publishVideoDraft, takenSlots, type PublishOutcome } from '@/lib/video-
 import { reviveStalledRuns, type ReviveResult } from '@/lib/video-revive';
 import { publicVideoCopy } from '@/lib/drive';
 import { cachedPublicCopy, rememberPublicCopy } from '@/lib/transcript-cache';
+import { awaitingPostsForVideo } from '@/lib/awaiting-posts';
+import { isAwaitingApproval } from '@/lib/post-mode';
+import { alreadyQueuedMessage, networksAlreadyQueued } from '@/lib/queue-guard';
 import { parseDriveFileId } from '@/lib/drive-url';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
@@ -926,6 +929,7 @@ async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string 
     networks: rowNetworks,
     videoLink: a.videoLink,
     title: draftTitle,
+    rowLabel: a.tab + ' \u00b7 row ' + a.row,
     format: pick(a.rec, 'formato', 'format'),
     sheetYoutube: pick(a.rec, 'youtube'),
     published: publishedNetworks(VIDEO_NETWORK_COLUMNS, (col: string) => pick(a.rec, col)),
@@ -972,7 +976,7 @@ async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string 
 
 export type QueueExistingResult =
   | { ok: true; title: string; draftId: string | null; metricool: PublishOutcome[] }
-  | { ok: false; reason: 'no_table' | 'not_found' | 'hidden' | 'no_video' | 'no_copy'; message: string };
+  | { ok: false; reason: 'no_table' | 'not_found' | 'hidden' | 'no_video' | 'no_copy' | 'already_queued'; message: string };
 
 /**
  * Queue ONE named row whose copy is already written, with its video — the
@@ -1009,12 +1013,32 @@ export async function queueExistingCopy(opts: {
   const rowKey = rowKeyFor(title, videoLink);
   const { data: existing } = await supabaseAdmin()
     .from('video_runs')
-    .select('id, attempts')
+    .select('id, attempts, state')
     .eq('spreadsheet_id', spreadsheetId).eq('tab', opts.tab).eq('row_key', rowKey)
     .maybeSingle()
     .then((x) => x, () => ({ data: null }));
-  const prior = (existing as { id: string; attempts: number } | null) || null;
+  const prior = (existing as { id: string; attempts: number; state?: string } | null) || null;
   const gid = await tabGid(spreadsheetId, opts.tab);
+
+  // A row the sweep (or an earlier press) already queued is not queued again
+  // while its drafts wait: this path used to read the run for its id only,
+  // never its state, and re-queued the row — the second of row 179's four
+  // sets of drafts. Only when the queue holds nothing for the video any more
+  // (drafts deleted, or published) is the row eligible again.
+  if (prior && prior.state === 'prepared' && !opts.skipMetricool) {
+    const fileId = parseDriveFileId(videoLink);
+    const known = fileId ? await cachedPublicCopy(fileId) : null;
+    const waiting = (await awaitingPostsForVideo(opts.userId, { fileId, copyId: known?.id })).filter((p) => isAwaitingApproval(p.status));
+    if (waiting.length) {
+      const nets = Array.from(new Set(waiting.map((p) => String((Array.isArray(p.providers) ? p.providers[0] : '') || '')).filter(Boolean)));
+      const message = 'Row ' + opts.row + ' already has ' + waiting.length + ' draft' + (waiting.length === 1 ? '' : 's') + ' waiting for your approval (' + nets.join(', ') + ') \u2014 approve them in the queue, or delete them there first.';
+      void recordVideoEvent({
+        userId: opts.userId, videoKey: videoKeyFor(spreadsheetId, opts.tab, rowKey), event: 'skipped', actor: opts.actor ?? 'button',
+        title: title || videoLink, link: videoLink, detail: { tab: opts.tab, row: opts.row, gid, reason: 'already_queued', error: message },
+      });
+      return { ok: false, reason: 'already_queued', message };
+    }
+  }
 
   const out = await queueExistingCopyRow({
     userId: opts.userId, spreadsheetId, tab: opts.tab, row: opts.row, gid,
@@ -1210,6 +1234,8 @@ export async function handOffToMetricool(args: {
   published?: readonly string[];
   /** A slot already reserved for this row by a batch; overrides the local search. */
   publicationDate?: string;
+  /** "2026 CELLULAR HOPE · row 179", for the sentence a skipped network gets. */
+  rowLabel?: string | null;
 }): Promise<PublishOutcome[]> {
   const { userId, prepared, networks, videoLink, title, format, sheetYoutube, published = [] } = args;
 
@@ -1246,8 +1272,21 @@ export async function handOffToMetricool(args: {
     }
   }
 
-  const chosen = networksFor(networks, Boolean(mediaUrl), format, published);
-  if (!chosen.length) return [];
+  const wanted = networksFor(networks, Boolean(mediaUrl), format, published);
+  if (!wanted.length) return [];
+
+  // ONE DRAFT PER VIDEO AND NETWORK while it waits for approval. Four paths
+  // reach this hand-off — the sweep's two branches, Prepare, Attach videos —
+  // and none of them used to ask whether the video already had a draft
+  // waiting on that network; row 179 ended up in Metricool eleven times.
+  // A network that already has one is answered, not sent.
+  const already = await awaitingPostsForVideo(userId, { fileId, copyId: mediaFileId });
+  const split = networksAlreadyQueued(already, wanted);
+  const out: PublishOutcome[] = split.queued.map((network) => ({
+    network, ok: false as const, reason: 'already_queued' as const, message: alreadyQueuedMessage(network, args.rowLabel),
+  }));
+  const chosen = split.free;
+  if (!chosen.length) return out;
 
   const now = new Date();
   // takenSlots throws rather than returning an empty list it cannot vouch for:
@@ -1269,9 +1308,8 @@ export async function handOffToMetricool(args: {
   } catch (e) {
     reportError('video-sweep:slots', e);
     const message = e instanceof Error ? e.message : 'The posting calendar could not be read.';
-    return chosen.map((network) => ({ network, ok: false as const, reason: 'metricool_error' as const, message }));
+    return [...out, ...chosen.map((network) => ({ network, ok: false as const, reason: 'metricool_error' as const, message }))];
   }
-  const out: PublishOutcome[] = [];
   const reserved = args.publicationDate ? new Date(args.publicationDate) : null;
   for (const network of chosen) {
     const slot = reserved && Number.isFinite(reserved.getTime()) ? reserved : nextFreeSlot(taken, now);

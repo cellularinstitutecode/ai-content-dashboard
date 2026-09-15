@@ -903,10 +903,15 @@ export default function SourcesView({ kind }: { kind: Tab }) {
             body: JSON.stringify({ tab: p.v.tab, row: p.v.row, publicationDate: slotFor.get(k) }),
           });
           const j = await r.json().catch(() => ({}));
+          // Already in the queue is not a failure: the drafts exist and wait for
+          // approval. Said as such, so the run does not read as broken.
+          if (r.status === 409 || j?.error === 'already_queued') return finish('done', String(j?.message || 'Already in the queue, waiting for your approval.'));
           if (!r.ok) return finish('failed', String(j?.message || 'The row could not be queued.'));
-          const outs = (Array.isArray(j?.metricool) ? j.metricool : []) as { ok?: boolean; network?: string; message?: string }[];
+          const outs = (Array.isArray(j?.metricool) ? j.metricool : []) as { ok?: boolean; network?: string; message?: string; reason?: string }[];
           const sent = outs.filter((m) => m?.ok).length;
-          const refused = outs.filter((m) => !m?.ok);
+          const alreadyThere = outs.filter((m) => m?.reason === 'already_queued').length;
+          const refused = outs.filter((m) => !m?.ok && m?.reason !== 'already_queued');
+          if (!sent && alreadyThere && !refused.length) return finish('done', 'Already in the queue, waiting for your approval (' + alreadyThere + ' draft' + (alreadyThere === 1 ? '' : 's') + ').');
           return finish(
             refused.length && !sent ? 'failed' : 'done',
             'Queued with the video, copy unchanged · ' + sent + ' draft' + (sent === 1 ? '' : 's') +
