@@ -40,13 +40,33 @@ export function parseFromRow(raw: string | number | null | undefined): number | 
  * row does. Rows with copy are left alone: a filled cell is never work, and
  * ticking it would spend a run to change nothing.
  */
-export function rowsFrom(rows: readonly RowLike[], fromRow: number | null, tab?: string | null): string[] {
+export function rowsFrom(rows: readonly RowLike[], fromRow: number | null, tab?: string | null, toRow: number | null = null): string[] {
   if (fromRow == null) return [];
+  if (toRow != null && toRow < fromRow) return [];
   const wantTab = String(tab || '').trim().toLowerCase();
   return rows
-    .filter((r) => r.row >= fromRow)
+    .filter((r) => r.row >= fromRow && (toRow == null || r.row <= toRow))
     .filter((r) => !wantTab || String(r.tab || '').trim().toLowerCase() === wantTab)
     .filter((r) => Boolean(String(r.link || '').trim()) && !String(r.copy || '').trim())
+    .sort((a, b) => (a.tab === b.tab ? a.row - b.row : a.tab.localeCompare(b.tab)))
+    .map((r) => r.tab + ':' + r.row);
+}
+
+/**
+ * The keys (`tab:row`) of every row between `fromRow` and `toRow` inclusive
+ * that has a video — copy written or not — in row order. `toRow` null means
+ * to the end. This is the range "Attach videos" works on: a row whose copy
+ * is already written is exactly the kind of draft that may be missing its
+ * video, so unlike rowsFrom this does not exclude it.
+ */
+export function rowsBetween(rows: readonly RowLike[], fromRow: number | null, toRow: number | null, tab?: string | null): string[] {
+  if (fromRow == null) return [];
+  if (toRow != null && toRow < fromRow) return [];
+  const wantTab = String(tab || '').trim().toLowerCase();
+  return rows
+    .filter((r) => r.row >= fromRow && (toRow == null || r.row <= toRow))
+    .filter((r) => !wantTab || String(r.tab || '').trim().toLowerCase() === wantTab)
+    .filter((r) => Boolean(String(r.link || '').trim()))
     .sort((a, b) => (a.tab === b.tab ? a.row - b.row : a.tab.localeCompare(b.tab)))
     .map((r) => r.tab + ':' + r.row);
 }
