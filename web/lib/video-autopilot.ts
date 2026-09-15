@@ -399,69 +399,15 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
           if (!columnsFailed) { reportError('video-sweep:columns', e, { tab: tab.title }); columnsFailed = true; }
           break;
         }
-        const text = existingCopyText(copy);
-        const fileId = parseDriveFileId(videoLink);
-        let draftId: string | null = null;
-        try {
-          draftId = await saveVideoDraft(opts.userId, draftTitle, {
-            instagram: text, facebook: text, linkedin: text, blog: '',
-            kind: 'video', title: draftTitle, sourceUrl: videoLink, videoId: fileId || videoLink,
-            transcript: '', transcriptSource: 'sheet', transcriptLanguage: null, tiktok: text,
-          });
-        } catch (e) {
-          reportError('video-sweep:existing-draft', e, { tab: tab.title, row: String(row) });
-        }
-        const posted = opts.skipMetricool ? [] : await handOffToMetricool({
-          userId: opts.userId,
-          prepared: { linkedin: text, tiktok: text, draftId },
-          networks: rowNetworks,
-          videoLink,
-          title: draftTitle,
-          format: pick(rec, 'formato', 'format'),
-          sheetYoutube: pick(rec, 'youtube'),
-          published: publishedNetworks(VIDEO_NETWORK_COLUMNS, (col: string) => pick(rec, col)),
-          publicationDate: await slotForNextRow(),
+        const queued = await queueExistingCopyRow({
+          userId: opts.userId, spreadsheetId, tab: tab.title, row, gid: where.gid,
+          rec, rowKey, title, videoLink, copy, columns, prior,
+          publicationDate: await slotForNextRow(), actor: 'sweep', skipMetricool: opts.skipMetricool,
         });
-        // ESTADO IA only. COPY is not even named here, and writeRowBack never
-        // fills a cell that has something in it.
-        try {
-          await writeRowBack(spreadsheetId, tab.title, row, columns, { aiStatus: STATUS_TEXT.queued_existing });
-        } catch (e) {
-          reportError('video-sweep:existing-status', e, { tab: tab.title, row: String(row) });
-        }
-        const { error: runError } = await admin.from('video_runs').upsert({
-          ...(prior ? { id: prior.id } : {}),
-          user_id: opts.userId,
-          spreadsheet_id: spreadsheetId,
-          tab: tab.title,
-          row_key: rowKey,
-          row_number: row,
-          video_title: title || null,
-          video_link: videoLink || null,
-          state: 'prepared',
-          attempts: (prior?.attempts ?? 0) + 1,
-          transcript_source: 'sheet',
-          draft_id: draftId,
-          metricool: posted,
-          last_error: null,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'spreadsheet_id,tab,row_key' });
-        if (runError) reportError('video-sweep:existing-run', runError, { tab: tab.title, row: String(row) });
         existingThisRun++;
         result.queuedExisting++;
-        result.metricoolDrafts += posted.filter((p) => p.ok).length;
-        const sent = posted.filter((p) => p.ok).map((p) => p.network);
-        const refused = posted.filter((p) => !p.ok);
-        void recordVideoEvent({
-          userId: opts.userId,
-          videoKey: videoKeyFor(spreadsheetId, tab.title, rowKey),
-          event: 'queued',
-          actor: 'sweep',
-          title: draftTitle,
-          link: videoLink,
-          detail: { ...where, existingCopy: true, networks: sent, refused: refused.map((p) => ({ network: p.network, reason: p.reason })) },
-        });
-        result.rows.push({ tab: tab.title, row, rowKey, title: draftTitle, state: 'queued_existing', draftId, metricool: posted });
+        result.metricoolDrafts += queued.metricool.filter((p) => p.ok).length;
+        result.rows.push({ tab: tab.title, row, rowKey, title: draftTitle, state: 'queued_existing', draftId: queued.draftId, metricool: queued.metricool });
         continue;
       }
 
@@ -821,6 +767,155 @@ export async function ensureTabColumns(tab: string, spreadsheetId = SOURCE_IDS.v
   if (!header.length) return; // not a video table; the row write will say so properly
   const usedWidth = rows.reduce((w, r) => Math.max(w, (r || []).length), 0);
   await ensureAiColumns(spreadsheetId, tab, headerRow, header, usedWidth);
+}
+
+type QueueRowArgs = {
+  userId: string;
+  spreadsheetId: string;
+  tab: string;
+  row: number;
+  gid: number | null;
+  rec: Record<string, string>;
+  rowKey: string;
+  title: string;
+  videoLink: string;
+  copy: string;
+  columns: Partial<Record<VideoField, string>>;
+  prior: { id: string; attempts: number } | null;
+  publicationDate?: string;
+  actor: VideoActor;
+  skipMetricool?: boolean;
+};
+
+/**
+ * QUEUE A ROW WHOSE COPY IS ALREADY WRITTEN — do not write.
+ *
+ * The copy is the person's and goes out verbatim. The dashboard draft exists
+ * so the publishing list, the PENDING chip and Approve treat this row like
+ * any other; the video_runs row exists so a sweep fifteen minutes from now
+ * does not queue it again; ESTADO IA says what happened; the register keeps
+ * the row. One place for it, so the nightly sweep and the "Attach videos"
+ * button cannot drift apart.
+ */
+async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string | null; metricool: PublishOutcome[] }> {
+  const admin = supabaseAdmin();
+  const draftTitle = a.title || a.videoLink;
+  const text = existingCopyText(a.copy);
+  const fileId = parseDriveFileId(a.videoLink);
+  const rowNetworks = VIDEO_NETWORKS.filter(([col]) => YES_TICK.test(pick(a.rec, col))).map(([, n]) => n);
+
+  let draftId: string | null = null;
+  try {
+    draftId = await saveVideoDraft(a.userId, draftTitle, {
+      instagram: text, facebook: text, linkedin: text, blog: '',
+      kind: 'video', title: draftTitle, sourceUrl: a.videoLink, videoId: fileId || a.videoLink,
+      transcript: '', transcriptSource: 'sheet', transcriptLanguage: null, tiktok: text,
+    });
+  } catch (e) {
+    reportError('video-queue:draft', e, { tab: a.tab, row: String(a.row) });
+  }
+  const posted = a.skipMetricool ? [] : await handOffToMetricool({
+    userId: a.userId,
+    prepared: { linkedin: text, tiktok: text, draftId },
+    networks: rowNetworks,
+    videoLink: a.videoLink,
+    title: draftTitle,
+    format: pick(a.rec, 'formato', 'format'),
+    sheetYoutube: pick(a.rec, 'youtube'),
+    published: publishedNetworks(VIDEO_NETWORK_COLUMNS, (col: string) => pick(a.rec, col)),
+    publicationDate: a.publicationDate,
+  });
+  // ESTADO IA only. COPY is not even named here, and writeRowBack never
+  // fills a cell that has something in it.
+  try {
+    await writeRowBack(a.spreadsheetId, a.tab, a.row, a.columns, { aiStatus: STATUS_TEXT.queued_existing });
+  } catch (e) {
+    reportError('video-queue:status', e, { tab: a.tab, row: String(a.row) });
+  }
+  const { error: runError } = await admin.from('video_runs').upsert({
+    ...(a.prior ? { id: a.prior.id } : {}),
+    user_id: a.userId,
+    spreadsheet_id: a.spreadsheetId,
+    tab: a.tab,
+    row_key: a.rowKey,
+    row_number: a.row,
+    video_title: a.title || null,
+    video_link: a.videoLink || null,
+    state: 'prepared',
+    attempts: (a.prior?.attempts ?? 0) + 1,
+    transcript_source: 'sheet',
+    draft_id: draftId,
+    metricool: posted,
+    last_error: null,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'spreadsheet_id,tab,row_key' });
+  if (runError) reportError('video-queue:run', runError, { tab: a.tab, row: String(a.row) });
+  const sent = posted.filter((p) => p.ok).map((p) => p.network);
+  const refused = posted.filter((p) => !p.ok);
+  void recordVideoEvent({
+    userId: a.userId,
+    videoKey: videoKeyFor(a.spreadsheetId, a.tab, a.rowKey),
+    event: 'queued',
+    actor: a.actor,
+    title: draftTitle,
+    link: a.videoLink,
+    detail: { tab: a.tab, row: a.row, gid: a.gid, existingCopy: true, networks: sent, refused: refused.map((p) => ({ network: p.network, reason: p.reason })) },
+  });
+  return { draftId, metricool: posted };
+}
+
+export type QueueExistingResult =
+  | { ok: true; title: string; draftId: string | null; metricool: PublishOutcome[] }
+  | { ok: false; reason: 'no_table' | 'not_found' | 'hidden' | 'no_video' | 'no_copy'; message: string };
+
+/**
+ * Queue ONE named row whose copy is already written, with its video — the
+ * "Attach videos" button's path for a row that has no draft yet. Reads the
+ * row itself, applies the same rules as the sweep (hidden rows are left
+ * alone, no video or no copy is a refusal, not a guess), and hands the rest
+ * to queueExistingCopyRow.
+ */
+export async function queueExistingCopy(opts: {
+  userId: string;
+  tab: string;
+  row: number;
+  publicationDate?: string;
+  actor?: VideoActor;
+  spreadsheetId?: string;
+  skipMetricool?: boolean;
+}): Promise<QueueExistingResult> {
+  const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
+  const { rows, hidden } = await readTabWithMeta(spreadsheetId, opts.tab);
+  const { header, headerRow, records } = tableFromRows(rows, ['tipo de video', 'título del video', 'titulo del video', 'copy', 'link video', 'formato', 'title', 'video']);
+  if (!header.length) return { ok: false, reason: 'no_table', message: 'That tab has no video table.' };
+  const found = records.find((r) => r.row === opts.row);
+  if (!found) return { ok: false, reason: 'not_found', message: 'Row ' + opts.row + ' is not a data row on ' + opts.tab + '.' };
+  if (hidden.has(opts.row)) return { ok: false, reason: 'hidden', message: 'Row ' + opts.row + ' is hidden in the sheet, so it is left alone.' };
+
+  const title = pick(found.rec, 'título del video', 'titulo del video', 'title');
+  const videoLink = firstLinkIn(pick(found.rec, 'link video', 'link', 'video link'));
+  const copy = pick(found.rec, 'copy', 'caption');
+  if (!String(copy || '').trim()) return { ok: false, reason: 'no_copy', message: 'Row ' + opts.row + ' has no copy yet — Prepare writes it and queues the video.' };
+  if (!isExistingCopyRow({ videoLink, copy })) return { ok: false, reason: 'no_video', message: 'Row ' + opts.row + ' has no Drive or YouTube video to attach.' };
+
+  const usedWidth = rows.reduce((w, r) => Math.max(w, (r || []).length), 0);
+  const columns = await ensureAiColumns(spreadsheetId, opts.tab, headerRow, header, usedWidth);
+  const rowKey = rowKeyFor(title, videoLink);
+  const { data: existing } = await supabaseAdmin()
+    .from('video_runs')
+    .select('id, attempts')
+    .eq('spreadsheet_id', spreadsheetId).eq('tab', opts.tab).eq('row_key', rowKey)
+    .maybeSingle()
+    .then((x) => x, () => ({ data: null }));
+  const prior = (existing as { id: string; attempts: number } | null) || null;
+  const gid = await tabGid(spreadsheetId, opts.tab);
+
+  const out = await queueExistingCopyRow({
+    userId: opts.userId, spreadsheetId, tab: opts.tab, row: opts.row, gid,
+    rec: found.rec, rowKey, title, videoLink, copy, columns, prior,
+    publicationDate: opts.publicationDate, actor: opts.actor ?? 'button', skipMetricool: opts.skipMetricool,
+  });
+  return { ok: true, title: title || videoLink, ...out };
 }
 
 export async function completeRow(opts: {

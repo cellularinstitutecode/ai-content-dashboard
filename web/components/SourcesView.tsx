@@ -25,7 +25,8 @@ import { runPrepare } from '@/lib/prepare-request';
 import { mapLimit } from '@/lib/map-limit';
 import { mayStartBatch, reasons, tally, type BatchReasons, type BatchState } from '@/lib/batch-plan';
 import { isDriveUrl, parseDriveFileId } from '@/lib/drive-url';
-import { parseFromRow, rowsFrom } from '@/lib/rows-from';
+import { parseFromRow, rowsBetween, rowsFrom } from '@/lib/rows-from';
+import { attachPlanFor, pendingPosts, postsByRow } from '@/lib/attach-plan';
 import { ZOOM_MAX, ZOOM_MIN, frameGeometry, readStoredZoom, zoomIn, zoomLabel, zoomOut, zoomStorageKey } from '@/lib/sheet-zoom';
 
 /** How a batched row is getting on, in words rather than a spinner. */
@@ -569,6 +570,8 @@ export default function SourcesView({ kind }: { kind: Tab }) {
    * needing copy, which is the month being worked on.
    */
   const [fromRow, setFromRow] = useState('');
+  /** Optional last row of the range; empty means to the end. */
+  const [toRow, setToRow] = useState('');
   const [fromTab, setFromTab] = useState('');
 
   const rowKey = (v: VideoEntry) => v.tab + ':' + v.row;
@@ -603,10 +606,11 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     try {
       const raw = window.localStorage.getItem(BASKET_KEY);
       if (!raw) return;
-      const saved = JSON.parse(raw) as { picked?: string[]; batch?: Record<string, { state: BatchState; note?: string }>; sheetOnly?: boolean; fromRow?: string; fromTab?: string };
+      const saved = JSON.parse(raw) as { picked?: string[]; batch?: Record<string, { state: BatchState; note?: string }>; sheetOnly?: boolean; fromRow?: string; toRow?: string; fromTab?: string };
       if (Array.isArray(saved.picked) && saved.picked.length) setPicked(new Set(saved.picked));
       if (typeof saved.sheetOnly === 'boolean') setSheetOnly(saved.sheetOnly);
       if (typeof saved.fromRow === 'string') setFromRow(saved.fromRow);
+      if (typeof saved.toRow === 'string') setToRow(saved.toRow);
       if (typeof saved.fromTab === 'string') setFromTab(saved.fromTab);
       if (saved.batch && typeof saved.batch === 'object') {
         // A row left mid-flight belongs to a page that is gone. Show it as unfinished
@@ -627,9 +631,9 @@ export default function SourcesView({ kind }: { kind: Tab }) {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(BASKET_KEY, JSON.stringify({ picked: Array.from(picked), batch, sheetOnly, fromRow, fromTab }));
+      window.localStorage.setItem(BASKET_KEY, JSON.stringify({ picked: Array.from(picked), batch, sheetOnly, fromRow, toRow, fromTab }));
     } catch { /* storage full or blocked; the basket simply will not survive a reload */ }
-  }, [picked, batch, sheetOnly, fromRow, fromTab]);
+  }, [picked, batch, sheetOnly, fromRow, toRow, fromTab]);
 
   function togglePick(v: VideoEntry) {
     const k = rowKey(v);
@@ -761,6 +765,145 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   }
 
   /**
+   * "Attach videos": make sure every draft in the From–To range carries its
+   * video. Per row, lib/attach-plan.ts decides which of three EXISTING paths
+   * applies — attach to posts still waiting for the video (the PENDING chip's
+   * action), queue copy already written (/api/videos/queue), or prepare a row
+   * with no copy (the batch's own path). Rows whose posts already carry the
+   * video are reported as done without a single call. Nothing is removed or
+   * rewritten, and nothing publishes.
+   */
+  async function attachRange() {
+    if (running || !videos) return;
+    const byKey = new Map(videos.entries.map((v) => [rowKey(v), v] as const));
+    const rows = rangeKeys.map((k) => byKey.get(k)).filter((v): v is VideoEntry => Boolean(v)).slice(0, BATCH_MAX);
+    if (!rows.length) return;
+    setRunning(true);
+    stopRef.current = false;
+    setSummary(null);
+    setBatch(Object.fromEntries(rows.map((v) => [rowKey(v), { state: 'queued' as const }])));
+
+    // What each row already has, from the publishing list — read once. A list
+    // that cannot be read is a reason to stop, not to guess "no posts" and
+    // queue duplicates of drafts that already exist.
+    let grouped = new Map<string, { id: string; videoPending?: boolean | null }[]>();
+    try {
+      const r = await fetch('/api/posts');
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setBatch({});
+        setSummary('The publishing list could not be read, so nothing was attached — try again.');
+        setRunning(false);
+        return;
+      }
+      grouped = postsByRow(Array.isArray(j?.posts) ? j.posts : []);
+    } catch {
+      setBatch({});
+      setSummary('The dashboard could not be reached to read the publishing list — try again.');
+      setRunning(false);
+      return;
+    }
+    const plans = rows.map((v) => ({ v, action: attachPlanFor({ link: prepareLink(v), copy: v.copy }, grouped.get(rowKey(v))) }));
+
+    // Rows that will CREATE drafts need what the batch needs: the AI columns
+    // settled once per tab, and one reserved slot each so they land on
+    // distinct instants. mayStartBatch holds the rule.
+    const creating = plans.filter((p) => p.action === 'queue' || p.action === 'prepare');
+    const slotFor = new Map<string, string>();
+    if (creating.length) {
+      const planRows = creating.map((p) => ({ tab: p.v.tab, hasAiColumns: Boolean(p.v.columns?.keywords && p.v.columns?.ref && p.v.columns?.aiStatus) }));
+      let slots: string[] = [];
+      let failedTabs: string[] = [];
+      let planError: string | null = null;
+      try {
+        const r = await fetch('/api/videos/batch', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ tabs: Array.from(new Set(creating.map((p) => p.v.tab))), count: creating.length }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) planError = String(j?.message || 'The dashboard could not prepare the sheet for this run.');
+        else {
+          slots = Array.isArray(j?.slots) ? j.slots : [];
+          failedTabs = Array.isArray(j?.columnErrors) ? j.columnErrors : [];
+        }
+      } catch {
+        planError = 'The dashboard could not be reached to prepare the sheet for this run.';
+      }
+      const may = mayStartBatch(planRows, failedTabs, planError);
+      if (!may.ok) {
+        setBatch({});
+        setSummary(may.reason + ' Nothing was attached — try again.');
+        setRunning(false);
+        return;
+      }
+      creating.forEach((p, i) => { if (slots[i]) slotFor.set(rowKey(p.v), slots[i]); });
+    }
+
+    const outcomes = await mapLimit(plans, BATCH_CONCURRENCY, async (p): Promise<BatchState> => {
+      const k = rowKey(p.v);
+      const finish = (state: BatchState, note?: string): BatchState => {
+        setBatch((b) => ({ ...b, [k]: note ? { state, note } : { state } }));
+        return state;
+      };
+      if (stopRef.current) return finish('failed', 'Stopped before this one.');
+      setBatch((b) => ({ ...b, [k]: { state: 'working' } }));
+      try {
+        if (p.action === 'done') return finish('done', 'Already has its video.');
+        if (p.action === 'no_video') return finish('failed', 'No Drive or YouTube video on this row.');
+        if (p.action === 'attach') {
+          const pending = pendingPosts(grouped.get(k));
+          let attached = 0;
+          let lastError = '';
+          for (const post of pending) {
+            const r = await fetch('/api/posts', {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: post.id, action: 'attach_video' }),
+            });
+            if (r.ok) attached++;
+            else lastError = await friendlyErrorFromResponse(r, 'We could not attach the video to that post.');
+          }
+          if (attached === pending.length) return finish('done', 'Video attached to ' + attached + ' draft' + (attached === 1 ? '' : 's') + '.');
+          return finish('failed', 'Attached to ' + attached + ' of ' + pending.length + ' — ' + lastError);
+        }
+        if (p.action === 'queue') {
+          const r = await fetch('/api/videos/queue', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ tab: p.v.tab, row: p.v.row, publicationDate: slotFor.get(k) }),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) return finish('failed', String(j?.message || 'The row could not be queued.'));
+          const outs = (Array.isArray(j?.metricool) ? j.metricool : []) as { ok?: boolean; network?: string; message?: string }[];
+          const sent = outs.filter((m) => m?.ok).length;
+          const refused = outs.filter((m) => !m?.ok);
+          return finish(
+            refused.length && !sent ? 'failed' : 'done',
+            'Queued with the video, copy unchanged · ' + sent + ' draft' + (sent === 1 ? '' : 's') +
+              (refused.length ? ' · ' + refused.length + ' refused: ' + refused.map((m) => m.network + ' (' + m.message + ')').join('; ') : ''),
+          );
+        }
+        // prepare: the existing path — writes the copy and queues it with the video.
+        const out = await runPrepare(
+          { url: prepareLink(p.v), tab: p.v.tab, row: p.v.row, publicationDate: slotFor.get(k), skipMetricool: false },
+          (note) => setBatch((b) => ({ ...b, [k]: { state: 'working', note } })),
+        );
+        if (!out.ok) return finish(out.kind === 'needs_transcript' ? 'needs_transcript' : 'failed', out.message);
+        const sheetError = (out.data as { sheet?: { error?: string } }).sheet?.error;
+        setResults((r) => ({ ...r, [k]: out.data as unknown as Prepared }));
+        return finish(sheetError ? 'failed' : 'done', sheetError || 'Prepared and queued with the video.');
+      } catch (e) {
+        return finish('failed', friendlyError(e, 'Something went wrong on this row.'));
+      }
+    });
+
+    setRunning(false);
+    setSummary(summarise(outcomes));
+    await load('videos', true);
+  }
+
+  /**
    * What the run added up to, tallied from what mapLimit RETURNED.
    *
    * Not read back out of the batch state: that is a React store being written from
@@ -871,18 +1014,19 @@ export default function SourcesView({ kind }: { kind: Tab }) {
    */
   // Plain derivations, not memoised: a few hundred rows, and prepareLink is a
   // function of the component (memoising on it would recompute every render anyway).
+  // Tabs that hold videos, busiest first — copy written or not, because the
+  // "Attach videos" range works on both.
   const workCounts = new Map<string, number>();
   for (const v of videos?.entries || []) {
-    if (prepareLink(v) && !String(v.copy || '').trim()) workCounts.set(v.tab, (workCounts.get(v.tab) || 0) + 1);
+    if (prepareLink(v)) workCounts.set(v.tab, (workCounts.get(v.tab) || 0) + 1);
   }
   const tabsWithWork = Array.from(workCounts.entries()).sort((a, b) => b[1] - a[1]).map(([t]) => t);
   const fromTabInUse = fromTab && tabsWithWork.includes(fromTab) ? fromTab : (tabsWithWork[0] || '');
-  /** What "From row N, to the end" would tick, over the whole sheet — decided in lib/rows-from.ts. */
-  const fromRowKeys = rowsFrom(
-    (videos?.entries || []).map((v) => ({ tab: v.tab, row: v.row, link: prepareLink(v), copy: v.copy })),
-    parseFromRow(fromRow),
-    fromTabInUse,
-  );
+  const rangeRows = (videos?.entries || []).map((v) => ({ tab: v.tab, row: v.row, link: prepareLink(v), copy: v.copy }));
+  /** What "From row N [to M]" would tick for Prepare — rows still needing copy — decided in lib/rows-from.ts. */
+  const fromRowKeys = rowsFrom(rangeRows, parseFromRow(fromRow), fromTabInUse, parseFromRow(toRow));
+  /** Every row with a video in the From–To range, copy or not — what "Attach videos" works on. */
+  const rangeKeys = rowsBetween(rangeRows, parseFromRow(fromRow), parseFromRow(toRow), fromTabInUse);
   /** Ticked but not on screen. Left unsaid, the count above looks like a bug. */
   const pickedOffScreen = pickedRows.length - filteredVideos.filter((v) => picked.has(v.tab + ':' + v.row)).length;
 
@@ -1050,6 +1194,18 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                       style={{ width: 64, padding: '6px 8px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.12)', fontSize: 13 }}
                     />
                   </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>to</span>
+                    <input
+                      value={toRow}
+                      onChange={(e) => setToRow(e.target.value.replace(/[^0-9]/g, ''))}
+                      inputMode="numeric"
+                      placeholder="end"
+                      aria-label="Last row to select (empty = to the end)"
+                      disabled={running}
+                      style={{ width: 64, padding: '6px 8px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.12)', fontSize: 13 }}
+                    />
+                  </label>
                   {tabsWithWork.length > 1 && (
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span>on</span>
@@ -1065,12 +1221,34 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                     onClick={() => setPicked((prev) => { const next = new Set(prev); for (const k of fromRowKeys) next.add(k); return next; })}
                   >
                     {parseFromRow(fromRow) == null
-                      ? 'Select to the end'
+                      ? 'Select to prepare'
                       : fromRowKeys.length
-                        ? 'Select ' + fromRowKeys.length + ' row' + (fromRowKeys.length === 1 ? '' : 's') + ' to the end'
-                        : 'Nothing to prepare from row ' + parseFromRow(fromRow)}
+                        ? 'Select ' + fromRowKeys.length + ' row' + (fromRowKeys.length === 1 ? '' : 's') + ' to prepare'
+                        : 'Nothing to prepare in that range'}
                   </button>
-                  <span style={{ opacity: .6 }}>Rows with a video and no copy yet, from that row down{tabsWithWork.length > 1 ? ' on ' + fromTabInUse : ''}.</span>
+                  {/*
+                    "Attach videos": every draft in the range ends up with its
+                    video. Per row, lib/attach-plan.ts picks one of three
+                    existing paths — attach to posts waiting for the video,
+                    queue copy already written, or prepare a row with no copy
+                    — and rows that already carry it are reported as done
+                    without a call. Additive: nothing here removes or rewrites.
+                  */}
+                  <button
+                    type="button"
+                    style={{ ...btn, opacity: rangeKeys.length && !running ? 1 : .6 }}
+                    disabled={running || !rangeKeys.length}
+                    onClick={() => void attachRange()}
+                    title="Make sure every draft in this range carries its video: attach where a draft is waiting for it, queue rows whose copy is written, prepare rows with no copy. Nothing publishes."
+                  >
+                    {running ? 'Working…' : parseFromRow(fromRow) == null
+                      ? 'Attach videos'
+                      : 'Attach videos · ' + Math.min(rangeKeys.length, BATCH_MAX) + ' row' + (Math.min(rangeKeys.length, BATCH_MAX) === 1 ? '' : 's')}
+                  </button>
+                  <span style={{ opacity: .6 }}>
+                    Rows {parseFromRow(fromRow) ?? '…'} to {parseFromRow(toRow) ?? 'the end'}{tabsWithWork.length > 1 ? ' on ' + fromTabInUse : ''}: “Select” ticks the ones still needing copy; “Attach videos” covers every row with a video.
+                    {rangeKeys.length > BATCH_MAX ? ' The first ' + BATCH_MAX + ' run now; press again for the rest.' : ''}
+                  </span>
                 </div>
               )}
               {/*

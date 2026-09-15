@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseFromRow, rowsFrom, type RowLike } from './rows-from.ts';
+import { parseFromRow, rowsBetween, rowsFrom, type RowLike } from './rows-from.ts';
 
 const L = 'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456/view';
 const rows: RowLike[] = [
@@ -39,4 +39,23 @@ test('no row means no selection', () => {
   assert.deepEqual(rowsFrom(rows, null, 'Marzo'), []);
   assert.deepEqual(rowsFrom([], 179, 'Marzo'), []);
   assert.deepEqual(rowsFrom(rows, 999, 'Marzo'), []);
+});
+
+test('a From–To range takes every row with a video, copy or not, inclusive at both ends', () => {
+  assert.deepEqual(rowsBetween(rows, 179, 182, 'Marzo'), ['Marzo:179', 'Marzo:180', 'Marzo:182']);
+  // Row 180 has copy and is included; row 181 has no video and is not.
+  assert.deepEqual(rowsBetween(rows, 178, 181, 'Marzo'), ['Marzo:178', 'Marzo:179', 'Marzo:180']);
+});
+
+test('an empty To means to the end; To before From means nothing', () => {
+  assert.deepEqual(rowsBetween(rows, 182, null, 'Marzo'), ['Marzo:182', 'Marzo:183']);
+  assert.deepEqual(rowsBetween(rows, 183, 179, 'Marzo'), []);
+  assert.deepEqual(rowsBetween(rows, null, 190, 'Marzo'), []);
+  assert.deepEqual(rowsBetween(rows, 179, 179, 'Marzo'), ['Marzo:179']);
+});
+
+test('the "needs copy" selection also honours a To row when one is given', () => {
+  assert.deepEqual(rowsFrom(rows, 179, 'Marzo', 182), ['Marzo:179', 'Marzo:182']);
+  assert.deepEqual(rowsFrom(rows, 179, 'Marzo', 178), []);
+  assert.deepEqual(rowsFrom(rows, 179, 'Marzo', null), ['Marzo:179', 'Marzo:182', 'Marzo:183']);
 });
