@@ -18,6 +18,7 @@ import { PanelLoader } from "@/components/LoadingScreen";
 import { friendlyError, friendlyErrorFromResponse, friendlyImageError } from '@/lib/friendly-error';
 import { postStatusMeta, isAwaitingApproval } from '@/lib/post-mode';
 import { mapLimit } from '@/lib/map-limit';
+import { findDuplicatePosts } from '@/lib/duplicate-posts';
 import { sheetRowUrl, sheetRowLabel, sheetRowTitle } from '@/lib/sheet-link';
 import { semrushDraftNote } from '@/lib/semrush-reason';
 import { fmtScheduleDateTime, scheduleTzLabel, schedulePresetValue } from '@/lib/schedule-clock';
@@ -797,6 +798,30 @@ finally { setApprovingId(null); }
 // Approve (or publish now) every ticked post — the same route, one call per
 // post, so each still passes the AVISO/REF gate and the video gate on its
 // own. One confirmation for the lot; failures are named, the rest go ahead.
+// The queue's duplicates — the same row (or video, or text) on the same
+// network more than once, all waiting for approval. One press removes the
+// extras and keeps the earliest per network. Each removal goes through
+// DELETE /api/posts, which deletes the Metricool draft first and the local
+// row only after; nothing is published.
+async function removeDuplicates() {
+const dupes = findDuplicatePosts(safePosts as any[]);
+const extras = dupes.extras as any[];
+if (!extras.length || bulkBusy) return;
+const lines = dupes.groups.map((g: any) => (g.keep?.source?.row ? 'row ' + g.keep.source.row : 'one video') + ' \u00b7 ' + g.network + ' \u00d7 ' + (g.extras.length + 1)).join('\n');
+if (typeof window !== 'undefined' && !window.confirm('Remove ' + extras.length + ' duplicate draft' + (extras.length === 1 ? '' : 's') + ', keeping one per network?\n\n' + lines + '\n\nThey are removed from Metricool too. Nothing is published.')) return;
+setBulkBusy(true);
+const failures: string[] = [];
+let ok = 0;
+await mapLimit(extras, 4, async (p: any) => {
+try {
+const r = await fetch('/api/posts?id=' + encodeURIComponent(String(p.id)), { method: 'DELETE' });
+if (r.ok) ok++; else failures.push((p?.source?.row ? 'row ' + p.source.row + ' ' : '') + '(' + ((p?.providers || []).join('/') || 'post') + '): ' + await friendlyErrorFromResponse(r, 'could not be removed'));
+} catch (e) { failures.push((p?.source?.row ? 'row ' + p.source.row + ' ' : '') + '(' + ((p?.providers || []).join('/') || 'post') + '): ' + friendlyError(e, 'could not be removed')); }
+});
+setActionMsg(failures.length ? (ok + ' of ' + extras.length + ' duplicates removed. Not done: ' + failures.join('; ')) : ok + ' duplicate draft' + (ok === 1 ? '' : 's') + ' removed \u2014 one per network kept.');
+setBulkBusy(false);
+announce('posts', 'stats');
+}
 async function approveSelected(now = false) {
 const chosen = safePosts.filter((p: any) => selectedPosts.has(String(p?.id || '')) && isAwaitingApproval(p?.status) && p?.videoPending !== true);
 const ids = chosen.map((p: any) => String(p.id));
@@ -1883,7 +1908,12 @@ return selectMode ? (
 <button type="button" disabled={bulkBusy} onClick={() => { setSelectMode(false); setSelectedPosts(new Set()); }} className="text-[11px] text-ink-muted hover:text-ink">Cancel</button>
 </>
 ) : (
+<>
+{(() => { const n = findDuplicatePosts(safePosts as any[]).extras.length; return n > 0 ? (
+<button type="button" disabled={bulkBusy} title="The same draft on the same network more than once. Keeps the earliest of each; removes the rest from Metricool too." className="rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 ring-1 ring-amber-200 hover:bg-amber-100 disabled:opacity-50" onClick={() => void removeDuplicates()}>{bulkBusy ? 'Removing…' : 'Remove ' + n + ' duplicate' + (n === 1 ? '' : 's')}</button>
+) : null; })()}
 <button type="button" className="text-[11px] font-medium text-accent hover:underline" onClick={() => { setSelectMode(true); setShowAllQueue(true); }}>Select several…</button>
+</>
 );
 })()}
 </span>

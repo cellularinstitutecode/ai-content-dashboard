@@ -76,12 +76,19 @@ export async function GET() {
     );
   }
 
+  // The oldest 200 used to be the whole page: once the table passed 200 rows,
+  // the NEWEST drafts — the ones just made — fell off the end, the queue did
+  // not show them, and every "does this row already have drafts" decision
+  // on the client failed open into making more. Recent and upcoming instead:
+  // the last fortnight onward, and room for five hundred.
+  const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
   const { data, error } = await sb
     .from('posts')
     .select('*')
     .eq('user_id', user.id)
+    .gte('publication_date', since)
     .order('publication_date', { ascending: true })
-    .limit(200);
+    .limit(500);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   // `videoPending` — the PENDING chip's whole input.

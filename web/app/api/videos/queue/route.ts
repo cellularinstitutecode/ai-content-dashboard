@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
   try {
     const out = await queueExistingCopy({ userId: auth.userId, tab, row, publicationDate, actor: publicationDate ? 'batch' : 'button' });
     if (!out.ok) {
-      const status = out.reason === 'not_found' || out.reason === 'no_table' ? 404 : 422;
+      const status = out.reason === 'not_found' || out.reason === 'no_table' ? 404 : out.reason === 'already_queued' ? 409 : 422;
       return NextResponse.json({ error: out.reason, message: out.message }, { status });
     }
     return NextResponse.json({ ok: true, title: out.title, draftId: out.draftId, metricool: out.metricool }, { headers: { 'cache-control': 'no-store' } });

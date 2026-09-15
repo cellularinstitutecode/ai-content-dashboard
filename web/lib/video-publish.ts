@@ -50,7 +50,7 @@ export type PublishOutcome = {
   ok: boolean;
   metricoolPostId?: string | null;
   /** Why it was not sent — a compliance refusal reads differently from an outage. */
-  reason?: 'not_configured' | 'compliance' | 'metricool_error' | 'too_long';
+  reason?: 'not_configured' | 'compliance' | 'metricool_error' | 'too_long' | 'already_queued';
   message?: string;
 };
 
