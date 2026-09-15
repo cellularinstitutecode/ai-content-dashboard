@@ -191,7 +191,7 @@ function hasSemrushData(stamp: SemrushStamp | null | undefined): boolean {
  * leaves no trace anywhere — the row is written, Metricool gets the post, and
  * only the library is quietly missing it.
  */
-async function saveVideoDraft(userId: string, title: string, videoPack: VideoPack): Promise<string | null> {
+export async function saveVideoDraft(userId: string, title: string, videoPack: VideoPack): Promise<string | null> {
   const admin = supabaseAdmin();
   const row = { topic: 'Video · ' + title, channels: ['linkedin', 'tiktok'], provider: 'anthropic' };
   const videoId = String(videoPack.videoId || '').trim();
