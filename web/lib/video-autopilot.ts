@@ -110,6 +110,18 @@ export type SweepResult = {
   queuedExisting: number;
   /** Rows with a video that sit above the start row — seen, never prepared. */
   belowStart: number;
+  /**
+   * WHY the walk did not reach every row — the counters that tell apart "the
+   * queue is off", "those rows were done before", "those rows are retired" and
+   * "the run ran out of time". Added when a fortnight of quarter-hour runs
+   * left 90 copy rows untouched and the line could not say which gate held them.
+   */
+  withCopy: number;
+  doneBefore: number;
+  retired: number;
+  priorErrors: number;
+  queueOn: boolean;
+  stoppedWhy?: 'time' | 'max_videos' | 'per_run_cap' | 'quota' | 'columns';
   /** Drafts that were waiting for their video and got it on this run. */
   attached: number;
   /**
@@ -202,6 +214,12 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
     metricoolDrafts: result.metricoolDrafts,
     newlySeen: result.newlySeen,
     stoppedEarly: result.stoppedEarly,
+    ...(result.stoppedWhy ? { stoppedWhy: result.stoppedWhy } : {}),
+    withCopy: result.withCopy,
+    doneBefore: result.doneBefore,
+    retired: result.retired,
+    priorErrors: result.priorErrors,
+    queueOn: result.queueOn,
     startRow: startRow ? (startRow.tab ? startRow.tab + '!' : '') + startRow.row : 'none',
     ...(result.ok ? {} : { error: 'Google access is not set up, so the sheet cannot be read.' }),
   });
@@ -217,7 +235,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
   const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
   const admin = supabaseAdmin();
 
-  const result: SweepResult = { ok: true, scanned: 0, candidates: 0, prepared: 0, needsTranscript: 0, failed: 0, metricoolDrafts: 0, rows: [], stoppedEarly: false, newlySeen: 0, hidden: 0, queuedExisting: 0, belowStart: 0, attached: 0 };
+  const result: SweepResult = { ok: true, scanned: 0, candidates: 0, prepared: 0, needsTranscript: 0, failed: 0, metricoolDrafts: 0, rows: [], stoppedEarly: false, newlySeen: 0, hidden: 0, queuedExisting: 0, belowStart: 0, attached: 0, withCopy: 0, doneBefore: 0, retired: 0, priorErrors: 0, queueOn: false };
   if (!sourcesConfigured()) {
     return { ...result, ok: false };
   }
@@ -274,6 +292,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
   // Rows whose copy a person already wrote are queued, not written — with
   // their own per-run cap, because they cost seconds rather than minutes.
   const queueExisting = queueExistingEnabled(process.env);
+  result.queueOn = queueExisting;
   let existingThisRun = 0;
   // Rows prepared earlier whose drafts still wait for the video: attached
   // in the walk, a few per run — one copy and a few Metricool calls each.
@@ -305,7 +324,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
 
   const tabs = await listTabs(spreadsheetId);
   for (const tab of tabs) {
-    if (result.prepared + result.failed + result.needsTranscript >= maxVideos) { result.stoppedEarly = true; break; }
+    if (result.prepared + result.failed + result.needsTranscript >= maxVideos) { result.stoppedEarly = true; result.stoppedWhy = 'max_videos'; break; }
 
     let rows: string[][] = [];
     let hidden = new Set<number>();
@@ -331,8 +350,8 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
     };
 
     for (const { rec, row } of records) {
-      if (Date.now() - started > budgetMs) { result.stoppedEarly = true; break; }
-      if (result.prepared + result.failed + result.needsTranscript >= maxVideos) { result.stoppedEarly = true; break; }
+      if (Date.now() - started > budgetMs) { result.stoppedEarly = true; result.stoppedWhy = 'time'; break; }
+      if (result.prepared + result.failed + result.needsTranscript >= maxVideos) { result.stoppedEarly = true; result.stoppedWhy = 'max_videos'; break; }
 
       result.scanned++;
       // HIDDEN ROWS ARE LEFT ALONE. A row the clinic has hidden is finished,
@@ -390,6 +409,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
       // as seen, and no video_runs query is spent on a row that will not run.
       if (quotaReached()) {
         result.stoppedEarly = true;
+        result.stoppedWhy = 'quota';
         result.rows.push({ tab: tab.title, row, rowKey, title: title || videoLink, state: 'skipped', message: 'Today\u2019s ' + String(quota) + ' are done (' + String(preparedToday + result.prepared + wouldPrepare) + ' prepared); this row waits for the next day.' });
         continue;
       }
@@ -407,6 +427,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
       // every row would look brand new, and the sweep would re-download and
       // re-transcribe the entire sheet. Degrading to "one column absent" is a
       // great deal cheaper than degrading to "no memory at all".
+      if (existingCopy) result.withCopy++;
       const { data: existing, error: priorError } = await admin
         .from('video_runs')
         .select('*')
@@ -416,10 +437,12 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
         // Not knowing whether this row was done before is not a licence to do
         // it again at full price. Skip it and let the next sweep ask again.
         reportError('video-sweep:prior', priorError, { tab: tab.title, row: String(row) });
+        result.priorErrors++;
         continue;
       }
       const prior = existing as { id: string; state: string; attempts: number; updated_at?: string; last_error_code?: string | null; draft_id?: string | null } | null;
       if (prior && prior.state === 'prepared') {
+        result.doneBefore++;
         // DONE — but is it? A row prepared before the Shared Drive existed
         // has drafts with no video (the copy could not be made then), and
         // the publishing list shows them PENDING. The row is finished as far
@@ -444,7 +467,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
         }
         continue;
       }
-      if (prior && prior.state === 'skipped') continue;
+      if (prior && prior.state === 'skipped') { result.retired++; continue; }
       // How many passes this row is worth depends on WHY it stopped.
       //
       // This used to be a flat `attempts >= 3`, which retired a row that had
@@ -452,19 +475,19 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
       // person — and nothing anywhere could un-retire either. A timeout is
       // fixed by trying again; a refusal is not, and two more transcriptions
       // reach it again at full price. lib/failure-kind.ts holds the split.
-      if (prior && !mayRetry(prior.last_error_code ?? null, prior.attempts)) continue;
+      if (prior && !mayRetry(prior.last_error_code ?? null, prior.attempts)) { result.retired++; continue; }
       // Claimed by a sweep that is still running. The hourly cron and the
       // sheet's own edit trigger can fire seconds apart, and transcribing a
       // video takes minutes — without this both would do it, and pay twice.
       // A claim older than the longest a request can live is stale, not held.
-      if (prior && prior.state === 'preparing' && !claimIsStale(prior.updated_at)) continue;
+      if (prior && prior.state === 'preparing' && !claimIsStale(prior.updated_at)) { result.retired++; continue; }
 
       if (existingCopy) {
         // QUEUE, DO NOT WRITE. The copy is the person's; it goes out verbatim.
         // The dashboard draft exists so the publishing list, the PENDING chip
         // and Approve treat this row like any other; the video_runs row exists
         // so a run fifteen minutes from now does not queue it again.
-        if (existingThisRun >= EXISTING_COPY_PER_RUN) { result.stoppedEarly = true; continue; }
+        if (existingThisRun >= EXISTING_COPY_PER_RUN) { result.stoppedEarly = true; result.stoppedWhy = 'per_run_cap'; continue; }
         result.candidates++;
         const draftTitle = title || videoLink;
         if (opts.dryRun) {
@@ -478,6 +501,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
           columns = await columnsFor();
         } catch (e) {
           if (!columnsFailed) { reportError('video-sweep:columns', e, { tab: tab.title }); columnsFailed = true; }
+          result.stoppedEarly = true; result.stoppedWhy = 'columns';
           break;
         }
         const queued = await queueExistingCopyRow({
@@ -534,6 +558,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
         columns = await columnsFor();
       } catch (e) {
         if (!columnsFailed) { reportError('video-sweep:columns', e, { tab: tab.title }); columnsFailed = true; }
+        result.stoppedEarly = true; result.stoppedWhy = 'columns';
         break; // this whole tab is unwritable; the next sweep will retry it
       }
 

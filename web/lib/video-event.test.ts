@@ -124,3 +124,15 @@ test('a video_attached line counts the drafts that got their video', () => {
   assert.equal(describeEntry({ event: 'video_attached', actor: 'sweep', detail: { attached: 1 } }), 'The video was attached to 1 draft that was waiting for it.');
   assert.match(describeEntry({ event: 'video_attached', detail: { attached: 1, failed: 1, error: 'Metricool did not answer.' } }), /1 could not be updated — Metricool did not answer\./);
 });
+
+test('a sweep_ran line names the gates that held rows back, when the run recorded them', () => {
+  const said = describeEntry({
+    event: 'sweep_ran', actor: 'sweep',
+    detail: { scanned: 124, hidden: 0, belowStart: 12, startRow: 179, queuedExisting: 0, attached: 0, prepared: 0, needsTranscript: 0, failed: 0, withCopy: 90, queueOn: true, doneBefore: 14, retired: 19, priorErrors: 0, stoppedEarly: true, stoppedWhy: 'time' },
+  });
+  assert.equal(said, 'Sweep ran: 124 rows seen \u00b7 0 hidden \u00b7 12 below row 179 \u00b7 0 queued with copy \u00b7 0 videos attached to waiting drafts \u00b7 0 prepared \u00b7 0 need a transcript \u00b7 0 failed \u00b7 90 with copy to queue \u00b7 14 done before \u00b7 19 retired or claimed \u00b7 stopped early (out of time).');
+  // Queuing switched off is said in so many words — it is the one setting that silently holds every copy row.
+  assert.match(describeEntry({ event: 'sweep_ran', detail: { scanned: 1, withCopy: 90, queueOn: false } }), /90 with copy to queue \(queuing is OFF\)/);
+  // An unknown reason is still shown rather than dropped.
+  assert.match(describeEntry({ event: 'sweep_ran', detail: { scanned: 1, stoppedEarly: true, stoppedWhy: 'odd' } }), /stopped early \(odd\)\.$/);
+});
