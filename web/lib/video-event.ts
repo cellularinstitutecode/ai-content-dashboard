@@ -49,6 +49,15 @@ export const VIDEO_EVENTS = [
 /** The key every sweep_ran line carries: not a video, so no row chip. */
 export const SWEEP_KEY = 'sweep|run';
 
+/** Why a sweep stopped before the last row, in the words the line uses. */
+const STOPPED_WHY: Record<string, string> = {
+  time: 'out of time',
+  max_videos: 'this run\u2019s video limit',
+  per_run_cap: 'this run\u2019s queue cap, the rest next run',
+  quota: 'today\u2019s quota',
+  columns: 'the sheet columns could not be written',
+};
+
 export type VideoEvent = (typeof VIDEO_EVENTS)[number];
 
 /**
@@ -205,7 +214,13 @@ export function describeEntry(e: { event: string; actor?: string; detail?: Recor
         n('needsTranscript') + ' need a transcript',
         n('failed') + ' failed',
       ];
-      if (d.stoppedEarly === true) parts.push('stopped early');
+      // The gate counters, when the run recorded them: WHY the walk did not
+      // reach every row. Older lines without them read exactly as before.
+      if (typeof d.withCopy === 'number') parts.push(n('withCopy') + ' with copy to queue' + (d.queueOn === false ? ' (queuing is OFF)' : ''));
+      if (typeof d.doneBefore === 'number') parts.push(n('doneBefore') + ' done before');
+      if (typeof d.retired === 'number' && n('retired') > 0) parts.push(n('retired') + ' retired or claimed');
+      if (typeof d.priorErrors === 'number' && n('priorErrors') > 0) parts.push(n('priorErrors') + ' could not be looked up');
+      if (d.stoppedEarly === true) parts.push('stopped early' + (typeof d.stoppedWhy === 'string' && d.stoppedWhy ? ' (' + (STOPPED_WHY[d.stoppedWhy] || d.stoppedWhy) + ')' : ''));
       return (d.dryRun === true ? 'Dry run: ' : 'Sweep ran: ') + parts.join(' · ') + '.';
     }
     default:
