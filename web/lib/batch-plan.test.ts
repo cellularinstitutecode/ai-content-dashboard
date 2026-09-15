@@ -77,7 +77,7 @@ test('one cause across several rows reads as one sentence', () => {
     { state: 'failed', note: 'The dashboard cannot open that Drive file.' },
     { state: 'failed', note: 'The dashboard cannot open that Drive file.' },
   ]);
-  assert.deepEqual(out.shown, ['The dashboard cannot open that Drive file.']);
+  assert.deepEqual(out.shown.map((r) => r.text), ['The dashboard cannot open that Drive file.']);
   assert.equal(out.more, 0);
 });
 
@@ -87,7 +87,7 @@ test('different causes are both named', () => {
     { state: 'needs_transcript', note: 'Only a few words could be heard.' },
   ]);
   assert.equal(out.shown.length, 2);
-  assert.ok(out.shown.includes('Only a few words could be heard.'));
+  assert.ok(out.shown.some((r) => r.text === 'Only a few words could be heard.'));
 });
 
 test('a big batch reports the remainder rather than listing everything', () => {
@@ -97,16 +97,69 @@ test('a big batch reports the remainder rather than listing everything', () => {
     { state: 'failed', note: 'Three.' },
     { state: 'failed', note: 'Four.' },
   ]);
-  assert.deepEqual(out.shown, ['One.', 'Two.']);
+  assert.deepEqual(out.shown.map((r) => r.text), ['One.', 'Two.']);
   assert.equal(out.more, 2);
 });
 
 test('a long refusal is trimmed rather than pasted whole', () => {
   const out = reasons([{ state: 'failed', note: 'x'.repeat(400) }]);
-  assert.ok(out.shown[0].length <= 150);
-  assert.ok(out.shown[0].endsWith('…'));
+  assert.ok(out.shown[0].text.length <= 150);
+  assert.ok(out.shown[0].text.endsWith('…'));
 });
 
 test('a failure with no recorded note is skipped, not shown blank', () => {
   assert.deepEqual(reasons([{ state: 'failed' }, { state: 'failed', note: '   ' }]), { shown: [], more: 0 });
+});
+
+// --- every miss names its row ------------------------------------------------
+import { rowLabelFromKey, rowList, runSummary, tallyRows } from './batch-plan.ts';
+
+test('a reason carries the rows it applies to, in row order', () => {
+  const out = reasons([
+    { key: 'Marzo:190', state: 'failed', note: 'Interrupted — press Prepare again to finish this one.' },
+    { key: 'Marzo:183', state: 'failed', note: 'Interrupted — press Prepare again to finish this one.' },
+    { key: 'Marzo:185', state: 'done' },
+  ]);
+  assert.equal(out.shown.length, 1);
+  assert.deepEqual(out.shown[0].rows.map((r) => r.label), ['row 183', 'row 190']);
+  assert.deepEqual(out.shown[0].rows.map((r) => r.key), ['Marzo:183', 'Marzo:190']);
+});
+
+test('the row label names the tab only when the run spans more than one', () => {
+  assert.equal(rowLabelFromKey('Marzo:183'), 'row 183');
+  assert.equal(rowLabelFromKey('Marzo:183', true), 'Marzo · row 183');
+  assert.equal(rowLabelFromKey('2026 CELLULAR HOPE:12', true), '2026 CELLULAR HOPE · row 12');
+  assert.equal(rowLabelFromKey(undefined), '');
+  assert.equal(rowLabelFromKey('nonsense'), 'nonsense');
+  const two = reasons([
+    { key: 'Marzo:183', state: 'failed', note: 'x' },
+    { key: 'Abril:5', state: 'failed', note: 'x' },
+  ]);
+  assert.deepEqual(two.shown[0].rows.map((r) => r.label), ['Abril · row 5', 'Marzo · row 183']);
+});
+
+test('the tally knows which rows are behind each count', () => {
+  const rows = tallyRows([
+    { key: 'Marzo:183', state: 'failed', note: 'x' },
+    { key: 'Marzo:184', state: 'needs_transcript', note: 'y' },
+    { key: 'Marzo:185', state: 'queued' },
+    { key: 'Marzo:186', state: 'done' },
+  ]);
+  assert.deepEqual(rows.failed.map((r) => r.label), ['row 183']);
+  assert.deepEqual(rows.needsTranscript.map((r) => r.label), ['row 184']);
+  assert.deepEqual(rows.pending.map((r) => r.label), ['row 185']);
+  assert.equal(rowList(rows.failed), 'row 183');
+  assert.equal(rowList([{ key: 'a:1', label: 'row 1' }, { key: 'a:2', label: 'row 2' }, { key: 'a:3', label: 'row 3' }, { key: 'a:4', label: 'row 4' }]), 'row 1, row 2, row 3 +1');
+  assert.equal(rowList([]), '');
+});
+
+test('the run summary names every row that did not finish, with its reason', () => {
+  const said = runSummary([
+    { key: 'Marzo:180', state: 'done' },
+    { key: 'Marzo:181', state: 'done' },
+    { key: 'Marzo:190', state: 'needs_transcript', note: 'Only a few words could be heard.' },
+    { key: 'Marzo:183', state: 'failed', note: 'Interrupted — press Prepare again to finish this one.' },
+  ]);
+  assert.equal(said, '2 written into the sheet · 1 need a transcript (row 190) · 1 not done (row 183: Interrupted — press Prepare again to finish this one.)');
+  assert.equal(runSummary([]), 'Nothing to report.');
 });

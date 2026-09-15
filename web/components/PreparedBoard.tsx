@@ -32,6 +32,13 @@ const CONCURRENCY = 4;
 
 const isApproved = (status: unknown) => String(status || '').toLowerCase() === APPROVED_STATUS;
 
+/** "row 183 (youtube)" — a failure names its row before its network. */
+function whichPost(p: Post): string {
+  const row = p.source && typeof p.source.row === 'number' ? 'row ' + p.source.row : '';
+  const nets = (p.providers || []).join('/') || 'post';
+  return row ? row + ' (' + nets + ')' : nets;
+}
+
 export default function PreparedBoard({ videoLinks, recentKeys }: {
   /** `tab:row` → the row's video link, so each line can open the video itself. */
   videoLinks: Record<string, string>;
@@ -100,9 +107,9 @@ export default function PreparedBoard({ videoLinks, recentKeys }: {
           body: JSON.stringify({ id: p.id, action: now ? 'publish_now' : 'approve' }),
         });
         if (r.ok) { ok++; return; }
-        failures.push((p.providers || []).join('/') + ': ' + await friendlyErrorFromResponse(r, 'could not be approved'));
+        failures.push(whichPost(p) + ': ' + await friendlyErrorFromResponse(r, 'could not be approved'));
       } catch (e) {
-        failures.push((p.providers || []).join('/') + ': ' + friendlyError(e, 'could not be approved'));
+        failures.push(whichPost(p) + ': ' + friendlyError(e, 'could not be approved'));
       }
     });
     setSummary((now ? 'Published now: ' : 'Approved: ') + ok + ' of ' + chosen.length + ' post' + (chosen.length === 1 ? '' : 's') + (failures.length ? ' · not done: ' + failures.join('; ') : '') + '.');
