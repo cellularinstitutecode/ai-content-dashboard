@@ -118,5 +118,28 @@ alter table public.video_runs    set (autovacuum_vacuum_scale_factor = 0.05, aut
 alter table public.usage_events  set (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.05);
 
 -- ===========================================================================
+-- C1. Put back transcripts that the public-copy bookkeeping erased.
+--     Until the fix in lib/transcript-cache.ts, recording a video's
+--     world-readable copy replaced its banked transcript with ''. The app now
+--     recovers such a transcript from the video's draft on the next Prepare,
+--     one video at a time. This does the same for every affected row at once.
+--     Read-only check first; the update is commented out.
+-- ===========================================================================
+
+select vt.video_id, vt.chars, length(vt.text) as text_now, vt.public_copy_id
+from public.video_transcripts vt
+where vt.text = '';
+
+-- update public.video_transcripts vt
+-- set text = d.transcript, chars = length(d.transcript), updated_at = now()
+-- from (
+--   select distinct on (pack->>'videoId') pack->>'videoId' as video_id, pack->>'transcript' as transcript
+--   from public.drafts
+--   where pack->>'kind' = 'video' and length(coalesce(pack->>'transcript', '')) >= 40
+--   order by pack->>'videoId', updated_at desc
+-- ) d
+-- where d.video_id = vt.video_id and vt.text = '';
+
+-- ===========================================================================
 -- Done. Re-run section 0 and compare.
 -- ===========================================================================

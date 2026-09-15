@@ -20,6 +20,7 @@ import 'server-only';
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
+import { transcriptFromPacks } from '@/lib/transcript-recall';
 
 export type CachedTranscript = {
   text: string;
@@ -46,8 +47,41 @@ export async function cachedTranscript(videoId: string): Promise<CachedTranscrip
   }
   const row = r.data as { text?: string; source?: string; language?: string | null; title?: string | null } | null;
   const text = String(row?.text || '').trim();
-  if (!text) return null;
+  if (!text) return recallFromDrafts(id);
   return { text, source: String(row?.source || 'drive'), language: row?.language ?? null, title: row?.title ?? null };
+}
+
+/**
+ * The transcript, found again in the draft that was written from it.
+ *
+ * rememberPublicCopy() once replaced a banked transcript with '' every time a
+ * video's public copy was recorded — at the end of every successful Prepare.
+ * The transcript was gone from this table but not from the draft: Prepare
+ * saves it in the pack (lib/video-prepare.ts, saveVideoDraft). So a miss here
+ * looks there before anyone pays for the download and the transcription
+ * again, and re-banks what it finds. One cheap read; never throws.
+ */
+async function recallFromDrafts(videoId: string): Promise<CachedTranscript | null> {
+  const r = await supabaseAdmin()
+    .from('drafts')
+    .select('pack')
+    .eq('pack->>kind', 'video')
+    .eq('pack->>videoId', videoId)
+    .order('updated_at', { ascending: false })
+    .limit(5)
+    .then((x) => x, (e: unknown) => ({ data: null, error: e as { message?: string } }));
+  if (r.error) {
+    reportError('transcript-cache:recall', r.error, { videoId });
+    return null;
+  }
+  const packs = ((r.data || []) as { pack?: Record<string, unknown> | null }[]).map((d) => d.pack);
+  const found = transcriptFromPacks(packs);
+  if (!found) return null;
+  const t: CachedTranscript = { text: found.text, source: 'drive', language: found.language, title: found.title };
+  // Banked again so the next read is the cheap one. cacheTranscript writes only
+  // the transcript columns, so a public copy recorded on the row is kept.
+  await cacheTranscript(videoId, t);
+  return t;
 }
 
 /**
@@ -119,25 +153,46 @@ export async function cachedPublicCopy(videoId: string): Promise<{ id: string; u
 /**
  * Remember the copy, or forget it once it has been deleted.
  *
- * Upsert rather than update: a video whose copy is made before its transcript is cached
- * has no row yet, and losing the record would put us straight back to making a second
- * copy on the next run. `text` is required by the table, so an empty string stands in
- * until the transcript itself arrives and replaces it.
+ * UPDATE first, and INSERT only when the video has no row yet. This used to be
+ * one upsert carrying `text: ''` — meant as a placeholder for a video whose
+ * copy is made before its transcript is cached, but an upsert MERGES, so on a
+ * video that already had its transcript banked the placeholder overwrote it.
+ * That ran at the end of every successful Prepare: every success erased the
+ * transcript, and the next press paid the download and the transcription
+ * again, past the time the request had. The transcript columns are never
+ * touched here now; the placeholder row is only ever created, never merged.
  */
 export async function rememberPublicCopy(videoId: string, copy: { id: string; url: string } | null): Promise<void> {
   const key = String(videoId || '').trim();
   if (!key) return;
-  const r = await supabaseAdmin()
+  const admin = supabaseAdmin();
+  const patch = {
+    public_copy_id: copy?.id ?? null,
+    public_copy_url: copy?.url ?? null,
+    updated_at: new Date().toISOString(),
+  };
+  const updated = await admin
     .from('video_transcripts')
-    .upsert({
-      video_id: key,
-      text: '',
-      public_copy_id: copy?.id ?? null,
-      public_copy_url: copy?.url ?? null,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'video_id', ignoreDuplicates: false })
+    .update(patch)
+    .eq('video_id', key)
+    .select('video_id')
+    .then((x) => x, (e: unknown) => ({ data: null, error: e as { message?: string } }));
+  if (updated.error) {
+    reportError('transcript-cache:copy-write', updated.error, { videoId: key });
+    return;
+  }
+  if (Array.isArray(updated.data) && updated.data.length) return;
+  // No row yet: the copy was made before the transcript. A placeholder row,
+  // created once — a transcript that arrives later replaces the empty text.
+  const inserted = await admin
+    .from('video_transcripts')
+    .insert({ video_id: key, text: '', chars: 0, ...patch })
     .then((x) => x, (e: unknown) => ({ error: e as { message?: string } }));
-  if (r.error) reportError('transcript-cache:copy-write', r.error, { videoId: key });
+  // A row that appeared between the two statements is fine: it has the
+  // transcript, and the copy is remembered on the next call.
+  if (inserted.error && !/duplicate|unique|23505/i.test(String(inserted.error.message || ''))) {
+    reportError('transcript-cache:copy-insert', inserted.error, { videoId: key });
+  }
 }
 
 /**

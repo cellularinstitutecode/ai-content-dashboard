@@ -18,6 +18,10 @@ import { parseVideoUrl } from '@/lib/composer';
 import { prepareVideo } from '@/lib/video-prepare';
 import { completeRow, findRowByLink } from '@/lib/video-autopilot';
 import { recordRowFailure } from '@/lib/video-runs';
+import { recordVideoEvent } from '@/lib/video-register';
+import { videoKeyFor } from '@/lib/video-event';
+import { rowKeyFor } from '@/lib/video-row';
+import { SOURCE_IDS } from '@/lib/google-sources';
 import { cachedPublicCopy } from '@/lib/transcript-cache';
 import { GoogleSourceError, serviceAccountEmail } from '@/lib/google-sources';
 import { reportError } from '@/lib/report';
@@ -132,6 +136,26 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         reportError('videos:prepare-record-failure', e, { tab, row: String(row) });
       }
+    }
+    // And say so where a person looks. video_runs is the sweep's memory; the
+    // "Recently added" register is the person's — and until now a Prepare
+    // that failed from the button left no line there at all, so the row and
+    // the reason were nowhere on the page. Same key as the sweep's lines when
+    // the row is known, so they thread together; the video itself otherwise.
+    {
+      const sheetId = SOURCE_IDS.videosSheet();
+      const hasRow = Boolean(tab) && Number.isInteger(row) && row >= 2;
+      const fileId = parseDriveFileId(url);
+      const videoKey = hasRow && sheetId ? videoKeyFor(sheetId, tab, rowKeyFor(out.title || '', url)) : 'drive|' + (fileId || url);
+      void recordVideoEvent({
+        userId: auth.userId,
+        videoKey,
+        event: 'failed',
+        actor: 'button',
+        title: out.title || null,
+        link: url,
+        detail: { ...(hasRow ? { tab, row } : {}), state: out.needsPaste ? 'needs_transcript' : 'failed', reason: out.error, error: out.message },
+      }).catch((e: unknown) => reportError('videos:prepare-register', e, { tab, row: String(row) }));
     }
     return NextResponse.json(
       { error: out.error, message: out.message, needsPaste: out.needsPaste, title: out.title },
