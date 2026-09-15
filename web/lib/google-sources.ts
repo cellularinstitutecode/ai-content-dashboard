@@ -32,6 +32,7 @@ import { classifyGoogleError, type GoogleFailure } from './google-error.ts';
 
 export { classifyGoogleError, type GoogleFailure };
 import { parseSheetDate, pick, tableFromRows, columnFor, columnLetter } from '@/lib/sheet-table';
+import { gridText, type SheetCell } from '@/lib/sheet-cells';
 
 // The clinic's documents. Overridable per environment, never secret.
 export const SOURCE_IDS = {
@@ -220,8 +221,37 @@ export async function listTabs(spreadsheetId: string): Promise<SheetMeta[]> {
   }));
 }
 
+/**
+ * A tab as text, one array per row — WITH the link behind a linked cell.
+ *
+ * The values API returns what a cell displays. A video cell whose text is the
+ * file name with the Drive link attached (Insert → Link, or a pasted link
+ * Google turned into a title) therefore read as "Testimonio Lance_sub.mp4"
+ * and the sweep saw no video at all — which is how rows 179 onward of the
+ * clinic's sheet were being walked past. spreadsheets.get with a field mask
+ * returns the display text and the link together; lib/sheet-cells.ts folds
+ * them into the same string[][] every caller already reads.
+ *
+ * The values read stays as the fallback: if the richer read fails for any
+ * reason (a field the API stops accepting, a quota blip) the tab is read the
+ * old way and the failure is reported once, so no caller is ever worse off
+ * than before.
+ */
 export async function readTab(spreadsheetId: string, tab: string): Promise<string[][]> {
   const range = encodeURIComponent("'" + tab.replace(/'/g, "''") + "'");
+  try {
+    const res = await gfetch(
+      SHEETS_BASE() + '/v4/spreadsheets/' + encodeURIComponent(spreadsheetId) +
+      '?ranges=' + range + '&fields=' + encodeURIComponent('sheets.data.rowData.values(formattedValue,hyperlink,textFormatRuns.format.link.uri)'),
+    );
+    const j = await json<{ sheets?: { data?: { rowData?: { values?: SheetCell[] }[] }[] }[] }>(res, 'sheet read');
+    const data = j.sheets?.[0]?.data?.[0];
+    // A sheet with nothing on it comes back with no rowData at all; that is an
+    // empty tab, not a failed read, and must not fall through to a second call.
+    if (data) return gridText(data.rowData);
+  } catch (e) {
+    reportError('sources:read-tab-rich', e, { tab });
+  }
   const res = await gfetch(SHEETS_BASE() + '/v4/spreadsheets/' + encodeURIComponent(spreadsheetId) + '/values/' + range + '?majorDimension=ROWS');
   const j = await json<{ values?: string[][] }>(res, 'sheet read');
   return j.values || [];

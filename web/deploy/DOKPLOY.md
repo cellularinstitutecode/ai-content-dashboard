@@ -30,7 +30,10 @@ Open `.env.dokploy`. It is the exact production set. Two edits before pasting:
 - **delete `FFMPEG_DOWNLOAD_URL` and `FFMPEG_SHA256`** if present — the image has ffmpeg on disk.
 
 Everything else stays exactly as it is, `CRON_SECRET` included (the schedules
-use it).
+use it). That includes the pacing settings (`VIDEO_START_ROW`,
+`VIDEO_DAILY_QUOTA`, `VIDEO_AUTOPILOT_TIMES`, `VIDEO_POST_DAYS`): the copy
+reads the same values, and since only one side runs the video schedule the
+daily count is never doubled.
 
 ### 2. Create the application
 
