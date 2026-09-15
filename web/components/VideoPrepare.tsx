@@ -17,7 +17,7 @@ import { parseVideoUrl, NETWORKS_NEEDING_MEDIA } from '@/lib/composer';
 import { isDriveUrl } from '@/lib/drive-url';
 import { fitsNetwork } from '@/lib/video-row';
 import { MediaPreview } from '@/components/MediaPicker';
-import type { BatchReasons } from '@/lib/batch-plan';
+import { rowList, type BatchReasons, type RowRef } from '@/lib/batch-plan';
 
 export type Prepared = {
   draftId: string | null;
@@ -83,7 +83,7 @@ export type BatchTally = {
   pending: number;
 };
 
-export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, batch, batchReasons, batchRunning }: {
+export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, batch, batchReasons, batchRows, batchRunning, onJump }: {
   initialUrl?: string;
   blogId?: string;
   /**
@@ -117,7 +117,11 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, bat
    * the answer should say it.
    */
   batchReasons?: BatchReasons | null;
+  /** The rows behind each count, so "✗ 1 not done" can say which row. */
+  batchRows?: { failed: RowRef[]; needsTranscript: RowRef[]; pending: RowRef[] } | null;
   batchRunning?: boolean;
+  /** Take the person to that row in the table below — a line that names a row should go there. */
+  onJump?: (key: string) => void;
 }) {
   const [url, setUrl] = useState(initialUrl || '');
   const [pasted, setPasted] = useState('');
@@ -272,8 +276,8 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, bat
           {/* The same pills, and the same three colours, the single-run badges below use. */}
           {batch.done > 0 && <span style={{ background: '#eaf7ee', color: '#1f6b3a', borderRadius: 999, padding: '3px 9px' }}>✓ {batch.done} written into the sheet</span>}
           {batch.pending > 0 && <span style={{ background: '#eef3ff', color: '#1d4ed8', borderRadius: 999, padding: '3px 9px' }}>{batch.pending} to go</span>}
-          {batch.needsTranscript > 0 && <span style={{ background: '#fff8e6', color: '#8a5a00', borderRadius: 999, padding: '3px 9px' }}>{batch.needsTranscript} need a transcript</span>}
-          {batch.failed > 0 && <span style={{ background: '#fff2f2', color: '#a1252b', borderRadius: 999, padding: '3px 9px' }}>✗ {batch.failed} not done</span>}
+          {batch.needsTranscript > 0 && <span style={{ background: '#fff8e6', color: '#8a5a00', borderRadius: 999, padding: '3px 9px' }}>{batch.needsTranscript} need a transcript{batchRows?.needsTranscript.length ? ' · ' + rowList(batchRows.needsTranscript) : ''}</span>}
+          {batch.failed > 0 && <span style={{ background: '#fff2f2', color: '#a1252b', borderRadius: 999, padding: '3px 9px' }}>✗ {batch.failed} not done{batchRows?.failed.length ? ' · ' + rowList(batchRows.failed) : ''}</span>}
           {!batchReasons?.shown.length && (
             <span style={{ opacity: .7 }}>Row-by-row detail is in the Videos table below.</span>
           )}
@@ -281,7 +285,22 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, bat
       )}
       {batch && batch.total > 0 && Boolean(batchReasons?.shown.length) && (
         <div style={{ marginTop: 6, display: 'grid', gap: 4, fontSize: 12, color: '#a1252b' }}>
-          {batchReasons!.shown.map((r) => (<span key={r}>· {r}</span>))}
+          {batchReasons!.shown.map((r) => (
+            <span key={r.text}>
+              {'\u00b7 '}
+              {r.rows.map((row, i) => (
+                <span key={row.key}>
+                  {i > 0 ? ', ' : ''}
+                  {onJump ? (
+                    <button type="button" onClick={() => onJump(row.key)} title="Go to this row in the table below" style={{ background: 'none', border: '1px solid rgba(161,37,43,0.35)', borderRadius: 999, padding: '0 7px', fontSize: 11, fontWeight: 600, color: '#a1252b', cursor: 'pointer' }}>
+                      {row.label}
+                    </button>
+                  ) : <strong>{row.label}</strong>}
+                </span>
+              ))}
+              {r.rows.length ? ' — ' : ''}{r.text}
+            </span>
+          ))}
           {batchReasons!.more > 0 && (
             <span style={{ opacity: .7, color: '#555' }}>
               and {batchReasons!.more} other {batchReasons!.more === 1 ? 'reason' : 'reasons'} — the rest is in the Videos table below.

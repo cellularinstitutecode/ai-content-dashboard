@@ -24,7 +24,7 @@ import VideoPrepare, { type Prepared } from '@/components/VideoPrepare';
 import { ensureVideoAttachable, fetchShareableVideos } from '@/components/MediaPicker';
 import { runPrepare } from '@/lib/prepare-request';
 import { mapLimit } from '@/lib/map-limit';
-import { mayStartBatch, reasons, tally, type BatchReasons, type BatchState } from '@/lib/batch-plan';
+import { mayStartBatch, reasons, runSummary, tally, tallyRows, type BatchReasons, type BatchState } from '@/lib/batch-plan';
 import { isDriveUrl, parseDriveFileId } from '@/lib/drive-url';
 import { parseFromRow, rowsBetween, rowsFrom } from '@/lib/rows-from';
 import { attachPlanFor, pendingPosts, postsByRow } from '@/lib/attach-plan';
@@ -590,7 +590,12 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   const liveTally = useMemo(() => tally(Object.values(batch).map((b) => b.state)), [batch]);
   // WHY the ones that stopped, stopped. Every failed row already carries the
   // server's own sentence; until now it only reached the table far below.
-  const liveReasons = useMemo(() => reasons(Object.values(batch)), [batch]);
+  // With the row KEYS, so every reason and every count can name its rows.
+  const batchEntries = useMemo(() => Object.entries(batch).map(([key, b]) => ({ key, ...b })), [batch]);
+  const liveReasons = useMemo(() => reasons(batchEntries), [batchEntries]);
+  const liveRows = useMemo(() => tallyRows(batchEntries), [batchEntries]);
+  /** The finished run, with the rows behind every miss — read from the same map the chips use. */
+  const liveSummary = useMemo(() => (batchEntries.length ? runSummary(batchEntries) : null), [batchEntries]);
 
   /**
    * The basket, kept across a reload.
@@ -773,7 +778,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     });
 
     setRunning(false);
-    setSummary(summarise(outcomes));
+    setSummary(null); // the live summary below reads the finished map, rows included
 
     // One row, pressed deliberately: take them to the finished result.
     //
@@ -864,7 +869,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
       creating.forEach((p, i) => { if (slots[i]) slotFor.set(rowKey(p.v), slots[i]); });
     }
 
-    const outcomes = await mapLimit(plans, BATCH_CONCURRENCY, async (p): Promise<BatchState> => {
+    await mapLimit(plans, BATCH_CONCURRENCY, async (p): Promise<BatchState> => {
       const k = rowKey(p.v);
       const finish = (state: BatchState, note?: string): BatchState => {
         setBatch((b) => ({ ...b, [k]: note ? { state, note } : { state } }));
@@ -923,24 +928,23 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     });
 
     setRunning(false);
-    setSummary(summarise(outcomes));
+    setSummary(null); // the live summary below reads the finished map, rows included
     await load('videos', true);
   }
 
   /**
-   * What the run added up to, tallied from what mapLimit RETURNED.
-   *
-   * Not read back out of the batch state: that is a React store being written from
-   * several lanes at once, and reading it inside an updater to count it is a side effect
-   * in the wrong place. The outcomes come back in input order; count those.
+   * Take the person to a row in the Videos table — the thing a summary line
+   * that names a row should do, instead of saying "see the table below".
    */
-  function summarise(outcomes: readonly BatchState[]): string {
-    const n = (want: BatchState) => outcomes.filter((o) => o === want).length;
-    const parts: string[] = [];
-    if (n('done')) parts.push(n('done') + ' written into the sheet');
-    if (n('needs_transcript')) parts.push(n('needs_transcript') + ' need a transcript');
-    if (n('failed')) parts.push(n('failed') + ' not done');
-    return parts.join(' · ') || 'Nothing to report.';
+  function jumpToRow(key: string) {
+    if (typeof document === 'undefined') return;
+    const el = document.getElementById('video-row-' + key);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const before = el.style.background;
+    el.style.transition = 'background 0.3s';
+    el.style.background = '#fff3c4';
+    window.setTimeout(() => { el.style.background = before; }, 1400);
   }
 
   function prepareLink(v: VideoEntry): string {
@@ -1185,7 +1189,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
         {tab === 'videos' && (
           <div style={{ display: 'grid', gap: 20 }}>
             <VideoRegister />
-          <VideoPrepare result={shown ? results[shown] ?? null : null} batch={liveTally} batchReasons={liveReasons} batchRunning={running} />
+          <VideoPrepare result={shown ? results[shown] ?? null : null} batch={liveTally} batchReasons={liveReasons} batchRows={liveRows} batchRunning={running} onJump={jumpToRow} />
             {/*
               Every video that has drafts, one line each, with a batch Approve.
               The panel above shows ONE result; this is the whole of what was
@@ -1368,7 +1372,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                       The first {BATCH_MAX} only: past that the hourly limit starts refusing them. Run it again for the rest.
                     </span>
                   )}
-                  {summary && <span style={{ fontSize: 12, fontWeight: 600 }}>{summary}</span>}
+                  {(summary || (!running && liveSummary)) && <span style={{ fontSize: 12, fontWeight: 600 }}>{summary || liveSummary}</span>}
                   {pickedWithCopy > 0 && (
                     <span style={{ fontSize: 11, color: '#8a6d00' }}>
                       {pickedWithCopy} of these already {pickedWithCopy === 1 ? 'has' : 'have'} copy. Copy already written is never overwritten, so {pickedWithCopy === 1 ? 'it' : 'they'} will cost a run and change nothing.
@@ -1416,7 +1420,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                       <tbody>
                         {shownVideos.map((v, i) => (
                           <Fragment key={i}>
-                          <tr style={{ borderTop: '1px solid rgba(0,0,0,0.08)', verticalAlign: 'top' }}>
+                          <tr id={'video-row-' + v.tab + ':' + v.row} style={{ borderTop: '1px solid rgba(0,0,0,0.08)', verticalAlign: 'top' }}>
                             <td style={{ padding: '8px' }}>
                               {prepareLink(v) && (
                                 <input

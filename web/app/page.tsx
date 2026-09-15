@@ -778,18 +778,22 @@ finally { setApprovingId(null); }
 // post, so each still passes the AVISO/REF gate and the video gate on its
 // own. One confirmation for the lot; failures are named, the rest go ahead.
 async function approveSelected(now = false) {
-const ids = safePosts.filter((p: any) => selectedPosts.has(String(p?.id || '')) && isAwaitingApproval(p?.status) && p?.videoPending !== true).map((p: any) => String(p.id));
+const chosen = safePosts.filter((p: any) => selectedPosts.has(String(p?.id || '')) && isAwaitingApproval(p?.status) && p?.videoPending !== true);
+const ids = chosen.map((p: any) => String(p.id));
+// A failure names its row before its network — "row 183 (youtube): …".
+const which = (p: any) => (typeof p?.source?.row === 'number' ? 'row ' + p.source.row + ' (' : '(') + ((p?.providers || []).join('/') || 'post') + ')';
 if (!ids.length || bulkBusy) return;
 const when = now ? 'in the next couple of minutes' : 'each at its scheduled time';
 if (typeof window !== 'undefined' && !window.confirm((now ? 'Publish ' : 'Approve ') + ids.length + ' post' + (ids.length === 1 ? '' : 's') + (now ? ' now' : '') + '?\n\nThey will go out ' + when + '. Metricool does the publishing.')) return;
 setBulkBusy(true);
 const failures: string[] = [];
 let ok = 0;
-await mapLimit(ids, 4, async (id) => {
+await mapLimit(chosen, 4, async (p: any) => {
+const id = String(p.id);
 try {
 const r = await fetch('/api/posts', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, action: now ? 'publish_now' : 'approve' }) });
-if (r.ok) ok++; else failures.push(await friendlyErrorFromResponse(r, 'one post could not be approved'));
-} catch (e) { failures.push(friendlyError(e, 'one post could not be approved')); }
+if (r.ok) ok++; else failures.push(which(p) + ': ' + await friendlyErrorFromResponse(r, 'could not be approved'));
+} catch (e) { failures.push(which(p) + ': ' + friendlyError(e, 'could not be approved')); }
 });
 setActionMsg(failures.length ? (ok + ' of ' + ids.length + ' approved. Not done: ' + failures.join('; ')) : null);
 setBulkBusy(false);
