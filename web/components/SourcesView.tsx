@@ -644,10 +644,18 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   // the boxes show, once, after mount; a stored basket value still wins.
   useEffect(() => {
     const shown = (el: HTMLInputElement | null) => String(el?.value || '').replace(/[^0-9]/g, '');
-    const f = shown(fromRef.current);
-    const t = shown(toRef.current);
-    if (f) setFromRow((cur) => cur || f);
-    if (t) setToRow((cur) => cur || t);
+    const sync = () => {
+      const f = shown(fromRef.current);
+      const t = shown(toRef.current);
+      if (f) setFromRow((cur) => cur || f);
+      if (t) setToRow((cur) => cur || t);
+    };
+    sync();
+    // The restoration can land AFTER mount; look again shortly, and on the
+    // page being shown from the back/forward cache.
+    const timer = window.setTimeout(sync, 800);
+    window.addEventListener('pageshow', sync);
+    return () => { window.clearTimeout(timer); window.removeEventListener('pageshow', sync); };
   }, []);
 
   function togglePick(v: VideoEntry) {
@@ -788,10 +796,10 @@ export default function SourcesView({ kind }: { kind: Tab }) {
    * video are reported as done without a single call. Nothing is removed or
    * rewritten, and nothing publishes.
    */
-  async function attachRange() {
+  async function attachRange(keys: readonly string[]) {
     if (running || !videos) return;
     const byKey = new Map(videos.entries.map((v) => [rowKey(v), v] as const));
-    const rows = rangeKeys.map((k) => byKey.get(k)).filter((v): v is VideoEntry => Boolean(v)).slice(0, BATCH_MAX);
+    const rows = keys.map((k) => byKey.get(k)).filter((v): v is VideoEntry => Boolean(v)).slice(0, BATCH_MAX);
     if (!rows.length) return;
     setRunning(true);
     stopRef.current = false;
@@ -1204,6 +1212,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                       value={fromRow}
                       onChange={(e) => setFromRow(e.target.value.replace(/[^0-9]/g, ''))}
                       onBlur={(e) => setFromRow(e.target.value.replace(/[^0-9]/g, ''))}
+                      onFocus={(e) => setFromRow(e.target.value.replace(/[^0-9]/g, ''))}
                       autoComplete="off"
                       inputMode="numeric"
                       placeholder="179"
@@ -1219,6 +1228,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                       value={toRow}
                       onChange={(e) => setToRow(e.target.value.replace(/[^0-9]/g, ''))}
                       onBlur={(e) => setToRow(e.target.value.replace(/[^0-9]/g, ''))}
+                      onFocus={(e) => setToRow(e.target.value.replace(/[^0-9]/g, ''))}
                       autoComplete="off"
                       inputMode="numeric"
                       placeholder="end"
@@ -1245,20 +1255,45 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                     it are reported as done without a call. Ticking rows by
                     hand (the header checkbox, "Prepare N videos") is untouched.
                   */}
+                  {/*
+                    NEVER disabled on a value the page cannot trust. The browser
+                    can put "179" back into the box after a reload without
+                    telling React, so the state said "empty" while the screen
+                    said 179 and the button sat grey under a hint asking for a
+                    row that was plainly there. The press reads the boxes
+                    themselves, adopts what they show, and runs on that.
+                  */}
                   <button
                     type="button"
-                    style={{ ...btn, opacity: rangeKeys.length && !running ? 1 : .6 }}
-                    disabled={running || !rangeKeys.length}
-                    onClick={() => void attachRange()}
+                    style={{ ...btn, opacity: videos && !running ? 1 : .6 }}
+                    disabled={running || !videos}
+                    onClick={() => {
+                      const f = String(fromRef.current?.value ?? fromRow).replace(/[^0-9]/g, '');
+                      const t = String(toRef.current?.value ?? toRow).replace(/[^0-9]/g, '');
+                      if (f !== fromRow) setFromRow(f);
+                      if (t !== toRow) setToRow(t);
+                      const from = parseFromRow(f);
+                      if (from == null) {
+                        setSummary('Type the first row in the “From row” box, then press Attach videos.');
+                        fromRef.current?.focus();
+                        return;
+                      }
+                      const keys = rowsBetween(rangeRows, from, parseFromRow(t), fromTabInUse);
+                      if (!keys.length) {
+                        setSummary('No row with a video between ' + from + ' and ' + (parseFromRow(t) ?? 'the end') + (tabsWithWork.length > 1 ? ' on ' + fromTabInUse : '') + '.');
+                        return;
+                      }
+                      void attachRange(keys);
+                    }}
                     title="Every draft in this range ends up with its video: rows with no copy are prepared, rows with copy are queued with the video unchanged, drafts waiting for their video get it. Nothing publishes."
                   >
-                    {running ? 'Working…' : parseFromRow(fromRow) == null
+                    {running ? 'Working…' : parseFromRow(fromRow) == null || !rangeKeys.length
                       ? 'Attach videos'
                       : 'Attach videos · ' + Math.min(rangeKeys.length, BATCH_MAX) + ' row' + (Math.min(rangeKeys.length, BATCH_MAX) === 1 ? '' : 's')}
                   </button>
                   <span style={{ opacity: .6 }}>
                     {parseFromRow(fromRow) == null
-                      ? 'Type the first row (and, if you want, the last). Every row with a video in that range gets its draft and its video; nothing publishes.'
+                      ? 'Every row with a video from the first row (to the last, if you give one) gets its draft and its video; nothing publishes.'
                       : 'Rows ' + parseFromRow(fromRow) + ' to ' + (parseFromRow(toRow) ?? 'the end') + (tabsWithWork.length > 1 ? ' on ' + fromTabInUse : '') + ': ' +
                         rangeKeys.length + ' with a video' + (fromRowKeys.length ? ', ' + fromRowKeys.length + ' still without copy (prepared first)' : '') + '.'}
                     {rangeKeys.length > BATCH_MAX ? ' The first ' + BATCH_MAX + ' run now; press again for the rest.' : ''}
