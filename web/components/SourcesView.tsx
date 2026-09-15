@@ -1190,15 +1190,6 @@ export default function SourcesView({ kind }: { kind: Tab }) {
           <div style={{ display: 'grid', gap: 20 }}>
             <VideoRegister />
           <VideoPrepare result={shown ? results[shown] ?? null : null} batch={liveTally} batchReasons={liveReasons} batchRows={liveRows} batchRunning={running} onJump={jumpToRow} />
-            {/*
-              Every video that has drafts, one line each, with a batch Approve.
-              The panel above shows ONE result; this is the whole of what was
-              clicked, with its drafts, ready to release together.
-            */}
-            <PreparedBoard
-              videoLinks={Object.fromEntries((videos?.entries || []).map((v) => [rowKey(v), prepareLink(v)]))}
-              recentKeys={Object.keys(batch)}
-            />
             <section style={{ ...card, padding: 0, overflow: 'hidden' }}>
               {ids && <SheetFrame id={ids.videos} title="Distribución RRSS CHI" height={sheetHeight - 60} />}
             </section>
@@ -1536,6 +1527,16 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                   </div>
                 )}
             </section>
+            {/*
+              Every video that has drafts, one line each, with a batch Approve.
+              The Prepare panel at the top shows ONE result; this, at the very
+              bottom — below the sheet and the Videos table — is everything that
+              was clicked, with its drafts, ready to release together.
+            */}
+            <PreparedBoard
+              videoLinks={Object.fromEntries((videos?.entries || []).map((v) => [rowKey(v), prepareLink(v)]))}
+              recentKeys={Object.keys(batch)}
+            />
           </div>
         )}
 
