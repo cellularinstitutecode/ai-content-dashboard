@@ -56,3 +56,21 @@ test('the grid keeps the row numbering the values API has', () => {
   assert.deepEqual(gridText(null), []);
   assert.deepEqual(gridText([]), []);
 });
+
+import { hiddenRows } from './sheet-cells.ts';
+
+test('hidden rows are named by their sheet row number, hidden by hand or by a filter', () => {
+  const meta = [
+    {},                        // row 1, the header, visible
+    { hiddenByUser: true },    // row 2
+    { hiddenByUser: true },    // row 3
+    { hiddenByFilter: true },  // row 4
+    null,                      // row 5
+    { hiddenByUser: false, hiddenByFilter: false }, // row 6
+  ];
+  assert.deepEqual([...hiddenRows(meta)], [2, 3, 4]);
+  assert.deepEqual([...hiddenRows(null)], []);
+  assert.deepEqual([...hiddenRows([])], []);
+  // A range that does not start at row 1 offsets accordingly.
+  assert.deepEqual([...hiddenRows([{ hiddenByUser: true }], 179)], [179]);
+});

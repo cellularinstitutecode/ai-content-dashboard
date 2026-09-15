@@ -32,7 +32,7 @@ import { classifyGoogleError, type GoogleFailure } from './google-error.ts';
 
 export { classifyGoogleError, type GoogleFailure };
 import { parseSheetDate, pick, tableFromRows, columnFor, columnLetter } from '@/lib/sheet-table';
-import { gridText, type SheetCell } from '@/lib/sheet-cells';
+import { gridText, hiddenRows, type SheetCell, type SheetRowMeta } from '@/lib/sheet-cells';
 
 // The clinic's documents. Overridable per environment, never secret.
 export const SOURCE_IDS = {
@@ -237,24 +237,40 @@ export async function listTabs(spreadsheetId: string): Promise<SheetMeta[]> {
  * old way and the failure is reported once, so no caller is ever worse off
  * than before.
  */
-export async function readTab(spreadsheetId: string, tab: string): Promise<string[][]> {
+export type TabRead = {
+  rows: string[][];
+  /**
+   * 1-based row numbers hidden in the sheet (by a person or a filter). The
+   * clinic hides rows that are done or parked, and hidden means out of bounds
+   * for the app: not listed, not prepared, not written to. Empty on the
+   * values-API fallback, which cannot see it — so a fallback read is also
+   * reported, never silent.
+   */
+  hidden: Set<number>;
+};
+
+export async function readTabWithMeta(spreadsheetId: string, tab: string): Promise<TabRead> {
   const range = encodeURIComponent("'" + tab.replace(/'/g, "''") + "'");
   try {
     const res = await gfetch(
       SHEETS_BASE() + '/v4/spreadsheets/' + encodeURIComponent(spreadsheetId) +
-      '?ranges=' + range + '&fields=' + encodeURIComponent('sheets.data.rowData.values(formattedValue,hyperlink,textFormatRuns.format.link.uri)'),
+      '?ranges=' + range + '&fields=' + encodeURIComponent('sheets.data(rowData.values(formattedValue,hyperlink,textFormatRuns.format.link.uri),rowMetadata(hiddenByUser,hiddenByFilter))'),
     );
-    const j = await json<{ sheets?: { data?: { rowData?: { values?: SheetCell[] }[] }[] }[] }>(res, 'sheet read');
+    const j = await json<{ sheets?: { data?: { rowData?: { values?: SheetCell[] }[]; rowMetadata?: SheetRowMeta[] }[] }[] }>(res, 'sheet read');
     const data = j.sheets?.[0]?.data?.[0];
     // A sheet with nothing on it comes back with no rowData at all; that is an
     // empty tab, not a failed read, and must not fall through to a second call.
-    if (data) return gridText(data.rowData);
+    if (data) return { rows: gridText(data.rowData), hidden: hiddenRows(data.rowMetadata) };
   } catch (e) {
     reportError('sources:read-tab-rich', e, { tab });
   }
   const res = await gfetch(SHEETS_BASE() + '/v4/spreadsheets/' + encodeURIComponent(spreadsheetId) + '/values/' + range + '?majorDimension=ROWS');
   const j = await json<{ values?: string[][] }>(res, 'sheet read');
-  return j.values || [];
+  return { rows: j.values || [], hidden: new Set() };
+}
+
+export async function readTab(spreadsheetId: string, tab: string): Promise<string[][]> {
+  return (await readTabWithMeta(spreadsheetId, tab)).rows;
 }
 
 /**
@@ -439,13 +455,17 @@ export async function readVideos(spreadsheetId = SOURCE_IDS.videosSheet()): Prom
   const entries: VideoEntry[] = [];
   for (const t of tabs) {
     let rows: string[][] = [];
-    try { rows = await readTab(spreadsheetId, t.title); } catch (e) { reportError('sources:videos-tab', e, { tab: t.title }); continue; }
+    let hidden = new Set<number>();
+    try { ({ rows, hidden } = await readTabWithMeta(spreadsheetId, t.title)); } catch (e) { reportError('sources:videos-tab', e, { tab: t.title }); continue; }
     const { header, headerRow, records } = tableFromRows(rows, ['tipo de video', 'título del video', 'titulo del video', 'copy', 'link video', 'formato', 'title', 'video']);
     if (!header.length) continue;
     // The first column carries the creator's name and has no header.
     const firstKey = header[0] || 'col0';
     const columns = videoColumns(header);
     for (const { rec: r, row } of records) {
+      // Hidden in the sheet → not in the library. What the clinic has put out
+      // of sight is not offered as work, so it cannot be ticked into a batch.
+      if (hidden.has(row)) continue;
       const title = pick(r, 'título del video', 'titulo del video', 'title');
       const videoLink = pick(r, 'link video', 'link', 'video link');
       if (!title && !videoLink) continue;

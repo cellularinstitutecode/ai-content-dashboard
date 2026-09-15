@@ -31,6 +31,7 @@ import {
   listTabs,
   probeDriveMedia,
   readTab,
+  readTabWithMeta,
   readRowCells,
   updateRowCells,
   sourcesConfigured,
@@ -98,6 +99,8 @@ export type SweepResult = {
   stoppedEarly: boolean;
   /** How many videos the register had never seen before this sweep. */
   newlySeen: number;
+  /** Rows hidden in the sheet, walked past untouched — not even registered. */
+  hidden: number;
   /**
    * The day's pace, when VIDEO_DAILY_QUOTA is set: how many rows the day
    * allows, how many were already prepared today (by any run or any button)
@@ -159,7 +162,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
   const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
   const admin = supabaseAdmin();
 
-  const result: SweepResult = { ok: true, scanned: 0, candidates: 0, prepared: 0, needsTranscript: 0, failed: 0, metricoolDrafts: 0, rows: [], stoppedEarly: false, newlySeen: 0 };
+  const result: SweepResult = { ok: true, scanned: 0, candidates: 0, prepared: 0, needsTranscript: 0, failed: 0, metricoolDrafts: 0, rows: [], stoppedEarly: false, newlySeen: 0, hidden: 0 };
   if (!sourcesConfigured()) {
     return { ...result, ok: false };
   }
@@ -243,7 +246,8 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
     if (result.prepared + result.failed + result.needsTranscript >= maxVideos) { result.stoppedEarly = true; break; }
 
     let rows: string[][] = [];
-    try { rows = await readTab(spreadsheetId, tab.title); } catch (e) { reportError('video-sweep:tab', e, { tab: tab.title }); continue; }
+    let hidden = new Set<number>();
+    try { ({ rows, hidden } = await readTabWithMeta(spreadsheetId, tab.title)); } catch (e) { reportError('video-sweep:tab', e, { tab: tab.title }); continue; }
     const { header, headerRow, records } = tableFromRows(rows, ['tipo de video', 'título del video', 'titulo del video', 'copy', 'link video', 'formato', 'title', 'video']);
     if (!header.length) continue;
     const linkCol = columnFor(header, 'link video', 'link', 'video link');
@@ -269,6 +273,15 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
       if (result.prepared + result.failed + result.needsTranscript >= maxVideos) { result.stoppedEarly = true; break; }
 
       result.scanned++;
+      // HIDDEN ROWS ARE LEFT ALONE. A row the clinic has hidden is finished,
+      // parked, or not for the app — and it stays exactly as it is: not
+      // registered, not prepared, not written to. The instruction was literal:
+      // "whatever is hidden should remain hidden." Checked before anything
+      // else so a hidden row costs nothing, not even a register line.
+      if (hidden.has(row)) {
+        result.hidden++;
+        continue;
+      }
       const title = pick(rec, 'título del video', 'titulo del video', 'title');
       // The cell can carry a note around the link ("SUBS: https://…", a
       // numbered list of three takes). The first link is the one to work on.
@@ -738,12 +751,15 @@ export async function completeRow(opts: {
   actor?: VideoActor;
 }): Promise<{ wrote: Partial<Record<VideoField, boolean>>; metricool: PublishOutcome[]; status: string }> {
   const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
-  const rows = await readTab(spreadsheetId, opts.tab);
+  const { rows, hidden } = await readTabWithMeta(spreadsheetId, opts.tab);
   const { header, headerRow, records } = tableFromRows(rows, ['tipo de video', 'título del video', 'titulo del video', 'copy', 'link video', 'formato', 'title', 'video']);
   if (!header.length) throw new Error('That tab has no video table.');
 
   const found = records.find((r) => r.row === opts.row);
   if (!found) throw new Error('Row ' + opts.row + ' is not a data row on ' + opts.tab + '.');
+  // The same rule the sweep and the library apply, for the one door that can
+  // still name a row directly (the assistant, an old link): hidden is untouched.
+  if (hidden.has(opts.row)) throw new Error('Row ' + opts.row + ' is hidden in the sheet, so it is left alone. Unhide it first if it should be prepared.');
 
   const usedWidth = rows.reduce((w, r) => Math.max(w, (r || []).length), 0);
   const columns = await ensureAiColumns(spreadsheetId, opts.tab, headerRow, header, usedWidth);
