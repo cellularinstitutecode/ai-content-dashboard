@@ -9,6 +9,8 @@ import assert from 'node:assert/strict';
 
 import { readAnthropicStream } from './sse-stream.ts';
 
+const messageStopEarly = 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+
 /** A Response whose body yields exactly these byte chunks, in order. */
 function streamOf(chunks: string[]): Response {
   const encoder = new TextEncoder();
@@ -41,7 +43,7 @@ test('a frame split across chunk boundaries is not lost', async () => {
   // terminator in a later read.
   const whole = delta('one') + delta('two');
   const cut = [whole.slice(0, 12), whole.slice(12, 40), whole.slice(40)];
-  assert.equal(await readAnthropicStream(streamOf(cut)), 'onetwo');
+  assert.equal(await readAnthropicStream(streamOf([...cut, messageStopEarly])), 'onetwo');
 });
 
 test('an error after a 200 throws instead of returning a truncated body', async () => {
@@ -64,6 +66,7 @@ test('keep-alives, comments and unparseable frames are skipped, not fatal', asyn
     'event: ping\ndata: {"type":"ping"}\n\n',
     'data: not json at all\n\n',
     delta('ok'),
+    messageStopEarly,
   ]));
   assert.equal(got, 'ok');
 });
@@ -95,8 +98,27 @@ test('a normal completion is unaffected by the new check', async () => {
   assert.equal(got, '{"instagram":"done"}');
 });
 
-test('a stream that never reports a stop reason still returns its text', async () => {
-  // Not every producer sends message_delta. Absent evidence of truncation is
-  // not evidence of truncation.
-  assert.equal(await readAnthropicStream(streamOf([delta('ok')])), 'ok');
+const messageStop = 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+
+test('a stream that ends with message_stop but no stop reason still returns its text', async () => {
+  // Not every producer sends message_delta. The stream's own "that was all"
+  // is enough: absent evidence of truncation is not evidence of truncation.
+  assert.equal(await readAnthropicStream(streamOf([delta('ok'), messageStop])), 'ok');
+});
+
+test('a stream that just stops — no stop reason, no message_stop — is a dropped connection, not an answer', async () => {
+  // The platform or a proxy closing the socket ends the reader cleanly. What
+  // got through is half a JSON object; returning it had parseJsonStrict call
+  // the MODEL's answer garbled, and the re-roll paid for the same drop.
+  await assert.rejects(
+    () => readAnthropicStream(streamOf([delta('{"instagram":"half a pos')])),
+    /stream ended early after 24 characters/,
+  );
+});
+
+test('a refusal is said as a refusal', async () => {
+  await assert.rejects(
+    () => readAnthropicStream(streamOf([stopWith('refusal'), messageStop])),
+    /declined this request \(refusal\)/,
+  );
 });
