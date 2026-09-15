@@ -67,3 +67,24 @@ export function gridText(rowData: ({ values?: SheetCell[] | null } | null | unde
   while (last > 0 && !rows[last - 1].length) last--;
   return rows.slice(0, last);
 }
+
+/** The slice of a row's metadata this cares about: is the row hidden? */
+export type SheetRowMeta = { hiddenByUser?: boolean | null; hiddenByFilter?: boolean | null } | null | undefined;
+
+/**
+ * The 1-based sheet row numbers that are hidden — by a person (right-click →
+ * Hide) or by a filter. Either way the clinic has put the row out of sight,
+ * and the app treats out of sight as out of bounds: never registered, never
+ * prepared, never written to. The instruction was literal: "whatever is
+ * hidden should remain hidden."
+ *
+ * `rowMetadata` from spreadsheets.get lines up with the grid from row 1 when
+ * the whole tab is requested, which is how readTab asks for it.
+ */
+export function hiddenRows(meta: readonly SheetRowMeta[] | null | undefined, firstRow = 1): Set<number> {
+  const out = new Set<number>();
+  (meta || []).forEach((m, i) => {
+    if (m?.hiddenByUser || m?.hiddenByFilter) out.add(firstRow + i);
+  });
+  return out;
+}
