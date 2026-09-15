@@ -91,9 +91,16 @@ const TRENDING_KEY = 'chi_trending_topics_v1';
 // Where a Metricool brand's planner lives, so we can deep-link a queued post
 // straight to the place it gets approved. The DEFAULT brand; the Publishing
 // panel's brand switcher overrides it everywhere via activeBlogId.
+//
+// Metricool's app resolves a brand only inside a user, so every web link
+// carries BOTH ids. This one used to be the only link without userId (and
+// on a path, /planning/list, that nothing else confirmed): pressing "Open in
+// Metricool" landed on Metricool's own "There was an error that prevented
+// loading the page". Same shape as the Full planner link now.
 const METRICOOL_BLOG_ID = '4308292';
+const METRICOOL_USER_ID = '3377431';
 function metricoolPlannerUrl(blogId: string = METRICOOL_BLOG_ID): string {
-return 'https://app.metricool.com/planning/list?blogId=' + encodeURIComponent(blogId || METRICOOL_BLOG_ID);
+return 'https://app.metricool.com/planner/calendar?blogId=' + encodeURIComponent(blogId || METRICOOL_BLOG_ID) + '&userId=' + METRICOOL_USER_ID;
 }
 
 // Deep-link into the Semrush Keyword Magic Tool for keyword research, pre-filled
@@ -1948,8 +1955,8 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 </div>
 <div className="mt-6 flex flex-wrap gap-3 border-t border-line pt-5 text-[12px]">
 <a href={'https://app.metricool.com/inbox'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">💬 Open Inbox ↗</a>
-<a href={'https://app.metricool.com/smartlink?blogId=' + encodeURIComponent(activeBlogId) + '&userId=3377431'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">🔗 Smartlinks ↗</a>
-<a href={'https://app.metricool.com/planner/calendar?blogId=' + encodeURIComponent(activeBlogId) + '&userId=3377431'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">📅 Full planner ↗</a>
+<a href={'https://app.metricool.com/smartlink?blogId=' + encodeURIComponent(activeBlogId) + '&userId=' + METRICOOL_USER_ID} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">🔗 Smartlinks ↗</a>
+<a href={'https://app.metricool.com/planner/calendar?blogId=' + encodeURIComponent(activeBlogId) + '&userId=' + METRICOOL_USER_ID} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">📅 Full planner ↗</a>
 </div>
 </div>
 </div>
