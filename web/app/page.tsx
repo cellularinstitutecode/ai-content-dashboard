@@ -16,7 +16,8 @@ import { useWorkspace } from "@/components/workspace";
 import { appliesTo as complianceApplies, checkCompliance, ensureAviso, DEFAULT_AVISO_NUMBER } from "@/lib/compliance";
 import { PanelLoader } from "@/components/LoadingScreen";
 import { friendlyError, friendlyErrorFromResponse, friendlyImageError } from '@/lib/friendly-error';
-import { postStatusMeta } from '@/lib/post-mode';
+import { postStatusMeta, isAwaitingApproval } from '@/lib/post-mode';
+import { mapLimit } from '@/lib/map-limit';
 import { sheetRowUrl, sheetRowLabel, sheetRowTitle } from '@/lib/sheet-link';
 import { semrushDraftNote } from '@/lib/semrush-reason';
 import { fmtScheduleDateTime, scheduleTzLabel, schedulePresetValue } from '@/lib/schedule-clock';
@@ -453,6 +454,12 @@ const [mBusy, setMBusy] = useState(false);
 // is what makes "sent for review" concrete: the post shows up here with its
 // status and a link to approve it in Metricool.
 const [posts, setPosts] = useState<any[]>([]);
+// Several at once. The per-post Approve stays; this ticks posts and sends the
+// selection through the same PATCH, one call each, one confirmation for all.
+const [selectMode, setSelectMode] = useState(false);
+const [selectedPosts, setSelectedPosts] = useState<Set<string>>(new Set());
+const [bulkBusy, setBulkBusy] = useState(false);
+const [showAllQueue, setShowAllQueue] = useState(false);
 const [postsLoading, setPostsLoading] = useState(false);
 // The queue is showing posts, but it could not read the drafts behind them —
 // so it cannot know which are waiting on a video, and every "Pending video"
@@ -765,6 +772,30 @@ setActionMsg(null);
 refreshPosts(); announce('posts', 'stats', 'insights');
 } catch (e) { setActionMsg(friendlyError(e, 'We could not approve that post.')); }
 finally { setApprovingId(null); }
+}
+
+// Approve (or publish now) every ticked post — the same route, one call per
+// post, so each still passes the AVISO/REF gate and the video gate on its
+// own. One confirmation for the lot; failures are named, the rest go ahead.
+async function approveSelected(now = false) {
+const ids = safePosts.filter((p: any) => selectedPosts.has(String(p?.id || '')) && isAwaitingApproval(p?.status) && p?.videoPending !== true).map((p: any) => String(p.id));
+if (!ids.length || bulkBusy) return;
+const when = now ? 'in the next couple of minutes' : 'each at its scheduled time';
+if (typeof window !== 'undefined' && !window.confirm((now ? 'Publish ' : 'Approve ') + ids.length + ' post' + (ids.length === 1 ? '' : 's') + (now ? ' now' : '') + '?\n\nThey will go out ' + when + '. Metricool does the publishing.')) return;
+setBulkBusy(true);
+const failures: string[] = [];
+let ok = 0;
+await mapLimit(ids, 4, async (id) => {
+try {
+const r = await fetch('/api/posts', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, action: now ? 'publish_now' : 'approve' }) });
+if (r.ok) ok++; else failures.push(await friendlyErrorFromResponse(r, 'one post could not be approved'));
+} catch (e) { failures.push(friendlyError(e, 'one post could not be approved')); }
+});
+setActionMsg(failures.length ? (ok + ' of ' + ids.length + ' approved. Not done: ' + failures.join('; ')) : null);
+setBulkBusy(false);
+setSelectedPosts(new Set());
+setSelectMode(false);
+refreshPosts(); announce('posts', 'stats', 'insights');
 }
 
 // What the "Pending video" chip does.
@@ -1794,9 +1825,26 @@ return (
 })()}
 </div>
 <div className="mt-6 border-t border-line pt-5">
-<div className="flex items-center justify-between gap-2">
+<div className="flex flex-wrap items-center justify-between gap-2">
 <label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Your publishing queue</label>
+<span className="flex flex-wrap items-center gap-2">
 {postsLoading && <span className="text-[11px] text-ink-faint">Refreshing…</span>}
+{(() => {
+const approvable = safePosts.filter((p: any) => isAwaitingApproval(p?.status) && p?.videoPending !== true);
+if (!approvable.length) return null;
+const n = approvable.filter((p: any) => selectedPosts.has(String(p?.id || ''))).length;
+return selectMode ? (
+<>
+<button type="button" className="text-[11px] font-medium text-accent hover:underline" onClick={() => setSelectedPosts(new Set(approvable.map((p: any) => String(p.id))))}>All {approvable.length}</button>
+<button type="button" disabled={!n || bulkBusy} onClick={() => void approveSelected(false)} className="rounded-full bg-accent px-2.5 py-0.5 text-[11px] font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50">{bulkBusy ? 'Approving…' : 'Approve ' + n}</button>
+<button type="button" disabled={!n || bulkBusy} onClick={() => void approveSelected(true)} className="text-[11px] font-medium text-accent hover:underline disabled:opacity-50">Publish {n} now</button>
+<button type="button" disabled={bulkBusy} onClick={() => { setSelectMode(false); setSelectedPosts(new Set()); }} className="text-[11px] text-ink-muted hover:text-ink">Cancel</button>
+</>
+) : (
+<button type="button" className="text-[11px] font-medium text-accent hover:underline" onClick={() => { setSelectMode(true); setShowAllQueue(true); }}>Select several…</button>
+);
+})()}
+</span>
 </div>
 {loadError && (
 <div className="mt-2 rounded-2xl bg-amber-50 p-4 text-[12px] text-amber-800 ring-1 ring-amber-200" role="status">{loadError}</div>
@@ -1811,7 +1859,7 @@ We could not read the drafts behind these posts just now, so any post waiting on
 )}
 {safePosts.length > 0 && (
 <ul className="mt-2 space-y-2">
-{safePosts.slice(0, 6).map((p: any, i: number) => {
+{safePosts.slice(0, showAllQueue ? safePosts.length : 6).map((p: any, i: number) => {
 const meta = postStatusMeta(p?.status);
 const tone = meta.tone === 'amber' ? 'bg-amber-50 text-amber-700 ring-amber-100' : meta.tone === 'green' ? 'bg-emerald-50 text-emerald-700 ring-emerald-100' : 'bg-blue-50 text-blue-700 ring-blue-100';
 const id = String(p?.id || '');
@@ -1823,6 +1871,16 @@ const pending = p?.videoPending === true;
 return (
 <li key={id || i} className="rounded-2xl bg-white p-3 ring-1 ring-line">
 <div className="flex items-center justify-between gap-2">
+{selectMode && id && isAwaitingApproval(p?.status) && !pending && (
+<input
+type="checkbox"
+aria-label="Select this post"
+checked={selectedPosts.has(id)}
+disabled={bulkBusy}
+onChange={(e) => setSelectedPosts((prev) => { const next = new Set(prev); if (e.target.checked) next.add(id); else next.delete(id); return next; })}
+className="mr-1"
+/>
+)}
 {pending ? (
 <button
 type="button"
@@ -1875,6 +1933,11 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 );
 })}
 </ul>
+)}
+{safePosts.length > 6 && (
+<button type="button" onClick={() => setShowAllQueue((v) => !v)} className="mt-2 text-[11px] font-medium text-accent hover:underline">
+{showAllQueue ? 'Show the first 6' : 'Show all ' + safePosts.length}
+</button>
 )}
 </div>
 <div className="mt-6 flex flex-wrap gap-3 border-t border-line pt-5 text-[12px]">

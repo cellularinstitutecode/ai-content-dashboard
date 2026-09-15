@@ -19,6 +19,7 @@ import PageNav from '@/components/PageNav';
 import { useWorkspace } from '@/components/workspace';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 import VideoRegister from '@/components/VideoRegister';
+import PreparedBoard from '@/components/PreparedBoard';
 import VideoPrepare, { type Prepared } from '@/components/VideoPrepare';
 import { ensureVideoAttachable, fetchShareableVideos } from '@/components/MediaPicker';
 import { runPrepare } from '@/lib/prepare-request';
@@ -1185,6 +1186,15 @@ export default function SourcesView({ kind }: { kind: Tab }) {
           <div style={{ display: 'grid', gap: 20 }}>
             <VideoRegister />
           <VideoPrepare result={shown ? results[shown] ?? null : null} batch={liveTally} batchReasons={liveReasons} batchRunning={running} />
+            {/*
+              Every video that has drafts, one line each, with a batch Approve.
+              The panel above shows ONE result; this is the whole of what was
+              clicked, with its drafts, ready to release together.
+            */}
+            <PreparedBoard
+              videoLinks={Object.fromEntries((videos?.entries || []).map((v) => [rowKey(v), prepareLink(v)]))}
+              recentKeys={Object.keys(batch)}
+            />
             <section style={{ ...card, padding: 0, overflow: 'hidden' }}>
               {ids && <SheetFrame id={ids.videos} title="Distribución RRSS CHI" height={sheetHeight - 60} />}
             </section>
