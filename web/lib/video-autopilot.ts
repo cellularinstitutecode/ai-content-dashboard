@@ -46,6 +46,8 @@ import { VIDEO_NETWORK_COLUMNS, publishedNetworks } from '@/lib/sheet-ticks';
 import { prepareVideo, type PrepareOk } from '@/lib/video-prepare';
 import { STATUS_TEXT, claimIsStale, firstLinkIn, fitsNetwork, isCandidate, preparedStatus, rowKeyFor } from '@/lib/video-row';
 import { NEEDS_VIDEO, networksFor, nextFreeSlot } from '@/lib/video-slot';
+import { belowStart, parseQuota, parseStartRow, remainingQuota, startOfDayIso } from '@/lib/daily-pace';
+import { SCHEDULE_TZ } from '@/lib/timezone';
 import { publishVideoDraft, takenSlots, type PublishOutcome } from '@/lib/video-publish';
 import { reviveStalledRuns, type ReviveResult } from '@/lib/video-revive';
 import { publicVideoCopy } from '@/lib/drive';
@@ -96,6 +98,13 @@ export type SweepResult = {
   stoppedEarly: boolean;
   /** How many videos the register had never seen before this sweep. */
   newlySeen: number;
+  /**
+   * The day's pace, when VIDEO_DAILY_QUOTA is set: how many rows the day
+   * allows, how many were already prepared today (by any run or any button)
+   * before this sweep began, and where the sweep was told to start. Absent
+   * when no daily rule is configured.
+   */
+  pace?: { quota: number; preparedToday: number; startRow: string | null };
   /**
    * What the revive pass handed back to the queue before this sweep started.
    *
@@ -174,6 +183,61 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
   // — the sweep's own budget decides that — just a record that they exist.
   const seenRows: { videoKey: string; title: string; link: string; tab: string; row: number; gid: number | null }[] = [];
 
+  // THE DAY'S PACE. "Two a day" is a count of rows prepared TODAY across every
+  // run — the nightly cron, the sheet's edit trigger, a person's Prepare — on
+  // the clinic's clock. Counted once, before the walk; the walk adds its own.
+  // Unset quota = no daily rule, and the per-run attempt ceiling alone applies.
+  const startRow = parseStartRow(process.env.VIDEO_START_ROW);
+  const quota = parseQuota(process.env.VIDEO_DAILY_QUOTA);
+  let preparedToday = 0;
+  if (quota != null) {
+    const since = startOfDayIso(new Date(), SCHEDULE_TZ);
+    const counted = await admin
+      .from('video_runs')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', opts.userId)
+      .eq('state', 'prepared')
+      .gte('updated_at', since)
+      .then((x) => x, (e: unknown) => ({ count: null, error: e as { message?: string } }));
+    if (counted.error) {
+      // Not knowing how many went out today is not a licence to send more.
+      reportError('video-sweep:prepared-today', counted.error);
+      return { ...result, ok: false };
+    }
+    preparedToday = counted.count ?? 0;
+    result.pace = { quota, preparedToday, startRow: process.env.VIDEO_START_ROW || null };
+  }
+  const dayAllows = remainingQuota(quota, preparedToday);
+  // A dry run prepares nothing, so it counts what it WOULD have prepared —
+  // otherwise it would list every row to the end as "would prepare" and say
+  // nothing about where the day's pair actually stops.
+  let wouldPrepare = 0;
+  const quotaReached = () => dayAllows != null && result.prepared + wouldPrepare >= dayAllows;
+
+  // ONE SLOT PER ROW. The calendar is read once here; each prepared row takes
+  // the next free instant and every network of that row shares it, so a row
+  // going to YouTube, LinkedIn and TikTok fills one slot and not three. Read
+  // lazily and remembered as failed: a calendar that cannot be read costs the
+  // hand-off (reported per row, as before), never the copy.
+  let taken: Set<string> | null = null;
+  let takenFailed: string | null = null;
+  const slotForNextRow = async (): Promise<string | undefined> => {
+    if (takenFailed) return undefined;
+    if (!taken) {
+      try {
+        taken = new Set(await takenSlots(opts.userId, new Date().toISOString()));
+      } catch (e) {
+        takenFailed = e instanceof Error ? e.message : 'The posting calendar could not be read.';
+        reportError('video-sweep:slots', e);
+        return undefined;
+      }
+    }
+    const slot = nextFreeSlot(taken, new Date());
+    if (!slot) return undefined;
+    taken.add(slot.toISOString());
+    return slot.toISOString();
+  };
+
   const tabs = await listTabs(spreadsheetId);
   for (const tab of tabs) {
     if (result.prepared + result.failed + result.needsTranscript >= maxVideos) { result.stoppedEarly = true; break; }
@@ -233,6 +297,21 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
       const where = { tab: tab.title, row, gid: Number.isFinite(tab.sheetId) ? tab.sheetId : null };
 
       if (!isCandidate({ videoLink, copy })) continue;
+      // Before the start row: in the library and registered as seen, but not
+      // this sweep's to prepare. Said in the report so a dry run shows exactly
+      // which rows the rule is holding back.
+      if (belowStart(tab.title, row, startRow)) {
+        result.rows.push({ tab: tab.title, row, rowKey, title: title || videoLink, state: 'skipped', message: 'Below the start row (' + String(process.env.VIDEO_START_ROW) + ').' });
+        continue;
+      }
+      // The day's quota is full: this row waits for tomorrow's run. The walk
+      // goes on (a `continue`, not a `break`) so every row is still registered
+      // as seen, and no video_runs query is spent on a row that will not run.
+      if (quotaReached()) {
+        result.stoppedEarly = true;
+        result.rows.push({ tab: tab.title, row, rowKey, title: title || videoLink, state: 'skipped', message: 'Today\u2019s ' + String(quota) + ' are done (' + String(preparedToday + result.prepared + wouldPrepare) + ' prepared); this row waits for the next day.' });
+        continue;
+      }
       // Where the clinic has said this video goes. Ticks only — a FALSE
       // checkbox is Google's default, not a destination.
       const rowNetworks = VIDEO_NETWORKS.filter(([col]) => YES_TICK.test(pick(rec, col))).map(([, n]) => n);
@@ -284,6 +363,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
         // nothing is transcribed, nothing is written.
         const fileId = !youtubeLink ? parseDriveFileId(videoLink) : null;
         let reach: SweepRowOutcome = { tab: tab.title, row, rowKey, title: title || videoLink, state: 'would_prepare' };
+        wouldPrepare++;
         if (fileId) {
           // Same ceiling the real run uses — none. A dry run that refused at
           // 450 MB while the real run streams the file would report work as
@@ -461,6 +541,10 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
               format: pick(rec, 'formato', 'format'),
               sheetYoutube: pick(rec, 'youtube'),
               published: publishedNetworks(VIDEO_NETWORK_COLUMNS, (col: string) => pick(rec, col)),
+              // The row's one slot, shared by all its networks. Undefined when
+              // the calendar could not be read, and the hand-off then reports
+              // that per network exactly as it always has.
+              publicationDate: await slotForNextRow(),
             });
 
         // ESTADO IA last, once both the keyword coverage and the hand-off are

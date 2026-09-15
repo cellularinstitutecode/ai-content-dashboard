@@ -15,11 +15,49 @@
 import { upcomingSlots } from './timezone.ts';
 import { NETWORKS_NEEDING_MEDIA } from './composer.ts';
 
-/** Monday–Friday. The clinic does not post at weekends. */
+/** Monday–Friday: the grid when VIDEO_POST_DAYS is unset or `weekdays`. */
 export const POST_WEEKDAYS = [1, 2, 3, 4, 5];
+
+/** Every day: the grid when VIDEO_POST_DAYS is `all`. */
+export const EVERY_DAY = [0, 1, 2, 3, 4, 5, 6];
 
 /** Clinic morning. Matches the Video Library composer's own default. */
 export const POST_TIME_OF_DAY = process.env.VIDEO_AUTOPILOT_TIME || '09:00';
+
+/**
+ * Which days carry slots, read at call time so a setting changed on the
+ * host takes effect without a restart — and so a test can set it.
+ *
+ * `all` is the two-a-day cadence the clinic asked for ("the day after
+ * tomorrow, and so forth" — no gap for the weekend). Anything else, including
+ * unset, keeps the original Monday–Friday grid.
+ */
+export function postWeekdays(env: Record<string, string | undefined> = process.env): number[] {
+  const v = String(env.VIDEO_POST_DAYS || '').trim().toLowerCase();
+  return v === 'all' || v === 'daily' || v === 'everyday' ? EVERY_DAY : POST_WEEKDAYS;
+}
+
+/**
+ * The times of day that carry a slot, in order.
+ *
+ * VIDEO_AUTOPILOT_TIMES is a comma list ("09:00,17:00"); the older singular
+ * VIDEO_AUTOPILOT_TIME still works as a one-entry list, so nothing already
+ * configured changes. Unreadable entries are dropped, never guessed; an empty
+ * result falls back to 09:00 so the grid can never be empty.
+ */
+export function postTimes(env: Record<string, string | undefined> = process.env): string[] {
+  const raw = String(env.VIDEO_AUTOPILOT_TIMES || env.VIDEO_AUTOPILOT_TIME || '').trim();
+  const seen = new Set<string>();
+  for (const part of raw.split(/[,;\s]+/)) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(part.trim());
+    if (!m) continue;
+    const hh = Number(m[1]);
+    const mm = Number(m[2]);
+    if (hh > 23 || mm > 59) continue;
+    seen.add(String(hh).padStart(2, '0') + ':' + m[2]);
+  }
+  return seen.size ? [...seen] : ['09:00'];
+}
 
 /** How far ahead a backlog may be spread before it is somebody's decision, not this rule's. */
 const HORIZON_DAYS = 120;
@@ -37,7 +75,13 @@ export function nextFreeSlot(taken: Iterable<string>, now: Date = new Date(), tz
     const at = Date.parse(String(t));
     if (Number.isFinite(at)) used.add(at);
   }
-  const slots = upcomingSlots(POST_WEEKDAYS, POST_TIME_OF_DAY, HORIZON_DAYS, tz, now);
+  // One grid per time of day, merged and ordered: with 09:00 and 17:00 the
+  // morning of a day always comes before its afternoon, and both before the
+  // next day's morning — which is what makes "two a day" mean two a day.
+  const days = postWeekdays();
+  const slots = postTimes()
+    .flatMap((t) => upcomingSlots(days, t, HORIZON_DAYS, tz, now))
+    .sort((a, b) => a.getTime() - b.getTime());
   for (const slot of slots) {
     if (!used.has(slot.getTime())) return slot;
   }

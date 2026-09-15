@@ -151,3 +151,49 @@ test('nothing published leaves the default exactly as it was', () => {
   assert.deepEqual(networksFor([], true, 'Vertical 9:16'), ['youtube', 'linkedin', 'tiktok']);
   assert.deepEqual(networksFor([], true, 'Vertical 9:16', []), ['youtube', 'linkedin', 'tiktok']);
 });
+
+// --- two a day, every day -------------------------------------------------------
+import { EVERY_DAY, postTimes, postWeekdays } from './video-slot.ts';
+
+test('the times of day are read from the setting, singular or plural', () => {
+  assert.deepEqual(postTimes({}), ['09:00']);
+  assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIME: '10:30' }), ['10:30']);
+  assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIMES: '09:00,17:00' }), ['09:00', '17:00']);
+  // The plural wins when both are set; spaces, semicolons and a bare hour are tolerated.
+  assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIMES: '9:00; 17:00 ', VIDEO_AUTOPILOT_TIME: '11:00' }), ['09:00', '17:00']);
+  // Junk is dropped, never guessed; nothing readable falls back to the morning.
+  assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIMES: '25:00,abc,09:60' }), ['09:00']);
+  assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIMES: '17:00,17:00,09:00' }), ['17:00', '09:00']);
+});
+
+test('the days are weekdays unless the setting says every day', () => {
+  assert.deepEqual(postWeekdays({}), POST_WEEKDAYS);
+  assert.deepEqual(postWeekdays({ VIDEO_POST_DAYS: 'weekdays' }), POST_WEEKDAYS);
+  assert.deepEqual(postWeekdays({ VIDEO_POST_DAYS: 'all' }), EVERY_DAY);
+  assert.deepEqual(postWeekdays({ VIDEO_POST_DAYS: 'ALL ' }), EVERY_DAY);
+});
+
+test('two times a day, every day: morning, afternoon, next morning — weekend included', () => {
+  const before = { times: process.env.VIDEO_AUTOPILOT_TIMES, days: process.env.VIDEO_POST_DAYS };
+  process.env.VIDEO_AUTOPILOT_TIMES = '09:00,17:00';
+  process.env.VIDEO_POST_DAYS = 'all';
+  try {
+    // 02:00 Cancún on Saturday 12 Sep 2026 — the nightly run's own hour.
+    const night = new Date('2026-09-12T07:00:00Z');
+    const slots = reserveSlots(6, [], night, TZ).map((d) => d.toISOString());
+    assert.deepEqual(slots, [
+      '2026-09-12T14:00:00.000Z', // Sat 09:00
+      '2026-09-12T22:00:00.000Z', // Sat 17:00
+      '2026-09-13T14:00:00.000Z', // Sun 09:00
+      '2026-09-13T22:00:00.000Z', // Sun 17:00
+      '2026-09-14T14:00:00.000Z', // Mon 09:00
+      '2026-09-14T22:00:00.000Z', // Mon 17:00
+    ]);
+    // A morning already held by another post pushes the pair, never stacks it.
+    const pair = reserveSlots(2, ['2026-09-12T14:00:00.000Z'], night, TZ).map((d) => d.toISOString());
+    assert.deepEqual(pair, ['2026-09-12T22:00:00.000Z', '2026-09-13T14:00:00.000Z']);
+  } finally {
+    if (before.times === undefined) delete process.env.VIDEO_AUTOPILOT_TIMES; else process.env.VIDEO_AUTOPILOT_TIMES = before.times;
+    if (before.days === undefined) delete process.env.VIDEO_POST_DAYS; else process.env.VIDEO_POST_DAYS = before.days;
+  }
+});
