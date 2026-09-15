@@ -26,10 +26,16 @@ export type Workspace = {
   handoffText: string;
   handoffMedia: string;
   handoffMediaLabel: string;
+  // WHERE it came from, when it came from a sheet row: the tab, the row and
+  // the source video link. The composer sends them with the post so the queue
+  // can show "tab · row N" on a post nobody prepared through the sweep.
+  handoffTab: string;
+  handoffRow: number;
+  handoffLink: string;
   handoffNonce: number;
 };
 
-const BLANK: Workspace = { topic: '', keyword: '', domain: '', draftId: '', source: '', handoffText: '', handoffMedia: '', handoffMediaLabel: '', handoffNonce: 0 };
+const BLANK: Workspace = { topic: '', keyword: '', domain: '', draftId: '', source: '', handoffText: '', handoffMedia: '', handoffMediaLabel: '', handoffTab: '', handoffRow: 0, handoffLink: '', handoffNonce: 0 };
 const STORE = 'chi:workspace:v1';
 const EVENT = 'chi:workspace';
 

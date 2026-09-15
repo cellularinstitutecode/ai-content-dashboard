@@ -316,8 +316,9 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
     handoffSeen.current = nonce;
     if (workspace.handoffText) setMText(workspace.handoffText);
     if (workspace.handoffMedia) { setMMedia(workspace.handoffMedia); setMMediaLabel(workspace.handoffMediaLabel || 'Image from Drive'); }
+    setMSource(workspace.handoffTab && workspace.handoffRow >= 2 ? { tab: workspace.handoffTab, row: workspace.handoffRow, link: workspace.handoffLink } : null);
     setMStatus(null);
-    workspace.patch({ handoffText: '', handoffMedia: '', handoffMediaLabel: '' });
+    workspace.patch({ handoffText: '', handoffMedia: '', handoffMediaLabel: '', handoffTab: '', handoffRow: 0, handoffLink: '' });
     try { scrollToPublisher(); } catch { /* not mounted yet */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.handoffNonce]);
@@ -326,6 +327,9 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
   // warning.
   const [mMedia, setMMedia] = useState<string>("");
   const [mMediaLabel, setMMediaLabel] = useState<string>("");
+  // The sheet row the video was handed over from, sent with the post so the
+  // queue can name it. Cleared with the media.
+  const [mSource, setMSource] = useState<{ tab: string; row: number; link: string } | null>(null);
   /** Is a video-only channel selected? Drives the picker's hint. */
   const mNeedsMedia = Boolean(mediaProblem(mNetworks, ''));
   const mChars = mText.trim().length;
@@ -373,7 +377,7 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
       const heroHasText = Boolean(heroImg && heroImg.verification && heroImg.verification.textDetected === true);
       const heroUrl = heroImg && heroImg.url && !heroHasText ? String(heroImg.url) : "";
       if (heroUrl) { setMMedia(heroUrl); setMMediaLabel("AI hero image"); }
-      else { setMMedia(""); setMMediaLabel(""); }
+      else { setMMedia(""); setMMediaLabel(""); setMSource(null); }
       setMNetworks(platformsForFormat(fmt).filter((n) => PUBLISH_NETWORKS.some((p) => p.id === n)));
       setMStatus(null);
       setSelectedDraft(null); setEditingDraft(false);
@@ -1139,7 +1143,12 @@ mNetworks.map(async (network) => {
 const r = await fetch('/api/metricool/schedule', {
 method: 'POST',
 headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify({ network, text: mText, publishAt: mDate, blogId: activeBlogId || METRICOOL_BLOG_ID, mediaUrl: mMedia || undefined }),
+body: JSON.stringify({
+network, text: mText, publishAt: mDate, blogId: activeBlogId || METRICOOL_BLOG_ID, mediaUrl: mMedia || undefined,
+title: mMediaLabel || undefined,
+// The row this was handed over from, so the queue can name it.
+...(mSource ? { sheetTab: mSource.tab, sheetRow: mSource.row, sourceUrl: mSource.link } : {}),
+}),
 });
 const data = await r.json().catch(() => ({}));
 return { network, ok: r.ok, status: r.status, data };
@@ -1789,7 +1798,7 @@ Too long for {networkLabel(mLimit.network)} by {mOverBy.toLocaleString()} charac
 <span>✓ Sent as {mSent.networks.length === 1 ? 'a draft' : 'drafts'} on {mSent.networks.map((n) => networkLabel(n)).join(', ')}. {mSent.networks.length === 1 ? 'It is' : 'They are'} in your queue below — nothing publishes until you press Approve there.</span>
 <span className="mt-1.5 flex flex-wrap gap-3">
 <button type="button" className="font-semibold text-emerald-900 underline" onClick={() => { const el = typeof document !== 'undefined' ? document.getElementById('publishing-queue') : null; if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Show the queue</button>
-<button type="button" className="font-semibold text-emerald-900 underline" onClick={() => { setMText(''); setMMedia(''); setMMediaLabel(''); setMSent(null); setMStatus(null); }}>Write another post</button>
+<button type="button" className="font-semibold text-emerald-900 underline" onClick={() => { setMText(''); setMMedia(''); setMMediaLabel(''); setMSource(null); setMSent(null); setMStatus(null); }}>Write another post</button>
 </span>
 </div>
 )}

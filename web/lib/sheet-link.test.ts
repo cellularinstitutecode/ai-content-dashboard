@@ -82,11 +82,15 @@ test('both publishing lists and the video register carry the row link', () => {
   }
 });
 
-test('the API supplies the source from video_runs, in one query', () => {
+test('the API supplies the source from video_runs, in one query, resolved per post', () => {
   const src = readSrc('app/api/posts/route.ts');
   assert.match(src, /from\('video_runs'\)/);
-  assert.match(src, /spreadsheet_id, tab, row_number, video_title/);
-  assert.match(src, /\.in\('draft_id', draftIds\)/, 'the source read is not batched');
+  assert.match(src, /spreadsheet_id, tab, row_number, video_title, video_link, updated_at/);
+  // One read of the user's runs for the whole page — not one per post, and no
+  // longer only the drafts' runs: lib/post-source.ts resolves by draft, by
+  // video, by public copy and by register line.
+  assert.match(src, /resolvePostSources\(/, 'the resolver is not used');
+  assert.doesNotMatch(src, /\.in\('draft_id', draftIds\)/, 'the source read is still batched by draft only');
   // Scoped to the caller, like every other read on this route.
   const at = src.indexOf("from('video_runs')");
   assert.match(src.slice(at, at + 300), /\.eq\('user_id', user\.id\)/, 'video_runs is read unscoped');
