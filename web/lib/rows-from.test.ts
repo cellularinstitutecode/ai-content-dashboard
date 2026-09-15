@@ -1,0 +1,42 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { parseFromRow, rowsFrom, type RowLike } from './rows-from.ts';
+
+const L = 'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456/view';
+const rows: RowLike[] = [
+  { tab: 'Marzo', row: 178, link: L, copy: '' },
+  { tab: 'Marzo', row: 179, link: L, copy: '' },
+  { tab: 'Marzo', row: 180, link: L, copy: 'already written' },
+  { tab: 'Marzo', row: 181, link: '', copy: '' },
+  { tab: 'Marzo', row: 183, link: L, copy: '' },
+  { tab: 'Marzo', row: 182, link: L, copy: '' },
+  { tab: 'Abril', row: 200, link: L, copy: '' },
+];
+
+test('"from row" is a whole number of at least 2', () => {
+  assert.equal(parseFromRow('179'), 179);
+  assert.equal(parseFromRow(' 179 '), 179);
+  assert.equal(parseFromRow(2), 2);
+  for (const bad of ['', '0', '1', '-4', 'abc', '12.5', null, undefined]) assert.equal(parseFromRow(bad), null, JSON.stringify(bad));
+});
+
+test('from 179 on one tab: the rows that are work, in row order, nothing above', () => {
+  assert.deepEqual(rowsFrom(rows, 179, 'Marzo'), ['Marzo:179', 'Marzo:182', 'Marzo:183']);
+});
+
+test('a row with copy, or without a video, is never selected', () => {
+  const keys = rowsFrom(rows, 179, 'Marzo');
+  assert.ok(!keys.includes('Marzo:180'), 'row 180 already has copy');
+  assert.ok(!keys.includes('Marzo:181'), 'row 181 has no video');
+});
+
+test('without a tab the rule applies to every tab; the tab match ignores case', () => {
+  assert.deepEqual(rowsFrom(rows, 179), ['Abril:200', 'Marzo:179', 'Marzo:182', 'Marzo:183']);
+  assert.deepEqual(rowsFrom(rows, 179, 'marzo '), ['Marzo:179', 'Marzo:182', 'Marzo:183']);
+});
+
+test('no row means no selection', () => {
+  assert.deepEqual(rowsFrom(rows, null, 'Marzo'), []);
+  assert.deepEqual(rowsFrom([], 179, 'Marzo'), []);
+  assert.deepEqual(rowsFrom(rows, 999, 'Marzo'), []);
+});
