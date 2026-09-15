@@ -25,6 +25,7 @@ import { runPrepare } from '@/lib/prepare-request';
 import { mapLimit } from '@/lib/map-limit';
 import { mayStartBatch, reasons, tally, type BatchReasons, type BatchState } from '@/lib/batch-plan';
 import { isDriveUrl, parseDriveFileId } from '@/lib/drive-url';
+import { parseFromRow, rowsFrom } from '@/lib/rows-from';
 import { ZOOM_MAX, ZOOM_MIN, frameGeometry, readStoredZoom, zoomIn, zoomLabel, zoomOut, zoomStorageKey } from '@/lib/sheet-zoom';
 
 /** How a batched row is getting on, in words rather than a spinner. */
@@ -561,6 +562,14 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   const [sheetOnly, setSheetOnly] = useState(false);
   /** Set when Stop is pressed; the loop checks it between videos, never mid-video. */
   const stopRef = useRef(false);
+  /**
+   * "From row N to the end" — the way a whole section of the sheet is ticked
+   * in one press. The row number is what people read off the sheet, so it is
+   * typed, not searched; the tab defaults to the one with the most rows still
+   * needing copy, which is the month being worked on.
+   */
+  const [fromRow, setFromRow] = useState('');
+  const [fromTab, setFromTab] = useState('');
 
   const rowKey = (v: VideoEntry) => v.tab + ':' + v.row;
 
@@ -594,9 +603,11 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     try {
       const raw = window.localStorage.getItem(BASKET_KEY);
       if (!raw) return;
-      const saved = JSON.parse(raw) as { picked?: string[]; batch?: Record<string, { state: BatchState; note?: string }>; sheetOnly?: boolean };
+      const saved = JSON.parse(raw) as { picked?: string[]; batch?: Record<string, { state: BatchState; note?: string }>; sheetOnly?: boolean; fromRow?: string; fromTab?: string };
       if (Array.isArray(saved.picked) && saved.picked.length) setPicked(new Set(saved.picked));
       if (typeof saved.sheetOnly === 'boolean') setSheetOnly(saved.sheetOnly);
+      if (typeof saved.fromRow === 'string') setFromRow(saved.fromRow);
+      if (typeof saved.fromTab === 'string') setFromTab(saved.fromTab);
       if (saved.batch && typeof saved.batch === 'object') {
         // A row left mid-flight belongs to a page that is gone. Show it as unfinished
         // rather than as forever "Preparing…".
@@ -616,9 +627,9 @@ export default function SourcesView({ kind }: { kind: Tab }) {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(BASKET_KEY, JSON.stringify({ picked: Array.from(picked), batch, sheetOnly }));
+      window.localStorage.setItem(BASKET_KEY, JSON.stringify({ picked: Array.from(picked), batch, sheetOnly, fromRow, fromTab }));
     } catch { /* storage full or blocked; the basket simply will not survive a reload */ }
-  }, [picked, batch, sheetOnly]);
+  }, [picked, batch, sheetOnly, fromRow, fromTab]);
 
   function togglePick(v: VideoEntry) {
     const k = rowKey(v);
@@ -853,6 +864,25 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   );
   /** Ticked rows that already have copy — preparing them cannot write anything. */
   const pickedWithCopy = pickedRows.filter((v) => String(v.copy || '').trim()).length;
+  /**
+   * The tabs that have work on them, most first — the choice offered beside
+   * "From row", with the busiest tab as the default so the common case is
+   * "type 179, press the button".
+   */
+  // Plain derivations, not memoised: a few hundred rows, and prepareLink is a
+  // function of the component (memoising on it would recompute every render anyway).
+  const workCounts = new Map<string, number>();
+  for (const v of videos?.entries || []) {
+    if (prepareLink(v) && !String(v.copy || '').trim()) workCounts.set(v.tab, (workCounts.get(v.tab) || 0) + 1);
+  }
+  const tabsWithWork = Array.from(workCounts.entries()).sort((a, b) => b[1] - a[1]).map(([t]) => t);
+  const fromTabInUse = fromTab && tabsWithWork.includes(fromTab) ? fromTab : (tabsWithWork[0] || '');
+  /** What "From row N, to the end" would tick, over the whole sheet — decided in lib/rows-from.ts. */
+  const fromRowKeys = rowsFrom(
+    (videos?.entries || []).map((v) => ({ tab: v.tab, row: v.row, link: prepareLink(v), copy: v.copy })),
+    parseFromRow(fromRow),
+    fromTabInUse,
+  );
   /** Ticked but not on screen. Left unsaid, the count above looks like a bug. */
   const pickedOffScreen = pickedRows.length - filteredVideos.filter((v) => picked.has(v.tab + ':' + v.row)).length;
 
@@ -1000,6 +1030,49 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                 </div>
               </div>
 
+              {/*
+                "From row N to the end": one press ticks a whole section of the
+                sheet — every row at or after N that still needs copy — so a
+                month's worth of videos can go into the batch without thirty
+                searches. Adds to the basket; never clears what was ticked.
+              */}
+              {videos && tabsWithWork.length > 0 && (
+                <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>From row</span>
+                    <input
+                      value={fromRow}
+                      onChange={(e) => setFromRow(e.target.value.replace(/[^0-9]/g, ''))}
+                      inputMode="numeric"
+                      placeholder="179"
+                      aria-label="First row to select"
+                      disabled={running}
+                      style={{ width: 64, padding: '6px 8px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.12)', fontSize: 13 }}
+                    />
+                  </label>
+                  {tabsWithWork.length > 1 && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>on</span>
+                      <select value={fromTabInUse} onChange={(e) => setFromTab(e.target.value)} disabled={running} aria-label="Tab" style={{ padding: '6px 8px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.12)', fontSize: 13 }}>
+                        {tabsWithWork.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  <button
+                    type="button"
+                    style={{ ...ghost, opacity: fromRowKeys.length ? 1 : .5 }}
+                    disabled={running || !fromRowKeys.length}
+                    onClick={() => setPicked((prev) => { const next = new Set(prev); for (const k of fromRowKeys) next.add(k); return next; })}
+                  >
+                    {parseFromRow(fromRow) == null
+                      ? 'Select to the end'
+                      : fromRowKeys.length
+                        ? 'Select ' + fromRowKeys.length + ' row' + (fromRowKeys.length === 1 ? '' : 's') + ' to the end'
+                        : 'Nothing to prepare from row ' + parseFromRow(fromRow)}
+                  </button>
+                  <span style={{ opacity: .6 }}>Rows with a video and no copy yet, from that row down{tabsWithWork.length > 1 ? ' on ' + fromTabInUse : ''}.</span>
+                </div>
+              )}
               {/*
                 Only when something is ticked. An empty toolbar sitting above
                 the table every time would be a permanent reminder of a feature
