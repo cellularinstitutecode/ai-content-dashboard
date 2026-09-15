@@ -107,7 +107,7 @@ export async function recordVideoEvent(input: EventInput): Promise<boolean> {
  */
 export async function recordFirstSeen(
   userId: string,
-  seen: readonly { videoKey: string; title?: unknown; link?: unknown; tab?: string; row?: number | null }[],
+  seen: readonly { videoKey: string; title?: unknown; link?: unknown; tab?: string; row?: number | null; gid?: number | null }[],
   actor: VideoActor = 'sweep',
 ): Promise<number> {
   if (tableExists === false) return 0;
@@ -162,7 +162,14 @@ export async function recordFirstSeen(
       actor,
       title: s.title,
       link: s.link,
-      detail: { tab: s.tab, row: typeof s.row === 'number' ? s.row : undefined },
+      // WHERE it is. The row number is what the panel shows and the gid is
+      // what lets the link open the sheet at that row; both are read back by
+      // lib/register-source.ts, so the names here are a contract.
+      detail: {
+        tab: s.tab,
+        row: typeof s.row === 'number' ? s.row : undefined,
+        gid: typeof s.gid === 'number' ? s.gid : undefined,
+      },
     });
   });
 

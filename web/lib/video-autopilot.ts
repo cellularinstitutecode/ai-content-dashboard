@@ -34,6 +34,7 @@ import {
   readRowCells,
   updateRowCells,
   sourcesConfigured,
+  tabGid,
   type VideoField,
 } from '@/lib/google-sources';
 import { mayRetry } from '@/lib/failure-kind';
@@ -171,7 +172,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
 
   // Every row the sweep walks past, for the register. Not a set of things to do
   // — the sweep's own budget decides that — just a record that they exist.
-  const seenRows: { videoKey: string; title: string; link: string; tab: string; row: number }[] = [];
+  const seenRows: { videoKey: string; title: string; link: string; tab: string; row: number; gid: number | null }[] = [];
 
   const tabs = await listTabs(spreadsheetId);
   for (const tab of tabs) {
@@ -223,8 +224,13 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
           link: videoLink,
           tab: tab.title,
           row,
+          gid: Number.isFinite(tab.sheetId) ? tab.sheetId : null,
         });
       }
+      // WHERE this row is, for every register line about it. The sheet
+      // coordinates are the one thing a person can act on from the panel —
+      // a title is recognisable, a row number is findable.
+      const where = { tab: tab.title, row, gid: Number.isFinite(tab.sheetId) ? tab.sheetId : null };
 
       if (!isCandidate({ videoLink, copy })) continue;
       // Where the clinic has said this video goes. Ticks only — a FALSE
@@ -420,7 +426,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
             actor: 'sweep',
             title: title || videoLink,
             link: videoLink,
-            detail: { state, reason: prepared.error, error: prepared.message },
+            detail: { ...where, state, reason: prepared.error, error: prepared.message },
           });
           outcome = { tab: tab.title, row, rowKey, title: title || videoLink, state, message: prepared.message };
           result.rows.push(outcome);
@@ -494,7 +500,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
             actor: 'sweep',
             title: prepared.title,
             link: videoLink,
-            detail: { transcriptSource: prepared.transcript.source, hasKeywords: prepared.hasKeywords, wrote },
+            detail: { ...where, transcriptSource: prepared.transcript.source, hasKeywords: prepared.hasKeywords, wrote },
           });
           const sent = posted.filter((p) => p.ok).map((p) => p.network);
           const refused = posted.filter((p) => !p.ok);
@@ -506,7 +512,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
               actor: 'sweep',
               title: prepared.title,
               link: videoLink,
-              detail: { networks: sent, refused: refused.map((p) => ({ network: p.network, reason: p.reason })) },
+              detail: { ...where, networks: sent, refused: refused.map((p) => ({ network: p.network, reason: p.reason })) },
             });
           }
         }
@@ -532,7 +538,7 @@ export async function sweepVideos(opts: SweepOptions): Promise<SweepResult> {
           actor: 'sweep',
           title: title || videoLink,
           link: videoLink,
-          detail: { state: 'failed', reason: 'unreachable', error: message },
+          detail: { ...where, state: 'failed', reason: 'unreachable', error: message },
         });
         result.rows.push({ tab: tab.title, row, rowKey, title: title || videoLink, state: 'failed', message });
       }
@@ -730,6 +736,10 @@ export async function completeRow(opts: {
   // anything — recordVideoEvent does not throw, and the row above is already
   // saved either way.
   const registerKey = videoKeyFor(spreadsheetId, opts.tab, rowKey);
+  // The gid is a cached metadata read (an hour's TTL) and null on any failure:
+  // the register line then opens the document instead of the row, which is
+  // the same degradation the publishing list's button has.
+  const where = { tab: opts.tab, row: opts.row, gid: await tabGid(spreadsheetId, opts.tab) };
   void recordVideoEvent({
     userId: opts.userId,
     videoKey: registerKey,
@@ -738,6 +748,7 @@ export async function completeRow(opts: {
     title: opts.prepared.title,
     link: opts.videoLink,
     detail: {
+      ...where,
       transcriptSource: opts.prepared.transcript.source,
       hasKeywords: opts.prepared.hasKeywords,
       // What reached the sheet, and what was left alone because a person had
@@ -758,7 +769,7 @@ export async function completeRow(opts: {
       link: opts.videoLink,
       // A compliance refusal reads very differently from an outage, and both
       // need to still be visible next week.
-      detail: { networks: sent, refused: refused.map((m) => ({ network: m.network, reason: m.reason })) },
+      detail: { ...where, networks: sent, refused: refused.map((m) => ({ network: m.network, reason: m.reason })) },
     });
   }
 
