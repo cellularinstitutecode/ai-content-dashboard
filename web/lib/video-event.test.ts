@@ -109,11 +109,18 @@ test('a sweep_ran line says what the run saw and did', () => {
     event: 'sweep_ran', actor: 'sweep',
     detail: { scanned: 302, hidden: 178, belowStart: 0, startRow: 179, queuedExisting: 20, prepared: 0, needsTranscript: 19, failed: 0, stoppedEarly: true },
   });
-  assert.equal(said, 'Sweep ran: 302 rows seen · 178 hidden · 0 below row 179 · 20 queued with copy · 0 prepared · 19 need a transcript · 0 failed · stopped early.');
+  assert.equal(said, 'Sweep ran: 302 rows seen · 178 hidden · 0 below row 179 · 20 queued with copy · 0 videos attached to waiting drafts · 0 prepared · 19 need a transcript · 0 failed · stopped early.');
   assert.match(describeEntry({ event: 'sweep_ran', detail: { dryRun: true, scanned: 5 } }), /^Dry run: 5 rows seen/);
 });
 
 test('a sweep that stopped says why, and never reads as a video', () => {
   assert.equal(describeEntry({ event: 'sweep_ran', detail: { error: 'The posting calendar could not be read.' } }), 'Sweep stopped: The posting calendar could not be read.');
   assert.ok(SWEEP_KEY.startsWith('sweep|'));
+});
+
+test('a video_attached line counts the drafts that got their video', () => {
+  assert.ok((VIDEO_EVENTS as readonly string[]).includes('video_attached'));
+  assert.equal(describeEntry({ event: 'video_attached', actor: 'sweep', detail: { attached: 2 } }), 'The video was attached to 2 drafts that were waiting for it.');
+  assert.equal(describeEntry({ event: 'video_attached', actor: 'sweep', detail: { attached: 1 } }), 'The video was attached to 1 draft that was waiting for it.');
+  assert.match(describeEntry({ event: 'video_attached', detail: { attached: 1, failed: 1, error: 'Metricool did not answer.' } }), /1 could not be updated — Metricool did not answer\./);
 });
