@@ -1839,7 +1839,9 @@ if (!approvable.length) return null;
 const n = approvable.filter((p: any) => selectedPosts.has(String(p?.id || ''))).length;
 return selectMode ? (
 <>
-<button type="button" className="text-[11px] font-medium text-accent hover:underline" onClick={() => setSelectedPosts(new Set(approvable.map((p: any) => String(p.id))))}>All {approvable.length}</button>
+<span className="text-[11px] font-semibold text-ink">{n} of {approvable.length} selected</span>
+<button type="button" disabled={n === approvable.length || bulkBusy} className="text-[11px] font-medium text-accent hover:underline disabled:opacity-50" onClick={() => setSelectedPosts(new Set(approvable.map((p: any) => String(p.id))))}>All</button>
+<button type="button" disabled={!n || bulkBusy} className="text-[11px] font-medium text-accent hover:underline disabled:opacity-50" onClick={() => setSelectedPosts(new Set())}>None</button>
 <button type="button" disabled={!n || bulkBusy} onClick={() => void approveSelected(false)} className="rounded-full bg-accent px-2.5 py-0.5 text-[11px] font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50">{bulkBusy ? 'Approving…' : 'Approve ' + n}</button>
 <button type="button" disabled={!n || bulkBusy} onClick={() => void approveSelected(true)} className="text-[11px] font-medium text-accent hover:underline disabled:opacity-50">Publish {n} now</button>
 <button type="button" disabled={bulkBusy} onClick={() => { setSelectMode(false); setSelectedPosts(new Set()); }} className="text-[11px] text-ink-muted hover:text-ink">Cancel</button>

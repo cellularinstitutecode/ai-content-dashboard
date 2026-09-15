@@ -54,6 +54,8 @@ export default function PreparedBoard({ videoLinks, recentKeys }: {
   const [summary, setSummary] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const started = useRef(false);
+  /** The master tick above the list: half-filled when only some are selected. */
+  const masterRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -87,7 +89,18 @@ export default function PreparedBoard({ videoLinks, recentKeys }: {
   const effective = touched ? selected : new Set(approvable.map((g) => g.key));
   const chosen = postsToApprove(ordered, effective);
   const chosenVideos = approvable.filter((g) => effective.has(g.key)).length;
+  const allSelected = approvable.length > 0 && chosenVideos === approvable.length;
+  const someSelected = chosenVideos > 0 && !allSelected;
   const shown = open ? ordered : ordered.slice(0, 8);
+
+  // A DOM property, not an attribute: React cannot set `indeterminate` from JSX.
+  useEffect(() => { if (masterRef.current) masterRef.current.indeterminate = someSelected; }, [someSelected]);
+
+  /** Tick every approvable video, or none — one press instead of one per row. */
+  function selectAll(on: boolean) {
+    setTouched(true);
+    setSelected(on ? new Set(approvable.map((g) => g.key)) : new Set());
+  }
 
   if (posts === null && !error) return null;
   if (!ordered.length && !error) return null;
@@ -155,6 +168,28 @@ export default function PreparedBoard({ videoLinks, recentKeys }: {
 
       {error && <p style={{ fontSize: 12, color: '#a1252b', marginTop: 8 }}>{error}</p>}
       {summary && <p style={{ fontSize: 12, fontWeight: 600, marginTop: 8 }}>{summary}</p>}
+
+      {approvable.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 12, padding: '6px 12px', fontSize: 12, borderRadius: 10, background: '#f5f5f7' }}>
+          {/* Lines up with the row ticks below: the same 24px column. */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: busy ? 'default' : 'pointer' }}>
+            <input
+              ref={masterRef}
+              type="checkbox"
+              aria-label={allSelected ? 'Unselect all videos' : 'Select all videos'}
+              checked={allSelected}
+              disabled={Boolean(busy)}
+              onChange={(e) => selectAll(e.target.checked)}
+              style={{ width: 16, height: 16, margin: 0 }}
+            />
+            <strong>{chosenVideos} of {approvable.length} selected</strong>
+          </label>
+          <span style={{ opacity: .35 }}>|</span>
+          <button type="button" style={{ ...ghost, padding: '3px 10px', fontSize: 12, opacity: allSelected || busy ? .5 : 1 }} disabled={allSelected || Boolean(busy)} onClick={() => selectAll(true)}>Select all</button>
+          <button type="button" style={{ ...ghost, padding: '3px 10px', fontSize: 12, opacity: chosenVideos === 0 || busy ? .5 : 1 }} disabled={chosenVideos === 0 || Boolean(busy)} onClick={() => selectAll(false)}>Unselect all</button>
+          {chosenVideos === 0 && <span style={{ opacity: .6 }}>Nothing is selected — tick a video, or Select all.</span>}
+        </div>
+      )}
 
       <ul style={{ listStyle: 'none', margin: '12px 0 0', padding: 0, display: 'grid', gap: 8 }}>
         {shown.map((g) => {
