@@ -8,8 +8,17 @@ export async function middleware(req: NextRequest) {
 
   // Only enforce auth on app routes; let the sign-in/auth flows pass.
   // Exact-or-segment matching: '/auth/...' yes, '/authanything' no.
+  //
+  // /api/media/video is the one route that serves without a session, because
+  // its caller is Metricool's fetcher pulling a post's video onto its own
+  // storage and it has no way to hold one. It is safe here: it authenticates
+  // every request against an HMAC this app signed (lib/media-url.ts) and
+  // serves nothing without one. It is listed EXPLICITLY even though the
+  // matcher below already excludes any path ending in an extension — relying
+  // on that would mean a future edit to the matcher silently redirects
+  // Metricool to /sign-in and every video quietly stops working.
   const { pathname } = req.nextUrl;
-  const openPrefixes = ['/sign-in', '/sign-up', '/auth'];
+  const openPrefixes = ['/sign-in', '/sign-up', '/auth', '/api/media/video'];
   if (openPrefixes.some((p) => pathname === p || pathname.startsWith(p + '/'))) {
     return res;
   }

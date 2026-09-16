@@ -52,10 +52,30 @@ person published something. Approve is still a person, exactly as before.
   Facebook** get the short caption with the hashtags, REF and AVISO. Same split
   the Video Library's two boxes have always had.
 - **A network that needs a video** only gets a draft when Metricool can fetch
-  one. Metricool cannot read an ordinary Drive link, so the reel is copied into
-  the app's own Drive folder and that copy is opened to anyone-with-the-link.
-  The copy is made *inside* Drive, so a 283 MB file never travels through the
-  app. Your originals' sharing is never changed.
+  one, and that took three attempts to get right:
+
+  1. A world-readable **copy in Drive**. Google answers the download link for
+     anything over ~100 MB with its "cannot scan this file for viruses" web
+     page, and Metricool stored that page *as the video*, with a 200, so the
+     draft looked finished until somebody opened it.
+  2. The file streamed into a **public Supabase bucket**. Correct, and still
+     used — for files under 50 MB. That is the Free plan's upload limit, it is
+     fixed, and the clinic's reels run 96 MB to 1.8 GB.
+  3. **The app serves the file itself.** Everything above the bucket's limit
+     goes out as a signed link on this app's own domain
+     (`/api/media/video/…/video.mp4`), which streams the bytes out of Drive on
+     demand. Nothing is copied, nothing is stored, and there is no size limit.
+
+  Whichever path is used, the URL is **read back anonymously before any post is
+  created** — the first sixteen bytes must be an MP4 header and the length must
+  match the source. A URL that fails is deleted and reported, never sent. Your
+  originals' sharing is never changed.
+
+  Two settings decide where those links point: `PUBLIC_MEDIA_BASE_URL` (the
+  https origin that serves them — **the Dokploy copy**, because a Vercel
+  function cannot stream a file this size before Metricool stops waiting) and
+  `MEDIA_URL_SECRET` (signs them; rotating it invalidates every outstanding
+  link). System Status's **video_media** check reports both.
 - **Timing:** the next free weekday at 09:00 clinic time, one post per slot.
   Working off a backlog therefore spreads across mornings instead of stacking
   thirty posts on one — which would read as spam on every network. Override the

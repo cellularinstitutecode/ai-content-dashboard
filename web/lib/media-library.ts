@@ -22,6 +22,9 @@ import { verifyPlayableMp4 } from '@/lib/media-verify';
 import { cachedPublicCopy, rememberPublicCopy } from '@/lib/transcript-cache';
 import { parseDriveFileId } from '@/lib/drive-url';
 import { copyFailureAdvice, storageAdvice } from '@/lib/drive-copy-error';
+import { disposalFor, type CopyWhere } from '@/lib/copy-disposal';
+import { MediaKeyMissing, mediaUrlIsFresh, mediaVideoUrl, parseStreamCopyId, streamCopyId, streamCopyIdFromUrl } from '@/lib/media-url';
+import { MediaBaseUnresolved, publicBase } from '@/lib/public-base';
 import { reportError } from '@/lib/report';
 import { recordVideoEvent } from '@/lib/video-register';
 import { driveVideoKey, type VideoActor } from '@/lib/video-event';
@@ -49,7 +52,7 @@ export async function listShareableVideos(limit = 40): Promise<{ videos: Shareab
   const capped = Math.min(Math.max(Math.trunc(limit) || 40, 1), 200);
   const r = await supabaseAdmin()
     .from('video_transcripts')
-    .select('video_id, title, source, public_copy_url, updated_at')
+    .select('video_id, title, source, public_copy_id, public_copy_url, updated_at')
     .not('public_copy_url', 'is', null)
     .order('updated_at', { ascending: false })
     .limit(capped)
@@ -62,7 +65,7 @@ export async function listShareableVideos(limit = 40): Promise<{ videos: Shareab
 
   const rows = (r.data || []) as {
     video_id?: string | null; title?: string | null; source?: string | null;
-    public_copy_url?: string | null; updated_at?: string | null;
+    public_copy_id?: string | null; public_copy_url?: string | null; updated_at?: string | null;
   }[];
 
   const videos: ShareableVideo[] = [];
@@ -75,12 +78,54 @@ export async function listShareableVideos(limit = 40): Promise<{ videos: Shareab
     videos.push({
       videoId,
       title: String(row.title || '').trim() || 'Untitled video',
-      url,
+      // Re-minted here too. The composer can post one of these URLs straight
+      // to Metricool, so handing out an expired one from the picker would
+      // fail in exactly the place that is hardest to explain. Read-only: the
+      // banked value is refreshed by ensureShareableVideo, not by browsing.
+      url: freshCopyUrl(String(row.public_copy_id || '').trim() || streamCopyIdFromUrl(url) || '', url, videoId),
       source: String(row.source || 'drive').trim(),
       updatedAt: String(row.updated_at || ''),
     });
   }
   return { videos, failed: false };
+}
+
+/**
+ * A stored copy URL, re-minted when it is one of ours and has gone stale.
+ *
+ * A streamed video's URL carries an expiry, so the string banked in
+ * video_transcripts.public_copy_url has a shelf life that the marker beside it
+ * does not. Re-minting is a pure HMAC with no I/O, so it is done on every read
+ * rather than on a schedule; a bucket or Drive URL is returned untouched.
+ *
+ * Never throws: with no public address configured the stored URL is still the
+ * best answer available, and the health check is where that is said out loud.
+ */
+export function freshCopyUrl(copyId: string, url: string, sourceFileId: string): string {
+  const streamed = parseStreamCopyId(copyId);
+  if (!streamed) return url;
+  try {
+    const base = publicBase();
+    return mediaUrlIsFresh(url, streamed, base) ? url : mediaVideoUrl(streamed, base);
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Remove a copy that failed verification \u2014 and ONLY a copy.
+ *
+ * Exhaustive through lib/copy-disposal.ts rather than an `else`. The streamed
+ * path creates nothing: its recorded id wraps the SOURCE video's Drive id, the
+ * clinic's master, so a catch-all Drive branch here would delete the footage
+ * the post was made from.
+ */
+async function removeMade(made: { fileId: string; where: CopyWhere }): Promise<void> {
+  switch (disposalFor(made.where)) {
+    case 'bucket': await deleteBucketVideo(made.fileId); return;
+    case 'drive': await deleteDriveFile(made.fileId).catch(() => undefined); return;
+    case 'none': return;
+  }
 }
 
 /**
@@ -120,7 +165,14 @@ export async function ensureShareableVideo(
   // Not registered: nothing happened. The copy already existed, and a register
   // that records "nothing happened" every time somebody opens the picker is a
   // register nobody can read.
-  if (known?.url) return { ok: true, url: known.url, fileId: known.id, created: false };
+  if (known?.url) {
+    // A streamed URL expires. Re-mint it rather than hand on a dead link, and
+    // bank the new one so the next read is a plain cache hit again. The marker
+    // never changes, so nothing downstream sees a difference.
+    const url = freshCopyUrl(known.id, known.url, fileId);
+    if (url !== known.url) await rememberPublicCopy(fileId, { id: known.id, url });
+    return { ok: true, url, fileId: known.id, created: false };
+  }
 
   try {
     // THE FILE ITSELF, in a bucket this app controls, as <id>.mp4 — not a Drive
@@ -130,21 +182,45 @@ export async function ensureShareableVideo(
     // is recorded (lib/media-verify.ts), and a copy that is not the video is
     // removed and reported instead of handed on.
     const staged = await stageVideoInBucket(fileId);
-    let made: { fileId: string; url: string; sizeBytes: number | null; where: 'bucket' | 'drive' };
+    let made: { fileId: string; url: string; sizeBytes: number | null; where: CopyWhere };
     if (staged.ok) {
       made = { fileId: staged.key, url: staged.url, sizeBytes: staged.sizeBytes, where: 'bucket' };
-    } else if (staged.reason === 'too_large') {
-      const name = String(title || 'video').replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 80) + '.mp4';
-      const copy = await publicVideoCopy(fileId, name);
-      made = { fileId: copy.fileId, url: copy.url, sizeBytes: staged.sizeBytes ?? null, where: 'drive' };
+    } else if (staged.reason === 'too_large' || staged.reason === 'upload_limit') {
+      // THE APP'S OWN DOMAIN. Nothing is copied and nothing is stored: the URL
+      // is a signed pointer at the clinic's own file, which this app streams
+      // through on demand (app/api/media/video). That is the whole answer to
+      // Supabase's fixed 50 MB upload limit \u2014 there is no upload.
+      made = {
+        fileId: streamCopyId(fileId),
+        url: mediaVideoUrl(fileId, publicBase()),
+        sizeBytes: staged.sizeBytes ?? null,
+        where: 'stream',
+      };
     } else {
       throw Object.assign(new Error(staged.message), { stageReason: staged.reason });
     }
 
-    const verdict = await verifyPlayableMp4(made.url, made.sizeBytes);
+    let verdict = await verifyPlayableMp4(made.url, made.sizeBytes);
+
+    // THE DRIVE COPY, last and only as a rescue. It is the path that started
+    // all of this \u2014 Google answers a download link for a file over ~100 MB
+    // with its virus-scan page \u2014 so it is reached only when this app's own
+    // host could not answer, and it is verified exactly as before. When it
+    // fails too, it fails loudly, naming that page, instead of quietly
+    // storing it.
+    if (!verdict.ok && made.where === 'stream') {
+      reportError('media-library:stream-unverified', new Error(verdict.message), { fileId });
+      const name = String(title || 'video').replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 80) + '.mp4';
+      const copy = await publicVideoCopy(fileId, name);
+      made = { fileId: copy.fileId, url: copy.url, sizeBytes: made.sizeBytes, where: 'drive' };
+      verdict = await verifyPlayableMp4(made.url, made.sizeBytes);
+    }
+
     if (!verdict.ok) {
-      // Not recorded, not sent. Removed so the next attempt starts clean.
-      if (made.where === 'bucket') await deleteBucketVideo(made.fileId); else await deleteDriveFile(made.fileId).catch(() => undefined);
+      // Not recorded, not sent. Removed so the next attempt starts clean \u2014
+      // and for a streamed video there is nothing to remove, which is the one
+      // case a catch-all `else` here used to get catastrophically wrong.
+      await removeMade(made);
       const message = 'The video copy could not be verified: ' + verdict.message;
       if (who?.userId) {
         void recordVideoEvent({
@@ -178,9 +254,14 @@ export async function ensureShareableVideo(
     // version of this threw that away and told everyone to "try again" — the
     // right advice for exactly one of them.
     const stageReason = (e as { stageReason?: string } | null)?.stageReason;
-    let advice = stageReason
-      ? { reason: stageReason, message: e instanceof Error ? e.message : String(e) }
-      : copyFailureAdvice(e);
+    // Two causes that are configuration, not Google: without a public address
+    // or a signing key there is no URL to give Metricool at all, and the
+    // generic "try again" advice would be the wrong thing to tell anybody.
+    let advice = e instanceof MediaBaseUnresolved || e instanceof MediaKeyMissing
+      ? { reason: e.code, message: e.message }
+      : stageReason
+        ? { reason: stageReason, message: e instanceof Error ? e.message : String(e) }
+        : copyFailureAdvice(e);
     // Google reports "the drive is full" and "this identity owns no storage at
     // all" with the same code, and only the folder itself distinguishes them.
     // Worth one extra call on a path that has already failed: the difference is
