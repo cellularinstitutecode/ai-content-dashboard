@@ -136,3 +136,35 @@ test('a sweep_ran line names the gates that held rows back, when the run recorde
   // An unknown reason is still shown rather than dropped.
   assert.match(describeEntry({ event: 'sweep_ran', detail: { scanned: 1, stoppedEarly: true, stoppedWhy: 'odd' } }), /stopped early \(odd\)\.$/);
 });
+
+test('a run that sent two of three networks says which one did not, and why', () => {
+  // The register used to read as an unqualified success here: it looked only
+  // at `networks`, so "Saved on tiktok, youtube; failed on linkedin" had no
+  // counterpart anywhere a person could go back and read.
+  const said = describeEntry({
+    event: 'queued',
+    detail: {
+      networks: ['tiktok', 'youtube'],
+      refused: [{ network: 'linkedin', reason: 'metricool_error', message: 'LinkedIn is not connected to this brand in Metricool.' }],
+    },
+  } as Parameters<typeof describeEntry>[0]);
+  assert.match(said, /Sent to Metricool as a draft for tiktok, youtube/);
+  assert.match(said, /linkedin: LinkedIn is not connected to this brand in Metricool\./);
+});
+
+test('with no message the reason still reads as words, not a machine token', () => {
+  const said = describeEntry({
+    event: 'queued',
+    detail: { networks: [], refused: [{ network: 'linkedin', reason: 'already_queued' }] },
+  } as Parameters<typeof describeEntry>[0]);
+  assert.match(said, /^Nothing was sent to Metricool\./);
+  assert.match(said, /linkedin: already queued/);
+  assert.doesNotMatch(said, /already_queued/);
+});
+
+test('a run with nothing refused reads exactly as it always did', () => {
+  assert.equal(
+    describeEntry({ event: 'queued', detail: { networks: ['linkedin'] } } as Parameters<typeof describeEntry>[0]),
+    'Sent to Metricool as a draft for linkedin, awaiting approval.',
+  );
+});

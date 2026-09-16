@@ -3,6 +3,7 @@ import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
 import { apiBase as metricoolApiBase, normalizeMediaList } from '@/lib/metricool';
 import { bucketKeyFromUrl } from '@/lib/video-bucket';
 import { streamCopyIdFromUrl } from '@/lib/media-url';
+import { metricoolRefusal } from '@/lib/metricool-refusal';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { tiktokDataFor } from '@/lib/tiktok-meta';
 import { NextRequest, NextResponse } from 'next/server';
@@ -257,9 +258,24 @@ export async function POST(req: NextRequest) {
     let parsed: any = null;
     try { parsed = JSON.parse(rawText); } catch { parsed = { raw: rawText }; }
     if (!r.ok) {
-      // Do not leak the raw upstream body to the client; log it server-side instead.
+      // The body is still not forwarded — it is READ, here, and answered with
+      // our own sentence.
+      //
+      // "Metricool rejected the request. Please review and try again." was the
+      // entire account anybody got, and the composer then discarded even that,
+      // so a network that failed because it is not CONNECTED read exactly like
+      // one that failed because the video was too long. Three problems, three
+      // different fixes, one word on screen. metricoolRefusal reads the body
+      // where it already is and returns a sentence that cannot contain it.
       console.error('Metricool schedule error', r.status, redact(rawText.slice(0, 500)));
-      return NextResponse.json({ error: 'Metricool rejected the request. Please review and try again.', status: r.status }, { status: 502 });
+      return NextResponse.json(
+        {
+          error: 'metricool_refused',
+          message: metricoolRefusal(r.status, rawText, network),
+          status: r.status,
+        },
+        { status: 502 },
+      );
     }
     const post = (parsed && parsed.data) ? parsed.data : parsed;
     const id = post && (post.id || post.postId) ? (post.id || post.postId) : null;

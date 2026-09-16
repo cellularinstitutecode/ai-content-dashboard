@@ -344,20 +344,25 @@ export default function CalendarPage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ network, text: pText, publishAt, blogId: 4308292, mediaUrl: pMedia || undefined }),
           });
-          return { network, ok: r.ok };
+          // The body, not just the verdict: it carries the sentence saying WHY.
+          return { network, ok: r.ok, data: await r.json().catch(() => ({})) };
         })
       );
       const ok = results.filter((x) => x.ok).map((x) => x.network);
-      const failed = results.filter((x) => !x.ok).map((x) => x.network);
+      // Same fix as the composer's: a network name on its own tells nobody
+      // whether to reconnect an account, shorten the text or do nothing at all.
+      const bad = results.filter((x) => !x.ok).map((x) => ({ network: x.network, why: friendlyError(x.data) }));
+      const failed = bad.map((x) => x.network);
+      const reasons = bad.map((x) => x.network + ': ' + x.why).join(' ');
       await refresh();
       if (ok.length) announce('posts', 'stats', 'insights');
       if (failed.length === 0) {
         setPStatus('Scheduled on ' + ok.join(', ') + '.');
         setScheduleDay(null);
       } else if (ok.length === 0) {
-        setPStatus('Error: failed on ' + failed.join(', ') + '.');
+        setPStatus('Error: failed on ' + failed.join(', ') + '. ' + reasons);
       } else {
-        setPStatus('Scheduled on ' + ok.join(', ') + '; failed on ' + failed.join(', ') + '.');
+        setPStatus('Scheduled on ' + ok.join(', ') + '; failed on ' + failed.join(', ') + '. ' + reasons);
       }
     } catch (e: any) {
       setPStatus('Error: ' + (e?.message || 'failed'));
