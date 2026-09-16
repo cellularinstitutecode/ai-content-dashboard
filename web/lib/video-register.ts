@@ -226,7 +226,7 @@ function shape(r: Record<string, any>): RegisterRow {
  */
 export async function readRegister(
   userId: string,
-  opts: { limit?: number; videoKey?: string } = {},
+  opts: { limit?: number; videoKey?: string; only?: string[]; except?: string[] } = {},
 ): Promise<{ off: true } | { off: false; rows: RegisterRow[] }> {
   if (tableExists === false) return { off: true };
 
@@ -237,6 +237,16 @@ export async function readRegister(
     .order('created_at', { ascending: false })
     .limit(Math.min(Math.max(Math.trunc(opts.limit ?? 50) || 50, 1), 200));
   if (opts.videoKey) q = q.eq('video_key', opts.videoKey);
+  // Read one KIND of event, or everything but.
+  //
+  // The sweep writes a line per run, every fifteen minutes, whether or not it
+  // did anything — so forty of them is ten quiet hours, and asking for "the
+  // last forty entries" returned forty sweep lines and nothing else. The panel
+  // that is supposed to say what arrived said only that a sweep had run. The
+  // window has to be spent on the events a person is looking for, with the
+  // latest run fetched separately.
+  if (opts.only?.length) q = q.in('event', opts.only);
+  if (opts.except?.length) q = q.not('event', 'in', '(' + opts.except.join(',') + ')');
 
   const { data, error } = await q.then((x) => x, (e: unknown) => ({ data: null, error: e as { code?: string } }));
   if (error) {

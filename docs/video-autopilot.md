@@ -71,11 +71,12 @@ person published something. Approve is still a person, exactly as before.
   match the source. A URL that fails is deleted and reported, never sent. Your
   originals' sharing is never changed.
 
-  Two settings decide where those links point: `PUBLIC_MEDIA_BASE_URL` (the
-  https origin that serves them — **the Dokploy copy**, because a Vercel
-  function cannot stream a file this size before Metricool stops waiting) and
-  `MEDIA_URL_SECRET` (signs them; rotating it invalidates every outstanding
-  link). System Status's **video_media** check reports both.
+  Two settings decide those links: `PUBLIC_MEDIA_BASE_URL` (the https origin
+  that serves them — optional, and only worth setting to the Dokploy copy if
+  large files turn out to be slow from the default host) and `MEDIA_URL_SECRET`
+  (signs them; rotating it invalidates every outstanding link). System Status's
+  **video_media** check reports both, and goes red only when one is genuinely
+  missing — not because of which host it resolved.
 - **Timing:** the next free weekday at 09:00 clinic time, one post per slot.
   Working off a backlog therefore spreads across mornings instead of stacking
   thirty posts on one — which would read as spam on every network. Override the
