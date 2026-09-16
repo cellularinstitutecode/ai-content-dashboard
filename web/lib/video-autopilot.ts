@@ -763,7 +763,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
               actor: 'sweep',
               title: prepared.title,
               link: videoLink,
-              detail: { ...where, networks: sent, refused: refused.map((p) => ({ network: p.network, reason: p.reason })) },
+              detail: { ...where, networks: sent, refused: refused.map((p) => ({ network: p.network, reason: p.reason, message: p.message })) },
             });
           }
         }
@@ -972,7 +972,7 @@ async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string 
     actor: a.actor,
     title: draftTitle,
     link: a.videoLink,
-    detail: { tab: a.tab, row: a.row, gid: a.gid, existingCopy: true, networks: sent, refused: refused.map((p) => ({ network: p.network, reason: p.reason })) },
+    detail: { tab: a.tab, row: a.row, gid: a.gid, existingCopy: true, networks: sent, refused: refused.map((p) => ({ network: p.network, reason: p.reason, message: p.message })) },
   });
   return { draftId, metricool: posted };
 }
@@ -1220,7 +1220,7 @@ export async function completeRow(opts: {
       link: opts.videoLink,
       // A compliance refusal reads very differently from an outage, and both
       // need to still be visible next week.
-      detail: { ...where, networks: sent, refused: refused.map((m) => ({ network: m.network, reason: m.reason })) },
+      detail: { ...where, networks: sent, refused: refused.map((m) => ({ network: m.network, reason: m.reason, message: m.message })) },
     });
   }
 

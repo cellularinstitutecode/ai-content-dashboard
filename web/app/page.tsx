@@ -1199,16 +1199,27 @@ return { network, ok: r.ok, status: r.status, data };
 })
 );
 const ok = results.filter((x) => x.ok).map((x) => x.network);
-const failed = results.filter((x) => !x.ok).map((x) => x.network);
+// THE REASON, NOT JUST THE NAME.
+//
+// This used to project straight to `.network`, so "failed on linkedin" was the
+// whole account a person ever got — while the route had already written a
+// perfectly good sentence into `data.message` ("… has already been published on
+// linkedin …", "LinkedIn is not connected to this brand …") that nobody read.
+// Three different problems with three different fixes all reached the screen as
+// the same word. friendlyError prefers our own message and never shows a bare
+// machine code, exactly as the Prepare panel already does.
+const bad = results.filter((x) => !x.ok).map((x) => ({ network: x.network, why: friendlyError(x.data) }));
+const failed = bad.map((x) => x.network);
+const reasons = bad.map((x) => x.network + ': ' + x.why).join(' ');
 if (failed.length === 0) {
 // Kept, not cleared: the text stays where the person can see it, the button
 // turns into "Sent", and the green line above it says where the drafts went.
 setMStatus(null);
 setMSent({ key: mKey, networks: ok });
 } else if (ok.length === 0) {
-setMStatus('Error: failed on ' + failed.join(', ') + '.');
+setMStatus('Error: failed on ' + failed.join(', ') + '. ' + reasons);
 } else {
-setMStatus('Saved on ' + ok.join(', ') + '; failed on ' + failed.join(', ') + '.');
+setMStatus('Saved on ' + ok.join(', ') + '; failed on ' + failed.join(', ') + '. ' + reasons);
 }
 announce('posts', 'stats', 'insights');
 } catch (e: any) {

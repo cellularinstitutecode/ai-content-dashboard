@@ -189,7 +189,25 @@ export function describeEntry(e: { event: string; actor?: string; detail?: Recor
       return 'No shareable copy could be made, so a post from this row would go out with no video' + because;
     case 'queued': {
       const nets = Array.isArray(d.networks) ? (d.networks as unknown[]).map(String) : [];
-      return 'Sent to Metricool as a draft' + (nets.length ? ' for ' + nets.join(', ') : '') + ', awaiting approval.';
+      // NAME THE ONES THAT DID NOT GO.
+      //
+      // This read as an unqualified success whether three networks were sent or
+      // one of three, because it only ever looked at `networks` — the refused
+      // list was written into the same row and never read by anything. So the
+      // register, the one place that is supposed to say what happened, agreed
+      // with the screen that said nothing: two of three went, and finding out
+      // why the third did not meant reading a server log.
+      const refused = Array.isArray(d.refused) ? (d.refused as { network?: unknown; reason?: unknown; message?: unknown }[]) : [];
+      const sent = 'Sent to Metricool as a draft' + (nets.length ? ' for ' + nets.join(', ') : '') + ', awaiting approval.';
+      if (!refused.length) return sent;
+      const why = refused
+        .map((r) => {
+          const network = String(r.network ?? '').trim() || 'a network';
+          const said = String(r.message ?? '').trim();
+          return network + ': ' + (said || String(r.reason ?? '').trim().replace(/_/g, ' ') || 'refused');
+        })
+        .join(' ');
+      return (nets.length ? sent + ' ' : 'Nothing was sent to Metricool. ') + 'Not sent — ' + why;
     }
     case 'video_attached': {
       const n = typeof d.attached === 'number' ? d.attached : 0;
