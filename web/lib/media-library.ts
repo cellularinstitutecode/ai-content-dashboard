@@ -16,7 +16,9 @@
 import 'server-only';
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { driveFolderReport, publicVideoCopy } from '@/lib/drive';
+import { deleteDriveFile, driveFolderReport, publicVideoCopy } from '@/lib/drive';
+import { deleteBucketVideo, stageVideoInBucket } from '@/lib/video-bucket';
+import { verifyPlayableMp4 } from '@/lib/media-verify';
 import { cachedPublicCopy, rememberPublicCopy } from '@/lib/transcript-cache';
 import { parseDriveFileId } from '@/lib/drive-url';
 import { copyFailureAdvice, storageAdvice } from '@/lib/drive-copy-error';
@@ -121,8 +123,38 @@ export async function ensureShareableVideo(
   if (known?.url) return { ok: true, url: known.url, fileId: known.id, created: false };
 
   try {
-    const name = String(title || 'video').replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 80) + '.mp4';
-    const made = await publicVideoCopy(fileId, name);
+    // THE FILE ITSELF, in a bucket this app controls, as <id>.mp4 — not a Drive
+    // download link, which Google answers with its virus-scan page for a file
+    // over ~100 MB, so Metricool stored a web page as the video. A file too big
+    // to stage keeps the Drive copy; either way the URL is read back before it
+    // is recorded (lib/media-verify.ts), and a copy that is not the video is
+    // removed and reported instead of handed on.
+    const staged = await stageVideoInBucket(fileId);
+    let made: { fileId: string; url: string; sizeBytes: number | null; where: 'bucket' | 'drive' };
+    if (staged.ok) {
+      made = { fileId: staged.key, url: staged.url, sizeBytes: staged.sizeBytes, where: 'bucket' };
+    } else if (staged.reason === 'too_large') {
+      const name = String(title || 'video').replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 80) + '.mp4';
+      const copy = await publicVideoCopy(fileId, name);
+      made = { fileId: copy.fileId, url: copy.url, sizeBytes: staged.sizeBytes ?? null, where: 'drive' };
+    } else {
+      throw Object.assign(new Error(staged.message), { stageReason: staged.reason });
+    }
+
+    const verdict = await verifyPlayableMp4(made.url, made.sizeBytes);
+    if (!verdict.ok) {
+      // Not recorded, not sent. Removed so the next attempt starts clean.
+      if (made.where === 'bucket') await deleteBucketVideo(made.fileId); else await deleteDriveFile(made.fileId).catch(() => undefined);
+      const message = 'The video copy could not be verified: ' + verdict.message;
+      if (who?.userId) {
+        void recordVideoEvent({
+          userId: who.userId, videoKey: driveVideoKey(fileId), event: 'copy_failed', actor: who.actor ?? 'unknown',
+          title, link: videoLink, detail: { reason: 'media_unverified', error: message, where: made.where },
+        });
+      }
+      return { ok: false, reason: 'failed', code: 'media_unverified', message };
+    }
+
     // Remembered immediately: without this, the next press makes ANOTHER
     // world-readable copy of the clinic's footage, and nothing here can delete one.
     await rememberPublicCopy(fileId, { id: made.fileId, url: made.url });
@@ -136,7 +168,7 @@ export async function ensureShareableVideo(
         actor: who.actor ?? 'unknown',
         title,
         link: videoLink,
-        detail: { copyId: made.fileId },
+        detail: { copyId: made.fileId, where: made.where, bytes: verdict.length, verified: true },
       });
     }
     return { ok: true, url: made.url, fileId: made.fileId, created: true };
@@ -145,7 +177,10 @@ export async function ensureShareableVideo(
     // Google says WHICH of five very different problems this is, and the first
     // version of this threw that away and told everyone to "try again" — the
     // right advice for exactly one of them.
-    let advice = copyFailureAdvice(e);
+    const stageReason = (e as { stageReason?: string } | null)?.stageReason;
+    let advice = stageReason
+      ? { reason: stageReason, message: e instanceof Error ? e.message : String(e) }
+      : copyFailureAdvice(e);
     // Google reports "the drive is full" and "this identity owns no storage at
     // all" with the same code, and only the folder itself distinguishes them.
     // Worth one extra call on a path that has already failed: the difference is

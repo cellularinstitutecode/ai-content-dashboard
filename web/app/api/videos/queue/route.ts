@@ -23,7 +23,8 @@ import { reportError } from '@/lib/report';
 export const runtime = 'nodejs';
 // One Drive copy and a few Metricool calls — seconds, but a large video copy
 // on Google's side can take a while to be acknowledged.
-export const maxDuration = 120;
+// 300: the first queue of a video streams it into the app's bucket and verifies it.
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   const auth = await requireAllowlistedUser();

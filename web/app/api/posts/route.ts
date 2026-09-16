@@ -12,6 +12,7 @@ import { youtubeDataFor } from '@/lib/youtube-meta';
 import { cachedPublicCopy } from '@/lib/transcript-cache';
 import { reportError } from '@/lib/report';
 import { deleteDriveFile } from '@/lib/drive';
+import { deleteBucketVideo, isBucketVideoKey } from '@/lib/video-bucket';
 import { forgetPublicCopy } from '@/lib/transcript-cache';
 import { modeOfStatus, videoPending, APPROVED_STATUS } from '@/lib/post-mode';
 import { tabGid } from '@/lib/google-sources';
@@ -24,7 +25,9 @@ export const runtime = 'nodejs';
 // local row, so the default 10s budget is too tight.
 // Two sequential Metricool calls now — normalise, then replace — each with its
 // own timeout. 30 was the budget for one.
-export const maxDuration = 60;
+// 300, not 60: attaching a video now streams the file into the app's bucket
+// and verifies it before Metricool is asked to take it.
+export const maxDuration = 300;
 
 /**
  * A valid session is the weaker question here.
@@ -419,7 +422,14 @@ export async function PATCH(req: Request) {
   if (media.length) {
     const norm = await normalizeMediaList(media);
     media = norm.media;
-    if (norm.degraded) console.error('posts:media-not-normalised — this replace will drop the attachment');
+    if (norm.degraded) {
+      // Refused, not warned about. A replace whose media Metricool did not
+      // take would leave the post looking finished with no video in it.
+      return NextResponse.json(
+        { error: 'media_unverified', message: 'Metricool did not take the video just now, so the post was left as it was. Try again in a moment; if it keeps happening, the video copy needs a look.' },
+        { status: 502 },
+      );
+    }
   }
 
   // YouTube's own fields have to be re-sent for the same reason the media does.
@@ -645,7 +655,10 @@ export async function DELETE(req: Request) {
       // Only when the answer is a confident zero. A failed count must leave the file
       // alone: guessing wrong here breaks a post that is still queued.
       if (!countErr && (count ?? 1) === 0) {
-        await deleteDriveFile(String(copyId));
+        // The recorded id is either a Drive copy (older posts) or an object in
+        // the app's own video bucket; each is removed where it lives.
+        if (isBucketVideoKey(String(copyId))) await deleteBucketVideo(String(copyId));
+        else await deleteDriveFile(String(copyId));
         await forgetPublicCopy(String(copyId));
       }
     } catch (e) {
