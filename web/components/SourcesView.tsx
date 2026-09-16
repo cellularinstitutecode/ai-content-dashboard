@@ -18,6 +18,7 @@ import type { Route } from 'next';
 import PageNav from '@/components/PageNav';
 import { useWorkspace } from '@/components/workspace';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
+import { metricoolPlannerUrl } from '@/lib/metricool-links';
 import VideoRegister from '@/components/VideoRegister';
 import PreparedBoard from '@/components/PreparedBoard';
 import VideoPrepare, { type Prepared } from '@/components/VideoPrepare';
@@ -182,6 +183,23 @@ function SheetFrame({ id, title, height }: { id: string; title: string; height: 
             {tryEditor ? 'Read-only view' : 'Edit here'}
           </button>
           <a href={sheetOpen(id)} target="_blank" rel="noreferrer" style={{ ...ghost, textDecoration: 'none' }}>Open in Google Sheets ↗</a>
+          {/* The other half of the row's life.
+              This sheet says what is PLANNED; Metricool's planner says what
+              actually went out and what is still waiting for approval. Checking
+              the second meant leaving the page and finding the brand by hand,
+              so the two now sit next to each other. The link is built by
+              lib/metricool-links.ts rather than written here — it has to carry
+              both the brand and the user, and the copy that did not is the one
+              that opened Metricool's own error page. */}
+          <a
+            href={metricoolPlannerUrl()}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ ...ghost, textDecoration: 'none' }}
+            title="What has been posted and what is waiting for approval, on Metricool's calendar"
+          >
+            {'\u{1F4C5}'} Metricool planner ↗
+          </a>
         </span>
       </div>
       <div
