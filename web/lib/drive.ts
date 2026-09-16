@@ -19,6 +19,7 @@ import { drive } from 'googleapis/build/src/apis/drive';
 import { JWT } from 'google-auth-library';
 import { Readable } from 'stream';
 import { parseDriveFolderId } from './drive-url.ts';
+import { reportError } from './report.ts';
 
 /**
  * The copies folder, as an id — whatever shape DRIVE_FOLDER_ID was pasted in.
@@ -135,6 +136,20 @@ export async function publicVideoCopy(fileId: string, filename: string): Promise
 export async function deleteDriveFile(fileId: string): Promise<void> {
   const id = String(fileId || '').trim();
   if (!id) return;
+  // A REAL Drive file id, and nothing else.
+  //
+  // The column that feeds this function has held three shapes: a Drive copy's
+  // id, a Supabase object key ('videos/<id>.mp4'), and a stream marker
+  // ('stream:<id>'). Only the first names a file this function may destroy.
+  // The stream marker is the dangerous one — it wraps the id of the clinic's
+  // ORIGINAL footage, because that path makes no copy at all — and it can only
+  // arrive here through a dispatcher bug. The dispatchers guard themselves,
+  // but a guard that lives at the call site is a guard the next edit can walk
+  // past, and the cost of walking past this one is the master.
+  if (!/^[A-Za-z0-9_-]{20,80}$/.test(id)) {
+    reportError('drive:refused-delete', new Error('not a Drive file id'), { fileId: id });
+    return;
+  }
   try {
     await driveClient().files.delete({ fileId: id, supportsAllDrives: true });
   } catch (e) {

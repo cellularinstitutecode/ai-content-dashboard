@@ -2,6 +2,7 @@ import { reportError, redact } from '@/lib/report';
 import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
 import { apiBase as metricoolApiBase, normalizeMediaList } from '@/lib/metricool';
 import { bucketKeyFromUrl } from '@/lib/video-bucket';
+import { streamCopyIdFromUrl } from '@/lib/media-url';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { tiktokDataFor } from '@/lib/tiktok-meta';
 import { NextRequest, NextResponse } from 'next/server';
@@ -142,7 +143,13 @@ export async function POST(req: NextRequest) {
   // video that already has a draft on this network waiting in the queue is
   // refused with the row named, instead of becoming the fourth copy.
   {
-    const copyId = typeof payload.mediaUrl === 'string' ? (parseDriveFileId(payload.mediaUrl) || bucketKeyFromUrl(payload.mediaUrl)) : null;
+    // Three shapes of media URL now, and a streamed one identifies its video
+    // by its path alone. Without this the column stayed null, so the duplicate
+    // guard below never fired and a post that carries its video reported as
+    // still waiting for one.
+    const copyId = typeof payload.mediaUrl === 'string'
+      ? (parseDriveFileId(payload.mediaUrl) || bucketKeyFromUrl(payload.mediaUrl) || streamCopyIdFromUrl(payload.mediaUrl))
+      : null;
     const sourceId = typeof payload.sourceUrl === 'string' ? parseDriveFileId(payload.sourceUrl) : null;
     if (copyId || sourceId) {
       const already = await awaitingPostsForVideo(user.id, { fileId: sourceId, copyId });
@@ -292,7 +299,7 @@ export async function POST(req: NextRequest) {
       // The copy that went out with the post, when there was one: the queue
       // reads media_drive_file_id to know the post carries its video, and
       // lib/post-source.ts follows it back to the sheet row.
-      const mediaCopyId = typeof payload.mediaUrl === 'string' ? (parseDriveFileId(payload.mediaUrl) || bucketKeyFromUrl(payload.mediaUrl)) : null;
+      const mediaCopyId = typeof payload.mediaUrl === 'string' ? (parseDriveFileId(payload.mediaUrl) || bucketKeyFromUrl(payload.mediaUrl) || streamCopyIdFromUrl(payload.mediaUrl)) : null;
       const { error: insertError } = await admin.from('posts').insert({
         user_id: user.id,
         draft_id: ownedDraftId,

@@ -856,13 +856,29 @@ export async function driveMediaAddress(fileId: string): Promise<{ url: string; 
   };
 }
 
-export async function driveMediaStream(fileId: string, transferMs = 40_000): Promise<Response> {
+/**
+ * The file's bytes, as a Response whose body the caller owns.
+ *
+ * `opts.range` forwards an HTTP Range straight through; Drive honours it on
+ * ?alt=media and answers 206 with its own Content-Range. That is what lets the
+ * public media route serve a sixteen-byte verification probe without pulling
+ * a gigabyte. `opts.signal` lets the caller tie the transfer to something
+ * outside it — a client hanging up, say — instead of the timeout alone.
+ */
+export async function driveMediaStream(
+  fileId: string,
+  transferMs = 40_000,
+  opts: { range?: string; signal?: AbortSignal } = {},
+): Promise<Response> {
   // AbortSignal.timeout stays armed for the whole transfer, not just the
   // handshake, so `transferMs` is a real deadline on the download rather than
   // on the moment Drive starts answering.
   return gfetch(
     DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true',
-    { signal: AbortSignal.timeout(transferMs) },
+    {
+      signal: opts.signal ?? AbortSignal.timeout(transferMs),
+      ...(opts.range ? { headers: { range: opts.range } } : {}),
+    },
   );
 }
 

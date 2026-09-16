@@ -22,6 +22,9 @@ import { sheetWriteAccess, serviceAccountEmail } from '@/lib/google-sources';
 import { driveFolderReport } from '@/lib/drive';
 import { serviceKeyVerdict } from '@/lib/supabase-key';
 import { SCHEDULE_TZ } from '@/lib/timezone';
+import { mediaUrlSecret, signMediaPath, verifyMediaSignature } from '@/lib/media-url';
+import { publicBaseSource } from '@/lib/public-base';
+import { bucketUploadMaxBytes } from '@/lib/video-bucket-key';
 import { schemaDetail, type SchemaProbe } from '@/lib/schema-probe';
 import { reportError } from '@/lib/report';
 
@@ -171,6 +174,34 @@ export async function runHealthChecks(): Promise<HealthReport> {
   })();
   const tzIsUtc = tz.resolves && (/^(GMT|UTC)$/i.test(tz.offset) || /^(GMT|UTC)[+-]0+(:00)?$/i.test(tz.offset));
   const tzOk = tz.resolves && (SCHEDULE_TZ === 'UTC' || !tzIsUtc);
+
+  // CAN A REEL REACH METRICOOL AT ALL?
+  //
+  // Two things now stand between a video and a post, and neither of them is
+  // Google. The clinic's files run 96 MB to 1.8 GB; Supabase refuses anything
+  // over its Free-plan limit, which is fixed and cannot be raised; so the file
+  // is served from this app, at a signed URL Metricool fetches. That needs an
+  // address to point at and a key to sign with, and until now a deployment
+  // could be missing both and say nothing.
+  //
+  // Cheapest first, no network: where the address comes from, then a real
+  // sign-and-verify round trip, which costs microseconds and catches a key
+  // that is present but unusable.
+  const mediaBase = publicBaseSource();
+  const mediaKey = Boolean(mediaUrlSecret());
+  const mediaSigns = (() => {
+    if (!mediaKey) return false;
+    const probeId = 'healthcheck0000000000';
+    const exp = Date.now() + 60_000;
+    const sig = signMediaPath(probeId, exp);
+    return Boolean(sig) && verifyMediaSignature(probeId, exp, sig!).ok;
+  })();
+  const mediaCode = !mediaBase.ok ? 'no_public_base' : !mediaKey ? 'no_signing_key' : !mediaSigns ? 'key_unusable' : undefined;
+  // Pointing media URLs at Vercel is the one configuration that looks right and
+  // is not: a function there streams through AWS Lambda, which throttles the
+  // response and caps the payload far under one reel, so Metricool's fetch
+  // times out and the post is refused. Worth saying before it happens.
+  const mediaOnVercel = mediaBase.ok && mediaBase.from === 'VERCEL_PROJECT_PRODUCTION_URL';
 
   const checks: Check[] = [
     {
@@ -424,6 +455,23 @@ export async function runHealthChecks(): Promise<HealthReport> {
             + 'Create a Shared Drive, add '
             + (serviceAccountEmail() || 'the service account')
             + ' as Content manager, and point DRIVE_FOLDER_ID at a folder inside it.',
+    },
+    {
+      name: 'video_media',
+      ok: Boolean(mediaCode === undefined && !mediaOnVercel),
+      // Required: without it no video over the Supabase limit reaches any
+      // network, which is every video the clinic actually posts.
+      severity: 'required',
+      code: mediaCode ?? (mediaOnVercel ? 'vercel_base' : undefined),
+      detail: !mediaBase.ok
+        ? 'This deployment does not know its own public address, so Metricool cannot be given a link to any video. Set PUBLIC_MEDIA_BASE_URL to the https origin that serves the media — the Dokploy copy, see deploy/DOKPLOY.md.'
+        : !mediaKey
+          ? 'No media signing key. Set MEDIA_URL_SECRET (openssl rand -hex 32); CRON_SECRET is used as a fallback. Without one every video link is refused, including ours.'
+          : !mediaSigns
+            ? 'A media signing key is set but does not verify its own signature. Check MEDIA_URL_SECRET for stray whitespace or quotes.'
+            : mediaOnVercel
+              ? 'Video links point at ' + mediaBase.base + ', which is the Vercel deployment. A function there cannot stream a file this size before Metricool stops waiting. Set PUBLIC_MEDIA_BASE_URL to the Dokploy host, which has no such ceiling.'
+              : 'Videos over ' + Math.round(bucketUploadMaxBytes() / 1024 / 1024) + ' MB are served from ' + mediaBase.base + ' at a signed link (' + mediaBase.from + '); smaller ones go in the bucket.',
     },
     {
       name: 'rate_limiting',

@@ -127,12 +127,23 @@ export async function normalizeMedia(rawUrl: string): Promise<string> {
     // ever sent went through `image/url`, the only path the code knew. If
     // Metricool has no such endpoint it answers non-ok and the image one is
     // tried, exactly as before — and the log says which one answered.
-    const paths = looksLikeVideoUrl(url)
+    const isVideo = looksLikeVideoUrl(url);
+    const paths = isVideo
       ? ['/actions/normalize/video/url', '/actions/normalize/image/url']
       : ['/actions/normalize/image/url'];
+    // Four minutes for a video, one for an image.
+    //
+    // Sixty seconds was the figure from when the video came off a CDN. It now
+    // comes from wherever this app serves it, and Metricool is not fetching a
+    // thumbnail: it is pulling a 96 MB to 1.8 GB file onto its own storage
+    // before it answers. A minute is not long enough for the smallest reel in
+    // the sheet, and the timeout's consequence is not a slow post — the catch
+    // below hands back the UN-normalised URL, normalizeMediaList flags
+    // `degraded`, and the post is refused. Every attach would fail.
+    const timeoutMs = isVideo ? 240_000 : 60_000;
     let res: Response | null = null;
     for (const path of paths) {
-      res = await metricoolFetch(path + '?url=' + encodeURIComponent(url), { timeoutMs: 60_000 });
+      res = await metricoolFetch(path + '?url=' + encodeURIComponent(url), { timeoutMs });
       if (res.ok) { if (path.includes('/video/')) console.info('metricool:normalize-media via video endpoint'); break; }
       console.warn('metricool:normalize-media non-ok', path, res.status);
     }

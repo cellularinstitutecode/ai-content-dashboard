@@ -30,21 +30,33 @@ const ROUTES = routeFiles(API_ROOT).map((f) => ({
 }));
 
 // Routes that legitimately authenticate by some means other than a user session.
-// Anything added here is a deliberate decision that a reviewer has to make.
-const NON_SESSION_ROUTES: Record<string, string> = {
-  'app/api/opus/webhook/route.ts':
-    'Authenticates with an HMAC over the raw body (timing-safe, freshness window, replay guard).',
+// Anything added here is a deliberate decision that a reviewer has to make, and
+// each one must name the check that replaces the session — which is then
+// asserted to actually be present, so the exemption cannot become a hole.
+const NON_SESSION_ROUTES: Record<string, { why: string; verifier: RegExp }> = {
+  'app/api/opus/webhook/route.ts': {
+    why: 'Authenticates with an HMAC over the raw body (timing-safe, freshness window, replay guard).',
+    verifier: /timingSafeEqual|createHmac/,
+  },
+  'app/api/media/video/[...parts]/route.ts': {
+    why: 'Serves a post\u2019s video to Metricool\u2019s fetcher, which cannot hold a session. '
+      + 'Every request carries an HMAC this app signed over the file id AND the expiry together '
+      + '(lib/media-url.ts), so a link cannot be edited into one for another video or extended; '
+      + 'with no signing key it refuses everything.',
+    verifier: /verifyMediaSignature\s*\(/,
+  },
 };
 
 test('every API route authenticates its caller', () => {
   const missing: string[] = [];
   for (const r of ROUTES) {
-    if (NON_SESSION_ROUTES[r.path]) {
+    const exempt = NON_SESSION_ROUTES[r.path];
+    if (exempt) {
       // Still assert the stated alternative is actually there.
       assert.match(
         r.source,
-        /timingSafeEqual|createHmac/,
-        r.path + ' claims HMAC auth but does not verify a signature',
+        exempt.verifier,
+        r.path + ' claims to authenticate without a session but does not run the check it names',
       );
       continue;
     }

@@ -14,8 +14,14 @@
 // lib/media-verify.ts then reads the first bytes back anonymously before the
 // URL is ever recorded or sent.
 //
-// Files larger than the scratch disk can hold keep the Drive-copy path (the
-// caller decides), verified the same way.
+// THE FIX AFTER THAT. The project is on Supabase's FREE plan, whose global
+// upload file size limit is FIXED at 50 MB — the field is greyed out, and
+// raising it means upgrading. The clinic's reels run 96 MB to 1.8 GB, so this
+// path now serves only the small ones. Anything bigger is refused here, before
+// a byte is transferred, and lib/media-library.ts hands it to the app's own
+// streaming route instead (lib/media-url.ts). Nothing about this module was
+// removed: a file Supabase will take still belongs in the bucket, where
+// serving it costs us nothing.
 import 'server-only';
 
 import { createReadStream, createWriteStream } from 'node:fs';
@@ -30,43 +36,29 @@ import { driveMediaStream, probeDriveMedia } from '@/lib/google-sources';
 import { DISK_SAFE_BYTES } from '@/lib/media-route';
 import { reportError } from '@/lib/report';
 
-const BUCKET = process.env.VIDEO_BUCKET || 'content-videos';
-/** The public bucket every post's video is streamed into. */
-export const VIDEO_BUCKET = BUCKET;
+// The naming and sizing rules live in a module with nothing attached, so they
+// can be tested; everything that imported them from here still can.
+import { VIDEO_BUCKET, bucketKeyFor, bucketUploadMaxBytes } from '@/lib/video-bucket-key';
+export { VIDEO_BUCKET, bucketKeyFor, bucketKeyFromUrl, bucketUploadMaxBytes, isBucketVideoKey } from '@/lib/video-bucket-key';
+
+const BUCKET = VIDEO_BUCKET;
 /**
  * The ceiling asked for when the bucket is created.
  *
  * Supabase refuses a bucket limit above the project's GLOBAL file size limit
- * (Storage → Settings), which is 50 MB on a new project — far under one reel.
- * When that refusal happens the bucket is created without a ceiling instead,
- * and an oversized upload then fails with uploadLimitMessage below.
+ * (Storage → Settings), which is 50 MB on the Free plan and cannot be raised
+ * there. When that refusal happens the bucket is created without a ceiling
+ * instead, so it exists either way.
  */
 const BUCKET_FILE_LIMIT = '1GB';
 const VIDEO_MIME_TYPES = ['video/mp4', 'video/quicktime'];
 
-/** The one sentence that fixes an upload refused for its size. */
+/** What an upload refused for its size means now that the limit cannot be raised. */
 function uploadLimitMessage(bytes: number, detail: string): string {
-  return 'Supabase refused the video as too large (' + Math.round(bytes / 1024 / 1024) + ' MB). '
-    + 'Raise the global file size limit in the Supabase dashboard \u2014 Storage \u2192 Settings \u2192 "Global file size limit" \u2014 to 1 GB; it is 50 MB by default. '
-    + '(' + detail.slice(0, 120) + ')';
-}
-
-/** The object key for a source video: one per video, so re-staging replaces rather than multiplies. */
-export function bucketKeyFor(fileId: string): string {
-  return 'videos/' + String(fileId || '').trim() + '.mp4';
-}
-
-/** Is this recorded copy id one of ours in the bucket (as opposed to a Drive copy id)? */
-export function isBucketVideoKey(id: string | null | undefined): boolean {
-  return /^videos\/[A-Za-z0-9_-]{20,80}\.mp4$/.test(String(id || ''));
-}
-
-/** The object key inside a Supabase public URL for this bucket, or null. */
-export function bucketKeyFromUrl(url: string | null | undefined): string | null {
-  const m = /\/storage\/v1\/object\/public\/([^/]+)\/(.+?)(?:[?#]|$)/.exec(String(url || ''));
-  if (!m) return null;
-  if (m[1] !== BUCKET) return null;
-  try { return decodeURIComponent(m[2]); } catch { return m[2]; }
+  return 'Supabase refused the video as too large (' + Math.round(bytes / 1024 / 1024) + ' MB); '
+    + 'the Free plan\u2019s upload limit is fixed at ' + Math.round(bucketUploadMaxBytes() / 1024 / 1024) + ' MB. '
+    + 'The video is served from the dashboard instead.'
+    + (detail ? ' (' + detail.slice(0, 120) + ')' : '');
 }
 
 export type StagedVideo =
@@ -91,8 +83,20 @@ export async function stageVideoInBucket(fileId: string, opts: { transferMs?: nu
     return { ok: false, reason, message: probe.message };
   }
   const sizeBytes = typeof probe.sizeBytes === 'number' && Number.isFinite(probe.sizeBytes) ? probe.sizeBytes : null;
-  if (sizeBytes != null && sizeBytes > DISK_SAFE_BYTES) {
-    return { ok: false, reason: 'too_large', sizeBytes, message: Math.round(sizeBytes / 1024 / 1024) + ' MB is more than this function can stage; the Drive copy is used instead.' };
+  // Refused BEFORE the transfer, on Drive's own reported size. The old order
+  // pulled the whole file onto the scratch disk and only then discovered that
+  // Supabase would not take it — a 144 MB download, every time, for nothing.
+  const ceiling = Math.min(DISK_SAFE_BYTES, bucketUploadMaxBytes());
+  if (sizeBytes != null && sizeBytes > ceiling) {
+    const why = bucketUploadMaxBytes() < DISK_SAFE_BYTES
+      ? 'more than Supabase will accept on this plan (' + Math.round(bucketUploadMaxBytes() / 1024 / 1024) + ' MB)'
+      : 'more than this function can stage';
+    return {
+      ok: false,
+      reason: sizeBytes > DISK_SAFE_BYTES ? 'too_large' : 'upload_limit',
+      sizeBytes,
+      message: Math.round(sizeBytes / 1024 / 1024) + ' MB is ' + why + '; the video is served from the dashboard instead.',
+    };
   }
 
   let dir: string | null = null;

@@ -15,6 +15,8 @@ import { reportError } from '@/lib/report';
 import { deleteDriveFile } from '@/lib/drive';
 import { deleteBucketVideo, isBucketVideoKey } from '@/lib/video-bucket';
 import { forgetPublicCopy } from '@/lib/transcript-cache';
+import { isStreamCopyId, mediaVideoUrl, parseStreamCopyId } from '@/lib/media-url';
+import { publicBase } from '@/lib/public-base';
 import { modeOfStatus, videoPending, APPROVED_STATUS } from '@/lib/post-mode';
 import { tabGid } from '@/lib/google-sources';
 import type { PostSource } from '@/lib/sheet-link';
@@ -405,9 +407,14 @@ export async function PATCH(req: Request) {
   // the video, which is the exact failure the rule above exists to prevent.
   if (existing.media_drive_file_id) {
     try {
-      const copy = await cachedPublicCopy(String(existing.media_drive_file_id));
-      if (copy?.url) {
-        media = [copy.url];
+      // A streamed video needs no lookup at all: its recorded id carries the
+      // source video's own Drive id, and the URL is derived from that. Fresh
+      // by construction, so an approve weeks after the draft was written can
+      // never hand Metricool an expired link.
+      const streamed = parseStreamCopyId(String(existing.media_drive_file_id));
+      const url = streamed ? mediaVideoUrl(streamed, publicBase()) : (await cachedPublicCopy(String(existing.media_drive_file_id)))?.url;
+      if (url) {
+        media = [url];
         videoAttached = true;
       }
     } catch (e) {
@@ -671,11 +678,24 @@ export async function DELETE(req: Request) {
       // Only when the answer is a confident zero. A failed count must leave the file
       // alone: guessing wrong here breaks a post that is still queued.
       if (!countErr && (count ?? 1) === 0) {
-        // The recorded id is either a Drive copy (older posts) or an object in
-        // the app's own video bucket; each is removed where it lives.
-        if (isBucketVideoKey(String(copyId))) await deleteBucketVideo(String(copyId));
-        else await deleteDriveFile(String(copyId));
-        await forgetPublicCopy(String(copyId));
+        // The recorded id is one of three things, and only two of them are a
+        // file this app made: a Drive copy (older posts), an object in the
+        // app's own video bucket, or a STREAM MARKER wrapping the source
+        // video's own id. That last one names the clinic's original footage —
+        // the streamed path copies nothing — so it is tested for first and
+        // nothing is deleted for it. The old `else` reached deleteDriveFile
+        // with anything that was not a bucket key, which under the new path
+        // would have been a delete of the master.
+        if (isStreamCopyId(String(copyId))) {
+          // Nothing of ours exists to remove, and nothing to forget: the
+          // mapping is still true and re-minting it costs one HMAC.
+        } else if (isBucketVideoKey(String(copyId))) {
+          await deleteBucketVideo(String(copyId));
+          await forgetPublicCopy(String(copyId));
+        } else {
+          await deleteDriveFile(String(copyId));
+          await forgetPublicCopy(String(copyId));
+        }
       }
     } catch (e) {
       reportError('posts:drive-copy-delete', e);
