@@ -86,9 +86,19 @@ export async function attachPendingVideos(args: {
   if (!made.ok) return { pending: posts.length, attached: 0, failed: posts.length, error: made.message };
 
   // Metricool discards a media URL it has not normalised, silently and with a
-  // 200 — so the list goes through the same step the approve path uses.
+  // 200 — so the list goes through the same step the approve path uses. A URL
+  // it did not take is NOT sent as a fallback: that produced drafts that read
+  // as attached and went out with no video.
   const norm = await normalizeMediaList([made.url]);
-  const media = norm.media.length ? norm.media : [made.url];
+  if (norm.degraded || !norm.media.length) {
+    const error = 'Metricool did not take the video, so nothing was attached \u2014 the drafts still wait for it.';
+    void recordVideoEvent({
+      userId: args.userId, videoKey: args.videoKey, event: 'copy_failed', actor: args.actor, title: args.title, link: args.videoLink,
+      detail: { ...(args.where || {}), reason: 'media_unverified', error, copyId: made.fileId },
+    });
+    return { pending: posts.length, attached: 0, failed: posts.length, error };
+  }
+  const media = norm.media;
 
   let attached = 0;
   let failed = 0;

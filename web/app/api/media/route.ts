@@ -20,7 +20,8 @@ export const runtime = 'nodejs';
 // The POST copies a file inside Drive. That is server-side (files.copy), so a
 // 1.7 GB reel never travels through this function — but a big file still takes
 // Google a while, and 30s was the read's budget, not the copy's.
-export const maxDuration = 60;
+// 300: making a video attachable now streams the file into the app's bucket.
+export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {

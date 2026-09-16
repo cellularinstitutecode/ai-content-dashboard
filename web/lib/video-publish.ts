@@ -16,7 +16,7 @@
 import 'server-only';
 
 import { complianceGate } from '@/lib/compliance-gate';
-import { metricoolConfigured, metricoolSchedulePost, readPostId, type Provider } from '@/lib/metricool';
+import { MediaNotNormalisedError, metricoolConfigured, metricoolSchedulePost, readPostId, type Provider } from '@/lib/metricool';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
@@ -50,7 +50,7 @@ export type PublishOutcome = {
   ok: boolean;
   metricoolPostId?: string | null;
   /** Why it was not sent — a compliance refusal reads differently from an outage. */
-  reason?: 'not_configured' | 'compliance' | 'metricool_error' | 'too_long' | 'already_queued';
+  reason?: 'not_configured' | 'compliance' | 'metricool_error' | 'too_long' | 'already_queued' | 'media_unverified';
   message?: string;
 };
 
@@ -111,6 +111,11 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
 
     return { network, ok: true, metricoolPostId };
   } catch (e) {
+    if (e instanceof MediaNotNormalisedError) {
+      // Not sent, on purpose: a draft that looks finished and goes out with no
+      // video is the failure this whole path exists to prevent.
+      return { network, ok: false, reason: 'media_unverified', message: e.message };
+    }
     reportError('video-publish:schedule', e, { network });
     return { network, ok: false, reason: 'metricool_error', message: e instanceof Error ? e.message : 'Metricool did not accept the post.' };
   }

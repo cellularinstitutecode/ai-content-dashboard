@@ -1,6 +1,7 @@
 import { reportError, redact } from '@/lib/report';
 import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
-import { apiBase as metricoolApiBase, normalizeMedia } from '@/lib/metricool';
+import { apiBase as metricoolApiBase, normalizeMediaList } from '@/lib/metricool';
+import { bucketKeyFromUrl } from '@/lib/video-bucket';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
@@ -132,7 +133,7 @@ export async function POST(req: NextRequest) {
   // video that already has a draft on this network waiting in the queue is
   // refused with the row named, instead of becoming the fourth copy.
   {
-    const copyId = typeof payload.mediaUrl === 'string' ? parseDriveFileId(payload.mediaUrl) : null;
+    const copyId = typeof payload.mediaUrl === 'string' ? (parseDriveFileId(payload.mediaUrl) || bucketKeyFromUrl(payload.mediaUrl)) : null;
     const sourceId = typeof payload.sourceUrl === 'string' ? parseDriveFileId(payload.sourceUrl) : null;
     if (copyId || sourceId) {
       const already = await awaitingPostsForVideo(user.id, { fileId: sourceId, copyId });
@@ -160,8 +161,16 @@ export async function POST(req: NextRequest) {
     // Both halves of that were wrong, and the effect was the same either way:
     // Metricool accepted the post with a 200 and quietly dropped the file, so
     // "attached" here meant nothing at all by the time a person opened the
-    // draft and read "Add at least 1 image or video."
-    body.media = [await normalizeMedia(String(payload.mediaUrl))];
+    // draft and read "Add at least 1 image or video." A URL Metricool did not
+    // take is refused here rather than sent for it to drop.
+    const norm = await normalizeMediaList([String(payload.mediaUrl)]);
+    if (norm.degraded || !norm.media.length) {
+      return NextResponse.json(
+        { error: 'media_unverified', message: 'Metricool did not take the video, so the post was not created. Try again in a moment; if it keeps happening, the video copy needs a look.' },
+        { status: 422 },
+      );
+    }
+    body.media = norm.media;
   }
 
   // YouTube alone needs a title, a Short-or-video answer and a stated audience;
@@ -250,7 +259,7 @@ export async function POST(req: NextRequest) {
       // The copy that went out with the post, when there was one: the queue
       // reads media_drive_file_id to know the post carries its video, and
       // lib/post-source.ts follows it back to the sheet row.
-      const mediaCopyId = typeof payload.mediaUrl === 'string' ? parseDriveFileId(payload.mediaUrl) : null;
+      const mediaCopyId = typeof payload.mediaUrl === 'string' ? (parseDriveFileId(payload.mediaUrl) || bucketKeyFromUrl(payload.mediaUrl)) : null;
       const { error: insertError } = await admin.from('posts').insert({
         user_id: user.id,
         draft_id: ownedDraftId,

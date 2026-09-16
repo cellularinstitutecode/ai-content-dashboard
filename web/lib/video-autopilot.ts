@@ -56,8 +56,8 @@ import { belowStart, parseQuota, parseStartRow, remainingQuota, startOfDayIso } 
 import { SCHEDULE_TZ } from '@/lib/timezone';
 import { publishVideoDraft, takenSlots, type PublishOutcome } from '@/lib/video-publish';
 import { reviveStalledRuns, type ReviveResult } from '@/lib/video-revive';
-import { publicVideoCopy } from '@/lib/drive';
-import { cachedPublicCopy, rememberPublicCopy } from '@/lib/transcript-cache';
+import { cachedPublicCopy } from '@/lib/transcript-cache';
+import { ensureShareableVideo } from '@/lib/media-library';
 import { awaitingPostsForVideo } from '@/lib/awaiting-posts';
 import { isAwaitingApproval } from '@/lib/post-mode';
 import { alreadyQueuedMessage, networksAlreadyQueued } from '@/lib/queue-guard';
@@ -1250,25 +1250,19 @@ export async function handOffToMetricool(args: {
   let mediaUrl: string | null = null;
   let mediaFileId: string | null = null;
   if (wantsVideo && fileId) {
-    try {
-      // Made once per video, not once per run. This copy is opened to ANYONE with the
-      // link, and until it was recorded, re-preparing a row simply made another — a
-      // folder filling with world-readable copies of the clinic's footage, none of them
-      // traceable back to a row and none deletable.
-      const known = await cachedPublicCopy(fileId);
-      if (known) {
-        mediaFileId = known.id;
-        mediaUrl = known.url;
-      } else {
-        const made = await publicVideoCopy(fileId, title.replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 80) + '.mp4');
-        mediaFileId = made.fileId;
-        mediaUrl = made.url;
-        await rememberPublicCopy(fileId, { id: made.fileId, url: made.url });
-      }
-    } catch (e) {
-      // Not fatal: the networks that need a video are dropped below, and the
-      // text-only ones still get their drafts.
-      reportError('video-sweep:media-copy', e);
+    // Made once per video, not once per run, and VERIFIED before it is recorded
+    // — lib/media-library.ts streams the file into the app's bucket and reads
+    // its first bytes back the way Metricool will. This used to be an inline
+    // Drive copy handing over a download link that Google answered with a web
+    // page for any reel over ~100 MB.
+    const made = await ensureShareableVideo(videoLink, title, { userId, actor: 'sweep' });
+    if (made.ok) {
+      mediaFileId = made.fileId;
+      mediaUrl = made.url;
+    } else {
+      // Not fatal here: the networks that need a video are dropped below, and
+      // the text-only ones still get their drafts. The register carries why.
+      reportError('video-sweep:media-copy', new Error(made.message), { fileId });
     }
   }
 

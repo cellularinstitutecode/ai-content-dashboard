@@ -104,6 +104,11 @@ async function metricoolFetch(
  * losing the post is worse — the caller sends what it has and the draft still
  * lands for a person to look at.
  */
+/** Does the URL name a video file? Decides which normalise endpoint is tried first. */
+export function looksLikeVideoUrl(url: string): boolean {
+  return /\.(mp4|mov|m4v|webm)(\?|#|$)/i.test(String(url || ''));
+}
+
 export async function normalizeMedia(rawUrl: string): Promise<string> {
   const url = String(rawUrl || '').trim();
   if (!url) return '';
@@ -114,11 +119,21 @@ export async function normalizeMedia(rawUrl: string): Promise<string> {
     // below hands back the un-normalised URL, and the media is dropped exactly
     // as it was before any of this was written — a silent regression that only
     // shows up on the big files that matter most.
-    const res = await metricoolFetch('/actions/normalize/image/url?url=' + encodeURIComponent(url), { timeoutMs: 60_000 });
-    if (!res.ok) {
-      console.warn('metricool:normalize-media non-ok', res.status);
-      return url;
+    //
+    // A video is offered to the video endpoint first; every video this app
+    // ever sent went through `image/url`, the only path the code knew. If
+    // Metricool has no such endpoint it answers non-ok and the image one is
+    // tried, exactly as before — and the log says which one answered.
+    const paths = looksLikeVideoUrl(url)
+      ? ['/actions/normalize/video/url', '/actions/normalize/image/url']
+      : ['/actions/normalize/image/url'];
+    let res: Response | null = null;
+    for (const path of paths) {
+      res = await metricoolFetch(path + '?url=' + encodeURIComponent(url), { timeoutMs: 60_000 });
+      if (res.ok) { if (path.includes('/video/')) console.info('metricool:normalize-media via video endpoint'); break; }
+      console.warn('metricool:normalize-media non-ok', path, res.status);
     }
+    if (!res || !res.ok) return url;
     const raw = await res.text();
     let data: unknown = null;
     try { data = JSON.parse(raw); } catch { data = raw; }
@@ -188,15 +203,32 @@ function wallClock(publicationDate: string): string {
   return isNaN(at.getTime()) ? String(publicationDate) : formatForMetricool(at, SCHEDULE_TZ);
 }
 
+/**
+ * Thrown before a post is created when its media did not normalise.
+ *
+ * This used to be a console.error and the post went out anyway — with a 200
+ * from Metricool and no video in it. A post the person will approve believing
+ * it carries its video is worse than no post: callers catch this by class and
+ * say so.
+ */
+export class MediaNotNormalisedError extends Error {
+  readonly code = 'media_unverified' as const;
+  constructor(message = 'Metricool did not take the media, so the post was not created \u2014 a post without its video would have looked finished and gone out empty.') {
+    super(message);
+    this.name = 'MediaNotNormalisedError';
+  }
+}
+
 export async function metricoolSchedulePost(input: SchedulePostInput, mode: PostMode = 'review') {
   // Normalised before the post is built, never after: an un-normalised URL is
   // accepted and then discarded, so "media sent" and "media attached" are two
   // different things and only this call makes them the same one.
   const { media, degraded } = await normalizeMediaList((input.media || []).map((m) => m.url).filter(Boolean));
   if (degraded) {
-    // Loud, because the failure is otherwise invisible: Metricool answers 200
-    // and the post simply arrives with no video.
-    console.error('metricool:media-not-normalised — the post will arrive WITHOUT its media', { count: media.length });
+    // Refused, not warned about: the failure is otherwise invisible — Metricool
+    // answers 200 and the post arrives with no video.
+    console.error('metricool:media-not-normalised — the post is NOT created', { count: media.length });
+    throw new MediaNotNormalisedError();
   }
 
   const body = {
