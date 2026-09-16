@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { readRegister } from '@/lib/video-register';
 import { describeEntry } from '@/lib/video-event';
+import { mergeRegisterFeed } from '@/lib/register-feed';
 import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
@@ -25,8 +26,27 @@ export async function GET(req: NextRequest) {
   const limit = parseInt(req.nextUrl.searchParams.get('limit') || '50', 10) || 50;
   const videoKey = req.nextUrl.searchParams.get('videoKey') || undefined;
 
+  // RUN LINES ARE READ SEPARATELY, and cannot spend the window.
+  //
+  // The sweep records a line every fifteen minutes whether or not it did
+  // anything, so "the last forty entries" became forty sweep lines and nothing
+  // else after ten quiet hours — and "Recently added" could only say that a
+  // sweep had run. The activity keeps the whole limit; the latest run is one
+  // extra row on top. A single video's history (?videoKey=) is unchanged:
+  // there, every run line about it is the point.
+  const RUN_EVENTS = ['sweep_ran'];
+
   try {
-    const out = await readRegister(auth.userId, { limit, videoKey });
+    const out = videoKey
+      ? await readRegister(auth.userId, { limit, videoKey })
+      : await (async () => {
+        const [activity, runs] = await Promise.all([
+          readRegister(auth.userId, { limit, except: RUN_EVENTS }),
+          readRegister(auth.userId, { limit: 1, only: RUN_EVENTS }),
+        ]);
+        if (activity.off || runs.off) return { off: true } as const;
+        return { off: false as const, rows: mergeRegisterFeed(activity.rows, runs.rows) };
+      })();
     // `off` is not an error and not an empty register. It means the migration
     // has not been run, and the screen says so rather than showing a blank
     // panel that looks like "nothing has ever happened".

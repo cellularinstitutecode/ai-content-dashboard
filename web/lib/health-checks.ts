@@ -197,11 +197,24 @@ export async function runHealthChecks(): Promise<HealthReport> {
     return Boolean(sig) && verifyMediaSignature(probeId, exp, sig!).ok;
   })();
   const mediaCode = !mediaBase.ok ? 'no_public_base' : !mediaKey ? 'no_signing_key' : !mediaSigns ? 'key_unusable' : undefined;
-  // Pointing media URLs at Vercel is the one configuration that looks right and
-  // is not: a function there streams through AWS Lambda, which throttles the
-  // response and caps the payload far under one reel, so Metricool's fetch
-  // times out and the post is refused. Worth saying before it happens.
-  const mediaOnVercel = mediaBase.ok && mediaBase.from === 'VERCEL_PROJECT_PRODUCTION_URL';
+  // WHICH HOST SERVES THE BYTES IS NOT A FAULT.
+  //
+  // This check used to go RED when the links resolved to the Vercel
+  // deployment, on the reasoning that a function there streams through AWS
+  // Lambda and would time out on a file this size. That reasoning is plausible
+  // and it is UNVERIFIED — it came from reading about the platform, not from
+  // watching this app fail — and an unverified belief has no business painting
+  // a required-severity banner on somebody's dashboard and telling them to
+  // fetch help. It said the pipeline was broken while the pipeline was, as far
+  // as anybody had actually observed, fine.
+  //
+  // So the check now reports what IS true: whether there is an address to
+  // point at and a key to sign with. Those two really do mean no video can go
+  // out. Where the address points is written into the detail line, where a
+  // person can weigh it, and if streaming from that host genuinely cannot
+  // work, the place that finds out is the one that already checks: the media
+  // is read back before any post is created, and a post is refused rather than
+  // sent with a video Metricool never managed to fetch.
 
   const checks: Check[] = [
     {
@@ -458,20 +471,21 @@ export async function runHealthChecks(): Promise<HealthReport> {
     },
     {
       name: 'video_media',
-      ok: Boolean(mediaCode === undefined && !mediaOnVercel),
-      // Required: without it no video over the Supabase limit reaches any
-      // network, which is every video the clinic actually posts.
+      ok: mediaCode === undefined,
+      // Required: without an address and a key, no video over the Supabase
+      // limit reaches any network — which is every video the clinic posts.
       severity: 'required',
-      code: mediaCode ?? (mediaOnVercel ? 'vercel_base' : undefined),
+      code: mediaCode,
       detail: !mediaBase.ok
         ? 'This deployment does not know its own public address, so Metricool cannot be given a link to any video. Set PUBLIC_MEDIA_BASE_URL to the https origin that serves the media — the Dokploy copy, see deploy/DOKPLOY.md.'
         : !mediaKey
           ? 'No media signing key. Set MEDIA_URL_SECRET (openssl rand -hex 32); CRON_SECRET is used as a fallback. Without one every video link is refused, including ours.'
           : !mediaSigns
             ? 'A media signing key is set but does not verify its own signature. Check MEDIA_URL_SECRET for stray whitespace or quotes.'
-            : mediaOnVercel
-              ? 'Video links point at ' + mediaBase.base + ', which is the Vercel deployment. A function there cannot stream a file this size before Metricool stops waiting. Set PUBLIC_MEDIA_BASE_URL to the Dokploy host, which has no such ceiling.'
-              : 'Videos over ' + Math.round(bucketUploadMaxBytes() / 1024 / 1024) + ' MB are served from ' + mediaBase.base + ' at a signed link (' + mediaBase.from + '); smaller ones go in the bucket.',
+            : 'Videos over ' + Math.round(bucketUploadMaxBytes() / 1024 / 1024) + ' MB are served from ' + mediaBase.base + ' at a signed link (' + mediaBase.from + '); smaller ones go in the bucket.'
+              + (mediaBase.from === 'VERCEL_PROJECT_PRODUCTION_URL'
+                ? ' PUBLIC_MEDIA_BASE_URL is unset, so this is the Vercel deployment; set it to move the transfer to another host.'
+                : ''),
     },
     {
       name: 'rate_limiting',
