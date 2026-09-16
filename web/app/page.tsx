@@ -584,6 +584,8 @@ try { if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'sm
       // otherwise the card lands the viewer on a closed header.
       window.dispatchEvent(new CustomEvent('section:open', { detail: STEP_ANCHORS[i] }));
       const el = typeof document !== 'undefined' ? document.getElementById(STEP_ANCHORS[i]) : null;
+      // Only the Dashboard's copy can miss: every anchor above renders on
+      // Draft, so there the element is always found and this never fires.
       if (!el && !isDraft) { window.location.href = '/draft#' + STEP_ANCHORS[i]; return; }
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1350,8 +1352,15 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
     looking like three unrelated glitches. Silent when all is well. */}
 <SystemStatus />
 
-{!isDraft && (<>
-{/* Onboarding "How this works" strip — dismissible, remembered per browser */}
+{/* Onboarding "How this works" strip — dismissible, remembered per browser.
+
+    ON BOTH PAGES, and that is the point of it. This used to sit inside the
+    same {!isDraft} wrapper as the stat cards below, because when /draft was
+    split out the strip read as overview-page furniture. But the four sections
+    it indexes — Create, Images, Repurpose, Schedule — ALL live on Draft, which
+    is where their "Step 1 · Create" headings are. The index and the things it
+    indexes ended up on opposite pages, so the Draft page numbered its steps
+    one to four with nothing on screen saying what the four were. */}
       {(
         <section className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
           <div className="flex items-center justify-between border-b border-line px-6 py-4 sm:px-8">
@@ -1377,7 +1386,8 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
         </section>
       )}
 
-{/* Stat cards */}
+{/* Stat cards — the overview page's own furniture, still Dashboard-only. */}
+{!isDraft && (
 <section className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
 {statCards.map(s => (
 <div key={s.label} className="rounded-2xl bg-surface p-5 shadow-card ring-1 ring-line/60">
@@ -1386,7 +1396,7 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 </div>
 ))}
 </section>
-</>)}
+)}
 
 
 {/* Generator */}
