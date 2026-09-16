@@ -905,6 +905,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
           const j = await r.json().catch(() => ({}));
           // Already in the queue is not a failure: the drafts exist and wait for
           // approval. Said as such, so the run does not read as broken.
+          if (j?.error === 'already_published') return finish('done', String(j?.message || 'Already published \u2014 left alone.'));
           if (r.status === 409 || j?.error === 'already_queued') return finish('done', String(j?.message || 'Already in the queue, waiting for your approval.'));
           if (!r.ok) return finish('failed', String(j?.message || 'The row could not be queued.'));
           const outs = (Array.isArray(j?.metricool) ? j.metricool : []) as { ok?: boolean; network?: string; message?: string; reason?: string }[];

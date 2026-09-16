@@ -60,7 +60,7 @@ import { cachedPublicCopy } from '@/lib/transcript-cache';
 import { ensureShareableVideo } from '@/lib/media-library';
 import { awaitingPostsForVideo } from '@/lib/awaiting-posts';
 import { isAwaitingApproval } from '@/lib/post-mode';
-import { alreadyQueuedMessage, networksAlreadyQueued } from '@/lib/queue-guard';
+import { alreadyQueuedMessage, hasGoneOut, networksAlreadyPublished, networksAlreadyQueued } from '@/lib/queue-guard';
 import { parseDriveFileId } from '@/lib/drive-url';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
@@ -979,7 +979,7 @@ async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string 
 
 export type QueueExistingResult =
   | { ok: true; title: string; draftId: string | null; metricool: PublishOutcome[] }
-  | { ok: false; reason: 'no_table' | 'not_found' | 'hidden' | 'no_video' | 'no_copy' | 'already_queued'; message: string };
+  | { ok: false; reason: 'no_table' | 'not_found' | 'hidden' | 'no_video' | 'no_copy' | 'already_queued' | 'already_published'; message: string };
 
 /**
  * Queue ONE named row whose copy is already written, with its video — the
@@ -1031,7 +1031,24 @@ export async function queueExistingCopy(opts: {
   if (prior && prior.state === 'prepared' && !opts.skipMetricool) {
     const fileId = parseDriveFileId(videoLink);
     const known = fileId ? await cachedPublicCopy(fileId) : null;
-    const waiting = (await awaitingPostsForVideo(opts.userId, { fileId, copyId: known?.id })).filter((p) => isAwaitingApproval(p.status));
+    const forVideo = await awaitingPostsForVideo(opts.userId, { fileId, copyId: known?.id });
+
+    // ALREADY OUT. A row whose posts were approved and published is finished,
+    // and nothing here may queue it again: approving emptied the queue, so the
+    // waiting check below saw nothing and the row looked free — one press of
+    // Attach videos over a range would publish the same reel twice.
+    const published = forVideo.filter((p) => hasGoneOut(p.status));
+    if (published.length) {
+      const nets = Array.from(new Set(published.map((p) => String((Array.isArray(p.providers) ? p.providers[0] : '') || '')).filter(Boolean)));
+      const message = 'Row ' + opts.row + ' has already been published (' + (nets.join(', ') || String(published.length) + ' post' + (published.length === 1 ? '' : 's')) + '), so it was left alone. Queuing it again would post the same video twice.';
+      void recordVideoEvent({
+        userId: opts.userId, videoKey: videoKeyFor(spreadsheetId, opts.tab, rowKey), event: 'skipped', actor: opts.actor ?? 'button',
+        title: title || videoLink, link: videoLink, detail: { tab: opts.tab, row: opts.row, gid, reason: 'already_published', error: message },
+      });
+      return { ok: false, reason: 'already_published', message };
+    }
+
+    const waiting = forVideo.filter((p) => isAwaitingApproval(p.status));
     if (waiting.length) {
       const nets = Array.from(new Set(waiting.map((p) => String((Array.isArray(p.providers) ? p.providers[0] : '') || '')).filter(Boolean)));
       const message = 'Row ' + opts.row + ' already has ' + waiting.length + ' draft' + (waiting.length === 1 ? '' : 's') + ' waiting for your approval (' + nets.join(', ') + ') \u2014 approve them in the queue, or delete them there first.';
@@ -1285,10 +1302,19 @@ export async function handOffToMetricool(args: {
   // waiting on that network; row 179 ended up in Metricool eleven times.
   // A network that already has one is answered, not sent.
   const already = await awaitingPostsForVideo(userId, { fileId, copyId: mediaFileId });
-  const split = networksAlreadyQueued(already, wanted);
-  const out: PublishOutcome[] = split.queued.map((network) => ({
-    network, ok: false as const, reason: 'already_queued' as const, message: alreadyQueuedMessage(network, args.rowLabel),
-  }));
+  // Published first: a network this video already went out on is finished, and
+  // approving had emptied the waiting list, so the row looked free again.
+  const gone = networksAlreadyPublished(already, wanted);
+  const split = networksAlreadyQueued(already, gone.free);
+  const out: PublishOutcome[] = [
+    ...gone.published.map((network) => ({
+      network, ok: false as const, reason: 'already_published' as const,
+      message: (args.rowLabel ? args.rowLabel + ' has' : 'This video has') + ' already been published on ' + network + ', so nothing was sent \u2014 posting it again would publish the same video twice.',
+    })),
+    ...split.queued.map((network) => ({
+      network, ok: false as const, reason: 'already_queued' as const, message: alreadyQueuedMessage(network, args.rowLabel),
+    })),
+  ];
   const chosen = split.free;
   if (!chosen.length) return out;
 

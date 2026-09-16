@@ -12,6 +12,41 @@
 // Pure: the reads are the caller's; this only decides.
 import { isAwaitingApproval } from './post-mode.ts';
 
+/**
+ * Has this post already gone out — approved, scheduled to go, or published?
+ *
+ * Distinct from "not awaiting approval", which also covers failed and
+ * rejected: those are worth another attempt, a published post never is.
+ */
+export function hasGoneOut(status: unknown): boolean {
+  return ['approved', 'published', 'sent', 'live'].includes(String(status || '').trim().toLowerCase());
+}
+
+/**
+ * The posts of a video that already went out, by network.
+ *
+ * A row whose drafts were approved and published is FINISHED. The waiting
+ * check below could not see that — approving a row emptied the queue, and the
+ * row looked free again, so one press of Attach videos over a range would
+ * queue an already-published reel a second time.
+ */
+export function networksAlreadyPublished(posts: readonly AwaitingLike[], networks: readonly string[]): { published: string[]; free: string[] } {
+  const out = new Set<string>();
+  for (const p of posts) {
+    if (!hasGoneOut(p.status)) continue;
+    const n = networkOf(p);
+    if (n) out.add(n);
+  }
+  const published: string[] = [];
+  const free: string[] = [];
+  for (const n of networks) {
+    const key = String(n || '').trim().toLowerCase();
+    if (!key) continue;
+    (out.has(key) ? published : free).push(n);
+  }
+  return { published, free };
+}
+
 export type AwaitingLike = {
   providers?: unknown;
   status?: unknown;
