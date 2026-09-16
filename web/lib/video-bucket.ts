@@ -33,8 +33,23 @@ import { reportError } from '@/lib/report';
 const BUCKET = process.env.VIDEO_BUCKET || 'content-videos';
 /** The public bucket every post's video is streamed into. */
 export const VIDEO_BUCKET = BUCKET;
-/** Per-bucket ceiling set when the bucket is created. Supabase's global limit must allow it too. */
+/**
+ * The ceiling asked for when the bucket is created.
+ *
+ * Supabase refuses a bucket limit above the project's GLOBAL file size limit
+ * (Storage → Settings), which is 50 MB on a new project — far under one reel.
+ * When that refusal happens the bucket is created without a ceiling instead,
+ * and an oversized upload then fails with uploadLimitMessage below.
+ */
 const BUCKET_FILE_LIMIT = '1GB';
+const VIDEO_MIME_TYPES = ['video/mp4', 'video/quicktime'];
+
+/** The one sentence that fixes an upload refused for its size. */
+function uploadLimitMessage(bytes: number, detail: string): string {
+  return 'Supabase refused the video as too large (' + Math.round(bytes / 1024 / 1024) + ' MB). '
+    + 'Raise the global file size limit in the Supabase dashboard \u2014 Storage \u2192 Settings \u2192 "Global file size limit" \u2014 to 1 GB; it is 50 MB by default. '
+    + '(' + detail.slice(0, 120) + ')';
+}
 
 /** The object key for a source video: one per video, so re-staging replaces rather than multiplies. */
 export function bucketKeyFor(fileId: string): string {
@@ -106,18 +121,29 @@ export async function stageVideoInBucket(fileId: string, opts: { transferMs?: nu
 
     let { error } = await doUpload();
     if (error && /bucket/i.test(error.message || '')) {
-      // First run: create the public bucket with a ceiling that fits a reel, then retry once.
-      try { await db.storage.createBucket(BUCKET, { public: true, fileSizeLimit: BUCKET_FILE_LIMIT, allowedMimeTypes: ['video/mp4', 'video/quicktime'] }); }
-      catch (e) { reportError('video-bucket:create', e); }
+      // First run: create the public bucket, then retry the upload once.
+      //
+      // Read the RETURNED error, not a thrown one: createBucket resolves with
+      // { error } like every other supabase-js call, so a try/catch here saw
+      // nothing and the failure was discarded. And a bucket ceiling above the
+      // project's GLOBAL file size limit is refused outright — so asking for
+      // 1 GB while the project is still on the 50 MB default failed to create
+      // the bucket at all, and the next line reported "Bucket not found"
+      // instead of the one sentence that fixes it. Second attempt inherits the
+      // global limit, so the bucket exists either way and an oversized file
+      // fails below with an answer a person can act on.
+      const made = await db.storage.createBucket(BUCKET, { public: true, fileSizeLimit: BUCKET_FILE_LIMIT, allowedMimeTypes: VIDEO_MIME_TYPES });
+      if (made.error) {
+        reportError('video-bucket:create', made.error, { limit: BUCKET_FILE_LIMIT });
+        const retry = await db.storage.createBucket(BUCKET, { public: true, allowedMimeTypes: VIDEO_MIME_TYPES });
+        if (retry.error) reportError('video-bucket:create-plain', retry.error);
+      }
       ({ error } = await doUpload());
     }
     if (error) {
       const msg = String(error.message || '');
-      if (/exceed|too large|maximum|413|size/i.test(msg)) {
-        return {
-          ok: false, reason: 'upload_limit', sizeBytes,
-          message: 'Supabase refused the upload as too large (' + Math.round(bytes / 1024 / 1024) + ' MB). Raise the Supabase storage upload limit (Storage → Settings → global file size limit) above the default 50 MB.',
-        };
+      if (/exceed|too large|maximum|payload|413|size limit/i.test(msg)) {
+        return { ok: false, reason: 'upload_limit', sizeBytes, message: uploadLimitMessage(bytes, msg) };
       }
       return { ok: false, reason: 'failed', sizeBytes, message: 'The video could not be stored: ' + msg };
     }
