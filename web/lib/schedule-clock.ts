@@ -105,3 +105,27 @@ export function scheduleWallClock(input: unknown) {
   const at = new Date(input as string);
   return wallClockInTz(isNaN(at.getTime()) ? new Date() : at, scheduleTz());
 }
+
+/**
+ * An instant as the value a `datetime-local` box shows on the schedule
+ * clock: "YYYY-MM-DDTHH:mm" in the clinic's zone, whatever the browser's is.
+ */
+export function scheduleInputValue(input: unknown): string {
+  const w = scheduleWallClock(input);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${w.y}-${p(w.m)}-${p(w.d)}T${p(w.hh)}:${p(w.mm)}`;
+}
+
+/**
+ * The instant a `datetime-local` value names ON THE SCHEDULE CLOCK.
+ *
+ * The composer used to send the box's raw string, which the server took as
+ * clinic wall clock — right only when the browser's clock and the clinic's
+ * agreed. From a UTC machine "14:18" went out as 2:18 PM Cancún.
+ */
+export function scheduleInstantFromInput(value: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(value || '').trim());
+  if (!m) return null;
+  const iso = isoAtScheduleWallClock(Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5]));
+  return /^\d{4}-/.test(iso) ? iso : null;
+}

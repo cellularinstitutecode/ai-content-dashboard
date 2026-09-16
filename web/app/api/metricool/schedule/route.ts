@@ -3,6 +3,7 @@ import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
 import { apiBase as metricoolApiBase, normalizeMediaList } from '@/lib/metricool';
 import { bucketKeyFromUrl } from '@/lib/video-bucket';
 import { youtubeDataFor } from '@/lib/youtube-meta';
+import { tiktokDataFor } from '@/lib/tiktok-meta';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -93,6 +94,14 @@ export async function POST(req: NextRequest) {
   const when = normalizePublishAt(payload.publishAt);
   const blogId = String(payload.blogId || DEFAULT_BLOG_ID);
   const draftId = payload.draftId ? String(payload.draftId) : null;
+  // Ownership, checked once here so the draft's pack can be read for the
+  // YouTube/TikTok presets below; the row link further down reuses the answer.
+  let ownedDraftIdEarly: string | null = null;
+  if (draftId) {
+    const { data: ownDraftEarly } = await sb.from('drafts').select('id').eq('id', draftId).eq('user_id', user.id).maybeSingle()
+      .then((x) => x, () => ({ data: null }));
+    ownedDraftIdEarly = ownDraftEarly ? draftId : null;
+  }
   if (!when) return NextResponse.json({ error: 'publishAt must be a valid datetime' }, { status: 400 });
   // Metricool refuses a past date, but only when a person opens the draft and
   // tries to save it — by which point the post has been sitting in the queue
@@ -173,13 +182,34 @@ export async function POST(req: NextRequest) {
     body.media = norm.media;
   }
 
+  // The sheet's FORMATO / YOUTUBE cells: sent by the composer when the post
+  // was handed over from a row, else read from the draft's pack (the Prepare
+  // panel sends its draftId), so a vertical reel is a Short from every door.
+  let sheetFormat = typeof payload.format === 'string' ? payload.format : '';
+  let sheetYoutube = typeof payload.sheetYoutube === 'string' ? payload.sheetYoutube : '';
+  let packTitle = '';
+  if (ownedDraftIdEarly && (!sheetFormat || provider === 'youtube' || provider === 'tiktok')) {
+    const { data: d } = await sb.from('drafts').select('pack').eq('id', ownedDraftIdEarly).eq('user_id', user.id).maybeSingle()
+      .then((x) => x, () => ({ data: null }));
+    const pack = ((d as { pack?: Record<string, unknown> | null } | null)?.pack || {}) as { format?: unknown; sheetYoutube?: unknown; title?: unknown };
+    if (!sheetFormat && typeof pack.format === 'string') sheetFormat = pack.format;
+    if (!sheetYoutube && typeof pack.sheetYoutube === 'string') sheetYoutube = pack.sheetYoutube;
+    if (typeof pack.title === 'string') packTitle = pack.title;
+  }
+  const postTitle = (typeof payload.title === 'string' && payload.title.trim()) ? payload.title : packTitle;
+
+  // TikTok: public, comments/duet/stitch on — a direct publication rather than
+  // Metricool's "finish on your phone" mode.
+  if (provider === 'tiktok') body.tiktokData = tiktokDataFor({ title: postTitle, body: text });
+
   // YouTube alone needs a title, a Short-or-video answer and a stated audience;
   // without them Metricool will not let the draft be saved, let alone approved.
   if (provider === 'youtube') {
     const yt = youtubeDataFor({
-      title: typeof payload.title === 'string' ? payload.title : '',
+      title: postTitle,
       body: text,
-      format: typeof payload.format === 'string' ? payload.format : '',
+      format: sheetFormat,
+      sheetYoutube,
       defaultPrivacy: process.env.YOUTUBE_DEFAULT_PRIVACY,
     });
     if (!yt) {
@@ -235,18 +265,11 @@ export async function POST(req: NextRequest) {
     // corrupt the drafts-to-posts join. Verify ownership first; an id that isn't
     // the caller's is dropped rather than rejected, because the post is already
     // scheduled and the link is bookkeeping.
-    let ownedDraftId: string | null = null;
-    if (draftId) {
-      const { data: ownDraft } = await sb
-        .from('drafts')
-        .select('id')
-        .eq('id', draftId)
-        .eq('user_id', user.id)
-        .maybeSingle();
-      ownedDraftId = ownDraft ? draftId : null;
-      if (!ownedDraftId) {
-        console.warn('metricool/schedule: ignoring draftId not owned by caller');
-      }
+    // Asked once, at the top of the handler, where the draft's pack is also
+    // read for the YouTube/TikTok presets — the same question, one query.
+    const ownedDraftId: string | null = ownedDraftIdEarly;
+    if (draftId && !ownedDraftId) {
+      console.warn('metricool/schedule: ignoring draftId not owned by caller');
     }
     // supabase-js RESOLVES a failed insert rather than throwing, so this catch
     // could never fire for a database error and the result was discarded

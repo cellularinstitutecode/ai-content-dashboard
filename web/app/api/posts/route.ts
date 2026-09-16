@@ -9,6 +9,7 @@ import { isAllowedEmail } from '@/lib/access';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { metricoolDeletePost, metricoolReplacePost, normalizeMediaList, type Provider } from '@/lib/metricool';
 import { youtubeDataFor } from '@/lib/youtube-meta';
+import { tiktokDataFor } from '@/lib/tiktok-meta';
 import { cachedPublicCopy } from '@/lib/transcript-cache';
 import { reportError } from '@/lib/report';
 import { deleteDriveFile } from '@/lib/drive';
@@ -433,9 +434,23 @@ export async function PATCH(req: Request) {
   }
 
   // YouTube's own fields have to be re-sent for the same reason the media does.
-  const isYoutube = ((existing.providers || []) as string[]).some((p) => String(p).toLowerCase() === 'youtube');
+  // From the draft's pack, where the first hand-off stamped the sheet's
+  // FORMATO and YOUTUBE cells: rebuilding from the text alone turned every
+  // approved Short back into type: 'video'.
+  const providersLower = ((existing.providers || []) as string[]).map((p) => String(p).toLowerCase());
+  const isYoutube = providersLower.includes('youtube');
+  const packMeta = (draftPack || {}) as { format?: unknown; sheetYoutube?: unknown; title?: unknown };
   const youtubeData = isYoutube
-    ? youtubeDataFor({ body: String(existing.text || ''), defaultPrivacy: process.env.YOUTUBE_DEFAULT_PRIVACY })
+    ? youtubeDataFor({
+        title: typeof packMeta.title === 'string' ? packMeta.title : null,
+        body: String(existing.text || ''),
+        format: typeof packMeta.format === 'string' ? packMeta.format : null,
+        sheetYoutube: typeof packMeta.sheetYoutube === 'string' ? packMeta.sheetYoutube : null,
+        defaultPrivacy: process.env.YOUTUBE_DEFAULT_PRIVACY,
+      })
+    : null;
+  const tiktokData = providersLower.includes('tiktok')
+    ? tiktokDataFor({ title: typeof packMeta.title === 'string' ? packMeta.title : null, body: String(existing.text || '') })
     : null;
 
   // What the post will look like after this call.
@@ -509,6 +524,7 @@ export async function PATCH(req: Request) {
         media,
         mode,
         youtubeData,
+        tiktokData,
       });
     } catch (e) {
       reportError(action === 'reschedule' ? 'posts:metricool-reschedule' : 'posts:metricool-approve', e);

@@ -44,7 +44,7 @@ import { canWriteCopy } from '@/lib/prepare-budget';
 import { isMissingSchema } from '@/lib/schema-probe';
 import { columnFor, pick, tableFromRows } from '@/lib/sheet-table';
 import { VIDEO_NETWORK_COLUMNS, publishedNetworks } from '@/lib/sheet-ticks';
-import { prepareVideo, saveVideoDraft, type PrepareOk } from '@/lib/video-prepare';
+import { prepareVideo, saveVideoDraft, type PrepareOk, stampDraftVideoMeta } from '@/lib/video-prepare';
 import { EXISTING_COPY_PER_RUN, existingCopyText, isExistingCopyRow, queueExistingEnabled } from '@/lib/existing-copy';
 import { attachPendingVideos, pendingVideoPosts } from '@/lib/video-attach';
 
@@ -919,6 +919,9 @@ async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string 
       instagram: text, facebook: text, linkedin: text, blog: '',
       kind: 'video', title: draftTitle, sourceUrl: a.videoLink, videoId: fileId || a.videoLink,
       transcript: '', transcriptSource: 'sheet', transcriptLanguage: null, tiktok: text,
+      // So a replace on approve still knows Short-or-video and the privacy cell.
+      format: pick(a.rec, 'formato', 'format') || null,
+      sheetYoutube: pick(a.rec, 'youtube') || null,
     });
   } catch (e) {
     reportError('video-queue:draft', e, { tab: a.tab, row: String(a.row) });
@@ -1100,6 +1103,13 @@ export async function completeRow(opts: {
     aiStatus: STATUS_TEXT.prepared,
   });
 
+  // The sheet's FORMATO / YOUTUBE cells travel with the draft, so the replace
+  // on approve says Short-or-video the same way the first hand-off did.
+  await stampDraftVideoMeta(opts.prepared.draftId, {
+    format: pick(found.rec, 'formato', 'format'),
+    sheetYoutube: pick(found.rec, 'youtube'),
+    title: opts.prepared.title,
+  });
   const metricool = opts.skipMetricool ? [] : await handOffToMetricool({
     userId: opts.userId,
     prepared: opts.prepared,

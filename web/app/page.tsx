@@ -10,7 +10,7 @@ import CollapsibleSection from "@/components/CollapsibleSection";
 import SystemStatus from "@/components/SystemStatus";
 import ProcessTracker, { makeSteps, stepActive, stepError, stepSkip, stepsDone, type ProcessStep } from "@/components/ProcessTracker";
 import { announce, onRefresh, fetchDrafts } from "@/components/refreshBus";
-import { tightestLimit, networkLabel, parseVideoUrl, localDateTimeValue, draftLabel, PUBLISH_NETWORKS, DEFAULT_VIDEO_NETWORKS, mediaProblem } from "@/lib/composer";
+import { tightestLimit, networkLabel, parseVideoUrl, draftLabel, PUBLISH_NETWORKS, DEFAULT_VIDEO_NETWORKS, mediaProblem } from "@/lib/composer";
 import MediaPicker from "@/components/MediaPicker";
 import { useWorkspace } from "@/components/workspace";
 import { appliesTo as complianceApplies, checkCompliance, ensureAviso, DEFAULT_AVISO_NUMBER } from "@/lib/compliance";
@@ -21,7 +21,7 @@ import { mapLimit } from '@/lib/map-limit';
 import { findDuplicatePosts } from '@/lib/duplicate-posts';
 import { sheetRowUrl, sheetRowLabel, sheetRowTitle } from '@/lib/sheet-link';
 import { semrushDraftNote } from '@/lib/semrush-reason';
-import { fmtScheduleDateTime, scheduleTzLabel, schedulePresetValue } from '@/lib/schedule-clock';
+import { fmtScheduleDateTime, scheduleTzLabel, schedulePresetValue, scheduleInputValue, scheduleInstantFromInput } from '@/lib/schedule-clock';
 
 // The visible pipeline every manual generation walks through. Steps light up
 // as the real calls behind them start/finish so the viewer can follow the
@@ -317,9 +317,9 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
     handoffSeen.current = nonce;
     if (workspace.handoffText) setMText(workspace.handoffText);
     if (workspace.handoffMedia) { setMMedia(workspace.handoffMedia); setMMediaLabel(workspace.handoffMediaLabel || 'Image from Drive'); }
-    setMSource(workspace.handoffTab && workspace.handoffRow >= 2 ? { tab: workspace.handoffTab, row: workspace.handoffRow, link: workspace.handoffLink } : null);
+    setMSource(workspace.handoffTab && workspace.handoffRow >= 2 ? { tab: workspace.handoffTab, row: workspace.handoffRow, link: workspace.handoffLink, format: workspace.handoffFormat || '' } : null);
     setMStatus(null);
-    workspace.patch({ handoffText: '', handoffMedia: '', handoffMediaLabel: '', handoffTab: '', handoffRow: 0, handoffLink: '' });
+    workspace.patch({ handoffText: '', handoffMedia: '', handoffMediaLabel: '', handoffTab: '', handoffRow: 0, handoffLink: '', handoffFormat: '' });
     try { scrollToPublisher(); } catch { /* not mounted yet */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.handoffNonce]);
@@ -330,7 +330,20 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
   const [mMediaLabel, setMMediaLabel] = useState<string>("");
   // The sheet row the video was handed over from, sent with the post so the
   // queue can name it. Cleared with the media.
-  const [mSource, setMSource] = useState<{ tab: string; row: number; link: string } | null>(null);
+  const [mSource, setMSource] = useState<{ tab: string; row: number; link: string; format: string } | null>(null);
+  // The next free planner slots (09:00 / 17:00 Cancún), from the server: the
+  // time chips and the box's default. Not "tomorrow 9 AM" on the browser's clock.
+  const [mSlots, setMSlots] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/schedule/next-slots?n=3').then((r) => r.ok ? r.json() : null).then((j) => {
+      const list = j && Array.isArray(j.slots) ? j.slots.map((s: unknown) => String(s || '')).filter(Boolean) : [];
+      if (!alive || !list.length) return;
+      setMSlots(list);
+      setMDate((prev) => prev || scheduleInputValue(list[0]));
+    }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
   /** Is a video-only channel selected? Drives the picker's hint. */
   const mNeedsMedia = Boolean(mediaProblem(mNetworks, ''));
   const mChars = mText.trim().length;
@@ -339,8 +352,12 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
   const mTooLong = mOverBy > 0;
   // `min` is only applied once we know the browser's clock, so the server-rendered
   // HTML never ships a stale floor.
-  const mMinDateTime = nowTick ? localDateTimeValue(nowTick) : undefined;
-  const mDateInPast = Boolean(mDate && nowTick && new Date(mDate).getTime() < nowTick.getTime());
+  // Both on the SCHEDULE clock. localDateTimeValue and new Date(box value)
+  // were the browser's clock, so a UTC machine offered "14:18" as now and
+  // sent it as 2:18 PM Cancún.
+  const mMinDateTime = nowTick ? scheduleInputValue(nowTick) : undefined;
+  const mInstant = mDate ? scheduleInstantFromInput(mDate) : null;
+  const mDateInPast = Boolean(mDate && nowTick && mInstant && Date.parse(mInstant) < nowTick.getTime());
   const mProblem =
     !mNetworks.length ? 'Pick at least one channel.'
     : !mText.trim() ? 'Write the post first.'
@@ -1169,8 +1186,10 @@ const r = await fetch('/api/metricool/schedule', {
 method: 'POST',
 headers: { 'Content-Type': 'application/json' },
 body: JSON.stringify({
-network, text: mText, publishAt: mDate, blogId: activeBlogId || METRICOOL_BLOG_ID, mediaUrl: mMedia || undefined,
+// The absolute instant the box names on the schedule clock, not its raw digits.
+network, text: mText, publishAt: scheduleInstantFromInput(mDate) || mDate, blogId: activeBlogId || METRICOOL_BLOG_ID, mediaUrl: mMedia || undefined,
 title: mMediaLabel || undefined,
+format: mSource?.format || undefined,
 // The row this was handed over from, so the queue can name it.
 ...(mSource ? { sheetTab: mSource.tab, sheetRow: mSource.row, sourceUrl: mSource.link } : {}),
 }),
@@ -1755,7 +1774,12 @@ className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px
 {/* Computed on the schedule clock: setHours() on a browser Date made
     "Tomorrow" mean tomorrow *there*, so an evening press west of Cancun
     picked the wrong day. */}
-{[{ label: 'Tomorrow 9 AM', h: 9, d: 1 }, { label: 'Tomorrow 6 PM', h: 18, d: 1 }, { label: 'In 2 days, 12 PM', h: 12, d: 2 }].map((preset) => (
+{mSlots.length > 0
+? mSlots.map((slot) => (
+<button type="button" key={slot} onClick={() => setMDate(scheduleInputValue(slot))} title="The next free slot on the weekly planner"
+className={"rounded-full px-3 py-1 text-[12px] font-medium ring-1 transition hover:ring-accent " + (mDate === scheduleInputValue(slot) ? "bg-accent/10 text-accent ring-accent" : "bg-subtle text-ink-muted ring-line")}>{fmtScheduleDateTime(slot)}</button>
+))
+: [{ label: 'Tomorrow 9 AM', h: 9, d: 1 }, { label: 'Tomorrow 5 PM', h: 17, d: 1 }, { label: 'In 2 days, 9 AM', h: 9, d: 2 }].map((preset) => (
 <button type="button" key={preset.label} onClick={() => setMDate(schedulePresetValue(preset.d, preset.h))}
 className="rounded-full bg-subtle px-3 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:ring-accent">{preset.label}</button>
 ))}

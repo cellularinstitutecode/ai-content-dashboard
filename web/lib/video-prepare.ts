@@ -56,7 +56,38 @@ export type VideoPack = ContentPack & {
   transcriptLanguage: string | null;
   linkedin: string;
   tiktok: string;
+  /** The sheet's FORMATO cell, so a replace can still say Short or video. */
+  format?: string | null;
+  /** The sheet's YOUTUBE cell ("Unlisted", a link…), for the privacy preset. */
+  sheetYoutube?: string | null;
 };
+
+/**
+ * Write the sheet's FORMATO / YOUTUBE cells onto a draft's pack.
+ *
+ * The first hand-off knew them (they came with the row) and the replace on
+ * approve did not — it rebuilt youtubeData from the text alone, and every
+ * Short approved became type: 'video'. The pack is the one thing every
+ * replace already reads. Best-effort; never throws.
+ */
+export async function stampDraftVideoMeta(draftId: string | null | undefined, meta: { format?: string | null; sheetYoutube?: string | null; title?: string | null }): Promise<void> {
+  const id = String(draftId || '').trim();
+  if (!id) return;
+  const admin = supabaseAdmin();
+  const { data, error } = await admin.from('drafts').select('pack').eq('id', id).maybeSingle()
+    .then((x) => x, (e: unknown) => ({ data: null, error: e as { message?: string } }));
+  if (error || !data) { if (error) reportError('videos:stamp-meta-read', error, { draftId: id }); return; }
+  const pack = ((data as { pack?: Record<string, unknown> | null }).pack || {}) as Record<string, unknown>;
+  const next = {
+    ...pack,
+    ...(meta.format != null && String(meta.format).trim() ? { format: String(meta.format).trim() } : {}),
+    ...(meta.sheetYoutube != null && String(meta.sheetYoutube).trim() ? { sheetYoutube: String(meta.sheetYoutube).trim() } : {}),
+    ...(meta.title && !pack.title ? { title: meta.title } : {}),
+  };
+  const { error: upErr } = await admin.from('drafts').update({ pack: next, updated_at: new Date().toISOString() }).eq('id', id)
+    .then((x) => x, (e: unknown) => ({ error: e as { message?: string } }));
+  if (upErr) reportError('videos:stamp-meta-write', upErr, { draftId: id });
+}
 
 export type PrepareOk = {
   ok: true;

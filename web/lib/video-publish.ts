@@ -18,6 +18,7 @@ import 'server-only';
 import { complianceGate } from '@/lib/compliance-gate';
 import { MediaNotNormalisedError, metricoolConfigured, metricoolSchedulePost, readPostId, type Provider } from '@/lib/metricool';
 import { youtubeDataFor } from '@/lib/youtube-meta';
+import { tiktokDataFor } from '@/lib/tiktok-meta';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
@@ -85,6 +86,9 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
             defaultPrivacy: process.env.YOUTUBE_DEFAULT_PRIVACY,
           })
         : null,
+      // TikTok: public, comments/duet/stitch on — a direct publication rather
+      // than Metricool's "finish on your phone" mode.
+      tiktokData: network === 'tiktok' ? tiktokDataFor({ title: input.title, body: input.text }) : null,
     }, 'review');
     const metricoolPostId = readPostId(created);
 

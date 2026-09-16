@@ -48,6 +48,8 @@ export type ReplacePostInput = {
   mode: PostMode;
   /** YouTube's own fields. A replace that omits them wipes the video's title. */
   youtubeData?: unknown;
+  /** TikTok's own settings. A replace that omits them puts the post back in phone mode. */
+  tiktokData?: unknown;
 };
 
 /** The exact body a replace sends — exported so the rule is unit-testable. */
@@ -68,6 +70,7 @@ export function replacePostBody(post: ReplacePostInput) {
     // title and audience the draft was accepted with, and Metricool would then
     // refuse the very post a person had just approved.
     ...(post.youtubeData && providers.includes('youtube' as Provider) ? { youtubeData: post.youtubeData } : {}),
+    ...(post.tiktokData && providers.includes('tiktok' as Provider) ? { tiktokData: post.tiktokData } : {}),
     ...modeFlags(post.mode),
   };
 }

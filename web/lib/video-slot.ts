@@ -13,6 +13,7 @@
 // Pure, so it is unit-tested; lib/video-autopilot.ts supplies the real clock
 // and the slots already taken.
 import { upcomingSlots } from './timezone.ts';
+import { isLandscapeFormat } from './video-format.ts';
 import { NETWORKS_NEEDING_MEDIA } from './composer.ts';
 
 /** Monday–Friday: the grid when VIDEO_POST_DAYS is unset or `weekdays`. */
@@ -176,7 +177,7 @@ const VERTICAL_ONLY = new Set(['tiktok']);
  */
 export function fitsAspect(network: string, format: string | null | undefined): boolean {
   if (!VERTICAL_ONLY.has(String(network || '').toLowerCase())) return true;
-  return !/horizontal|16\s*[:x/]\s*9|landscape|paisaje/i.test(String(format || ''));
+  return !isLandscapeFormat(format);
 }
 
 export function networksFor(

@@ -32,10 +32,12 @@ export type Workspace = {
   handoffTab: string;
   handoffRow: number;
   handoffLink: string;
+  /** The row's FORMATO ("Vertical 9:16"), so a YouTube send is a Short. */
+  handoffFormat: string;
   handoffNonce: number;
 };
 
-const BLANK: Workspace = { topic: '', keyword: '', domain: '', draftId: '', source: '', handoffText: '', handoffMedia: '', handoffMediaLabel: '', handoffTab: '', handoffRow: 0, handoffLink: '', handoffNonce: 0 };
+const BLANK: Workspace = { topic: '', keyword: '', domain: '', draftId: '', source: '', handoffText: '', handoffMedia: '', handoffMediaLabel: '', handoffTab: '', handoffRow: 0, handoffLink: '', handoffFormat: '', handoffNonce: 0 };
 const STORE = 'chi:workspace:v1';
 const EVENT = 'chi:workspace';
 

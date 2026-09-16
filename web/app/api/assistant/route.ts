@@ -362,7 +362,10 @@ async function doSchedule(userId: string, p: PendingSchedule) {
       user_id: userId,
       providers: [provider],
       text: p.text,
-      publication_date: publishAt,
+      // The absolute instant, not the wall-clock string: the column is
+      // timestamptz, and a naive "09:00" stored here read as 09:00 UTC —
+      // five hours ahead of the Cancún time the post was actually set for.
+      publication_date: when.instant,
       metricool_post_id: id,
       status: status && status !== "scheduled" ? status : "pending_review",
     });
