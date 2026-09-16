@@ -17,6 +17,8 @@
 // Pure, so the rules are unit-tested without a network (lib/youtube-meta.test.ts).
 
 /** Metricool's `youtubeData` object. Field names come from its scheduler schema. */
+import { isVerticalFormat } from './video-format.ts';
+
 export type YoutubeData = {
   title: string;
   type: 'video' | 'short';
@@ -45,10 +47,17 @@ export function youtubeTitleFrom(title: string | null | undefined, body?: string
     .replace(/\s+/g, ' ')
     .trim();
   if (!clean) return '';
-  if (clean.length <= YOUTUBE_TITLE_MAX) return clean;
+  // The first sentence, when the line has more than one and the first is a
+  // real sentence on its own. A caption's opening line often runs on ("Quality
+  // in regenerative medicine isn't just about the cells, it's about how
+  // they're made. At Cellular Institute…"): the title is the first sentence,
+  // not the first ninety-nine characters cut mid-word.
+  const sentence = firstSentence(clean);
+  const candidate = sentence && sentence.length < clean.length && sentence.length >= 12 && sentence.length <= YOUTUBE_TITLE_MAX ? sentence : clean;
+  if (candidate.length <= YOUTUBE_TITLE_MAX) return candidate;
   // Cut on a word boundary where there is one close to the limit, so a title
   // does not end mid-word.
-  const cut = clean.slice(0, YOUTUBE_TITLE_MAX);
+  const cut = candidate.slice(0, YOUTUBE_TITLE_MAX);
   const lastSpace = cut.lastIndexOf(' ');
   return (lastSpace > YOUTUBE_TITLE_MAX - 20 ? cut.slice(0, lastSpace) : cut).trim();
 }
@@ -63,10 +72,19 @@ export function youtubeTitleFrom(title: string | null | undefined, body?: string
  * qualifies. Guessing the other way turns a rejection into the default.
  */
 export function youtubeTypeFor(format: string | null | undefined): 'video' | 'short' {
-  const f = String(format || '').toLowerCase();
-  if (!f) return 'video';
-  if (/\bshorts?\b|\breels?\b|vertical|9\s*[:x/]\s*16/.test(f)) return 'short';
-  return 'video';
+  return isVerticalFormat(format) ? 'short' : 'video';
+}
+
+/**
+ * The first sentence of a line: up to the first . ! ? or … that ends a word
+ * (followed by a space or the end of the line), or up to a spaced em dash.
+ * A trailing full stop is dropped — a title does not need one, and a line
+ * that is one sentence should not read differently from one that is two.
+ */
+export function firstSentence(line: string): string {
+  const m = /^(.+?[.!?\u2026])(?=\s|$)|^(.+?)\s+\u2014\s/.exec(String(line || ''));
+  const s = (m ? (m[1] || m[2]) : '').trim();
+  return s.replace(/\.$/, '').trim();
 }
 
 /**

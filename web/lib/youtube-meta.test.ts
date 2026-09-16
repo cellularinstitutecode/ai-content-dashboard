@@ -14,6 +14,17 @@ test('a title falls back to the first line of the post', () => {
   assert.equal(youtubeTitleFrom('  ', '\n\n   \nFirst real line\nsecond'), 'First real line');
 });
 
+test('a running first line is cut at its first sentence, not at 99 characters', () => {
+  const body = 'Quality in regenerative medicine isn\u2019t just about the cells, it\u2019s about how they\u2019re made. At Cellular Institute, we work with Cellgenic, where cellular products are cultured under carefully controlled conditions.';
+  assert.equal(youtubeTitleFrom('', body), 'Quality in regenerative medicine isn\u2019t just about the cells, it\u2019s about how they\u2019re made');
+  // One sentence only: kept whole, without the final period.
+  assert.equal(youtubeTitleFrom('', 'Why a Floating Bed Frame Is Part of Our Protocol.'), 'Why a Floating Bed Frame Is Part of Our Protocol');
+  // A question keeps its mark.
+  assert.equal(youtubeTitleFrom('', 'What is HBOT? Hyperbaric oxygen therapy places the body in a chamber.'), 'What is HBOT?');
+  // "Dr." is too short to be a sentence of its own, so the line goes on.
+  assert.equal(youtubeTitleFrom('', 'Dr. Smith explains stem cells'), 'Dr. Smith explains stem cells');
+});
+
 test('the row title wins over the body', () => {
   assert.equal(youtubeTitleFrom('Reel · Oxygen Circuit', 'Some other opening line'), 'Reel · Oxygen Circuit');
 });

@@ -20,6 +20,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { ensureShareableVideo } from '@/lib/media-library';
 import { metricoolReplacePost, normalizeMediaList, type Provider } from '@/lib/metricool';
 import { youtubeDataFor } from '@/lib/youtube-meta';
+import { tiktokDataFor } from '@/lib/tiktok-meta';
 import { isAwaitingApproval, modeOfStatus } from '@/lib/post-mode';
 import { reportError } from '@/lib/report';
 import { recordVideoEvent } from '@/lib/video-register';
@@ -100,6 +101,13 @@ export async function attachPendingVideos(args: {
   }
   const media = norm.media;
 
+  // The sheet's FORMATO / YOUTUBE cells, from the draft's pack, so the
+  // replace says Short-or-video the way the first hand-off did.
+  const { data: draftRow } = await supabaseAdmin().from('drafts').select('pack').eq('id', args.draftId).maybeSingle()
+    .then((x) => x, () => ({ data: null }));
+  const packMeta = ((draftRow as { pack?: Record<string, unknown> | null } | null)?.pack || {}) as { format?: unknown; sheetYoutube?: unknown; title?: unknown };
+  const metaTitle = typeof packMeta.title === 'string' ? packMeta.title : args.title;
+
   let attached = 0;
   let failed = 0;
   let lastError = '';
@@ -115,7 +123,16 @@ export async function attachPendingVideos(args: {
         media,
         // The post's OWN mode: a draft stays a draft. Attaching is not approving.
         mode: modeOfStatus(post.status),
-        youtubeData: isYoutube ? youtubeDataFor({ body: text, defaultPrivacy: process.env.YOUTUBE_DEFAULT_PRIVACY }) : null,
+        youtubeData: isYoutube
+          ? youtubeDataFor({
+              title: metaTitle,
+              body: text,
+              format: typeof packMeta.format === 'string' ? packMeta.format : null,
+              sheetYoutube: typeof packMeta.sheetYoutube === 'string' ? packMeta.sheetYoutube : null,
+              defaultPrivacy: process.env.YOUTUBE_DEFAULT_PRIVACY,
+            })
+          : null,
+        tiktokData: providers.some((p) => String(p).toLowerCase() === 'tiktok') ? tiktokDataFor({ title: metaTitle, body: text }) : null,
       });
       const { error: linkError } = await supabaseAdmin()
         .from('posts')

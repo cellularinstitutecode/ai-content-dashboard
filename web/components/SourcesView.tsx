@@ -508,7 +508,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     // A YouTube source is public and genuinely worth linking; a private Drive
     // link in the body is not, and the video is attached natively now anyway.
     const text = [v.copy || v.title, media || !youtubeUrl ? '' : 'Watch: ' + youtubeUrl].filter(Boolean).join('\n\n');
-    handoff(text, media, media ? v.title || 'Video' : '', { tab: v.tab, row: v.row, link });
+    handoff(text, media, media ? v.title || 'Video' : '', { tab: v.tab, row: v.row, link, format: v.format || '' });
   }
 
   async function load(kind: Tab, fresh: boolean) {
@@ -977,11 +977,11 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     void prepareSelected([v]);
   }
 
-  function handoff(text: string, media: string, mediaLabel: string, from?: { tab: string; row: number; link: string }) {
+  function handoff(text: string, media: string, mediaLabel: string, from?: { tab: string; row: number; link: string; format?: string }) {
     workspace.patch({
       handoffText: text, handoffMedia: media, handoffMediaLabel: mediaLabel,
       // WHERE it came from, so the composer can send the row with the post.
-      handoffTab: from?.tab || '', handoffRow: from?.row || 0, handoffLink: from?.link || '',
+      handoffTab: from?.tab || '', handoffRow: from?.row || 0, handoffLink: from?.link || '', handoffFormat: from?.format || '',
       handoffNonce: Date.now(),
     });
     router.push('/draft#section-publish' as Route);

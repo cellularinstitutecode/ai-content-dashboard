@@ -21,6 +21,7 @@ import { resolveOwner } from '@/lib/sweep-owner';
 import { sheetWriteAccess, serviceAccountEmail } from '@/lib/google-sources';
 import { driveFolderReport } from '@/lib/drive';
 import { serviceKeyVerdict } from '@/lib/supabase-key';
+import { SCHEDULE_TZ } from '@/lib/timezone';
 import { schemaDetail, type SchemaProbe } from '@/lib/schema-probe';
 import { reportError } from '@/lib/report';
 
@@ -156,7 +157,33 @@ export async function runHealthChecks(): Promise<HealthReport> {
   const textFailing = blocksWork(lastText);
   const metricoolFailing = blocksWork(lastMetricool);
 
+  // Does the schedule clock resolve, and is it the clinic's? Every wall-clock
+  // the app sends Metricool is computed from SCHEDULE_TZ; a zone that does not
+  // resolve, or one that is UTC by accident, labels UTC digits "Cancun".
+  const tz = (() => {
+    try {
+      const off = new Intl.DateTimeFormat('en-US', { timeZone: SCHEDULE_TZ, timeZoneName: 'shortOffset' })
+        .formatToParts(new Date()).find((p) => p.type === 'timeZoneName')?.value || '';
+      return { resolves: true, offset: off };
+    } catch {
+      return { resolves: false, offset: '' };
+    }
+  })();
+  const tzIsUtc = tz.resolves && (/^(GMT|UTC)$/i.test(tz.offset) || /^(GMT|UTC)[+-]0+(:00)?$/i.test(tz.offset));
+  const tzOk = tz.resolves && (SCHEDULE_TZ === 'UTC' || !tzIsUtc);
+
   const checks: Check[] = [
+    {
+      name: 'timezone',
+      ok: tzOk,
+      code: !tz.resolves ? 'unresolvable' : tzIsUtc ? 'utc' : undefined,
+      severity: 'required',
+      detail: !tz.resolves
+        ? 'SCHEDULE_TIMEZONE "' + SCHEDULE_TZ + '" is not a zone this server knows; posts would be stamped with the wrong time.'
+        : tzIsUtc
+          ? 'The schedule clock is ' + SCHEDULE_TZ + ' (' + tz.offset + '): posts are being stamped in UTC, not clinic time. Set SCHEDULE_TIMEZONE=America/Cancun.'
+          : 'Posts are scheduled on ' + SCHEDULE_TZ + ' (' + tz.offset + ').',
+    },
     {
       // Every migration in this repo is a file a human is asked to paste into
       // the Supabase SQL editor. Nothing ever checked that they had, so a

@@ -5,6 +5,7 @@
 import { formatForMetricool, SCHEDULE_TZ } from '@/lib/timezone';
 import { modeFlags, replacePostBody, type PostMode, type ReplacePostInput } from '@/lib/metricool-post';
 import type { YoutubeData } from '@/lib/youtube-meta';
+import type { TiktokData } from '@/lib/tiktok-meta';
 import { recordProviderOutcome } from '@/lib/provider-status';
 export { modeFlags, replacePostBody, type PostMode, type ReplacePostInput };
 
@@ -23,6 +24,8 @@ export interface SchedulePostInput {
   media?: { url: string }[];
   /** YouTube's own fields — title, Short-or-video, visibility, audience. */
   youtubeData?: YoutubeData | null;
+  /** TikTok's own settings (public, comments/duet/stitch on). lib/tiktok-meta.ts. */
+  tiktokData?: TiktokData | null;
 }
 
 // Overridable so the end-to-end harness can point the client at a local mock.
@@ -245,6 +248,9 @@ export async function metricoolSchedulePost(input: SchedulePostInput, mode: Post
     // Only sent for a YouTube post, and only when there is a real title:
     // Metricool refuses to save a YouTube draft without one.
     ...(input.youtubeData && input.providers.includes('youtube') ? { youtubeData: input.youtubeData } : {}),
+    // TikTok's own settings, so the draft is a direct publication (public,
+    // comments/duet/stitch on) and not Metricool's "finish on your phone" mode.
+    ...(input.tiktokData && input.providers.includes('tiktok') ? { tiktokData: input.tiktokData } : {}),
     // Publishing is a human decision. The default lands the post in Metricool's
     // review queue; only an explicit `mode: 'scheduled'` — which every caller
     // reaches through a person pressing Approve in the dashboard — puts it in
@@ -253,12 +259,22 @@ export async function metricoolSchedulePost(input: SchedulePostInput, mode: Post
     ...modeFlags(mode),
   };
 
-  const res = await metricoolFetch('/v2/scheduler/posts', {
+  let res = await metricoolFetch('/v2/scheduler/posts', {
     method: 'POST',
     body: JSON.stringify(body),
   });
-
-  const data = await res.json().catch(() => ({}));
+  let data = await res.json().catch(() => ({}));
+  // The tiktokData field names come from public clients of this endpoint,
+  // not from documentation this app could read. If Metricool refuses the
+  // block by name, the post is sent once more without it — a wrong preset
+  // costs the preset, never the post — and the log says so.
+  if (!res.ok && res.status === 400 && 'tiktokData' in body && /tiktok/i.test(JSON.stringify(data))) {
+    console.warn('metricool:tiktokData refused, sending without it', JSON.stringify(data).slice(0, 300));
+    const withoutTiktok = { ...(body as Record<string, unknown>) };
+    delete withoutTiktok.tiktokData;
+    res = await metricoolFetch('/v2/scheduler/posts', { method: 'POST', body: JSON.stringify(withoutTiktok) });
+    data = await res.json().catch(() => ({}));
+  }
   if (!res.ok) {
     const message = 'Metricool ' + res.status + ': ' + JSON.stringify(data);
     // Capability, not configuration. The `metricool` health check asks only

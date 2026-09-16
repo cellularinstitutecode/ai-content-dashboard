@@ -42,8 +42,12 @@ WORKDIR /app
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+# TZ stated, not assumed: every wall-clock the app shows or sends is computed
+# from SCHEDULE_TIMEZONE (America/Cancun by default); the server's own clock
+# is UTC on purpose so a naive Date never masquerades as clinic time.
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
+    TZ=UTC \
     PORT=3000 \
     HOSTNAME=0.0.0.0 \
     FFMPEG_PATH=/usr/bin/ffmpeg

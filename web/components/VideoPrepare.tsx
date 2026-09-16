@@ -18,6 +18,7 @@ import { isDriveUrl } from '@/lib/drive-url';
 import { fitsNetwork } from '@/lib/video-row';
 import { MediaPreview } from '@/components/MediaPicker';
 import { rowList, type BatchReasons, type RowRef } from '@/lib/batch-plan';
+import { scheduleInputValue, scheduleInstantFromInput } from '@/lib/schedule-clock';
 
 export type Prepared = {
   draftId: string | null;
@@ -66,13 +67,6 @@ function Counter({ network, text }: { network: string; text: string }) {
       · {fit.length}/{fit.limit}{fit.ok ? '' : ' — too long to send'}
     </span>
   );
-}
-
-function defaultWhen(): string {
-  const d = new Date(Date.now() + 24 * 3600e3);
-  d.setMinutes(0, 0, 0); d.setHours(9);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
 }
 
 export type BatchTally = {
@@ -135,7 +129,18 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, bat
   const [tiktok, setTiktok] = useState('');
   const [clips, setClips] = useState<ClipOption[]>([]);
   const [clipUrl, setClipUrl] = useState('');
-  const [when, setWhen] = useState(defaultWhen());
+  // The next free planner slot (09:00 / 17:00 Cancún), read from the server.
+  // This used to be "tomorrow 9 AM" on the BROWSER's clock — from a UTC
+  // machine that is tomorrow 09:00 UTC, labelled Cancún.
+  const [when, setWhen] = useState('');
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/schedule/next-slots?n=1').then((r) => r.ok ? r.json() : null).then((j) => {
+      const first = j && Array.isArray(j.slots) ? String(j.slots[0] || '') : '';
+      if (alive && first) setWhen((prev) => prev || scheduleInputValue(first));
+    }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
   const [sent, setSent] = useState<string | null>(null);
 
   useEffect(() => { if (initialUrl) { setUrl(initialUrl); setPrepared(null); setSent(null); setErr(null); } }, [initialUrl]);
@@ -228,11 +233,15 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, bat
       setErr(LABEL[network] + ' needs the video. Prepare the row first so the shareable copy is made, or pick a vertical clip below.');
       return;
     }
+    const publishAt = scheduleInstantFromInput(when);
+    if (!publishAt) { setErr('Pick the date and time it should go out (clinic time).'); return; }
     setBusy('send'); setErr(null);
     try {
       const r = await fetch('/api/metricool/schedule', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ network, text, publishAt: when, blogId, mediaUrl: media || undefined, draftId: prepared?.draftId || undefined }),
+        // An absolute instant, computed on the schedule clock: the server no
+        // longer has to guess which zone the box's digits were in.
+        body: JSON.stringify({ network, text, publishAt, blogId, mediaUrl: media || undefined, draftId: prepared?.draftId || undefined }),
       });
       if (!r.ok) { setErr(await friendlyErrorFromResponse(r, 'Metricool did not accept that post.')); return; }
       setSent((s) => (s ? s + ' · ' : '') + LABEL[network] + ' saved as a draft in your queue — press Approve there to publish.');
