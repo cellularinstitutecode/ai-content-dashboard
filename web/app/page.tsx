@@ -16,6 +16,7 @@ import { useWorkspace } from "@/components/workspace";
 import { appliesTo as complianceApplies, checkCompliance, ensureAviso, DEFAULT_AVISO_NUMBER } from "@/lib/compliance";
 import { PanelLoader } from "@/components/LoadingScreen";
 import { friendlyError, friendlyErrorFromResponse, friendlyImageError } from '@/lib/friendly-error';
+import { METRICOOL_BLOG_ID, METRICOOL_USER_ID, metricoolPlannerUrl } from '@/lib/metricool-links';
 import { postStatusMeta, isAwaitingApproval } from '@/lib/post-mode';
 import { mapLimit } from '@/lib/map-limit';
 import { findDuplicatePosts } from '@/lib/duplicate-posts';
@@ -93,16 +94,10 @@ const TRENDING_KEY = 'chi_trending_topics_v1';
 // straight to the place it gets approved. The DEFAULT brand; the Publishing
 // panel's brand switcher overrides it everywhere via activeBlogId.
 //
-// Metricool's app resolves a brand only inside a user, so every web link
-// carries BOTH ids. This one used to be the only link without userId (and
-// on a path, /planning/list, that nothing else confirmed): pressing "Open in
-// Metricool" landed on Metricool's own "There was an error that prevented
-// loading the page". Same shape as the Full planner link now.
-const METRICOOL_BLOG_ID = '4308292';
-const METRICOOL_USER_ID = '3377431';
-function metricoolPlannerUrl(blogId: string = METRICOOL_BLOG_ID): string {
-return 'https://app.metricool.com/planner/calendar?blogId=' + encodeURIComponent(blogId || METRICOOL_BLOG_ID) + '&userId=' + METRICOOL_USER_ID;
-}
+// Moved to lib/metricool-links.ts, unchanged, once the Video Library's sheet
+// toolbar needed the same link: two copies of a URL that must carry both ids
+// is exactly how the version WITHOUT userId came to exist, and that one landed
+// on Metricool's "There was an error that prevented loading the page".
 
 // Deep-link into the Semrush Keyword Magic Tool for keyword research, pre-filled
 // with the topic the user is working on. Opens in a new tab; no credentials involved.
@@ -2060,7 +2055,7 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 <div className="mt-6 flex flex-wrap gap-3 border-t border-line pt-5 text-[12px]">
 <a href={'https://app.metricool.com/inbox'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">💬 Open Inbox ↗</a>
 <a href={'https://app.metricool.com/smartlink?blogId=' + encodeURIComponent(activeBlogId) + '&userId=' + METRICOOL_USER_ID} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">🔗 Smartlinks ↗</a>
-<a href={'https://app.metricool.com/planner/calendar?blogId=' + encodeURIComponent(activeBlogId) + '&userId=' + METRICOOL_USER_ID} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">📅 Full planner ↗</a>
+<a href={metricoolPlannerUrl(activeBlogId)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent hover:underline">📅 Full planner ↗</a>
 </div>
 </div>
 </div>
