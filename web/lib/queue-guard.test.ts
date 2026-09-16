@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { alreadyQueuedMessage, networkOf, networksAlreadyQueued } from './queue-guard.ts';
+import { alreadyQueuedMessage, hasGoneOut, networkOf, networksAlreadyPublished, networksAlreadyQueued } from './queue-guard.ts';
 
 test('a network with a draft awaiting approval is skipped; the others go', () => {
   const posts = [
@@ -36,4 +36,24 @@ test('the network is the first provider, lowercased', () => {
 test('the message names the row when it is known', () => {
   assert.match(alreadyQueuedMessage('linkedin', '2026 CELLULAR HOPE · row 179'), /^2026 CELLULAR HOPE · row 179 already has a linkedin draft waiting/);
   assert.match(alreadyQueuedMessage('tiktok'), /^This video already has a tiktok draft/);
+});
+
+test('a network the video already went out on is finished, not free', () => {
+  // Approving a row empties the waiting list, so the "already queued" rule
+  // above saw nothing and the row looked free again — one press of Attach
+  // videos over a range would have published the same reel twice.
+  const posts = [
+    { providers: ['linkedin'], status: 'published' },
+    { providers: ['youtube'], status: 'approved' },
+    { providers: ['tiktok'], status: 'failed' },
+  ];
+  const out = networksAlreadyPublished(posts, ['linkedin', 'youtube', 'tiktok']);
+  assert.deepEqual(out.published, ['linkedin', 'youtube']);
+  // A failed post is worth another attempt; a published one never is.
+  assert.deepEqual(out.free, ['tiktok']);
+});
+
+test('gone out means approved, published, sent or live — nothing else', () => {
+  for (const s of ['approved', 'published', 'Sent', 'LIVE']) assert.equal(hasGoneOut(s), true, String(s));
+  for (const s of ['pending_review', 'scheduled', 'failed', 'rejected', '', null]) assert.equal(hasGoneOut(s), false, String(s));
 });

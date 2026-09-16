@@ -17,7 +17,7 @@ import { videoKeyFor } from '@/lib/video-event';
 import { rowKeyFor } from '@/lib/video-row';
 import { SOURCE_IDS } from '@/lib/google-sources';
 import { awaitingPostsForVideo } from '@/lib/awaiting-posts';
-import { alreadyQueuedMessage, networksAlreadyQueued } from '@/lib/queue-guard';
+import { alreadyQueuedMessage, networksAlreadyPublished, networksAlreadyQueued } from '@/lib/queue-guard';
 
 export const runtime = 'nodejs';
 // This route makes TWO sequential calls to Metricool now — normalise the media,
@@ -146,10 +146,20 @@ export async function POST(req: NextRequest) {
     const sourceId = typeof payload.sourceUrl === 'string' ? parseDriveFileId(payload.sourceUrl) : null;
     if (copyId || sourceId) {
       const already = await awaitingPostsForVideo(user.id, { fileId: sourceId, copyId });
+      const rowNum = Number(payload.sheetRow);
+      const rowLabel = typeof payload.sheetTab === 'string' && payload.sheetTab && Number.isInteger(rowNum) && rowNum >= 2 ? payload.sheetTab.trim() + ' \u00b7 row ' + rowNum : null;
+      // Already published on this network: finished, and not sendable again by
+      // hand either. Approving had emptied the waiting list, which is what made
+      // a published row look free.
+      const gone = networksAlreadyPublished(already, [network]);
+      if (gone.published.length) {
+        return NextResponse.json({
+          error: 'already_published',
+          message: (rowLabel || 'This video') + ' has already been published on ' + network + '. Posting it again would publish the same video twice \u2014 nothing was created.',
+        }, { status: 409 });
+      }
       const split = networksAlreadyQueued(already, [network]);
       if (split.queued.length) {
-        const rowNum = Number(payload.sheetRow);
-        const rowLabel = typeof payload.sheetTab === 'string' && payload.sheetTab && Number.isInteger(rowNum) && rowNum >= 2 ? payload.sheetTab.trim() + ' \u00b7 row ' + rowNum : null;
         return NextResponse.json({ error: 'already_queued', message: alreadyQueuedMessage(network, rowLabel) }, { status: 409 });
       }
     }
