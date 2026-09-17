@@ -26,6 +26,7 @@ import { disposalFor, type CopyWhere } from '@/lib/copy-disposal';
 import { MediaKeyMissing, mediaUrlIsFresh, mediaVideoUrl, parseStreamCopyId, streamCopyId, streamCopyIdFromUrl } from '@/lib/media-url';
 import { MediaBaseUnresolved, publicBase } from '@/lib/public-base';
 import { reportError } from '@/lib/report';
+import { cachedCopyUsable, copyRouteFor } from '@/lib/copy-source';
 import { recordVideoEvent } from '@/lib/video-register';
 import { driveVideoKey, type VideoActor } from '@/lib/video-event';
 
@@ -165,7 +166,21 @@ export async function ensureShareableVideo(
   // Not registered: nothing happened. The copy already existed, and a register
   // that records "nothing happened" every time somebody opens the picker is a
   // register nobody can read.
-  if (known?.url) {
+  //
+  // A STREAMED copy minted against a host that cannot serve a whole video is
+  // not a copy — it is the same link that was refused last time. Every row
+  // prepared between #253 and this change holds one, so without this check the
+  // cache would hand the broken link back forever and the fix would reach no
+  // existing row. lib/copy-source.ts.
+  // publicBase() THROWS when nothing is configured, and this line sits outside
+  // the try below — where that throw would leave the caller with an exception
+  // instead of the sentence lib/public-base.ts wrote for exactly this case. An
+  // unresolvable base is also not a host that can serve a video, so '' gives
+  // the right answer here and the real refusal happens inside the try.
+  const servingBase = (() => { try { return publicBase(); } catch { return ''; } })();
+  if (known?.url && !cachedCopyUsable(known.id, servingBase)) {
+    reportError('media-library:cached-unservable', new Error('a streamed copy exists but this host cannot serve it'), { fileId });
+  } else if (known?.url) {
     // A streamed URL expires. Re-mint it rather than hand on a dead link, and
     // bank the new one so the next read is a plain cache hit again. The marker
     // never changes, so nothing downstream sees a difference.
@@ -183,8 +198,31 @@ export async function ensureShareableVideo(
     // removed and reported instead of handed on.
     const staged = await stageVideoInBucket(fileId);
     let made: { fileId: string; url: string; sizeBytes: number | null; where: CopyWhere };
+    // WHICH SOURCE, BY SIZE. The bucket when it fits (what rows 180 and 182
+    // used), a Drive copy under Google's scan threshold, and this app's own
+    // stream only from a host that can actually deliver a whole file.
+    const route = copyRouteFor({
+      staged: staged.ok,
+      sizeBytes: staged.ok ? staged.sizeBytes : (staged.sizeBytes ?? null),
+      base: publicBase(),
+    });
+    if (route.source === 'refuse') {
+      if (who?.userId) {
+        void recordVideoEvent({
+          userId: who.userId, videoKey: driveVideoKey(fileId), event: 'copy_failed', actor: who.actor ?? 'unknown',
+          title, link: videoLink, detail: { reason: 'no_servable_host', error: route.message },
+        });
+      }
+      return { ok: false, reason: 'failed', code: 'no_servable_host', message: route.message };
+    }
     if (staged.ok) {
       made = { fileId: staged.key, url: staged.url, sizeBytes: staged.sizeBytes, where: 'bucket' };
+    } else if (route.source === 'drive') {
+      // Under ~100 MB Google serves the file itself rather than its scan page,
+      // and this is the path that worked before any of the rest of this existed.
+      const name = String(title || 'video').replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 80) + '.mp4';
+      const copy = await publicVideoCopy(fileId, name);
+      made = { fileId: copy.fileId, url: copy.url, sizeBytes: staged.sizeBytes ?? null, where: 'drive' };
     } else if (staged.reason === 'too_large' || staged.reason === 'upload_limit') {
       // THE APP'S OWN DOMAIN. Nothing is copied and nothing is stored: the URL
       // is a signed pointer at the clinic's own file, which this app streams
@@ -208,7 +246,7 @@ export async function ensureShareableVideo(
     // host could not answer, and it is verified exactly as before. When it
     // fails too, it fails loudly, naming that page, instead of quietly
     // storing it.
-    if (!verdict.ok && made.where === 'stream') {
+    if (!verdict.ok && made.where === 'stream' && route.source !== 'drive') {
       reportError('media-library:stream-unverified', new Error(verdict.message), { fileId });
       const name = String(title || 'video').replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 80) + '.mp4';
       const copy = await publicVideoCopy(fileId, name);
