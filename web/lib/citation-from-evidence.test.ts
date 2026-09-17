@@ -45,13 +45,16 @@ test('a paper with no DOI is never cited', () => {
   assert.equal(refLineFromEvidence(null), null);
 });
 
-test('the newest citable paper wins', () => {
+test('PubMed\u2019s relevance order is kept, not overridden by recency', () => {
+  // This used to sort by year, which threw away the ranking the search was
+  // asked for (`sort=relevance`): a newer but less relevant paper displaced
+  // the best match for the subject. On a medical advertisement the citation
+  // being ABOUT the claim matters more than it being recent.
   const chosen = pickCitation([
-    paper({ year: 1998, doi: '10.1016/old' }),
-    paper({ year: 2024, doi: '10.1016/new' }),
-    paper({ year: 2011, doi: '10.1016/mid' }),
+    paper({ year: 1998, doi: '10.1016/best-match' }),
+    paper({ year: 2024, doi: '10.1016/newer-but-worse' }),
   ]);
-  assert.equal(chosen?.doi, '10.1016/new');
+  assert.equal(chosen?.doi, '10.1016/best-match');
 });
 
 test('an uncitable paper never blocks a citable one behind it', () => {

@@ -35,14 +35,17 @@ export function citable(item: EvidenceItem | null | undefined): boolean {
 /**
  * The best paper to cite from what the search found.
  *
- * Newest first among those with a DOI: a 2024 trial reads better on a clinic's
- * post than a 1998 one, and the search already ranked for relevance, so recency
- * is the only tie-break worth applying on top.
+ * RELEVANCE ORDER IS KEPT. lib/evidence.ts queries PubMed with
+ * `sort=relevance`, so the list arrives best-match first — and an earlier
+ * version of this function re-sorted it by year, which threw that away: a
+ * newer but less relevant paper displaced the one PubMed had judged the best
+ * match for the subject. On a medical advertisement the citation being ABOUT
+ * the claim matters more than it being recent.
+ *
+ * So: the first citable item, in the order the search returned it.
  */
 export function pickCitation(items: readonly EvidenceItem[] | null | undefined): EvidenceItem | null {
-  const usable = (items || []).filter(citable);
-  if (!usable.length) return null;
-  return [...usable].sort((a, b) => (Number(b.year) || 0) - (Number(a.year) || 0))[0];
+  return (items || []).find(citable) ?? null;
 }
 
 /**
