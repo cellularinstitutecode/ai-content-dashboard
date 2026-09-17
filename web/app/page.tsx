@@ -11,6 +11,7 @@ import SystemStatus from "@/components/SystemStatus";
 import ProcessTracker, { makeSteps, stepActive, stepError, stepSkip, stepsDone, type ProcessStep } from "@/components/ProcessTracker";
 import { announce, onRefresh, fetchDrafts } from "@/components/refreshBus";
 import { tightestLimit, networkLabel, parseVideoUrl, draftLabel, PUBLISH_NETWORKS, DEFAULT_VIDEO_NETWORKS, mediaProblem } from "@/lib/composer";
+import { filterQueue, matchesQueueSearch } from "@/lib/queue-search";
 import MediaPicker from "@/components/MediaPicker";
 import { useWorkspace } from "@/components/workspace";
 import { appliesTo as complianceApplies, checkCompliance, ensureAviso, DEFAULT_AVISO_NUMBER } from "@/lib/compliance";
@@ -313,6 +314,22 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
     if (workspace.handoffText) setMText(workspace.handoffText);
     if (workspace.handoffMedia) { setMMedia(workspace.handoffMedia); setMMediaLabel(workspace.handoffMediaLabel || 'Image from Drive'); }
     setMSource(workspace.handoffTab && workspace.handoffRow >= 2 ? { tab: workspace.handoffTab, row: workspace.handoffRow, link: workspace.handoffLink, format: workspace.handoffFormat || '' } : null);
+    // THE CHANNELS COME WITH IT.
+    //
+    // The hand-off carried the copy, the video and the sheet row, and said
+    // nothing about where it should go — so a reel arrived with the composer's
+    // cold-start default of Facebook ticked and YouTube, LinkedIn and TikTok
+    // all off. Every video sent by hand had its channels re-picked, and a
+    // missed one went out on the wrong network entirely.
+    //
+    // The SHEET ROW is the signal, not the format. Only the Video Library's
+    // video hand-off carries a tab and row (SourcesView `sendToComposer`); a
+    // Drive photo and a calendar caption carry neither, and those keep whatever
+    // is already ticked. handoffFormat is NOT usable here — it holds the
+    // sheet's FORMATO ("Vertical 9:16"), a different vocabulary from the
+    // generator's "video"/"blog"/"email", so platformsForFormat would read a
+    // reel as Instagram and Facebook: the exact channels this is fixing.
+    if (workspace.handoffTab && workspace.handoffRow >= 2) setMNetworks(DEFAULT_VIDEO_NETWORKS);
     setMStatus(null);
     workspace.patch({ handoffText: '', handoffMedia: '', handoffMediaLabel: '', handoffTab: '', handoffRow: 0, handoffLink: '', handoffFormat: '' });
     try { scrollToPublisher(); } catch { /* not mounted yet */ }
@@ -490,6 +507,12 @@ const [posts, setPosts] = useState<any[]>([]);
 // Several at once. The per-post Approve stays; this ticks posts and sends the
 // selection through the same PATCH, one call each, one confirmation for all.
 const [selectMode, setSelectMode] = useState(false);
+// What is typed in the queue's search box. The TICKS ARE NOT DERIVED FROM IT:
+// selectedPosts is keyed by post id and survives a change of search, so a tick
+// made under one search is not silently dropped by the next. The bar says how
+// many of them the current search is hiding, and the delete confirm names
+// every row, so nothing goes without being seen.
+const [queueQ, setQueueQ] = useState('');
 const [selectedPosts, setSelectedPosts] = useState<Set<string>>(new Set());
 const [bulkBusy, setBulkBusy] = useState(false);
 const [showAllQueue, setShowAllQueue] = useState(false);
@@ -836,6 +859,44 @@ setActionMsg(failures.length ? (ok + ' of ' + extras.length + ' duplicates remov
 setBulkBusy(false);
 announce('posts', 'stats');
 }
+/**
+ * Delete every ticked draft — from the queue and from Metricool.
+ *
+ * Select mode used to offer Approve and Publish now and nothing else, while
+ * the only bulk delete in the app ("Remove N duplicates") lived in the other
+ * branch of the same bar and VANISHED the moment you started ticking. So the
+ * answer to "row 183 already has a draft waiting, delete it there first" was a
+ * screen with no way to delete anything but one row at a time.
+ *
+ * Same shape as removeDuplicates: one DELETE per post, four at a time, because
+ * each call also removes the post from Metricool and cleans up the shared video
+ * copy when nothing else references it. A bulk endpoint would have to repeat
+ * all of that care.
+ *
+ * The confirm NAMES EVERY ROW rather than counting them, because a tick can be
+ * hidden by the current search and this is the one action that cannot be undone.
+ */
+async function deleteSelected() {
+  const chosen = safePosts.filter((p: any) => selectedPosts.has(String(p?.id || '')) && isAwaitingApproval(p?.status));
+  if (!chosen.length || bulkBusy) return;
+  const lines = chosen.map((p: any) => '\u2022 ' + (p?.source?.row ? 'row ' + p.source.row : 'a post') + ' \u00b7 ' + ((p?.providers || []).join('/') || 'post')).join('\n');
+  if (typeof window !== 'undefined' && !window.confirm('Delete ' + chosen.length + ' draft' + (chosen.length === 1 ? '' : 's') + '?\n\n' + lines + '\n\nThey are removed from Metricool too. This cannot be undone.')) return;
+  setBulkBusy(true);
+  const failures: string[] = [];
+  let ok = 0;
+  await mapLimit(chosen, 4, async (p: any) => {
+    try {
+      const r = await fetch('/api/posts?id=' + encodeURIComponent(String(p.id)), { method: 'DELETE' });
+      if (r.ok) ok++; else failures.push((p?.source?.row ? 'row ' + p.source.row + ' ' : '') + '(' + ((p?.providers || []).join('/') || 'post') + '): ' + await friendlyErrorFromResponse(r, 'could not be removed'));
+    } catch (e) { failures.push((p?.source?.row ? 'row ' + p.source.row + ' ' : '') + '(' + ((p?.providers || []).join('/') || 'post') + '): ' + friendlyError(e, 'could not be removed')); }
+  });
+  setActionMsg(failures.length ? (ok + ' of ' + chosen.length + ' deleted. Not done: ' + failures.join('; ')) : ok + ' draft' + (ok === 1 ? '' : 's') + ' deleted \u2014 removed from Metricool too.');
+  setSelectedPosts(new Set());
+  setBulkBusy(false);
+  refreshPosts();
+  announce('posts', 'stats');
+}
+
 async function approveSelected(now = false) {
 const chosen = safePosts.filter((p: any) => selectedPosts.has(String(p?.id || '')) && isAwaitingApproval(p?.status) && p?.videoPending !== true);
 const ids = chosen.map((p: any) => String(p.id));
@@ -1256,6 +1317,9 @@ try { await navigator.clipboard.writeText(output); setCopied(true); setTimeout((
 const currentModels = PROVIDERS.find(p => p.id === provider)!.models;
 const safeDrafts = Array.isArray(drafts) ? drafts : [];
 const safePosts = Array.isArray(posts) ? posts : [];
+// The queue as the search leaves it. Only what is SHOWN is filtered — the
+// selection, the counts and the duplicate scan all still read safePosts.
+const shownPosts = filterQueue(safePosts as any[], queueQ);
 const pendingReviewCount = safePosts.filter((p: any) => postStatusMeta(p?.status).label === 'Waiting for your approval').length;
 const activeType = CONTENT_TYPES.find(t => t.id === type)!;
 
@@ -1795,7 +1859,7 @@ className={"inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px
 <button type="button" key={slot} onClick={() => setMDate(scheduleInputValue(slot))} title="The next free slot on the weekly planner"
 className={"rounded-full px-3 py-1 text-[12px] font-medium ring-1 transition hover:ring-accent " + (mDate === scheduleInputValue(slot) ? "bg-accent/10 text-accent ring-accent" : "bg-subtle text-ink-muted ring-line")}>{fmtScheduleDateTime(slot)}</button>
 ))
-: [{ label: 'Tomorrow 9 AM', h: 9, d: 1 }, { label: 'Tomorrow 5 PM', h: 17, d: 1 }, { label: 'In 2 days, 9 AM', h: 9, d: 2 }].map((preset) => (
+: [{ label: 'Tomorrow 8 AM', h: 8, d: 1 }, { label: 'Tomorrow 5 PM', h: 17, d: 1 }, { label: 'In 2 days, 8 AM', h: 8, d: 2 }].map((preset) => (
 <button type="button" key={preset.label} onClick={() => setMDate(schedulePresetValue(preset.d, preset.h))}
 className="rounded-full bg-subtle px-3 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:ring-accent">{preset.label}</button>
 ))}
@@ -1938,20 +2002,30 @@ return (
 const approvable = safePosts.filter((p: any) => isAwaitingApproval(p?.status) && p?.videoPending !== true);
 if (!approvable.length) return null;
 const n = approvable.filter((p: any) => selectedPosts.has(String(p?.id || ''))).length;
+// Ticked but not on screen, because the search is hiding them. Said out
+// loud: "Delete 5" when three are visible is otherwise a nasty surprise.
+const hidden = approvable.filter((p: any) => selectedPosts.has(String(p?.id || '')) && !matchesQueueSearch(p, queueQ)).length;
+// Duplicates are counted over the WHOLE queue, never the filtered view — a
+// search must not change how many duplicates the app thinks it has.
+const dupeCount = findDuplicatePosts(safePosts as any[]).extras.length;
 return selectMode ? (
 <>
-<span className="text-[11px] font-semibold text-ink">{n} of {approvable.length} selected</span>
+<span className="text-[11px] font-semibold text-ink">{n} of {approvable.length} selected{hidden > 0 ? ' (' + hidden + ' hidden by this search)' : ''}</span>
 <button type="button" disabled={n === approvable.length || bulkBusy} className="text-[11px] font-medium text-accent hover:underline disabled:opacity-50" onClick={() => setSelectedPosts(new Set(approvable.map((p: any) => String(p.id))))}>All</button>
 <button type="button" disabled={!n || bulkBusy} className="text-[11px] font-medium text-accent hover:underline disabled:opacity-50" onClick={() => setSelectedPosts(new Set())}>None</button>
 <button type="button" disabled={!n || bulkBusy} onClick={() => void approveSelected(false)} className="rounded-full bg-accent px-2.5 py-0.5 text-[11px] font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50">{bulkBusy ? 'Approving…' : 'Approve ' + n}</button>
 <button type="button" disabled={!n || bulkBusy} onClick={() => void approveSelected(true)} className="text-[11px] font-medium text-accent hover:underline disabled:opacity-50">Publish {n} now</button>
+<button type="button" disabled={!n || bulkBusy} onClick={() => void deleteSelected()} title="Removes them from the queue and from Metricool. Nothing is published." className="rounded-full bg-red-50 px-2.5 py-0.5 text-[11px] font-semibold text-danger ring-1 ring-red-200 transition hover:bg-red-100 disabled:opacity-50">{bulkBusy ? 'Working…' : 'Delete ' + n}</button>
 <button type="button" disabled={bulkBusy} onClick={() => { setSelectMode(false); setSelectedPosts(new Set()); }} className="text-[11px] text-ink-muted hover:text-ink">Cancel</button>
+{dupeCount > 0 && (
+<button type="button" disabled={bulkBusy} title="The same draft on the same network more than once. Keeps the earliest of each; removes the rest from Metricool too." className="rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 ring-1 ring-amber-200 hover:bg-amber-100 disabled:opacity-50" onClick={() => void removeDuplicates()}>{bulkBusy ? 'Removing…' : 'Remove ' + dupeCount + ' duplicate' + (dupeCount === 1 ? '' : 's')}</button>
+)}
 </>
 ) : (
 <>
-{(() => { const n = findDuplicatePosts(safePosts as any[]).extras.length; return n > 0 ? (
-<button type="button" disabled={bulkBusy} title="The same draft on the same network more than once. Keeps the earliest of each; removes the rest from Metricool too." className="rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 ring-1 ring-amber-200 hover:bg-amber-100 disabled:opacity-50" onClick={() => void removeDuplicates()}>{bulkBusy ? 'Removing…' : 'Remove ' + n + ' duplicate' + (n === 1 ? '' : 's')}</button>
-) : null; })()}
+{dupeCount > 0 && (
+<button type="button" disabled={bulkBusy} title="The same draft on the same network more than once. Keeps the earliest of each; removes the rest from Metricool too." className="rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 ring-1 ring-amber-200 hover:bg-amber-100 disabled:opacity-50" onClick={() => void removeDuplicates()}>{bulkBusy ? 'Removing…' : 'Remove ' + dupeCount + ' duplicate' + (dupeCount === 1 ? '' : 's')}</button>
+)}
 <button type="button" className="text-[11px] font-medium text-accent hover:underline" onClick={() => { setSelectMode(true); setShowAllQueue(true); }}>Select several…</button>
 </>
 );
@@ -1970,8 +2044,27 @@ We could not read the drafts behind these posts just now, so any post waiting on
 <div className="mt-2 rounded-2xl bg-subtle p-4 text-center text-[12px] text-ink-faint ring-1 ring-line">Nothing in the queue yet. Anything you schedule here, on the calendar or from a template lands in this list.</div>
 )}
 {safePosts.length > 0 && (
+<div className="mt-2">
+<input
+type="search"
+value={queueQ}
+onChange={(e) => setQueueQ(e.target.value)}
+placeholder="Search row number, channel or text…"
+aria-label="Search the publishing queue"
+className="w-full rounded-full bg-white px-4 py-2 text-[12px] text-ink ring-1 ring-line transition placeholder:text-ink-faint focus:outline-none focus:ring-accent"
+/>
+<p className="mt-1 px-1 text-[11px] text-ink-faint">A number on its own finds that sheet row — 183 finds row 183, not every post mentioning it.</p>
+</div>
+)}
+{safePosts.length > 0 && shownPosts.length === 0 && (
+<div className="mt-2 rounded-2xl bg-subtle p-4 text-center text-[12px] text-ink-faint ring-1 ring-line">Nothing in the queue matches “{queueQ.trim()}”. {safePosts.length} draft{safePosts.length === 1 ? '' : 's'} {safePosts.length === 1 ? 'is' : 'are'} waiting behind this search.</div>
+)}
+{shownPosts.length > 0 && (
 <ul className="mt-2 space-y-2">
-{safePosts.slice(0, showAllQueue ? safePosts.length : 6).map((p: any, i: number) => {
+{/* A search shows every match: finding row 183 and then hiding it behind
+    "show all" would be worse than not finding it. The six-row cap is for
+    the unfiltered, unselected queue only. */}
+{shownPosts.slice(0, (showAllQueue || selectMode || queueQ.trim()) ? shownPosts.length : 6).map((p: any, i: number) => {
 const meta = postStatusMeta(p?.status);
 const tone = meta.tone === 'amber' ? 'bg-amber-50 text-amber-700 ring-amber-100' : meta.tone === 'green' ? 'bg-emerald-50 text-emerald-700 ring-emerald-100' : 'bg-blue-50 text-blue-700 ring-blue-100';
 const id = String(p?.id || '');
@@ -2046,9 +2139,12 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 })}
 </ul>
 )}
-{safePosts.length > 6 && (
+{/* Hidden while a search or select mode is on, because both already show
+    everything they match — a "show all 40" under a 3-result search reads
+    as though the search had failed. */}
+{shownPosts.length > 6 && !selectMode && !queueQ.trim() && (
 <button type="button" onClick={() => setShowAllQueue((v) => !v)} className="mt-2 text-[11px] font-medium text-accent hover:underline">
-{showAllQueue ? 'Show the first 6' : 'Show all ' + safePosts.length}
+{showAllQueue ? 'Show the first 6' : 'Show all ' + shownPosts.length}
 </button>
 )}
 </div>
