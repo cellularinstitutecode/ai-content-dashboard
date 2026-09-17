@@ -339,10 +339,37 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
     // therapeutic plasma exchange sat under "Red Light Therapy at Cellular
     // Institute", left behind by the draft opened before it, and that title is
     // what YouTube and TikTok would have published.
-    setMTitle(workspace.handoffTitle || '');
+    const handedTitle = workspace.handoffTitle || '';
+    setMTitle(handedTitle);
     setMDraftId(workspace.handoffDraftId || '');
     setMKeyword(null);
     setMSent(null);
+    // WRITTEN ON ARRIVAL, not on a button press.
+    //
+    // "Use in post with video should extract the title automatically on the
+    // draft without us having to click on it." A draft prepared before the
+    // titles were written from the video carries its FILE NAME, and a draft
+    // from the sheet carries nothing — so the box would sit there holding
+    // "Reel_TPExRyall_Rodrigo.mp4", or empty, waiting to be noticed.
+    //
+    // Only when there is nothing usable: a title somebody wrote, or one this
+    // app already wrote from the transcript, is never overwritten by this.
+    if (!handedTitle || looksInternal(handedTitle, {})) {
+      const draftId = workspace.handoffDraftId || '';
+      const text = workspace.handoffText || '';
+      if (draftId || text.trim()) {
+        setMKwBusy(true);
+        void fetch('/api/title', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, draftId: draftId || undefined }),
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((j) => { const t = String(j?.title || '').trim(); if (t) setMTitle(t); })
+          .catch(() => undefined)
+          .finally(() => setMKwBusy(false));
+      }
+    }
     setMSource(workspace.handoffTab && workspace.handoffRow >= 2 ? { tab: workspace.handoffTab, row: workspace.handoffRow, link: workspace.handoffLink, format: workspace.handoffFormat || '' } : null);
     // THE CHANNELS COME WITH IT.
     //
