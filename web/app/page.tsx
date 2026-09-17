@@ -14,7 +14,7 @@ import { tightestLimit, networkLabel, parseVideoUrl, draftLabel, PUBLISH_NETWORK
 import { filterQueue, matchesQueueSearch } from "@/lib/queue-search";
 import MediaPicker from "@/components/MediaPicker";
 import { useWorkspace } from "@/components/workspace";
-import { appliesTo as complianceApplies, checkCompliance, ensureAviso, DEFAULT_AVISO_NUMBER } from "@/lib/compliance";
+import { appliesTo as complianceApplies, checkCompliance, complianceNetworksLabel, ensureAviso, DEFAULT_AVISO_NUMBER } from "@/lib/compliance";
 import { PanelLoader } from "@/components/LoadingScreen";
 import { friendlyError, friendlyErrorFromResponse, friendlyImageError } from '@/lib/friendly-error';
 import { METRICOOL_BLOG_ID, METRICOOL_USER_ID, metricoolPlannerUrl } from '@/lib/metricool-links';
@@ -370,6 +370,21 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
   const mMinDateTime = nowTick ? scheduleInputValue(nowTick) : undefined;
   const mInstant = mDate ? scheduleInstantFromInput(mDate) : null;
   const mDateInPast = Boolean(mDate && nowTick && mInstant && Date.parse(mInstant) < nowTick.getTime());
+  // WHICH networks, and WHAT is actually wrong.
+  //
+  // This said "Instagram and Facebook posts need a REF line citing a scientific
+  // study" for every failure — while the rule had covered LinkedIn, TikTok and
+  // YouTube for a week, and while a caption that HAD a REF line and was only
+  // missing its DOI got the same words. So somebody with LinkedIn, YouTube and
+  // TikTok ticked and a REF line already written was told to add a REF line for
+  // two networks they were not posting to.
+  const complianceRefusal = (check: { missing: readonly string[] }, networks: readonly string[]): string => {
+    const who = complianceNetworksLabel(networks);
+    if (check.missing.includes('doi')) return 'Your REF line has no DOI. ' + who + ' posts need one \u2014 add something like 10.1016/j.example.2024.01.001 to that line.';
+    if (check.missing.includes('ref')) return who + ' posts need a REF line citing a scientific study, with a DOI.';
+    return 'Add the AVISO DE PUBLICIDAD line before sending.';
+  };
+
   const mProblem =
     !mNetworks.length ? 'Pick at least one channel.'
     : !mText.trim() ? 'Write the post first.'
@@ -377,7 +392,7 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
     : !mDate ? 'Pick the date and time it should go out.'
     : mDateInPast ? 'That time has already passed. Pick a future time.'
     : mediaProblem(mNetworks, mMedia) ? mediaProblem(mNetworks, mMedia)
-    : mCompliance && !mCompliance.ok ? (mCompliance.missing.includes('ref') ? 'Instagram and Facebook posts need a REF line citing a scientific study.' : 'Add the AVISO DE PUBLICIDAD line before sending.')
+    : mCompliance && !mCompliance.ok ? complianceRefusal(mCompliance, mNetworks)
     : null;
   // The composer as one string: the same post, to the same channels, at the
   // same time, with the same video. Change any of it and Send is live again.
@@ -1937,7 +1952,18 @@ className={"mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring
       <div className="font-semibold">These posts must carry two lines</div>
       <ul className="mt-1 list-disc pl-4">
         <li>{mCompliance && !mCompliance.missing.includes('aviso') ? '✓ ' : ''}AVISO DE PUBLICIDAD: {avisoNumber}{mCompliance && mCompliance.missing.includes('aviso') ? (<> — <button type="button" onClick={() => setMText(ensureAviso(mText, avisoNumber))} className="font-semibold underline">add it now</button></>) : null}</li>
-        <li>{mCompliance && !mCompliance.missing.includes('ref') ? '✓ ' : ''}REF: a scientific study that supports the claim{mCompliance && mCompliance.missing.includes('ref') ? ' — add a line starting with "REF:" (author, year, journal, DOI). Drafts from the Content Generator include one.' : ''}</li>
+        {/* The old wording promised "Drafts from the Content Generator include
+            one", which is true for Instagram and Facebook and FALSE for the
+            three networks a video hand-off ticks: lib/ai.ts only ever asks for
+            and stamps the REF on the instagram and facebook sections of a pack.
+            Being told the line was supplied while looking at copy that has none
+            is worse than being told nothing. */}
+        <li>
+          {mCompliance && !mCompliance.missing.includes('ref') && !mCompliance.missing.includes('doi') ? '✓ ' : ''}
+          REF: a scientific study that supports the claim
+          {mCompliance && mCompliance.missing.includes('doi') ? ' — your line has no DOI. Add one (10.…/…); it is what lets the citation be checked.' : ''}
+          {mCompliance && mCompliance.missing.includes('ref') ? ' — add a line starting with "REF:" (author, year, journal, DOI). Instagram and Facebook drafts come with one; LinkedIn, YouTube and TikTok copy usually needs it added.' : ''}
+        </li>
       </ul>
     </div>
   )

@@ -10,6 +10,7 @@ import {
   checkCompliance,
   ensureAviso,
   complianceMessage,
+  complianceNetworksLabel,
 } from './compliance.ts';
 
 const GOOD =
@@ -88,4 +89,58 @@ test('the AVISO line is recognised with a full-width colon and extra spaces', ()
   // '10.'), so this fixture only passed while a REF without a usable DOI still counted.
   const c = checkCompliance('x\n\nREF: A real study (2021). Journal, 1(1), 1. DOI: 10.1080/00332747.1974.11023785\nAVISO  DE  PUBLICIDAD： 2623022002A00090');
   assert.equal(c.ok, true);
+});
+
+test('a REF line with no DOI is reported as a DOI problem, not a missing line', () => {
+  // THE MESSAGE THAT SENT PEOPLE HUNTING. A caption with a perfectly good REF
+  // line and no DOI used to report 'ref' — "add a REF line" — while the line
+  // was already sitting there in front of them.
+  const withRef = 'A claim about therapy.\n\nAVISO DE PUBLICIDAD: ' + DEFAULT_AVISO_NUMBER
+    + '\nREF: Smith, A.B. (2024). A study of something. Journal of Things, 12(3), 45-60.';
+  const check = checkCompliance(withRef);
+  assert.equal(check.ok, false);
+  assert.ok(check.missing.includes('doi'), 'the DOI is what is missing');
+  assert.ok(!check.missing.includes('ref'), 'the REF line is present and must not be reported as absent');
+  assert.ok(check.ref, 'the line itself was found');
+  assert.equal(check.doi, null);
+});
+
+test('no REF line at all is still reported as a missing line', () => {
+  const noRef = 'A claim.\n\nAVISO DE PUBLICIDAD: ' + DEFAULT_AVISO_NUMBER;
+  const check = checkCompliance(noRef);
+  assert.ok(check.missing.includes('ref'));
+  assert.ok(!check.missing.includes('doi'), 'one problem, one name — never both');
+});
+
+test('a REF line with a DOI passes', () => {
+  const good = 'A claim.\n\nAVISO DE PUBLICIDAD: ' + DEFAULT_AVISO_NUMBER
+    + '\nREF: Smith, A.B. (2024). A study. Journal, 12(3), 45-60. DOI: 10.1016/j.example.2024.01.001';
+  const check = checkCompliance(good);
+  assert.deepEqual(check.missing, []);
+  assert.equal(check.ok, true);
+  assert.equal(check.doi, '10.1016/j.example.2024.01.001');
+});
+
+test('the refusal names the networks the rule actually covers', () => {
+  // The assertion that keeps the wording honest the next time SOCIAL_NETWORKS
+  // changes. Every id in the set must be nameable, or a message will quietly
+  // omit the network somebody is actually posting to.
+  for (const id of ['instagram', 'facebook', 'linkedin', 'tiktok', 'youtube']) {
+    assert.ok(appliesTo([id]), id + ' is covered by the rule');
+    const named = complianceNetworksLabel([id]);
+    assert.ok(named && named !== 'These', id + ' has no proper name in the label');
+  }
+  assert.equal(complianceNetworksLabel(['linkedin', 'youtube', 'tiktok']), 'LinkedIn, YouTube and TikTok');
+  assert.equal(complianceNetworksLabel(['linkedin']), 'LinkedIn');
+  // A network outside the rule contributes nothing to the sentence.
+  assert.equal(complianceNetworksLabel(['twitter']), 'These');
+  assert.match(complianceNetworksLabel(), /Instagram/);
+  assert.match(complianceNetworksLabel(), /YouTube/);
+});
+
+test('the refused sentence names the selected networks, not two it is not about', () => {
+  const noRef = checkCompliance('A claim.\n\nAVISO DE PUBLICIDAD: ' + DEFAULT_AVISO_NUMBER);
+  const said = complianceMessage(noRef, ['linkedin', 'youtube', 'tiktok']);
+  assert.match(said, /^LinkedIn, YouTube and TikTok posts/);
+  assert.doesNotMatch(said, /Instagram/, 'it must not name a network the person is not posting to');
 });

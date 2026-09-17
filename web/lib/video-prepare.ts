@@ -574,10 +574,12 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
 
     // LinkedIn carries the notice and the citation too.
     //
-    // lib/compliance.ts scopes the advertising rule to Instagram and Facebook,
-    // so the writer is only ever asked for a REF line on those two and the AVISO
-    // is only stamped there — which left the LinkedIn post going out with
-    // neither. The same post, the same claims, the same clinic: it gets the same
+    // The writer is only ever ASKED for a REF line on the instagram and facebook
+    // sections of a pack, and the AVISO is only stamped there (lib/ai.ts) —
+    // which left the LinkedIn post going out with neither. (The rule itself has
+    // covered LinkedIn, TikTok and YouTube since September; it is the writer's
+    // instruction that is still narrower, which is exactly why this copies the
+    // verified citation across rather than trusting the pack.) The same post, the same claims, the same clinic: it gets the same
     // two lines, reusing the citation already verified against Crossref rather
     // than asking for a second one that would need verifying again.
     // "Watch: <url>" only when the link is one a reader can actually open.

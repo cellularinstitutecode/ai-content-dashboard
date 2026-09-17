@@ -173,7 +173,7 @@ export default function BrandPage() {
             <label style={{ fontSize: 13 }}>Aviso de publicidad (COFEPRIS advertising permit number)
               <input style={inputStyle} value={brand.aviso_publicidad || ''} onChange={(e) => update('aviso_publicidad', e.target.value)} placeholder="2623022002A00090" />
               <span style={{ display: 'block', marginTop: 6, fontSize: 12, opacity: .7 }}>
-                Added automatically as &quot;AVISO DE PUBLICIDAD: …&quot; on every Instagram and Facebook post. Those posts also need a REF line citing a scientific study — the app writes it and will not send a post without both.
+                Added automatically as &quot;AVISO DE PUBLICIDAD: &hellip;&quot; on every Instagram, Facebook, LinkedIn, YouTube and TikTok post. Those posts also need a REF line citing a scientific study, with a DOI — and the app will not send one without both.
               </span>
             </label>
             {/* Visual identity — what every generated image and brand card is painted with.
