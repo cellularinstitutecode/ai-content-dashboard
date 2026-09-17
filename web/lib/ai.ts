@@ -15,6 +15,14 @@ import { jsonDiagnostic, repairJsonText } from '@/lib/json-repair';
 import { reportError } from '@/lib/report';
 import { PLAYBOOK } from '@/lib/playbook';
 import { recordProviderOutcome } from '@/lib/provider-status';
+import {
+  JUDGE_SYSTEM,
+  MAX_CANDIDATES,
+  parseSupportVerdict,
+  supportPrompt,
+  type SupportVerdict,
+} from '@/lib/claim-support';
+import type { EvidenceItem } from '@/lib/evidence-parse';
 
 /**
  * Record what a provider just did, then throw if it refused.
@@ -652,6 +660,95 @@ export async function chatAssistant(
   return String(data?.choices?.[0]?.message?.content ?? '').trim();
 }
 
+
+// ---------------------------------------------------------------------------
+// Does the paper back the claim?
+//
+// Everything about a citation was checked except the only thing that matters on
+// an advertisement: whether the study supports the sentence printed above it.
+// The papers and their abstracts are already in memory by the time the copy
+// exists (lib/video-prepare.ts), so this costs one short call and no new
+// research. The question, the prompt and the parsing live in
+// lib/claim-support.ts, where they can be tested; this is the wire.
+// ---------------------------------------------------------------------------
+
+/**
+ * Ask which of these papers supports this copy.
+ *
+ * FAILS OPEN, DELIBERATELY. Every transport failure — no key, a 500, a timeout,
+ * a refusal, prose instead of JSON — returns 'unchecked', and the caller then
+ * behaves exactly as it did before this check existed. The same call the
+ * codebase already makes for an unreachable Crossref (lib/citation.ts returns
+ * 'unavailable', and lib/video-prepare.ts accepts the DOI anyway): a service
+ * being down is not evidence about a paper, and must never be the reason a
+ * clinic cannot publish.
+ */
+export async function judgeClaimSupport(args: {
+  claim: string;
+  items: readonly EvidenceItem[];
+  timeoutMs?: number;
+}): Promise<SupportVerdict> {
+  const items = (args.items || []).slice(0, MAX_CANDIDATES);
+  const claim = String(args.claim || '').trim();
+  // Nothing to judge is not a failure of judgement.
+  if (!claim || !items.length) return { status: 'unchecked' };
+
+  const timeoutMs = args.timeoutMs ?? 12000;
+  const prompt = supportPrompt(claim, items);
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
+
+  try {
+    if (anthropicKey) {
+      const res = await fetchWithRetry(
+        (process.env.ANTHROPIC_API_BASE || 'https://api.anthropic.com').replace(/\/$/, '') + '/v1/messages',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({
+            model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5',
+            // One line of JSON. A ceiling this low also stops a model that has
+            // decided to explain itself from spending a minute doing so.
+            max_tokens: 64,
+            // Zero, not 0.4. This is a verdict on a medical claim, and the same
+            // copy against the same abstracts must not come out differently on
+            // a second prepare.
+            temperature: 0,
+            system: JUDGE_SYSTEM,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+        },
+        // One retry, not two: this is an extra check inside a request budget
+        // that already has a transcript and two drafts to pay for.
+        { retries: 1, timeoutMs },
+      );
+      await noteProvider('anthropic', res);
+      const data = await res.json();
+      return parseSupportVerdict(String(data?.content?.[0]?.text ?? ''), items.length);
+    }
+    if (!openaiKey) return { status: 'unchecked' };
+    const res = await fetchWithRetry(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${openaiKey}` },
+        body: JSON.stringify({
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          max_tokens: 64,
+          temperature: 0,
+          messages: [{ role: 'system', content: JUDGE_SYSTEM }, { role: 'user', content: prompt }],
+        }),
+      },
+      { retries: 1, timeoutMs },
+    );
+    await noteProvider('openai', res);
+    const data = await res.json();
+    return parseSupportVerdict(String(data?.choices?.[0]?.message?.content ?? ''), items.length);
+  } catch (e) {
+    reportError('claim-support:judge', e);
+    return { status: 'unchecked' };
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Agentic assistant: lets the chatbot take real actions via tool-calling.

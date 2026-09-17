@@ -19,6 +19,7 @@ import { fitsNetwork } from '@/lib/video-row';
 import { MediaPreview } from '@/components/MediaPicker';
 import { rowList, type BatchReasons, type RowRef } from '@/lib/batch-plan';
 import { scheduleInputValue, scheduleInstantFromInput } from '@/lib/schedule-clock';
+import { claimSupportNote, type ClaimSupportStamp } from '@/lib/claim-support';
 
 export type Prepared = {
   draftId: string | null;
@@ -28,6 +29,14 @@ export type Prepared = {
   keywords: { primary?: string | null; keywords?: string[]; source?: string } | null;
   keywordLine?: string;
   ref?: string;
+  /**
+   * Whether the cited paper backs what this copy claims (lib/claim-support.ts).
+   *
+   * The pipeline repairs this by itself — it swaps the paper, searches again at
+   * the claim, and asks for another draft — so the panel only ever has
+   * something to say in the case it could not repair.
+   */
+  claimSupport?: ClaimSupportStamp | null;
   hasKeywords?: boolean;
   compliance: { citation?: { status?: string; title?: string | null } } | null;
   linkedin: string;
@@ -352,6 +361,12 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, bat
             <div style={{ fontSize: 12, background: '#f7f7f9', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 10, padding: 10, display: 'grid', gap: 6 }}>
               {prepared.keywordLine && <div><strong>Keywords</strong> <span style={{ opacity: .8 }}>{prepared.keywordLine}</span></div>}
               {prepared.ref && <div><strong>REF</strong> <span style={{ opacity: .8 }}>{prepared.ref}</span></div>}
+              {/* Said out loud only when it did NOT clear. A line on every draft
+                  saying "checked ✓" is a line nobody reads by the third video,
+                  and this one has to be noticed the one time it appears. */}
+              {claimSupportNote(prepared.claimSupport) && (
+                <div style={{ color: '#8a5a00' }}>⚠ {claimSupportNote(prepared.claimSupport)}</div>
+              )}
               <div style={{ opacity: .55 }}>These are what the sweep writes into the sheet’s KEYWORDS and REF columns.</div>
             </div>
           )}

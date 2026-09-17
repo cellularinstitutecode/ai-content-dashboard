@@ -15,18 +15,20 @@
 // It never publishes and never ticks a network column. Approve is still a person.
 import 'server-only';
 
-import { autoKeywordBrief, generateContentPack, type BrandContext, type ContentPack, type SemrushStamp } from '@/lib/ai';
+import { autoKeywordBrief, generateContentPack, judgeClaimSupport, type BrandContext, type ContentPack, type SemrushStamp } from '@/lib/ai';
 import { avisoNumberFor, checkCompliance } from '@/lib/compliance';
 import { resolveTranscript, type TranscriptOrigin } from '@/lib/video-transcript';
 import { keywordLineFrom } from '@/lib/video-row';
-import { composeCaption, forbiddenNames, houseStyleHint, keywordGrounding, namesLeaked, topicFromTranscript, transcriptExcerpt, videoSubject } from '@/lib/video-copy';
+import { composeCaption, forbiddenNames, houseStyleHint, keywordGrounding, namesLeaked, topicFromTranscript, transcriptExcerpt, videoSubject, withCitation } from '@/lib/video-copy';
 import { draftDefect, type DraftDefect } from '@/lib/draft-defect';
-import { canWriteCopy, remainingMs } from '@/lib/prepare-budget';
+import { canCheckClaim, canResearchClaim, canWriteCopy, remainingMs } from '@/lib/prepare-budget';
 import { shouldReseed } from '@/lib/reseed';
 import { writerFailure } from '@/lib/writer-failure';
 import { findEvidence } from '@/lib/evidence';
 import { evidenceBriefFrom } from '@/lib/evidence-brief';
-import { refLineFromEvidence } from '@/lib/citation-from-evidence';
+import type { EvidenceItem } from '@/lib/evidence-parse';
+import { claimFrom, claimQuery, supportedItem, type ClaimSupportStamp, type SupportVerdict } from '@/lib/claim-support';
+import { refLineFrom, refLineFromEvidence } from '@/lib/citation-from-evidence';
 import { verifyDoi } from '@/lib/citation';
 import { serpLandscapeFrom } from '@/lib/serp-landscape';
 import { serpCompetitors } from '@/lib/semrush';
@@ -58,6 +60,15 @@ export type VideoPack = ContentPack & {
   transcriptLanguage: string | null;
   linkedin: string;
   tiktok: string;
+  /**
+   * Did the cited paper back what this copy claims? (lib/claim-support.ts)
+   *
+   * On the pack rather than only in the response because the draft outlives the
+   * request: it is picked up again by the publishing queue days later, and the
+   * one person who can judge "the study does not quite say that" needs to be
+   * told so at the moment they are looking at it.
+   */
+  claimSupport?: ClaimSupportStamp | null;
   /** The sheet's FORMATO cell, so a replace can still say Short or video. */
   format?: string | null;
   /** The sheet's YOUTUBE cell ("Unlisted", a link…), for the privacy preset. */
@@ -110,6 +121,8 @@ export type PrepareOk = {
   hasKeywords: boolean;
   /** The REF citation the writer produced, without the label, or ''. */
   ref: string;
+  /** Whether that citation backs the copy, and what was done about it. */
+  claimSupport: ClaimSupportStamp;
   compliance: unknown;
   linkedin: string;
   tiktok: string;
@@ -442,6 +455,8 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   let linkedin = '';
   let ref = '';
   let defect: DraftDefect | null = null;
+  /** What the claim-support ladder concluded about the citation that shipped. */
+  let claimSupport: ClaimSupportStamp = { status: 'unchecked', doi: null };
   const banned = forbiddenNames(title, input.creator);
 
   // What this account has already published, so this post can avoid opening
@@ -580,6 +595,90 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
       || checkCompliance(String(pack.facebook || '')).ref
       || '';
 
+    const haveDoi = (value: string) => Boolean(checkCompliance('REF: ' + value).doi);
+    const doiOf = (value: string) => String(checkCompliance('REF: ' + value).doi || '').toLowerCase();
+
+    // DOES THE PAPER BACK WHAT THE COPY SAYS?
+    //
+    // Every check before this one asks whether the citation EXISTS: PubMed
+    // returned it, it carries a DOI, Crossref resolves it. None of them asks
+    // whether it supports the sentence printed above it — so a post could claim
+    // an outcome under a real, verified, on-topic paper that never measured it.
+    // On a COFEPRIS advertisement that is the reference doing the opposite of
+    // its job.
+    //
+    // What follows is a REPAIR LADDER, not a gate. Nothing here can refuse a
+    // video: every rung either improves the citation or leaves it alone, and a
+    // draft that comes out the far end still unmatched publishes flagged. The
+    // only refusal in this function is the one that was already here — no
+    // citation with a real DOI anywhere.
+    let candidates: EvidenceItem[] = evidence.slice();
+    const claim = claimFrom(tiktok) || claimFrom(String(pack.linkedin || ''));
+    const roomFor = (need: (ms: number) => boolean) =>
+      budgetMs <= 0 || need(remainingMs(startedAt, budgetMs, Date.now()));
+
+    // RUNG 1 — which of the papers already in hand backs this claim?
+    let verdict: SupportVerdict = { status: 'unchecked' };
+    if (claim && candidates.length && roomFor(canCheckClaim)) {
+      verdict = await judgeClaimSupport({ claim, items: candidates });
+    }
+
+    // RUNG 2 — none of them does, so search again AT THE CLAIM.
+    //
+    // The first search (above) was built from the video's SUBJECT. When nothing
+    // it found supports the copy, the likeliest explanation is not that the
+    // literature is silent but that the copy moved: it settled on a mechanism,
+    // an outcome or a modality the subject line never named. So ask PubMed
+    // about what the post actually says. This is the research step — the
+    // alternative was leaving a person to do it.
+    if (verdict.status === 'none' && claim && roomFor(canResearchClaim)) {
+      const query = claimQuery(claim);
+      if (query) {
+        const already = new Set(candidates.map((i) => String(i.doi || '').toLowerCase()));
+        const second = (await findEvidence(query)).filter((i) => !already.has(String(i.doi || '').toLowerCase()));
+        if (second.length) {
+          const retried = await judgeClaimSupport({ claim, items: second });
+          // Only adopt the second search when it actually produced a backing
+          // paper. A second 'none' leaves the first list in place, so the
+          // fallbacks below still have the relevance-ranked papers to work with.
+          if (retried.status === 'supported') {
+            candidates = second;
+            verdict = retried;
+          }
+        }
+      }
+    }
+
+    const backing = supportedItem(candidates, verdict);
+    // Recomputed every attempt. Left to carry over, a second draft would
+    // inherit the first one's verdict and publish a stamp about copy that no
+    // longer exists.
+    claimSupport = { status: 'unchecked', doi: null };
+
+    // RUNG 3 — cite the paper that backs it.
+    //
+    // Either the writer already did (nothing to do but record it), or the REF
+    // line is rebuilt from the backing paper and REPLACED on every caption.
+    // Its DOI goes through the same Crossref check as any other first.
+    if (backing) {
+      const backingDoi = String(backing.doi || '').toLowerCase();
+      if (ref && haveDoi(ref) && doiOf(ref) === backingDoi) {
+        claimSupport = { status: 'supported', doi: backing.doi };
+      } else {
+        const line = refLineFrom(backing);
+        const verified = await verifyDoi(checkCompliance(line).doi);
+        if (verified.status === 'verified' || verified.status === 'unavailable') {
+          const swappedFrom = Boolean(ref) && haveDoi(ref);
+          ref = line.replace(/^REF:\s*/i, '');
+          // withCitation REPLACES rather than appends: composeCaption keeps the
+          // first REF line it finds, so appending would leave the paper we just
+          // rejected in place and drop the one we chose.
+          tiktok = withCitation(tiktok, ref, aviso);
+          claimSupport = { status: swappedFrom ? 'swapped' : 'supported', doi: backing.doi };
+        }
+      }
+    }
+
     // THE WRITER DID NOT PRODUCE ONE, OR PRODUCED ONE WITH NO DOI.
     //
     // Fixed here rather than left for a person: the citation is built from a
@@ -588,7 +687,6 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     // no paper was found, ref stays empty and the post is refused exactly as it
     // is today, because a fabricated reference on a medical advertisement is a
     // far worse thing than a missing one.
-    const haveDoi = (value: string) => Boolean(checkCompliance('REF: ' + value).doi);
     if (!ref || !haveDoi(ref)) {
       const found = refLineFromEvidence(evidence);
       if (found) {
@@ -605,6 +703,20 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
           if (!checkCompliance(tiktok).doi) tiktok = composeCaption(tiktok + '\n\nREF: ' + ref, aviso);
         }
       }
+    }
+
+    // Judged, and nothing backed it. The copy still goes out — with the real,
+    // verified citation it has and a flag on the draft — and the writer gets
+    // one more attempt below to make a point its own research supports.
+    const unsupported = verdict.status === 'none' && !backing;
+    if (claimSupport.status === 'unchecked') {
+      // Not 'supported' and not 'swapped', so either nothing backed the claim
+      // or the question could not be asked. Both carry whatever citation the
+      // draft ended up with, which is real and verified either way.
+      claimSupport = {
+        status: unsupported ? 'unsupported' : 'unchecked',
+        doi: ref ? checkCompliance('REF: ' + ref).doi : null,
+      };
     }
 
     // LinkedIn carries the notice and the citation too.
@@ -626,8 +738,11 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     // different thing — public, and worth having.
     const watchable = /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(url);
     linkedin = String(pack.linkedin || '').trim() + (watchable ? '\n\nWatch: ' + url : '');
-    if (ref && !checkCompliance(linkedin).ref) linkedin += '\n\nREF: ' + ref;
-    linkedin = composeCaption(linkedin, aviso);
+    // withCitation rather than "append when absent": when the ladder above
+    // swapped the paper, LinkedIn may be carrying the writer's original REF
+    // line, and appending would have published the rejected paper here and the
+    // chosen one on TikTok. Same post, same claims, same citation.
+    linkedin = ref ? withCitation(linkedin, ref, aviso) : composeCaption(linkedin, aviso);
 
     // Did a name survive anyway?
     //
@@ -644,10 +759,16 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     // way. This is the half that does not depend on the writer complying.
     const repeat = repeatsOpening(openingLineOf(tiktok), priorOpenings);
 
-    defect = draftDefect(ref, leaked, Boolean(repeat));
+    defect = draftDefect(ref, leaked, Boolean(repeat), unsupported);
     if (!defect) break;
     if (repeat) {
       reportError('videos:opening-repeat', new Error('opening repeats a recent post (' + repeat.by + ', ' + repeat.score.toFixed(2) + ')'), { title });
+    }
+    if (unsupported) {
+      // Recorded, not raised. It does not stop the video; it is the one signal
+      // that would otherwise be invisible — a post whose citation is real,
+      // verified and beside the point.
+      reportError('videos:claim-unsupported', new Error('none of the papers found supports the claim'), { title });
     }
 
     // Worth another draft? Only with attempts left AND room to finish one.
@@ -705,6 +826,7 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   const videoPack: VideoPack = {
     ...pack,
     kind: 'video',
+    claimSupport,
     title,
     sourceUrl: url,
     videoId: t.videoId || '',
@@ -731,6 +853,7 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     keywordLine: keywordLineFrom(semrush),
     hasKeywords: hasSemrushData(semrush),
     ref,
+    claimSupport,
     compliance: (pack as ContentPack & { _compliance?: unknown })._compliance ?? null,
     linkedin,
     tiktok,

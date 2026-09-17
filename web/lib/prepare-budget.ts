@@ -103,3 +103,30 @@ export function transcribeBudgetMs(remaining: number): number {
 export function canWriteCopy(remaining: number): boolean {
   return remaining >= COMFORTABLE_COPY_MS;
 }
+
+/**
+ * Room for the extra step that reads the claim against the cited abstract.
+ *
+ * One short model call (lib/ai.ts judgeClaimSupport), with one retry, so 15
+ * seconds covers a slow answer and a repeat. Checked BEFORE the call for the
+ * reason at the top of this file: a check that runs the request off the end of
+ * its clock costs the whole prepare, and a draft published with an unverified
+ * citation and a flag on it is a far better outcome than no draft at all.
+ */
+export const CLAIM_CHECK_MS = 15_000;
+export function canCheckClaim(remaining: number): boolean {
+  return remaining >= CLAIM_CHECK_MS;
+}
+
+/**
+ * Room to go back to PubMed with the claim itself and judge what comes back.
+ *
+ * findEvidence spends up to 9 seconds of its own (lib/evidence.ts TOTAL_MS) and
+ * the second judgement is another CLAIM_CHECK_MS on top, so this rung is only
+ * attempted with real time in hand. Without it the draft simply keeps the
+ * citation it has.
+ */
+export const CLAIM_RESEARCH_MS = 30_000;
+export function canResearchClaim(remaining: number): boolean {
+  return remaining >= CLAIM_RESEARCH_MS;
+}

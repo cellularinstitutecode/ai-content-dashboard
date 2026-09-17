@@ -18,7 +18,7 @@
 // rather than the text, so the compliance and naming regexes stay in the one
 // place each already lives.
 
-export type DefectKind = 'no_citation' | 'named_a_person' | 'repeats_opening';
+export type DefectKind = 'no_citation' | 'named_a_person' | 'repeats_opening' | 'unsupported_citation';
 
 export type DraftDefect = {
   /**
@@ -106,30 +106,57 @@ const OPENING_CORRECTIVE =
   'regenerative medicine, safety, wellness or the field — that is the shape that repeated.';
 
 /**
+ * Not "cite something else" — "say something the paper you were given shows".
+ *
+ * The draft that triggers this already HAS a real, DOI-verified citation; what
+ * it does not have is a claim that citation supports (lib/claim-support.ts).
+ * Telling the writer to find a better study would be the wrong instruction and
+ * the expensive one: the papers in front of it were chosen from PubMed by
+ * relevance and their DOIs are already checked, so the fix is to make the point
+ * one of them actually makes.
+ *
+ * NEVER BLOCKING. A post whose citation is real and verified but whose claim
+ * the abstract does not squarely back is worth one more draft; it is not worth
+ * stopping a video over, because the alternative — a row that waits for a
+ * person — is the thing this whole path exists to avoid. lib/video-prepare.ts
+ * publishes it flagged instead.
+ */
+const SUPPORT_CORRECTIVE =
+  'IMPORTANT: your previous draft made a claim the study it cited does not actually show. Do not go looking ' +
+  'for a different study — use the papers in the research section above, which were retrieved for this video ' +
+  'and checked. Pick ONE of them, make a concrete point its abstract genuinely reports, and cite THAT paper. ' +
+  'Do not state an outcome the abstract never measured, and do not turn a hedged or partial finding into a ' +
+  'firm one. This is a medical advertisement: the reference under it has to support the sentence above it.';
+
+/**
  * Is this draft publishable, and if not, what should the writer be told?
  *
- * Both problems are reported together when both are present, so one more
- * attempt can fix both rather than trading one refusal for the other.
+ * Every problem present is reported together, so one more attempt can fix all
+ * of them rather than trading one refusal for another.
  *
  * @param ref the citation extracted from the composed copy; empty means none
  * @param leaked names the guard found in the copy
  * @param repeatsOpening lib/opening-line.ts found this opening in a recent post
+ * @param unsupported the citation is real and verified, but no abstract backs
+ *   the claim (lib/claim-support.ts). Never blocking — see SUPPORT_CORRECTIVE.
  */
 export function draftDefect(
   ref: string,
   leaked: readonly string[],
   repeatsOpening = false,
+  unsupported = false,
 ): DraftDefect | null {
   const correctives: string[] = [];
   if (leaked.length) correctives.push(nameCorrective(leaked.length));
   if (!String(ref || '').trim()) correctives.push(REF_CORRECTIVE);
+  if (unsupported) correctives.push(SUPPORT_CORRECTIVE);
   if (repeatsOpening) correctives.push(OPENING_CORRECTIVE);
   if (!correctives.length) return null;
 
   const blocking = Boolean(leaked.length) || !String(ref || '').trim();
-  return {
-    kind: leaked.length ? 'named_a_person' : (blocking ? 'no_citation' : 'repeats_opening'),
-    corrective: correctives.join('\n\n'),
-    blocking,
-  };
+  // Ordered by what is worst to publish, not by what was discovered first.
+  const kind: DefectKind = leaked.length
+    ? 'named_a_person'
+    : (blocking ? 'no_citation' : (unsupported ? 'unsupported_citation' : 'repeats_opening'));
+  return { kind, corrective: correctives.join('\n\n'), blocking };
 }

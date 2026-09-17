@@ -241,6 +241,11 @@ export async function POST(req: NextRequest) {
     keywordLine: out.keywordLine,
     hasKeywords: out.hasKeywords,
     ref: out.ref,
+    // Whether the cited paper backs the copy (lib/claim-support.ts). The panel
+    // only says anything when it did not clear — but it cannot say it at all if
+    // the answer stops at the route, which is where three earlier answers in
+    // this codebase were computed and thrown away.
+    claimSupport: out.claimSupport,
     compliance: out.compliance,
     linkedin: out.linkedin,
     tiktok: out.tiktok,
