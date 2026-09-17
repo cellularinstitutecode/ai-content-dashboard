@@ -876,6 +876,43 @@ announce('posts', 'stats');
  * The confirm NAMES EVERY ROW rather than counting them, because a tick can be
  * hidden by the current search and this is the one action that cannot be undone.
  */
+/**
+ * Pull a waiting draft back into the panel so it can be finished.
+ *
+ * The queue could approve a draft, move it, or delete it — never open it. So a
+ * draft that was nearly right had to be deleted and rewritten from scratch,
+ * and the copy the writer had already produced went in the bin.
+ *
+ * Nothing is removed from the queue by pressing this: the draft stays exactly
+ * where it is, and pressing Send updates it in place (the server adopts it
+ * rather than making a second one). If you change your mind, walk away — the
+ * draft is untouched.
+ */
+function continueDraft(p: any) {
+  setMText(String(p?.text || ''));
+  setMDate(p?.publication_date ? scheduleInputValue(p.publication_date) : '');
+  const networks = (Array.isArray(p?.providers) ? p.providers : []).map((n: unknown) => String(n || '').toLowerCase()).filter(Boolean);
+  if (networks.length) setMNetworks(networks);
+  // THE VIDEO COMES BACK TOO, or the person is told it did not.
+  //
+  // /api/posts resolves each post's media URL from the copy id it stores
+  // (re-minted if it is one of our expiring stream links). Loading the copy
+  // and the time but not the video would mean pressing Send strips the video
+  // off a draft that had one — the opposite of continuing it.
+  const media = String(p?.mediaUrl || '');
+  setMMedia(media);
+  setMMediaLabel(media ? (p?.source?.title || 'Video on this draft') : '');
+  const src = p?.source || null;
+  setMSource(src?.tab && Number(src?.row) >= 2 ? { tab: String(src.tab), row: Number(src.row), link: String(src.link || ''), format: '' } : null);
+  setMSent(null);
+  setMStatus(
+    p?.media_drive_file_id && !media
+      ? 'Continuing this draft \u2014 but its video could not be found, so sending now would leave the post without one. Re-attach it below first.'
+      : 'Continuing the draft already in your queue. Sending updates that one \u2014 it will not make a second.',
+  );
+  try { scrollToPublisher(); } catch { /* not mounted yet */ }
+}
+
 async function deleteSelected() {
   const chosen = safePosts.filter((p: any) => selectedPosts.has(String(p?.id || '')) && isAwaitingApproval(p?.status));
   if (!chosen.length || bulkBusy) return;
@@ -1257,6 +1294,11 @@ return { network, ok: r.ok, status: r.status, data };
 })
 );
 const ok = results.filter((x) => x.ok).map((x) => x.network);
+// How many of those were drafts already WAITING, continued rather than
+// duplicated. Said out loud, because "saved on linkedin" would otherwise
+// leave a person wondering whether there are now two of them — which is the
+// very anxiety the old refusal was trying to prevent.
+const updated = results.filter((x: any) => x.ok && x.data?.updated === true).length;
 // THE REASON, NOT JUST THE NAME.
 //
 // This used to project straight to `.network`, so "failed on linkedin" was the
@@ -1272,8 +1314,9 @@ const reasons = bad.map((x) => x.network + ': ' + x.why).join(' ');
 if (failed.length === 0) {
 // Kept, not cleared: the text stays where the person can see it, the button
 // turns into "Sent", and the green line above it says where the drafts went.
-setMStatus(null);
+setMStatus(updated ? 'Updated ' + updated + ' draft' + (updated === 1 ? '' : 's') + ' already waiting in your queue \u2014 no new ones were made. Approve there when you are happy.' : null);
 setMSent({ key: mKey, networks: ok });
+if (updated) refreshPosts();
 } else if (ok.length === 0) {
 setMStatus('Error: failed on ' + failed.join(', ') + '. ' + reasons);
 } else {
@@ -2120,6 +2163,7 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 <>
 <button type="button" disabled={approvingId === id} onClick={() => approvePost(p)} className="rounded-full bg-accent px-2.5 py-0.5 text-[11px] font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50">{approvingId === id ? 'Approving…' : 'Approve'}</button>
 <button type="button" disabled={approvingId === id} onClick={() => approvePost(p, true)} className="text-[11px] font-medium text-accent hover:underline disabled:opacity-50">Publish now</button>
+<button type="button" onClick={() => continueDraft(p)} title="Opens this draft in the panel above. Sending updates this same draft — it does not make a second one." className="text-[11px] font-medium text-accent hover:underline">Continue</button>
 </>
 )}
 <button type="button" onClick={() => { setRescheduleId(id); setRescheduleAt(''); }} className="text-[11px] font-medium text-accent hover:underline">Reschedule</button>
