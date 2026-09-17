@@ -28,7 +28,7 @@
 import { CLINIC_SUFFIX, cleanVideoTitle, looksLikeFilename, strippedWords, titleCasePhrase } from './video-title.ts';
 
 /** Where the title that shipped actually came from. */
-export type TitleSource = 'written' | 'keyword' | 'spoken' | 'filename' | 'clinic';
+export type TitleSource = 'written' | 'drafted' | 'keyword' | 'spoken' | 'filename' | 'clinic';
 
 export type TitleChoice = { title: string; source: TitleSource };
 
@@ -89,6 +89,16 @@ function usable(value: string | null | undefined): string {
 export function professionalTitle(args: {
   /** A title somebody typed — in the sheet, or in the composer. */
   supplied?: string | null;
+  /**
+   * A title written by the model from the transcript and the copy.
+   *
+   * Ahead of the keyword because it reads what was actually SAID, where the
+   * keyword is a guess about the video made from outside it — and behind a
+   * person's own words, which are never overruled. Still only a suggestion:
+   * every rule below applies to it exactly as to a typed title, so a model that
+   * names the presenter has its title refused rather than published.
+   */
+  drafted?: string | null;
   /** The primary keyword the research settled on. */
   keyword?: string | null;
   /** What the transcript says the video is about. */
@@ -106,6 +116,11 @@ export function professionalTitle(args: {
   const supplied = usable(args.supplied);
   if (supplied && !looksInternal(supplied, env)) {
     return { title: withClinic(supplied, suffix), source: 'written' };
+  }
+
+  const drafted = usable(args.drafted);
+  if (drafted && !looksInternal(drafted, env)) {
+    return { title: withClinic(drafted, suffix), source: 'drafted' };
   }
 
   const keyword = usable(args.keyword);

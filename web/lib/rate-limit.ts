@@ -83,6 +83,9 @@ const POLICIES: Record<string, Policy> = {
   // The nightly sweep, when a person asks for its report by hand. Lists the
   // whole bucket and reads every draft; nobody needs that twelve times an hour.
   'maintenance-prune': { limit: 12, windowSec: 3600 },
+  // One short model call to name a post. Cheap, pressed a few times per draft
+  // while somebody settles on a title, and never worth an unbounded loop.
+  title: { limit: 120, windowSec: 3600 },
 };
 
 const DEFAULT_POLICY: Policy = { limit: 60, windowSec: 3600 };

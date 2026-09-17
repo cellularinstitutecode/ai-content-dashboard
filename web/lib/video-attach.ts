@@ -96,7 +96,7 @@ export async function attachPendingVideos(args: {
     // Named, not just reported. This runs unattended in the sweep, so the one
     // record of what happened is the register entry written below — and "did
     // not take it" told a person nothing they could act on days later.
-    const failure = normalizeFailure({ status: norm.failure?.status ?? null, error: norm.failure?.error ?? null });
+    const failure = normalizeFailure({ status: norm.failure?.status ?? null, error: norm.failure?.error ?? null, shape: norm.failure?.shape ?? null });
     const error = failure.message + ' Nothing was attached \u2014 the drafts still wait for it.';
     void recordVideoEvent({
       userId: args.userId, videoKey: args.videoKey, event: 'copy_failed', actor: args.actor, title: args.title, link: args.videoLink,

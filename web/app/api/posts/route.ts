@@ -475,7 +475,7 @@ export async function PATCH(req: Request) {
       // And refused WITH THE REASON. The same sentence used to cover a 403, a
       // 413, a 502 and a transfer that ran out of time — see
       // lib/media-normalize-reason.ts.
-      const failure = normalizeFailure({ status: norm.failure?.status ?? null, error: norm.failure?.error ?? null });
+      const failure = normalizeFailure({ status: norm.failure?.status ?? null, error: norm.failure?.error ?? null, shape: norm.failure?.shape ?? null });
       reportError('posts:normalize-refused', new Error(failure.message), { reason: failure.reason, status: String(failure.status ?? '') });
       return NextResponse.json(
         {

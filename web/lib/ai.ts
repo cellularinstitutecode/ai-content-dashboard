@@ -23,6 +23,7 @@ import {
   type SupportVerdict,
 } from '@/lib/claim-support';
 import type { EvidenceItem } from '@/lib/evidence-parse';
+import { TITLE_SYSTEM, readTitle, titlePrompt } from '@/lib/title-writer';
 
 /**
  * Record what a provider just did, then throw if it refused.
@@ -747,6 +748,85 @@ export async function judgeClaimSupport(args: {
   } catch (e) {
     reportError('claim-support:judge', e);
     return { status: 'unchecked' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The title, written from what was said.
+//
+// The words are already here — the transcript that produced the copy, and the
+// copy itself — so this is one short call with no new research. The answer is
+// a SUGGESTION: lib/post-title.ts still refuses a name from the strip list,
+// adds the clinic once, and falls through to the rung below when the model
+// returns nothing usable.
+// ---------------------------------------------------------------------------
+
+/**
+ * Ask for one title. Never throws; returns '' when it cannot be had.
+ *
+ * Fails open exactly like judgeClaimSupport above: no key, a timeout, a 500,
+ * prose instead of a title — all of them are '', and the caller then titles the
+ * post the way it did before this existed.
+ */
+export async function writeTitle(args: {
+  copy?: string | null;
+  transcript?: string | null;
+  subject?: string | null;
+  timeoutMs?: number;
+}): Promise<string> {
+  const prompt = titlePrompt(args);
+  // Nothing to read means nothing to title.
+  if (!String(args.copy || '').trim() && !String(args.transcript || '').trim()) return '';
+
+  const timeoutMs = args.timeoutMs ?? 12000;
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
+  try {
+    if (anthropicKey) {
+      const res = await fetchWithRetry(
+        (process.env.ANTHROPIC_API_BASE || 'https://api.anthropic.com').replace(/\/$/, '') + '/v1/messages',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({
+            model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5',
+            // Six words. A ceiling this low also stops a model that has decided
+            // to explain its choice from spending the caller's clock doing so.
+            max_tokens: 48,
+            // A little room to pick the better of two phrasings, and no more:
+            // the same video prepared twice should not get unrelated titles.
+            temperature: 0.2,
+            system: TITLE_SYSTEM,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+        },
+        { retries: 1, timeoutMs },
+      );
+      await noteProvider('anthropic', res);
+      const data = await res.json();
+      return readTitle(String(data?.content?.[0]?.text ?? ''));
+    }
+    if (!openaiKey) return '';
+    const res = await fetchWithRetry(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${openaiKey}` },
+        body: JSON.stringify({
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          max_tokens: 48,
+          temperature: 0.2,
+          messages: [{ role: 'system', content: TITLE_SYSTEM }, { role: 'user', content: prompt }],
+        }),
+      },
+      { retries: 1, timeoutMs },
+    );
+    await noteProvider('openai', res);
+    const data = await res.json();
+    return readTitle(String(data?.choices?.[0]?.message?.content ?? ''));
+  } catch (e) {
+    reportError('title:write', e);
+    return '';
   }
 }
 

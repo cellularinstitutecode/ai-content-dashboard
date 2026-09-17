@@ -65,6 +65,8 @@ export function normalizeFailure(input: {
   error?: string | null;
   /** The size of the file, when this app has measured it. */
   sizeBytes?: number | null;
+  /** The answer's structure in types, when it answered with one we could not read. */
+  shape?: string | null;
 }): NormalizeFailure {
   const status = Number.isFinite(Number(input.status)) ? Number(input.status) : null;
   const size = readableSize(input.sizeBytes);
@@ -134,10 +136,15 @@ export function normalizeFailure(input: {
       message: 'Metricool refused the video (' + status + ').' + sized,
     };
   }
+  // The shape, in types, because this is the one failure whose fix is a key
+  // name — and a message that does not name it makes the next person guess
+  // exactly as long as the last one did.
+  const shape = String(input.shape || '').trim();
   return {
     reason: 'unreadable',
     status,
-    message: 'Metricool answered, but not with a reference this app could read, so the video would have been dropped silently.' + sized,
+    message: 'Metricool answered, but not with a reference this app could read, so the video would have been dropped silently.' + sized +
+      (shape ? ' It replied with ' + shape + '.' : ''),
   };
 }
 
