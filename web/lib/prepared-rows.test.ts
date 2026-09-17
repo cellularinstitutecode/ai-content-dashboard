@@ -75,7 +75,9 @@ test('a hand-off can never leave the previous draft’s title in the box', () =>
   // Cellular Institute" — left behind by the draft opened before it, and that
   // is the title YouTube and TikTok would have published.
   const page = src('app/page.tsx');
-  assert.match(page, /setMTitle\(workspace\.handoffTitle \|\| ''\)/, 'set ALWAYS, so an empty hand-off clears it');
+  // Set ALWAYS, so an empty hand-off clears it. Via `handedTitle`, which the
+  // auto-write below then reads to decide whether anything usable arrived.
+  assert.match(page, /const handedTitle = workspace\.handoffTitle \|\| '';\s*\n\s*setMTitle\(handedTitle\)/);
   assert.match(page, /setMDraftId\(workspace\.handoffDraftId \|\| ''\)/);
   assert.ok(
     !/if \(workspace\.handoffTitle\) setMTitle/.test(page),

@@ -586,6 +586,34 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     handoff(text, media, media ? v.title || 'Video' : '', { tab: v.tab, row: v.row, link, format: v.format || '' }, title, draftId);
   }
 
+  /**
+   * WHAT IS ACTUALLY WRONG WITH THIS ROW'S VIDEO.
+   *
+   * Six rounds of this failure were diagnosed by reading code, and every round
+   * cost a send. The facts live in the deployment: the file's size, which copy
+   * exists, which host serves it, and — the test nothing had ever run — whether
+   * a fetcher pulling the WHOLE file gets the whole file. A browser plays these
+   * links because a player asks for small pieces; Metricool does not.
+   */
+  const [diagnosing, setDiagnosing] = useState<string>('');
+  const [diagnosis, setDiagnosis] = useState<{ row: string; findings: string[] } | null>(null);
+  async function diagnose(v: VideoEntry) {
+    const key = rowKey(v);
+    if (diagnosing) return;
+    setDiagnosing(key);
+    setDiagnosis(null);
+    try {
+      const r = await fetch('/api/videos/diagnose?link=' + encodeURIComponent(firstLink(v)));
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(friendlyError(j, 'The video could not be checked just now.')); return; }
+      setDiagnosis({ row: key, findings: Array.isArray(j?.findings) ? j.findings.map(String) : [] });
+    } catch (e) {
+      setErr(friendlyError(e, 'The video could not be checked just now.'));
+    } finally {
+      setDiagnosing('');
+    }
+  }
+
   async function load(kind: Tab, fresh: boolean) {
     setErr(null);
     try {
@@ -1544,6 +1572,15 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                                 {prepareLink(v) && (
                                   <button type="button" style={btn} onClick={() => prepare(v)} title="Transcript → keywords → LinkedIn + TikTok copy">Prepare</button>
                                 )}
+                                {Boolean(parseDriveFileId(firstLink(v))) && (
+                                  <button
+                                    type="button"
+                                    style={{ ...ghost, fontSize: 11, padding: '4px 10px' }}
+                                    disabled={Boolean(diagnosing)}
+                                    onClick={() => void diagnose(v)}
+                                    title="Checks the size, the copy, the host, and whether a whole-file pull actually works — the way Metricool fetches it"
+                                  >{diagnosing === rowKey(v) ? 'Checking…' : 'Check the video'}</button>
+                                )}
                                 {/* The video comes WITH the copy when there is a fetchable version of it.
     Without one this used to append `Watch: <Drive link>` instead, which is
     private — so the post shipped a link most readers cannot open. Now it
@@ -1611,6 +1648,19 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                                     { name: 'notes', label: 'Notes (OBSERVACIÓN)', value: v.notes },
                                   ].filter((f) => v.columns && (v.columns as Record<string, string>)[f.name])}
                                 />
+                              </td>
+                            </tr>
+                          )}
+                          {diagnosis && diagnosis.row === rowKey(v) && (
+                            <tr>
+                              <td colSpan={7} style={{ padding: '10px 12px', background: '#fffbe6', borderTop: '1px solid rgba(0,0,0,0.08)' }}>
+                                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>What this row&rsquo;s video actually does</div>
+                                <ul style={{ margin: 0, paddingLeft: 18, display: 'grid', gap: 4 }}>
+                                  {diagnosis.findings.map((f, fi) => (
+                                    <li key={fi} style={{ fontSize: 12, color: /TRUNCATES|REFUSED|FAILED|cannot/.test(f) ? '#8a2a00' : '#333' }}>{f}</li>
+                                  ))}
+                                </ul>
+                                <button type="button" style={{ ...ghost, marginTop: 8, fontSize: 11, padding: '3px 9px' }} onClick={() => setDiagnosis(null)}>Close</button>
                               </td>
                             </tr>
                           )}

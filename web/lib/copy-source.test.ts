@@ -92,3 +92,39 @@ test('the copy maker chooses by size and re-checks what it cached', () => {
   assert.match(lib, /cachedCopyUsable\(known\.id/, 'a cached streamed copy must be re-checked against the host');
   assert.match(lib, /route\.source === 'drive'/, 'the Drive copy is a first choice under the threshold, not only a rescue');
 });
+
+// --- THE INSTRUMENT ---------------------------------------------------------
+//
+// "I've done every test possible, it's not working… check absolutely
+//  everything, there's something wrong."
+//
+// Six rounds of this were diagnosed by reading code, and each cost a send. The
+// facts are in the deployment, not the repository — and one of them had never
+// been measured by anything: whether a fetcher pulling the WHOLE file gets the
+// whole file. A browser plays these links because a player asks for small
+// pieces. lib/media-verify.ts passes them because it reads sixteen bytes.
+// Metricool pulls the entire video.
+
+test('the check pulls the file the way Metricool does, and says what arrived', () => {
+  const route = src('app/api/videos/diagnose/route.ts');
+  assert.match(route, /range: 'bytes=0-'/, 'it must ask for a large range, not a probe');
+  assert.match(route, /PULL_BYTES = 25 \* 1024 \* 1024/, 'past the size a serverless response is known to cut off at');
+  assert.match(route, /THE LINK TRUNCATES/, 'and must say so in words when fewer bytes arrive than were asked for');
+  // It reports the four facts that have been argued about all evening.
+  for (const fact of ['The video in Drive is', 'Media links are built from', 'Its copy is a', 'A new copy would be']) {
+    assert.ok(route.includes(fact), 'the check must report: ' + fact);
+  }
+  // And it changes nothing.
+  assert.ok(!/ensureShareableVideo|rememberPublicCopy|metricoolSchedulePost/.test(route), 'a diagnosis must not make copies or send posts');
+});
+
+test('the title is written on arrival, not on a button press', () => {
+  const page = src('app/page.tsx');
+  const handoff = page.slice(page.indexOf('const handedTitle = workspace.handoffTitle'), page.indexOf('const handedTitle = workspace.handoffTitle') + 1800);
+  assert.match(handoff, /looksInternal\(handedTitle/, 'a file name counts as no title at all');
+  assert.match(handoff, /'\/api\/title'/, 'and one is written from the draft and the copy');
+  assert.ok(
+    /if \(!handedTitle \|\| looksInternal/.test(handoff),
+    'only when there is nothing usable: a title somebody wrote is never overwritten',
+  );
+});
