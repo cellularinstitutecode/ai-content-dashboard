@@ -26,6 +26,8 @@ import { shouldReseed } from '@/lib/reseed';
 import { writerFailure } from '@/lib/writer-failure';
 import { findEvidence } from '@/lib/evidence';
 import { evidenceBriefFrom } from '@/lib/evidence-brief';
+import { refLineFromEvidence } from '@/lib/citation-from-evidence';
+import { verifyDoi } from '@/lib/citation';
 import { serpLandscapeFrom } from '@/lib/serp-landscape';
 import { serpCompetitors } from '@/lib/semrush';
 import { openingLineOf, repeatsOpening } from '@/lib/opening-line';
@@ -458,9 +460,15 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   //
   // Fail-open by construction (see lib/evidence.ts): no papers means the post
   // is written exactly as it was before, never blocked.
-  const evidenceHint = evidenceBriefFrom(
-    await findEvidence(subject, brief.stamp?.keywords || []),
-  );
+  // KEPT, not just summarised. These are real papers from PubMed — title,
+  // journal, year, first author and DOI — and until now only their prose
+  // summary was kept, as background for the writer. When the writer then failed
+  // to produce a REF line with a DOI, the row was prepared anyway and the post
+  // was refused at the door, with nothing to do but write a citation by hand —
+  // while a perfectly good one had been fetched seconds earlier and thrown
+  // away. See the fallback further down.
+  const evidence = await findEvidence(subject, brief.stamp?.keywords || []);
+  const evidenceHint = evidenceBriefFrom(evidence);
 
   // Who the reader is comparing this clinic against.
   //
@@ -571,6 +579,33 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
       || checkCompliance(String(pack.linkedin || '')).ref
       || checkCompliance(String(pack.facebook || '')).ref
       || '';
+
+    // THE WRITER DID NOT PRODUCE ONE, OR PRODUCED ONE WITH NO DOI.
+    //
+    // Fixed here rather than left for a person: the citation is built from a
+    // paper findEvidence already retrieved from PubMed above, and its DOI is
+    // then verified against Crossref like any other. Nothing is invented — if
+    // no paper was found, ref stays empty and the post is refused exactly as it
+    // is today, because a fabricated reference on a medical advertisement is a
+    // far worse thing than a missing one.
+    const haveDoi = (value: string) => Boolean(checkCompliance('REF: ' + value).doi);
+    if (!ref || !haveDoi(ref)) {
+      const found = refLineFromEvidence(evidence);
+      if (found) {
+        const candidate = found.replace(/^REF:\s*/i, '');
+        const verified = await verifyDoi(checkCompliance(found).doi);
+        if (verified.status === 'verified' || verified.status === 'unavailable') {
+          // 'unavailable' is Crossref being unreachable, not the paper being
+          // wrong — the DOI still came from PubMed. 'not_found' is a real
+          // rejection and falls through to no citation.
+          ref = candidate;
+          // TikTok's caption was composed above, BEFORE this recovery ran, so
+          // it has to be patched here or the network that most often carries
+          // the reel would be the one still missing its citation.
+          if (!checkCompliance(tiktok).doi) tiktok = composeCaption(tiktok + '\n\nREF: ' + ref, aviso);
+        }
+      }
+    }
 
     // LinkedIn carries the notice and the citation too.
     //

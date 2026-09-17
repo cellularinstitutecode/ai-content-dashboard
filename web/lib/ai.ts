@@ -572,8 +572,38 @@ export async function generateContentPack(
       regenerated = true;
     } catch { /* keep the first draft; the badge tells the reviewer */ }
   }
-  pack.instagram = ensureAviso(pack.instagram, aviso);
-  pack.facebook = ensureAviso(pack.facebook, aviso);
+  // THE AVISO GOES ON EVERY CHANNEL THE RULE COVERS, not two of them.
+  //
+  // lib/compliance.ts has covered LinkedIn, TikTok and YouTube since September;
+  // only this stamping stayed narrow, so those three arrived without the line
+  // and were refused at the door. The AVISO is a fixed permit number, not a
+  // claim — appending it is bookkeeping, and leaving it off was the bug.
+  for (const key of ['instagram', 'facebook', 'linkedin', 'tiktok', 'youtube'] as const) {
+    const current = (pack as Record<string, unknown>)[key];
+    if (typeof current === 'string' && current.trim()) {
+      (pack as Record<string, unknown>)[key] = ensureAviso(current, aviso);
+    }
+  }
+
+  // AND THE CITATION, ONTO THE CHANNELS THE WRITER WAS NEVER ASKED TO PUT IT ON.
+  //
+  // REF_INSTRUCTION asks only for the instagram and facebook variants, so a
+  // LinkedIn or TikTok draft arrived with no REF line at all and was refused.
+  // Copied across rather than asking for a second citation: this one has
+  // already been verified against Crossref, and a second would need verifying
+  // again. Never invented — if there is no verified citation there is nothing
+  // to copy, and the draft is refused as before.
+  if (citation.status === 'verified' || citation.status === 'unavailable') {
+    const source = checkCompliance(pack.instagram, aviso).ref || checkCompliance(pack.facebook, aviso).ref || '';
+    if (source) {
+      for (const key of ['linkedin', 'tiktok', 'youtube'] as const) {
+        const current = (pack as Record<string, unknown>)[key];
+        if (typeof current === 'string' && current.trim() && !checkCompliance(current, aviso).doi) {
+          (pack as Record<string, unknown>)[key] = ensureAviso(current.replace(/\s+$/, '') + '\n\nREF: ' + source, aviso);
+        }
+      }
+    }
+  }
   const stamp: ComplianceStamp = {
     aviso,
     instagram: checkCompliance(pack.instagram, aviso),
