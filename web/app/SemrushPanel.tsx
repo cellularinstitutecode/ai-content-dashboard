@@ -14,7 +14,7 @@
 // action=activity (draft keyword provenance). Everything is cache-first and
 // unit-budget-guarded server-side; the panel degrades to link-outs when the
 // key/plan is missing.
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import KeywordIntelligence from './KeywordIntelligence';
 import { announce, onRefresh } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
@@ -278,7 +278,29 @@ const CHART = {
 
 type Pt = { date: string; value: number };
 
-function useMeasuredWidth(): [RefObject<HTMLDivElement>, number] {
+// THE RETURN TYPE IS INFERRED, NOT WRITTEN, and that is the whole point.
+//
+// This used to say `[RefObject<HTMLDivElement>, number]` — the only
+// hand-written RefObject in the codebase, and the only thing standing between
+// the React 19 bump and a green build. @types/react@19 changed what
+// useRef<T>(null) returns, from RefObject<T> to RefObject<T | null>, so the
+// annotation stopped matching and `tsc --noEmit` failed the CI build before it
+// ever reached the tests.
+//
+// Widening it by hand to RefObject<HTMLDivElement | null> does NOT work: the
+// two are structurally identical under 18 (RefObject<T> is
+// `{ readonly current: T | null }` there), but TypeScript compares two
+// instances of the same generic interface by VARIANCE — it checks the type
+// arguments against each other, `HTMLDivElement | null` against
+// `HTMLDivElement`, and refuses. So the widened form breaks under 18 exactly
+// as the narrow form breaks under 19.
+//
+// Inference sidesteps the whole question: the caller gets precisely what
+// useRef produced, whichever version of the types is installed, and a
+// <div ref={…}> accepts that by construction. Every other ref in this codebase
+// is consumed as `ref={x}` or `x.current?.`, neither of which the change
+// touches — this was the one place a shape got written down.
+function useMeasuredWidth() {
   const ref = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(0);
   useEffect(() => {
@@ -294,7 +316,11 @@ function useMeasuredWidth(): [RefObject<HTMLDivElement>, number] {
       else window.removeEventListener('resize', update);
     };
   }, []);
-  return [ref, w];
+  // `as const` because a bare `[ref, w]` infers an ARRAY, not a tuple — so
+  // every destructured element came out as `RefObject<HTMLDivElement> | number`
+  // and neither half could be used for anything. The tuple is what the
+  // annotation above used to provide.
+  return [ref, w] as const;
 }
 
 // Area trend chart with gradient fill + crosshair hover tooltip.
