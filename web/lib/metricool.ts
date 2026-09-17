@@ -130,7 +130,17 @@ export type NormalizeOutcome = {
    */
   shape?: string;
   /** Every endpoint tried, and what it answered. Reported when none worked. */
-  attempts?: { path: string; status: number }[];
+  attempts?: { path: string; status: number; method?: string }[];
+  /**
+   * Metricool handed back the very URL it was given.
+   *
+   * Not a normalise: the file never moved onto their storage, and a post
+   * carrying that URL is one they accept with a 200 and publish with no video.
+   * Distinguished from every other failure because it is the one that LOOKS
+   * like success — and, until this flag existed, was the one whose diagnosis
+   * fell through the caller entirely.
+   */
+  echoed?: boolean;
 };
 
 /**
@@ -140,12 +150,25 @@ export type NormalizeOutcome = {
  * the person was told "the video copy needs a look" for a 403, a 413, a 502 and
  * a timeout alike. lib/media-normalize-reason.ts turns this into the sentence.
  */
+/** The same link, allowing for a trailing slash or a different case of host. */
+function sameUrl(a: string, b: string): boolean {
+  const norm = (v: string) => String(v || '').trim().replace(/\/+$/, '');
+  if (norm(a) === norm(b)) return true;
+  try {
+    const x = new URL(norm(a));
+    const y = new URL(norm(b));
+    return x.host.toLowerCase() === y.host.toLowerCase() && x.pathname === y.pathname;
+  } catch {
+    return false;
+  }
+}
+
 export async function normalizeMediaDetailed(rawUrl: string): Promise<NormalizeOutcome> {
   const url = String(rawUrl || '').trim();
   if (!url) return { url: '', ok: false, status: null, error: 'no url', attempts: [] };
   let lastStatus: number | null = null;
   /** Which endpoints answered what. Reported when nothing worked. */
-  const attempts: { path: string; status: number }[] = [];
+  const attempts: { path: string; status: number; method?: string }[] = [];
   try {
     // 60s, not the client's usual 15. Normalising is not a metadata call: it is
     // Metricool PULLING the file onto its own storage, and the clinic's reels
@@ -182,12 +205,19 @@ export async function normalizeMediaDetailed(rawUrl: string): Promise<NormalizeO
     // `degraded`, and the post is refused. Every attach would fail.
     const timeoutMs = isVideo ? 240_000 : 60_000;
     let res: Response | null = null;
-    for (const path of paths) {
-      res = await metricoolFetch(path + '?url=' + encodeURIComponent(url), { timeoutMs });
-      attempts.push({ path, status: res.status });
-      if (res.ok) { console.info('metricool:normalize-media via', path); break; }
-      lastStatus = res.status;
-      console.warn('metricool:normalize-media non-ok', path, res.status);
+    // GET first, because that is what has been sent all along and what has
+    // worked for the files that did go through. POST second, on the same
+    // paths, because an upload action is as likely to be a POST as a GET and
+    // this app has never tried one — a wrong method is answered in
+    // milliseconds, so asking costs nothing and settles it.
+    outer: for (const method of ['GET', 'POST'] as const) {
+      for (const path of paths) {
+        res = await metricoolFetch(path + '?url=' + encodeURIComponent(url), { timeoutMs, method });
+        attempts.push({ path, status: res.status, method });
+        if (res.ok) { console.info('metricool:normalize-media via', method, path); break outer; }
+        lastStatus = res.status;
+        console.warn('metricool:normalize-media non-ok', method, path, res.status);
+      }
     }
     if (!res || !res.ok) return { url, ok: false, status: lastStatus, error: null, attempts };
     const raw = await res.text();
@@ -198,7 +228,23 @@ export async function normalizeMediaDetailed(rawUrl: string): Promise<NormalizeO
     // through it and a 477 MB upload that had already crossed the wire was
     // discarded over a key name. lib/metricool-normalize-parse.ts.
     const parsed = readNormalizedUrl(raw, url);
-    if (parsed.url) return { url: parsed.url, ok: true, status: res.status, error: null, shape: parsed.shape, attempts };
+    if (parsed.url) {
+      // THE ECHO. Their answer held no reference but ours — the file did not
+      // move — and calling that a success cost this app a whole round of
+      // diagnosis: `ok: true` meant the caller recorded no failure, so the
+      // message that reached the screen had neither the reply's shape nor the
+      // endpoints tried in it, which were the two facts worth having.
+      const echoed = sameUrl(parsed.url, url);
+      return {
+        url: parsed.url,
+        ok: !echoed,
+        status: res.status,
+        error: null,
+        shape: parsed.shape,
+        attempts,
+        ...(echoed ? { echoed: true } : {}),
+      };
+    }
     console.warn('metricool:normalize-media unrecognised response', parsed.shape, raw.slice(0, 300));
     return { url, ok: false, status: res.status, error: null, shape: parsed.shape, attempts };
   } catch (e) {
@@ -249,7 +295,15 @@ export async function normalizeMediaList(
     }
     // Unchanged means normalise did not happen — every success path returns
     // Metricool's own reference, never the URL it was given.
-    if (n === trimmed) degraded = true;
+    if (n === trimmed) {
+      degraded = true;
+      // And it is a FAILURE, with everything known about it. This was the hole:
+      // an echoed URL set `degraded` without setting `failure`, so the caller
+      // had nothing to explain it with and printed the bare fallback sentence —
+      // no status, no shape, no endpoints. Two rounds of "it still says the
+      // same thing" came out of that.
+      if (!failure) failure = { ...out, ok: false, echoed: true };
+    }
     media.push(n);
   }
   return { media, degraded, failure };
