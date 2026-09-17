@@ -37,6 +37,14 @@ export type Prepared = {
    * something to say in the case it could not repair.
    */
   claimSupport?: ClaimSupportStamp | null;
+  /**
+   * The whole prepared pack, as /api/videos/prepare returns it.
+   *
+   * Kept so a row prepared a moment ago can hand its OWN copy to the composer
+   * without another round trip — and so "Use in post" can never fall back to
+   * the sheet's column for a row this browser just prepared.
+   */
+  pack?: Record<string, unknown> | null;
   hasKeywords?: boolean;
   compliance: { citation?: { status?: string; title?: string | null } } | null;
   linkedin: string;

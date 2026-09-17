@@ -1,5 +1,6 @@
 // web/app/api/drafts/route.ts
 import { NextRequest, NextResponse } from 'next/server';
+import { parseDriveFileId } from '@/lib/drive-url';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { IMAGE_BUCKET, removeStoredObjects } from '@/lib/images';
@@ -27,6 +28,35 @@ export async function GET(req: NextRequest) {
     if (oneErr) return NextResponse.json({ error: oneErr.message }, { status: 500 });
     if (!one) return NextResponse.json({ error: 'not_found' }, { status: 404 });
     return NextResponse.json({ draft: one });
+  }
+
+  // THE DRAFT FOR A VIDEO, by the video itself.
+  //
+  // "Use in post" looked the draft up by sheet ROW, through video_runs — and
+  // video_runs is the SWEEP's memory: pressing Prepare by hand records only
+  // failures there. So a row somebody had just prepared looked unprepared, the
+  // button fell back to the sheet's Copy column, and the post went to the
+  // composer with no REF line and no AVISO: "when I click use post with video
+  // itself it's not ready, no DOI number".
+  //
+  // The video is the key both sides always have. Every video draft's pack
+  // carries the sourceUrl it was written from, and the row carries the same
+  // link, so this matches on the Drive file id and takes the newest.
+  const forVideo = (req.nextUrl.searchParams.get('videoLink') || '').trim();
+  if (forVideo) {
+    const wantedFile = parseDriveFileId(forVideo) || forVideo;
+    const { data: recent, error: recentErr } = await sb
+      .from('drafts').select('*').eq('user_id', user.id)
+      .order('updated_at', { ascending: false }).limit(60);
+    if (recentErr) return NextResponse.json({ error: recentErr.message }, { status: 500 });
+    const match = (recent || []).find((d) => {
+      const pack = ((d as { pack?: Record<string, unknown> | null }).pack || {}) as Record<string, unknown>;
+      if (pack.kind !== 'video') return false;
+      const src = typeof pack.sourceUrl === 'string' ? pack.sourceUrl : '';
+      if (!src) return false;
+      return (parseDriveFileId(src) || src) === wantedFile;
+    });
+    return NextResponse.json({ draft: match ?? null });
   }
 
   // Pagination: ?limit (1-50, default 10) & ?offset (>=0, default 0).

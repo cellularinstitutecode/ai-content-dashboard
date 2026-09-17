@@ -561,24 +561,58 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     let text = '';
     let title = '';
     let draftId = '';
+    /** The prepared caption out of a pack, whichever variant carries it. */
+    const fromPack = (pack: Record<string, unknown> | null | undefined) => {
+      const p = (pack || {}) as Record<string, unknown>;
+      // tiktok is the caption the reel goes out with; linkedin is the long
+      // form. Either is the prepared text — with its AVISO and its verified
+      // REF line. The sheet's Copy column is neither.
+      const body = [p.tiktok, p.linkedin, p.instagram].find((x) => typeof x === 'string' && x.trim());
+      return {
+        text: typeof body === 'string' ? body : '',
+        title: typeof p.title === 'string' ? p.title : '',
+      };
+    };
+
+    // 1. PREPARED IN THIS SESSION. Pressing Prepare on this row a moment ago
+    //    put the whole pack in hand; going back to the server for it would be
+    //    a round trip to fetch something already here.
+    const justPrepared = results[rowKey(v)];
+    if (justPrepared) {
+      const got = fromPack(justPrepared.pack as unknown as Record<string, unknown>);
+      text = got.text || String(justPrepared.tiktok || justPrepared.linkedin || '');
+      title = got.title || justPrepared.title || '';
+      draftId = String(justPrepared.draftId || '');
+    }
+
+    // 2. THE DRAFT FOR THIS VIDEO, whoever prepared it and however long ago.
+    //
+    //    Matched on the video rather than on the sheet row, because the row was
+    //    the wrong key: video_runs is the SWEEP's memory and a Prepare pressed
+    //    by hand records only failures there. So a row prepared a minute
+    //    earlier looked unprepared, and the sheet's Copy column — no REF, no
+    //    AVISO — went to the composer instead.
+    if (!text && parseDriveFileId(link)) {
+      try {
+        const r = await fetch('/api/drafts?videoLink=' + encodeURIComponent(link));
+        const j = r.ok ? await r.json() : null;
+        if (j?.draft) {
+          const got = fromPack(j.draft.pack);
+          if (got.text) { text = got.text; title = got.title; draftId = String(j.draft.id || ''); }
+        }
+      } catch { /* the sheet's copy still goes over, exactly as before */ }
+    }
+
+    // 3. The sweep's own record, for a row it prepared and this browser has
+    //    never seen.
     const prepared = preparedRows[rowKeyOf(v.tab, v.row)];
-    if (prepared?.draftId) {
+    if (!text && prepared?.draftId) {
       try {
         const r = await fetch('/api/drafts?id=' + encodeURIComponent(prepared.draftId));
         const j = r.ok ? await r.json() : null;
-        const pack = (j?.draft?.pack || {}) as Record<string, unknown>;
-        // tiktok is the caption the reel goes out with; linkedin is the long
-        // form. Either is the prepared text; the sheet's column is neither.
-        const body = [pack.tiktok, pack.linkedin, pack.instagram].find((x) => typeof x === 'string' && x.trim());
-        if (typeof body === 'string' && body.trim()) {
-          text = body;
-          title = typeof pack.title === 'string' ? pack.title : '';
-          draftId = prepared.draftId;
-        }
-      } catch {
-        // A draft that cannot be read is not a reason to refuse the hand-off;
-        // the sheet's copy still goes over, exactly as it did before.
-      }
+        const got = fromPack(j?.draft?.pack);
+        if (got.text) { text = got.text; title = got.title; draftId = prepared.draftId; }
+      } catch { /* as above */ }
     }
     // A YouTube source is public and genuinely worth linking; a private Drive
     // link in the body is not, and the video is attached natively now anyway.
