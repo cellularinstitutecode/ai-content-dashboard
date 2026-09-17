@@ -20,7 +20,7 @@ import { rowKeyFor } from '@/lib/video-row';
 import { SOURCE_IDS } from '@/lib/google-sources';
 import { awaitingPostsForVideo } from '@/lib/awaiting-posts';
 import { networksAlreadyPublished } from '@/lib/queue-guard';
-import { decideAdoption } from '@/lib/adopt-draft';
+import { decideAdoption, replaceMissing } from '@/lib/adopt-draft';
 
 export const runtime = 'nodejs';
 // This route makes TWO sequential calls to Metricool now — normalise the media,
@@ -262,19 +262,40 @@ export async function POST(req: NextRequest) {
   // is showing — and the body above is built identically either way, so the
   // copy, the video, the time, the YouTube Short type and the TikTok options
   // all carry across rather than being half-updated.
-  const url = adopt
-    ? metricoolApiBase() + '/v2/scheduler/posts/' + encodeURIComponent(adopt.metricoolPostId) + '?blogId=' + encodeURIComponent(blogId) + '&userId=' + encodeURIComponent(userId)
-    : metricoolApiBase() + '/v2/scheduler/posts?blogId=' + encodeURIComponent(blogId) + '&userId=' + encodeURIComponent(userId);
+  const createUrl = metricoolApiBase() + '/v2/scheduler/posts?blogId=' + encodeURIComponent(blogId) + '&userId=' + encodeURIComponent(userId);
+  const replaceUrl = (postId: string) => metricoolApiBase() + '/v2/scheduler/posts/' + encodeURIComponent(postId) + '?blogId=' + encodeURIComponent(blogId) + '&userId=' + encodeURIComponent(userId);
+  const send = (method: 'POST' | 'PUT', to: string) => fetch(to, {
+    method,
+    headers: {
+      'content-type': 'application/json',
+      'X-Mc-Auth': token,
+    },
+    body: JSON.stringify(body),
+  });
 
   try {
-    const r = await fetch(url, {
-      method: adopt ? 'PUT' : 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'X-Mc-Auth': token,
-      },
-      body: JSON.stringify(body),
-    });
+    let r = adopt ? await send('PUT', replaceUrl(adopt.metricoolPostId)) : await send('POST', createUrl);
+    // THE DRAFT WE MEANT TO CONTINUE IS GONE — so create it.
+    //
+    // Metricool answers 404 to a PUT at an id it does not have, which happens
+    // for two ordinary reasons: the draft was deleted in Metricool directly
+    // (which is exactly what clearing duplicates by hand does) while our row
+    // survived, or the post belongs to a different brand than the one being
+    // sent to, so the id is not found in THIS blog. Both left a person at a
+    // dead end for something that is nobody's fault.
+    //
+    // Only "gone" is retried (lib/adopt-draft.ts): a rejected body, a refused
+    // credential, a rate limit or an outage all leave the post very possibly
+    // still there, and creating a second one on any of those would manufacture
+    // the duplicate this whole path exists to avoid. The local row is UPDATED
+    // rather than duplicated either way — adopt.postId still names it — so the
+    // stale bookkeeping heals itself.
+    let recreated = false;
+    if (adopt && !r.ok && replaceMissing(r.status)) {
+      console.warn('metricool/schedule: draft', adopt.metricoolPostId, 'is gone (HTTP ' + r.status + '); creating a fresh one');
+      r = await send('POST', createUrl);
+      recreated = r.ok;
+    }
     const rawText = await r.text();
     let parsed: any = null;
     try { parsed = JSON.parse(rawText); } catch { parsed = { raw: rawText }; }
@@ -394,7 +415,11 @@ export async function POST(req: NextRequest) {
       // Which of the two happened. Without it the panel would say "saved" for
       // an update and leave a person wondering whether a second draft now
       // exists — the exact anxiety the old 409 was trying to prevent.
-      updated: Boolean(adopt),
+      updated: Boolean(adopt) && !recreated,
+      // The draft that was waiting had already been removed in Metricool, so
+      // this made a fresh one. Said plainly: reporting "updated" here would
+      // send somebody hunting for a draft that does not exist.
+      recreated,
       ...(bookkeeping ? { warning: bookkeeping } : {}),
       id: id,
       status: status || 'pending_review',

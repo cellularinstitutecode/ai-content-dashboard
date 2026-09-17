@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decideAdoption, type AdoptablePost } from './adopt-draft.ts';
+import { decideAdoption, replaceMissing, type AdoptablePost } from './adopt-draft.ts';
 
 const waiting = (network: string, over: Partial<AdoptablePost> = {}): AdoptablePost => ({
   id: 'post-' + network, metricool_post_id: 'mc-' + network,
@@ -57,4 +57,21 @@ test('the network is matched case-insensitively, and an empty one creates', () =
   assert.equal(decideAdoption([waiting('linkedin')], 'LinkedIn').action, 'update');
   assert.equal(decideAdoption([{ ...waiting('linkedin'), providers: ['LinkedIn'] }], 'linkedin').action, 'update');
   assert.deepEqual(decideAdoption([waiting('linkedin')], '  '), { action: 'create' });
+});
+
+test('only "the draft is gone" is retried as a create', () => {
+  assert.equal(replaceMissing(404), true, 'Metricool has no post with that id');
+  assert.equal(replaceMissing(410), true, 'it had one, and it is gone');
+});
+
+test('nothing else is — that is how duplicates get made', () => {
+  // A rejected body, a refused credential, a rate limit or an outage all leave
+  // the post very possibly still there. Creating a second one on any of these
+  // would manufacture the exact duplicate the adoption rule exists to prevent.
+  for (const code of [200, 201, 400, 401, 403, 409, 422, 429, 500, 502, 503]) {
+    assert.equal(replaceMissing(code), false, String(code));
+  }
+  for (const junk of [null, undefined, '', 'not found', NaN, {}]) {
+    assert.equal(replaceMissing(junk), false, String(junk));
+  }
 });
