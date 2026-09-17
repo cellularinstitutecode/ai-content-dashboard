@@ -33,7 +33,9 @@ export type NormalizeReason =
   /** The transfer was still running when the clock ran out. */
   | 'timeout'
   /** It answered 200 with something this app could not read. */
-  | 'unreadable';
+  | 'unreadable'
+  /** It handed back the same link it was given: the file never moved. */
+  | 'echo';
 
 export type NormalizeFailure = {
   reason: NormalizeReason;
@@ -59,14 +61,14 @@ export function readableSize(bytes: number | null | undefined): string {
  * "v2/video 404 · video 200". Paths and status codes, nothing else — this is
  * the fact that ends a guessing round, and it is not a secret.
  */
-export function attemptTrace(attempts: readonly { path: string; status: number }[] | null | undefined): string {
-  const rows = (attempts || []).slice(0, 4).map((a) => {
+export function attemptTrace(attempts: readonly { path: string; status: number; method?: string }[] | null | undefined): string {
+  const rows = (attempts || []).slice(0, 8).map((a) => {
     const short = String(a.path || '')
       .replace('/actions/normalize/', '/')
       .replace(/^\//, '')
       .replace(/\/url$/, '')
       .replace('v2//', 'v2/');
-    return short + ' ' + a.status;
+    return short + (a.method && a.method !== 'GET' ? ' ' + a.method : '') + ' ' + a.status;
   });
   return rows.join(' \u00b7 ');
 }
@@ -87,7 +89,9 @@ export function normalizeFailure(input: {
   /** The answer's structure in types, when it answered with one we could not read. */
   shape?: string | null;
   /** Every endpoint tried, and its status. */
-  attempts?: readonly { path: string; status: number }[] | null;
+  attempts?: readonly { path: string; status: number; method?: string }[] | null;
+  /** Metricool handed back the URL it was given. */
+  echoed?: boolean | null;
 }): NormalizeFailure {
   const status = Number.isFinite(Number(input.status)) ? Number(input.status) : null;
   const size = readableSize(input.sizeBytes);
@@ -95,6 +99,23 @@ export function normalizeFailure(input: {
 
   const trace = attemptTrace(input.attempts);
   const tried = trace ? ' Tried ' + trace + '.' : '';
+  const shapeNote = String(input.shape || '').trim() ? ' It replied with ' + String(input.shape).trim() + '.' : '';
+
+  // THE ECHO, named before anything else it might be mistaken for.
+  //
+  // Metricool answered with the very link it was given. Nothing was copied onto
+  // their storage, so a post built on that link is one they accept and then
+  // publish with no video — the silent failure this whole step exists to stop.
+  // It is not "unreadable": the answer was perfectly readable and said no.
+  if (input.echoed) {
+    return {
+      reason: 'echo',
+      status: Number.isFinite(Number(input.status)) ? Number(input.status) : null,
+      message: 'Metricool handed the same link straight back instead of a copy of its own, which means it did not take the file.' +
+        (size ? ' The file is ' + size + '.' : '') + shapeNote + tried,
+    };
+  }
+
   const err = String(input.error || '');
   if (err) {
     const timedOut = /timed out|timeout|abort/i.test(err);
@@ -162,12 +183,11 @@ export function normalizeFailure(input: {
   // The shape, in types, because this is the one failure whose fix is a key
   // name — and a message that does not name it makes the next person guess
   // exactly as long as the last one did.
-  const shape = String(input.shape || '').trim();
   return {
     reason: 'unreadable',
     status,
     message: 'Metricool answered, but not with a reference this app could read, so the video would have been dropped silently.' + sized +
-      (shape ? ' It replied with ' + shape + '.' : '') + tried,
+      shapeNote + tried,
   };
 }
 

@@ -22,6 +22,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { describeShape, readNormalizedUrl } from './metricool-normalize-parse.ts';
 import { attemptTrace, normalizeFailure } from './media-normalize-reason.ts';
+import { readFileSync } from 'node:fs';
 
 const SENT = 'https://studio.example.com/api/media/video/abc/1800000000/ff/video.mp4';
 const THEIRS = 'https://cdn.metricool.com/media/9f3a2b.mp4';
@@ -140,4 +141,60 @@ test('a 404 from every endpoint reads as "no such endpoint", not "your file is b
   });
   assert.match(out.message, /no such endpoint/);
   assert.match(out.message, /Tried/);
+});
+
+// --- THE HOLE THAT COST TWO ROUNDS -----------------------------------------
+//
+// "nope still" — the same sentence, three sends running, with none of the new
+// diagnosis in it. The reason was not the deploy. It was this: when Metricool's
+// answer held no URL but OURS, the reader found a URL, reported success, and
+// the caller then marked the post degraded WITHOUT recording a failure. So the
+// message printed the bare fallback — no status, no shape, no endpoints — which
+// is byte-identical to the old one.
+//
+// An echo is a failure. It is the failure that looks most like success, which
+// is exactly why it has to be named.
+
+test('an echo is its own cause, not "unreadable"', () => {
+  const out = normalizeFailure({
+    status: 200,
+    echoed: true,
+    shape: '{url:string}',
+    sizeBytes: 477 * 1024 * 1024,
+    attempts: [{ path: '/v2/actions/normalize/video/url', status: 200, method: 'GET' }],
+  });
+  assert.equal(out.reason, 'echo');
+  assert.match(out.message, /handed the same link straight back/);
+  assert.match(out.message, /did not take the file/);
+  assert.match(out.message, /477 MB/);
+  assert.match(out.message, /It replied with \{url:string\}\./, 'the shape rides along, as it must for any diagnosis');
+  assert.match(out.message, /Tried/);
+  // And it is NOT the sentence it was indistinguishable from.
+  assert.ok(!/not with a reference this app could read/.test(out.message));
+});
+
+test('no degraded post can reach the screen without a diagnosis', () => {
+  // A source check, because the hole was in the wiring rather than in any one
+  // function: normalizeMediaList marked `degraded` and left `failure` null, so
+  // there was nothing to explain it with. Every branch that degrades must
+  // record why.
+  const src2 = readFileSync(new URL('../lib/metricool.ts', import.meta.url), 'utf8');
+  const list = src2.slice(src2.indexOf('export async function normalizeMediaList'));
+  const degradeLines = list.split('\n').filter((l) => /degraded = true/.test(l)).length;
+  assert.ok(degradeLines >= 2, 'expected the two degrade branches');
+  assert.match(list, /if \(!failure\) failure = \{ \.\.\.out, ok: false, echoed: true \}/,
+    'the echo branch must record the failure it is refusing on');
+});
+
+test('the method is tried both ways, and the trace says which', () => {
+  const src2 = readFileSync(new URL('../lib/metricool.ts', import.meta.url), 'utf8');
+  assert.match(src2, /\['GET', 'POST'\] as const/, 'an upload action is as likely to be a POST, and it had never been tried');
+  assert.equal(
+    attemptTrace([
+      { path: '/v2/actions/normalize/video/url', status: 404, method: 'GET' },
+      { path: '/actions/normalize/video/url', status: 200, method: 'POST' },
+    ]),
+    'v2/video 404 · video POST 200',
+    'GET is the default and stays unsaid; POST is the fact worth printing',
+  );
 });
