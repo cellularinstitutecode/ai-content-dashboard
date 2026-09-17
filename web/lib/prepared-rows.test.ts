@@ -65,7 +65,7 @@ test('the Video Library hands over the PREPARED copy, not the sheet column', () 
   const view = src('components/SourcesView.tsx');
   assert.match(view, /\/api\/videos\/runs/, 'it must know which draft belongs to the row');
   assert.match(view, /\/api\/drafts\?id=/, 'and must read that draft');
-  assert.match(view, /pack\.tiktok, pack\.linkedin/, 'the prepared caption is what goes over');
+  assert.match(view, /p\.tiktok, p\.linkedin/, 'the prepared caption is what goes over');
   // The sheet's column stays as the fallback for a row nobody prepared.
   assert.match(view, /if \(!text\) text = \[v\.copy \|\| v\.title/, 'a row with no draft still hands over its sheet copy');
 });
@@ -83,4 +83,46 @@ test('a hand-off can never leave the previous draft’s title in the box', () =>
     !/if \(workspace\.handoffTitle\) setMTitle/.test(page),
     'a conditional set is the bug: it keeps whatever was there before',
   );
+});
+
+// --- THE ROW WAS THE WRONG KEY ---------------------------------------------
+//
+// "It's not using the generated text it does when I hit Prepare — when I click
+//  use post with video it shows some other thing… it's not ready, no DOI."
+//
+// The lookup went through video_runs, keyed on tab and row. But video_runs is
+// the SWEEP's memory: /api/videos/prepare records only FAILURES there, so a row
+// somebody had just prepared by hand looked unprepared, and the sheet's Copy
+// column — no REF line, no AVISO — went to the composer instead of the copy the
+// pipeline had written.
+//
+// The video is the key both sides always have.
+
+test('the manual Prepare records no run, which is why the row key could not work', () => {
+  const route = src('app/api/videos/prepare/route.ts');
+  const success = route.slice(route.indexOf('if (!out.ok)'));
+  // A failure is recorded…
+  assert.match(route, /recordRowFailure\(\{/, 'a failed press is written down');
+  // …and nothing writes a run row on the way out. If that ever changes, this
+  // test should fail and the comment above should be revisited rather than the
+  // lookup silently starting to work by accident.
+  assert.ok(!/updateRun\(/.test(success), 'a successful press still records no run — so the draft must be found another way');
+});
+
+test('the hand-off finds the draft by the VIDEO, in three tries before the sheet', () => {
+  const view = src('components/SourcesView.tsx');
+  const fn = view.slice(view.indexOf('async function sendToComposer'), view.indexOf('async function load(kind: Tab'));
+  // 1. what this browser just prepared, 2. the draft for this video,
+  // 3. the sweep's own row record, 4. the sheet's column.
+  assert.ok(fn.indexOf('results[rowKey(v)]') < fn.indexOf('/api/drafts?videoLink='), 'the pack in hand comes first');
+  assert.ok(fn.indexOf('/api/drafts?videoLink=') < fn.indexOf('preparedRows[rowKeyOf'), 'then the draft for this video');
+  assert.ok(fn.indexOf('preparedRows[rowKeyOf') < fn.indexOf('if (!text) text = [v.copy'), 'then the sweep record, and only then the sheet');
+});
+
+test('a draft is matched on the video it was written from', () => {
+  const route = src('app/api/drafts/route.ts');
+  assert.match(route, /videoLink/, 'the route must accept the video');
+  assert.match(route, /pack\.kind !== 'video'/, 'and match only video drafts');
+  assert.match(route, /parseDriveFileId\(src\)/, 'on the Drive file behind the pack’s sourceUrl');
+  assert.match(route, /order\('updated_at', \{ ascending: false \}\)/, 'newest first: a row prepared twice hands over the newer copy');
 });
