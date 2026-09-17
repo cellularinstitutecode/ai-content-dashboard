@@ -6,7 +6,9 @@
 // Metricool, written from what the video actually says.
 //
 // It reuses lib/metricool.ts's scheduler exactly as Autopilot does, in
-// 'review' mode — the post is a DRAFT that a person approves in Metricool.
+// The mode comes from lib/publish-mode.ts: 'scheduled' by default, so the
+// post lands on Metricool's calendar ready to go out at its slot, or 'review'
+// when PUBLISH_MODE says so, in which case it is a draft awaiting approval.
 // Nothing here can publish; 'scheduled' mode is reachable only from a person
 // pressing Approve in the dashboard, and this is not that path.
 //
@@ -17,6 +19,7 @@ import 'server-only';
 
 import { complianceGate } from '@/lib/compliance-gate';
 import { MediaNotNormalisedError, metricoolConfigured, metricoolSchedulePost, readPostId, type Provider } from '@/lib/metricool';
+import { publishMode } from '@/lib/publish-mode';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { tiktokDataFor } from '@/lib/tiktok-meta';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -89,7 +92,7 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
       // TikTok: public, comments/duet/stitch on — a direct publication rather
       // than Metricool's "finish on your phone" mode.
       tiktokData: network === 'tiktok' ? tiktokDataFor({ title: input.title, body: input.text }) : null,
-    }, 'review');
+    }, publishMode());
     const metricoolPostId = readPostId(created);
 
     // Bookkeeping, so the dashboard's queue and calendar show this post like

@@ -114,15 +114,55 @@ test('no daily cron can publish anything', () => {
   }
 });
 
-test('the nightly video sweep hands Metricool a DRAFT', () => {
-  // The sweep is the one automatic path that creates posts. It must create them
-  // in the review queue, for a person to approve.
-  const body = src('lib/video-publish.ts');
-  assert.match(body, /\}, 'review'\)/, 'the sweep no longer publishes as a draft');
-  assert.ok(
-    !/\}, 'scheduled'\)/.test(body),
-    'the sweep can now publish live — nothing it creates should bypass approval',
-  );
+test('every door that creates a post reads the SAME setting', () => {
+  // THE PROMISE CHANGED, AND THIS IS WHAT REPLACED IT.
+  //
+  // The clinic asked for posts to arrive in Metricool already scheduled rather
+  // than greyed out as drafts they then flipped by hand, one at a time. So
+  // "nothing goes out until a person approves" is no longer the rule, and a
+  // test still asserting it would have been deleted rather than read.
+  //
+  // What matters now is that there is exactly ONE place the answer comes from.
+  // Three doors create posts — the panel's Send, the nightly sweep and the
+  // assistant's batch drafter — and a fourth behaviour drifting into one of
+  // them is how a deployment ends up publishing from a door nobody audited.
+  for (const door of ['app/api/metricool/schedule/route.ts', 'lib/video-publish.ts', 'lib/batch-draft.ts']) {
+    assert.match(
+      code(door),
+      /publishMode\(\)/,
+      door + ' no longer reads lib/publish-mode.ts — it has its own idea of whether posts go out',
+    );
+    assert.ok(
+      !/draft:\s*(true|false)/.test(code(door)),
+      door + ' hard-codes Metricool\u2019s draft flag instead of asking publishMode()',
+    );
+  }
+});
+
+test('the mode is the SERVER\u2019s, never the caller\u2019s', () => {
+  // The half of the old promise that survives, and the one that was always
+  // load-bearing: a signed-in account must not be able to ask for a live
+  // publish. PUBLISH_MODE is read from the environment; nothing reads it from
+  // a request body.
+  const mode = src('lib/publish-mode.ts');
+  assert.match(mode, /env\.PUBLISH_MODE/, 'the setting no longer comes from the environment');
+  for (const door of ['app/api/metricool/schedule/route.ts', 'lib/batch-draft.ts']) {
+    assert.ok(
+      !/(payload|body|input|item|req)\s*(\.|\[['"])\s*(publishMode|autoPublish|draft)\b/.test(code(door)),
+      door + ' reads the publish mode from the caller \u2014 that is a review queue turned into a megaphone',
+    );
+  }
+});
+
+test('a video post with no video still does not go out', () => {
+  // Unchanged by any of the above, and the one the clinic said first: "only
+  // with the video included; if not, it doesn\u2019t go out." Scheduling on send
+  // makes this MORE important, not less \u2014 there is no longer a human pass
+  // between the post being created and it publishing itself.
+  const fromVideo = { kind: 'video', sourceUrl: 'https://drive.google.com/file/d/abc/view' };
+  assert.equal(videoVerdict(fromVideo, false).pending, true, 'video copy with no video must be held');
+  assert.equal(videoVerdict(fromVideo, true).pending, false, 'with its video it may go');
+  assert.equal(videoVerdict({ kind: 'blog' }, false).pending, false, 'a post that is not video-derived is unaffected');
 });
 
 // --- 4. PUBLISH NOW IS A FASTER APPROVAL, NOT A BYPASS ----------------------

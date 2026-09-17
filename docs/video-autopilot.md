@@ -38,10 +38,21 @@ through the same code — so a video handled by hand and a video handled
 automatically end in the same state. Each row there shows its number in the
 sheet, and that number is searchable.
 
-**It never publishes.** What reaches Metricool is a *draft* in the review queue
-— the same thing the "Send to Metricool" button has always produced — and it
-never ticks a network checkbox in the sheet, because a tick is a record that a
-person published something. Approve is still a person, exactly as before.
+**It schedules.** What reaches Metricool is a post on the calendar, in colour,
+set to go out at its slot — the same thing the "Send to Metricool" button now
+produces. This changed at the clinic's request: posts used to arrive greyed out
+as drafts and were being flipped to scheduled by hand, one at a time.
+
+**Know what that means:** between the sweep creating a post and that post
+publishing itself, nobody necessarily looks at it. Set `PUBLISH_MODE=review` to
+put the approve-first step back.
+
+Three rules are unchanged either way, and they are the ones that matter most now
+there is no human pass: a post whose copy came from a video **does not go out
+without that video**; the advertising gate still refuses copy missing its AVISO
+or REF; and a row already published is never sent twice. The sweep still never
+ticks a network checkbox in the sheet, because a tick is a record that a person
+published something.
 
 ### Which networks, and when
 

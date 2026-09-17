@@ -21,6 +21,8 @@ import { SOURCE_IDS } from '@/lib/google-sources';
 import { awaitingPostsForVideo } from '@/lib/awaiting-posts';
 import { networksAlreadyPublished } from '@/lib/queue-guard';
 import { decideAdoption, replaceMissing } from '@/lib/adopt-draft';
+import { publishMode } from '@/lib/publish-mode';
+import { modeFlags } from '@/lib/metricool-post';
 
 export const runtime = 'nodejs';
 // This route makes TWO sequential calls to Metricool now — normalise the media,
@@ -185,14 +187,23 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  const mode = publishMode();
   const body: any = {
     text: text,
     publicationDate: { dateTime: publishAt, timezone: TIMEZONE },
     providers: [{ network: provider }],
-    // draft:true tells Metricool to hold the post for review rather than queue
-    // it live. Both values are constants: see the note on POST above.
-    autoPublish: false,
-    draft: true,
+    // SCHEDULED or held for review — one setting, lib/publish-mode.ts, read
+    // the same way by all three doors that create posts.
+    //
+    // The clinic was flipping every post from draft to scheduled by hand in
+    // Metricool after it arrived: a draft is greyed out on the calendar and
+    // waits for somebody, a scheduled post is in colour and goes out at its
+    // slot. Doing that by hand on every post is what this replaces.
+    //
+    // Still NOT a request parameter, which is the half that matters: `mode`
+    // comes from the server's own setting and never from the body, so a
+    // signed-in caller cannot turn a review queue into a megaphone.
+    ...modeFlags(mode),
   };
   if (payload.mediaUrl) {
     // Normalised first, and sent as a URL STRING.
@@ -423,8 +434,8 @@ export async function POST(req: NextRequest) {
       ...(bookkeeping ? { warning: bookkeeping } : {}),
       id: id,
       status: status || 'pending_review',
-      autoPublish: false,
-      review: true,
+      ...modeFlags(mode),
+      review: mode === 'review',
       publicationDate: publicationDate,
       publishAtUtc: when.instant,
       timezone: TIMEZONE,
