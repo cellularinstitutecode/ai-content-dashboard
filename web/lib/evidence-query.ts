@@ -70,6 +70,38 @@ function terms(text: string): string[] {
   return out;
 }
 
+/**
+ * The terms a PARAGRAPH is about, rather than the ones it opens with.
+ *
+ * `terms()` above keeps document order, which is right for a subject line
+ * somebody typed and wrong for a caption: the first content words of a caption
+ * are its hook, and the hook is the one sentence written to arrest a reader
+ * rather than to describe the subject. What a caption is about is what it
+ * returns to — so this ranks by count, and by first appearance when counts tie,
+ * so a one-mention-each caption still reads in its own order.
+ *
+ * Shares `terms()`, and therefore the NOISE list, with evidenceQuery: two
+ * stop-word lists that drift apart would mean two different ideas of what a
+ * search term is.
+ */
+export function frequentTerms(text: string, limit = MAX_TERMS): string[] {
+  const order = terms(text);
+  const counts = new Map<string, number>();
+  // Counted over the RAW tokens, not the de-duplicated list `terms()` returns.
+  const split = String(text || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/);
+  for (const w of split) counts.set(w, (counts.get(w) || 0) + 1);
+  return order
+    .map((w, i) => ({ w, n: counts.get(w) || 1, i }))
+    .sort((a, b) => (b.n - a.n) || (a.i - b.i))
+    .slice(0, Math.max(0, limit))
+    .map((x) => x.w);
+}
+
 export type EvidenceQuery = {
   /** The query to run first. Empty when there is nothing specific to ask. */
   primary: string;

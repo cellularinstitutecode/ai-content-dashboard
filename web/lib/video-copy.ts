@@ -329,6 +329,26 @@ const REF_LINE = /^[ \t]*REF(?:ERENCIA)?[ \t]*[.:：][ \t]*\S.*$/gim;
 const HASHTAG_LINE = /^[ \t]*(?:#[^\s#]+[ \t]*)+$/gim;
 
 /**
+ * The caption with its furniture removed: no notice, no reference, no tags.
+ *
+ * Exported because a second reader needs exactly this text and must not own a
+ * second copy of these three regexes. lib/claim-support.ts asks whether the
+ * cited paper backs what the post CLAIMS, and the permit number and the
+ * citation are not claims — handing them over would be asking the wrong
+ * question. Any drift between that stripping and this one would mean the text
+ * being judged is not the text being published.
+ */
+export function captionBody(text: string): string {
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(ANY_AVISO, '')
+    .replace(REF_LINE, '')
+    .replace(HASHTAG_LINE, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
  * Assemble the caption the way the clinic writes them:
  *
  *   body
@@ -347,12 +367,7 @@ export function composeCaption(text: string, avisoNumber?: string | null): strin
   const refs = raw.match(REF_LINE) || [];
   const tags = raw.match(HASHTAG_LINE) || [];
 
-  const body = raw
-    .replace(ANY_AVISO, '')
-    .replace(REF_LINE, '')
-    .replace(HASHTAG_LINE, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  const body = captionBody(raw);
 
   const parts = [body];
   // The first citation only: a second one is the model repeating itself.
@@ -362,4 +377,26 @@ export function composeCaption(text: string, avisoNumber?: string | null): strin
   if (tags.length) parts.push(tags.map((t) => t.trim()).join(' ').replace(/\s+/g, ' ').trim());
 
   return parts.filter(Boolean).join('\n\n');
+}
+
+/**
+ * The caption carrying EXACTLY this citation — replacing one already there.
+ *
+ * composeCaption keeps the first REF line it finds, which is right when the
+ * only question is which of the model's two citations to keep and wrong when
+ * the pipeline has decided on a different paper: appending would leave the
+ * original first and the new one dropped. That case is now real. When the
+ * claim-support check (lib/claim-support.ts) finds the copy is backed by a
+ * different paper from the one the writer cited, the REF line has to be
+ * REPLACED, on every caption, or the post publishes the swap on one network
+ * and the original on another.
+ *
+ * The hashtags survive, because they are stripped and re-appended by
+ * composeCaption rather than removed here.
+ */
+export function withCitation(text: string, ref: string | null | undefined, avisoNumber?: string | null): string {
+  const line = String(ref || '').trim().replace(/^REF(?:ERENCIA)?\s*[.:：]\s*/i, '').trim();
+  const stripped = String(text || '').replace(/\r\n/g, '\n').replace(REF_LINE, '');
+  if (!line) return composeCaption(stripped, avisoNumber);
+  return composeCaption(stripped.replace(/\s+$/, '') + '\n\nREF: ' + line, avisoNumber);
 }
