@@ -1385,6 +1385,10 @@ export async function handOffToMetricool(args: {
       title,
       format,
       sheetYoutube,
+      // The pack, so publishVideoDraft can run the "written from a video" rule.
+      // Every post the sweep creates IS written from a video, so this is what
+      // makes the rule real on this path rather than a fact nobody checks.
+      pack: { kind: 'video', sourceUrl: args.videoLink || '' },
     }));
   }
   return out;

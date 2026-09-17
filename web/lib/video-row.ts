@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto';
 
 import { parseDriveFileId } from './drive-url.ts';
-import { parseVideoUrl } from './composer.ts';
+import { NETWORK_LIMITS, parseVideoUrl } from './composer.ts';
 import { hashtagsFrom } from './hashtags.ts';
 
 /**
@@ -55,21 +55,15 @@ export function preparedStatus(opts: { hasKeywords: boolean; overLength: boolean
 }
 
 /**
- * How much text each network accepts. Mirrors lib/composer.ts's NETWORK_LIMITS,
- * which the manual composer shows a counter against; nothing enforced it on
- * the automatic path, so an over-long post reached Metricool and was rejected
- * there — after the row had already been marked ready.
+ * How much text each network accepts — lib/composer.ts's table, not a copy.
+ *
+ * It WAS a copy, and the two had drifted: this one said Facebook took 5,000
+ * characters and the composer's said 63,206 (Facebook's real limit). So the
+ * counter under the box and the rule that refuses the post disagreed by an
+ * order of magnitude, and which answer you got depended on which door you came
+ * through. One table, imported.
  */
-export const NETWORK_LIMIT: Record<string, number> = {
-  linkedin: 3000,
-  // YouTube's description field. Missing here meant a video caption was checked
-  // against Infinity — never refused by us, refused by YouTube instead.
-  youtube: 5000,
-  instagram: 2200,
-  tiktok: 2200,
-  facebook: 5000,
-  twitter: 280,
-};
+export { NETWORK_LIMITS as NETWORK_LIMIT } from './composer.ts';
 
 /**
  * Does this copy fit?
@@ -80,7 +74,7 @@ export const NETWORK_LIMIT: Record<string, number> = {
  * than one a person is asked to shorten.
  */
 export function fitsNetwork(network: string, text: string): { ok: boolean; limit: number; length: number } {
-  const limit = NETWORK_LIMIT[String(network || '').toLowerCase()] ?? Infinity;
+  const limit = NETWORK_LIMITS[String(network || '').toLowerCase()] ?? Infinity;
   const length = String(text || '').length;
   return { ok: length <= limit, limit, length };
 }

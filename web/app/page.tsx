@@ -2001,7 +2001,7 @@ Too long for {networkLabel(mLimit.network)} by {mOverBy.toLocaleString()} charac
 )}
 {mAlreadySent && mSent && (
 <div role="status" className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-[13px] font-medium text-emerald-900 ring-1 ring-emerald-200">
-<span>✓ Sent as {mSent.networks.length === 1 ? 'a draft' : 'drafts'} on {mSent.networks.map((n) => networkLabel(n)).join(', ')}. {mSent.networks.length === 1 ? 'It is' : 'They are'} in your queue below — nothing publishes until you press Approve there.</span>
+<span>✓ Scheduled on {mSent.networks.map((n) => networkLabel(n)).join(', ')}. {mSent.networks.length === 1 ? 'It goes' : 'They go'} out at the time above on {mSent.networks.length === 1 ? 'its' : 'their'} own — delete or reschedule below before then if you change your mind.</span>
 <span className="mt-1.5 flex flex-wrap gap-3">
 <button type="button" className="font-semibold text-emerald-900 underline" onClick={() => { const el = typeof document !== 'undefined' ? document.getElementById('publishing-queue') : null; if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Show the queue</button>
 <button type="button" className="font-semibold text-emerald-900 underline" onClick={() => { setMText(''); setMMedia(''); setMMediaLabel(''); setMSource(null); setMSent(null); setMStatus(null); }}>Write another post</button>

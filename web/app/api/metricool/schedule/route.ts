@@ -22,6 +22,7 @@ import { awaitingPostsForVideo } from '@/lib/awaiting-posts';
 import { networksAlreadyPublished } from '@/lib/queue-guard';
 import { decideAdoption, replaceMissing } from '@/lib/adopt-draft';
 import { publishMode } from '@/lib/publish-mode';
+import { preflightPost } from '@/lib/post-preflight';
 import { modeFlags } from '@/lib/metricool-post';
 
 export const runtime = 'nodejs';
@@ -229,15 +230,43 @@ export async function POST(req: NextRequest) {
   let sheetFormat = typeof payload.format === 'string' ? payload.format : '';
   let sheetYoutube = typeof payload.sheetYoutube === 'string' ? payload.sheetYoutube : '';
   let packTitle = '';
-  if (ownedDraftIdEarly && (!sheetFormat || provider === 'youtube' || provider === 'tiktok')) {
+  // Read WHENEVER there is a draft, not only when a preset needs it.
+  //
+  // The condition used to be "no format yet, or YouTube, or TikTok", so for a
+  // LinkedIn send the pack was never loaded — and the pack is the only record
+  // that the copy was written from a video. The rule that a video post cannot
+  // go out without its video therefore could not even be evaluated on the one
+  // network it was slipping through on.
+  let draftPack: Record<string, unknown> | null = null;
+  if (ownedDraftIdEarly) {
     const { data: d } = await sb.from('drafts').select('pack').eq('id', ownedDraftIdEarly).eq('user_id', user.id).maybeSingle()
       .then((x) => x, () => ({ data: null }));
-    const pack = ((d as { pack?: Record<string, unknown> | null } | null)?.pack || {}) as { format?: unknown; sheetYoutube?: unknown; title?: unknown };
+    draftPack = ((d as { pack?: Record<string, unknown> | null } | null)?.pack || {}) as Record<string, unknown>;
+    const pack = draftPack as { format?: unknown; sheetYoutube?: unknown; title?: unknown };
     if (!sheetFormat && typeof pack.format === 'string') sheetFormat = pack.format;
     if (!sheetYoutube && typeof pack.sheetYoutube === 'string') sheetYoutube = pack.sheetYoutube;
     if (typeof pack.title === 'string') packTitle = pack.title;
   }
   const postTitle = (typeof payload.title === 'string' && payload.title.trim()) ? payload.title : packTitle;
+
+  // THE SAME GATE THE SWEEP PASSES (lib/post-preflight.ts).
+  //
+  // This door enforced compliance and the media requirement and nothing else:
+  // no character limit at all (Metricool truncates, and the AVISO and REF lines
+  // are at the END of a caption, so truncation produces a silently
+  // non-compliant medical advertisement), no aspect check, and — the one that
+  // mattered most once posts stopped waiting for Approve — no check that copy
+  // written from a video actually carries it.
+  {
+    const pre = preflightPost({
+      network,
+      text,
+      pack: draftPack,
+      hasMedia: Boolean(typeof payload.mediaUrl === 'string' && payload.mediaUrl.trim()),
+      format: sheetFormat || undefined,
+    });
+    if (!pre.ok) return NextResponse.json({ error: pre.reason, message: pre.message }, { status: 422 });
+  }
 
   // TikTok: public, comments/duet/stitch on — a direct publication rather than
   // Metricool's "finish on your phone" mode.

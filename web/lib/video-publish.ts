@@ -20,6 +20,8 @@ import 'server-only';
 import { complianceGate } from '@/lib/compliance-gate';
 import { MediaNotNormalisedError, metricoolConfigured, metricoolSchedulePost, readPostId, type Provider } from '@/lib/metricool';
 import { publishMode } from '@/lib/publish-mode';
+import { preflightPost } from '@/lib/post-preflight';
+import type { PackLike } from '@/lib/video-required';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { tiktokDataFor } from '@/lib/tiktok-meta';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -47,6 +49,14 @@ export type PublishOne = {
   format?: string | null;
   /** The sheet's YOUTUBE cell — sometimes the word "Unlisted" rather than a link. */
   sheetYoutube?: string | null;
+  /**
+   * The linked draft's pack, so the "written from a video" rule can run HERE.
+   *
+   * It used to run only on Approve. Posts no longer wait for Approve, so
+   * without this a LinkedIn post of transcript-written copy whose video copy
+   * had failed published itself, text-only, at its slot.
+   */
+  pack?: PackLike;
 };
 
 export type PublishOutcome = {
@@ -54,7 +64,7 @@ export type PublishOutcome = {
   ok: boolean;
   metricoolPostId?: string | null;
   /** Why it was not sent — a compliance refusal reads differently from an outage. */
-  reason?: 'not_configured' | 'compliance' | 'metricool_error' | 'too_long' | 'already_queued' | 'already_published' | 'media_unverified';
+  reason?: 'not_configured' | 'compliance' | 'metricool_error' | 'too_long' | 'already_queued' | 'already_published' | 'media_unverified' | 'no_video' | 'needs_media' | 'wrong_aspect' | 'past';
   message?: string;
 };
 
@@ -67,9 +77,24 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
   const gate = await complianceGate(input.userId, input.text, network);
   if (!gate.ok) {
     // Deliberately not sent. Copy missing the AVISO line or the REF citation
-    // must not sit in a queue where one wrong click publishes it.
+    // must not go out at all, and now goes out by itself if it does.
     return { network, ok: false, reason: 'compliance', message: gate.message };
   }
+
+  // Everything else a post has to be right about, in the one place both doors
+  // share (lib/post-preflight.ts). This used to be scattered: the video rule
+  // lived only on Approve, which posts no longer pass through, and a supplied
+  // publishing time was taken on trust here however far in the past it was.
+  const pre = preflightPost({
+    network,
+    text: input.text,
+    pack: input.pack ?? null,
+    hasMedia: Boolean(String(input.mediaUrl || '').trim()),
+    format: input.format,
+    publicationDate: undefined,
+    publishAt: input.publicationDate,
+  } as Parameters<typeof preflightPost>[0]);
+  if (!pre.ok) return { network, ok: false, reason: pre.reason, message: pre.message };
 
   try {
     const created = await metricoolSchedulePost({

@@ -244,7 +244,7 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, bat
         body: JSON.stringify({ network, text, publishAt, blogId, mediaUrl: media || undefined, draftId: prepared?.draftId || undefined }),
       });
       if (!r.ok) { setErr(await friendlyErrorFromResponse(r, 'Metricool did not accept that post.')); return; }
-      setSent((s) => (s ? s + ' · ' : '') + LABEL[network] + ' saved as a draft in your queue — press Approve there to publish.');
+      setSent((s) => (s ? s + ' · ' : '') + LABEL[network] + ' scheduled — it goes out at its slot on its own. Delete or reschedule it in the queue before then if you change your mind.');
     } catch {
       setErr('We could not reach Metricool just now.');
     } finally {
