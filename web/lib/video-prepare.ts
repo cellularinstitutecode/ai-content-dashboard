@@ -29,6 +29,7 @@ import { evidenceBriefFrom } from '@/lib/evidence-brief';
 import type { EvidenceItem } from '@/lib/evidence-parse';
 import { claimFrom, claimQuery, supportedItem, type ClaimSupportStamp, type SupportVerdict } from '@/lib/claim-support';
 import { refLineFrom, refLineFromEvidence } from '@/lib/citation-from-evidence';
+import { professionalTitle } from '@/lib/post-title';
 import { verifyDoi } from '@/lib/citation';
 import { serpLandscapeFrom } from '@/lib/serp-landscape';
 import { serpCompetitors } from '@/lib/semrush';
@@ -445,6 +446,28 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     }
   }
 
+  // THE TITLE A PATIENT SEES, BUILT FROM THE RESEARCH THAT JUST RAN.
+  //
+  // `title` above is whatever the sheet or the file was called, and these files
+  // are named for who shot them: "Video_RyallxCellgenicxCellularInstitute_Rodrigo".
+  // That string went to YouTube and TikTok as the post's title. Cleaning the
+  // filename is not enough on its own — there is no subject in that name to
+  // recover — but the keyword search two dozen lines above has just worked out
+  // what the video is actually about, in the words people search for, and
+  // reseeded itself from the transcript when the filename told it nothing
+  // (lib/reseed.ts). So the title comes from that: "Red Light Therapy at
+  // Cellular Institute".
+  //
+  // The raw `title` stays exactly where it is used for everything internal —
+  // the banned-names guard below needs the editor's name precisely BECAUSE it
+  // must never be published.
+  const publicTitle = professionalTitle({
+    supplied: input.title,
+    keyword: brief.stamp.primary,
+    spoken,
+    filename: title,
+  }).title;
+
   // The Instagram-style caption (short, hashtags, REF + AVISO) is the TikTok
   // caption; LinkedIn gets the longer, insight-led post plus the video link.
   const aviso = avisoNumberFor(brand?.aviso_publicidad);
@@ -827,7 +850,7 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     ...pack,
     kind: 'video',
     claimSupport,
-    title,
+    title: publicTitle,
     sourceUrl: url,
     videoId: t.videoId || '',
     transcript: transcriptExcerpt(transcript, KEPT_TRANSCRIPT),
@@ -840,13 +863,17 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   // 4) Save as a draft so it is in the library and editable.
   let draftId: string | null = null;
   if (input.saveDraft !== false) {
-    draftId = await saveVideoDraft(input.userId, title, videoPack);
+    draftId = await saveVideoDraft(input.userId, publicTitle, videoPack);
   }
 
   return {
     ok: true,
     draftId,
-    title,
+    // The public one. It is what the sweep writes to the sheet and what the
+    // composer, YouTube and TikTok all show; the internal `title` never leaves
+    // this function except in a refusal message, where it names the file
+    // somebody has to go and look at.
+    title: publicTitle,
     videoId: t.videoId || '',
     transcript: { source: t.origin, language: t.language, chars: transcript.length, preview: transcript.slice(0, 600), full: transcript },
     keywords: semrush,
