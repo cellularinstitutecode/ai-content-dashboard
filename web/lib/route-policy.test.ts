@@ -161,12 +161,21 @@ test('no route lets the caller decide whether a post publishes', () => {
   );
 });
 
-test('the Metricool handoff always asks for a draft, never a live post', () => {
+test('the Metricool handoff takes its mode from the server, never the request', () => {
+  // This used to assert draft:true / autoPublish:false as constants. The clinic
+  // asked for posts to arrive SCHEDULED instead of greyed out as drafts, so
+  // those constants are now one setting (lib/publish-mode.ts) \u2014 but the part
+  // that kept a signed-in caller from publishing at will has to survive that,
+  // and it is asserted here rather than quietly dropped with the old rule.
   const route = ROUTES.find((r) => r.path === 'app/api/metricool/schedule/route.ts');
   assert.ok(route, 'expected the schedule route to exist');
-  assert.match(route!.source, /autoPublish:\s*false/, 'must send autoPublish: false');
-  assert.match(route!.source, /draft:\s*true/, 'must send draft: true');
-  assert.doesNotMatch(route!.source, /draft:\s*!/, 'draft must be a constant, not derived');
+  assert.match(route!.source, /modeFlags\(mode\)/, 'must send whatever publishMode() decided');
+  assert.match(route!.source, /const mode = publishMode\(\)/, 'the mode must come from the server setting');
+  assert.doesNotMatch(
+    route!.source,
+    /(payload|body|req)\s*(\.|\[['"])\s*(publishMode|mode)\b/,
+    'the publish mode must never be read from the request',
+  );
 });
 
 // The route test above reads app/api only. draftAndQueue puts posts into the

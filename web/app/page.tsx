@@ -1964,7 +1964,7 @@ className={"mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring
 Too long for {networkLabel(mLimit.network)} by {mOverBy.toLocaleString()} character{mOverBy === 1 ? '' : 's'}. Trim it, or unselect that channel.
 </p>
 )}
-<p className="mt-3 text-[12px] text-ink-muted">Every post lands in your queue as a draft. Press Approve there to publish.</p>
+<p className="mt-3 text-[12px] text-ink-muted">Posts arrive in Metricool <strong>scheduled</strong> — in colour on the calendar, going out at the time above on their own. A post whose copy came from a video still will not go without its video.</p>
 {/* The only reason the Send button was disabled used to be 12px grey text
     UNDER it, which reads as "the button is broken" rather than "one thing is
     missing". Same sentence, above the button, in a colour, naming the fix. */}
@@ -1987,7 +1987,7 @@ Too long for {networkLabel(mLimit.network)} by {mOverBy.toLocaleString()} charac
 <a href={metricoolPlannerUrl(activeBlogId)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:ring-accent">Open in Metricool ↗</a>
 </div>
 {mStatus && <p className="mt-3 rounded-xl bg-subtle px-3 py-2 text-[13px] text-ink-muted ring-1 ring-line">{mStatus}</p>}
-<p className="mt-3 text-[11px] text-ink-muted">Nothing publishes automatically — it lands in your queue as a draft for you to approve.</p>
+<p className="mt-3 text-[11px] text-ink-muted">Scheduled on arrival: each post goes out at its own time without another press. Delete or reschedule it here before then if you change your mind.</p>
 </div>
 )}
 <div className={"p-6 sm:p-8 " + (isDraft ? "lg:col-span-2" : "lg:col-span-5")}>

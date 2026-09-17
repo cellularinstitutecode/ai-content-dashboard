@@ -19,6 +19,8 @@ import { ensureAviso } from '@/lib/compliance';
 import { apiBase as metricoolApiBase, normalizeMediaList } from '@/lib/metricool';
 import { postRowFor } from '@/lib/batch-row';
 import { youtubeDataFor } from '@/lib/youtube-meta';
+import { publishMode } from '@/lib/publish-mode';
+import { modeFlags } from '@/lib/metricool-post';
 import { normalizePublishAt, METRICOOL_TIMEZONE } from '@/lib/metricool-time';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { DEFAULT_BLOG_ID, ALLOWED_BLOG_IDS } from '@/lib/access';
@@ -169,9 +171,10 @@ export async function draftAndQueue(
     text,
     publicationDate: { dateTime: when.wallClock, timezone: METRICOOL_TIMEZONE },
     providers: [{ network: provider }],
-    // Constants. See the note at the top of this file.
-    autoPublish: false,
-    draft: true,
+    // One setting, lib/publish-mode.ts — the same one the panel's Send and the
+    // video sweep read, so the three cannot drift apart. Never a parameter of
+    // the batch: see the note at the top of this file.
+    ...modeFlags(publishMode()),
   };
 
   if (item.mediaUrl) {
