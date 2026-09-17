@@ -13,6 +13,7 @@ import { announce, onRefresh, fetchDrafts } from "@/components/refreshBus";
 import { tightestLimit, networkLabel, parseVideoUrl, draftLabel, PUBLISH_NETWORKS, DEFAULT_VIDEO_NETWORKS, mediaProblem } from "@/lib/composer";
 import { filterQueue, matchesQueueSearch } from "@/lib/queue-search";
 import MediaPicker from "@/components/MediaPicker";
+import SchedulePack from "@/components/SchedulePack";
 import { useWorkspace } from "@/components/workspace";
 import { appliesTo as complianceApplies, checkCompliance, complianceNetworksLabel, ensureAviso, DEFAULT_AVISO_NUMBER } from "@/lib/compliance";
 import { PanelLoader } from "@/components/LoadingScreen";
@@ -204,6 +205,15 @@ const [approvingId, setApprovingId] = useState<string | null>(null);
 // approvingId because attaching is NOT approving — the post stays exactly
 // where it is in the queue, waiting for a person.
 const [attachingId, setAttachingId] = useState<string | null>(null);
+/**
+ * The pack as the writer returned it — each channel's own words.
+ *
+ * `output` is the FORMATTED string: one block of text for a person to read. It
+ * cannot be scheduled, because scheduling means sending Instagram its caption
+ * and LinkedIn its post, and by then the two are one string. So the pack is
+ * kept as well, and lib/pack-schedule.ts turns it into one post per channel.
+ */
+const [genPack, setGenPack] = useState<Record<string, unknown> | null>(null);
 const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string; verification?: { status?: string; score?: number | null; issues?: string[]; advisory?: string[]; textDetected?: boolean } } | null>(null);
 const [genImageLoading, setGenImageLoading] = useState(false);
 const [lastDraftId, setLastDraftId] = useState<string | null>(null);
@@ -1221,7 +1231,7 @@ announce('drafts', 'images');
 
 async function generate() {
 const runId = ++genRun.current;
-setLoading(true); setErr(null); setOutput(''); setGenImage(null); setLastDraftId(null);
+setLoading(true); setErr(null); setOutput(''); setGenPack(null); setGenImage(null); setLastDraftId(null);
 // Light up the live pipeline: research → draft → save → image → verify.
 clearProcTimers();
 setProc(stepActive(makeSteps(GEN_STEPS), 'research'));
@@ -1238,6 +1248,7 @@ setKeywordsApplied(Array.isArray(data.keywordsApplied) ? data.keywordsApplied : 
 setKeywordSource(typeof data.keywordSource === 'string' ? data.keywordSource : 'none');
 setKeywordReason(typeof data.keywordReason === 'string' ? data.keywordReason : undefined);
 setOutput(formatOutputString({ ...pack, format: type }));
+setGenPack(pack as Record<string, unknown>);
 clearProcTimers();
 setProc((p) => (p ? stepActive(p, 'save') : p));
 let draftId: string | null = null;
@@ -1792,6 +1803,16 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
 )}
 {keywordSource === 'none' && output && (
   <p className="mb-3 text-[11px] text-ink-faint">{semrushDraftNote(keywordReason as any)}</p>
+)}
+{output && genPack && (
+  <SchedulePack
+    pack={genPack}
+    draftId={lastDraftId}
+    imageUrl={genImage?.url || null}
+    avisoNumber={avisoNumber}
+    slots={mSlots}
+    blogId={activeBlogId || METRICOOL_BLOG_ID}
+  />
 )}
 {output && genImage?.url ? (
   <div className="mb-3 overflow-hidden rounded-2xl ring-1 ring-line">
