@@ -15,6 +15,7 @@ import { reportError } from '@/lib/report';
 import { deleteDriveFile } from '@/lib/drive';
 import { deleteBucketVideo, isBucketVideoKey } from '@/lib/video-bucket';
 import { forgetPublicCopy } from '@/lib/transcript-cache';
+import { freshCopyUrl } from '@/lib/media-library';
 import { isStreamCopyId, mediaVideoUrl, parseStreamCopyId } from '@/lib/media-url';
 import { publicBase } from '@/lib/public-base';
 import { modeOfStatus, videoPending, APPROVED_STATUS } from '@/lib/post-mode';
@@ -159,18 +160,29 @@ export async function GET() {
   }
 
   const copyToVideo: Record<string, string> = {};
+  // The URL each post's video actually lives at, so a draft can be OPENED in
+  // the panel and not just approved. Without it "Continue" would load the copy
+  // and the time but no video, and sending would strip the video off a draft
+  // that had one — worse than the refusal it replaced.
+  const copyToMedia: Record<string, string> = {};
   if (copyIds.length) {
     // video_transcripts has no user column and no read policy: admin, scoped
     // by the copy ids just read from this user's own posts (the same shape
     // forgetPublicCopy uses).
     const { data, error: copyErr } = await supabaseAdmin()
       .from('video_transcripts')
-      .select('video_id, public_copy_id')
+      .select('video_id, public_copy_id, public_copy_url')
       .in('public_copy_id', copyIds)
       .then((x) => x, (e: unknown) => ({ data: null, error: e as { message?: string } }));
     if (copyErr) reportError('posts:copy-read', copyErr, { userId: user.id });
-    for (const r of (data || []) as { video_id?: string; public_copy_id?: string }[]) {
+    for (const r of (data || []) as { video_id?: string; public_copy_id?: string; public_copy_url?: string }[]) {
       if (r.public_copy_id && r.video_id) copyToVideo[String(r.public_copy_id)] = String(r.video_id);
+      // Re-minted on the way out when it is one of ours: a streamed video's URL
+      // carries an expiry, and handing the panel a stale one would fail the
+      // media check on send.
+      if (r.public_copy_id && r.public_copy_url) {
+        copyToMedia[String(r.public_copy_id)] = freshCopyUrl(String(r.public_copy_id), String(r.public_copy_url), String(r.video_id || ''));
+      }
     }
   }
 
@@ -218,6 +230,7 @@ export async function GET() {
         ? false
         : videoPending(p.status, packs[String(p.draft_id || '')] ?? null, Boolean(p.media_drive_file_id)),
       source: sources[String(p.id || '')] ?? null,
+      mediaUrl: p.media_drive_file_id ? (copyToMedia[String(p.media_drive_file_id)] ?? null) : null,
     })),
     ...(packsUnavailable ? { packsUnavailable: true } : {}),
   });

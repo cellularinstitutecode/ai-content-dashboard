@@ -14,7 +14,22 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 import type { AwaitingLike } from '@/lib/queue-guard';
 
-export type AwaitingPost = AwaitingLike & { id: string; draft_id: string | null; media_drive_file_id: string | null };
+export type AwaitingPost = AwaitingLike & {
+  id: string;
+  draft_id: string | null;
+  media_drive_file_id: string | null;
+  /**
+   * Metricool's own id, and what the draft currently says.
+   *
+   * Carried because a draft already waiting for this video is no longer a
+   * reason to refuse a send — it is the draft that send UPDATES
+   * (lib/adopt-draft.ts). Replacing one needs its Metricool id; showing it in
+   * the panel needs its text and time.
+   */
+  metricool_post_id: string | null;
+  text: string | null;
+  publication_date: string | null;
+};
 
 export async function awaitingPostsForVideo(userId: string, video: { fileId?: string | null; copyId?: string | null }): Promise<AwaitingPost[]> {
   const fileId = String(video.fileId || '').trim();
@@ -42,7 +57,7 @@ export async function awaitingPostsForVideo(userId: string, video: { fileId?: st
 
   const { data, error } = await admin
     .from('posts')
-    .select('id, providers, status, draft_id, media_drive_file_id')
+    .select('id, providers, status, draft_id, media_drive_file_id, metricool_post_id, text, publication_date')
     .eq('user_id', userId)
     .or(clauses.join(','))
     .limit(200)

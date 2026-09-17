@@ -19,7 +19,8 @@ import { videoKeyFor } from '@/lib/video-event';
 import { rowKeyFor } from '@/lib/video-row';
 import { SOURCE_IDS } from '@/lib/google-sources';
 import { awaitingPostsForVideo } from '@/lib/awaiting-posts';
-import { alreadyQueuedMessage, networksAlreadyPublished, networksAlreadyQueued } from '@/lib/queue-guard';
+import { networksAlreadyPublished } from '@/lib/queue-guard';
+import { decideAdoption } from '@/lib/adopt-draft';
 
 export const runtime = 'nodejs';
 // This route makes TWO sequential calls to Metricool now — normalise the media,
@@ -143,6 +144,9 @@ export async function POST(req: NextRequest) {
   // rule the sweep's hand-off applies (lib/queue-guard.ts). A post carrying a
   // video that already has a draft on this network waiting in the queue is
   // refused with the row named, instead of becoming the fourth copy.
+  // Set by the block below when this send should REPLACE a draft that is
+  // already waiting, rather than create a second one.
+  let adopt: { postId: string; metricoolPostId: string } | null = null;
   {
     // Three shapes of media URL now, and a streamed one identifies its video
     // by its path alone. Without this the column stayed null, so the duplicate
@@ -166,9 +170,17 @@ export async function POST(req: NextRequest) {
           message: (rowLabel || 'This video') + ' has already been published on ' + network + '. Posting it again would publish the same video twice \u2014 nothing was created.',
         }, { status: 409 });
       }
-      const split = networksAlreadyQueued(already, [network]);
-      if (split.queued.length) {
-        return NextResponse.json({ error: 'already_queued', message: alreadyQueuedMessage(network, rowLabel) }, { status: 409 });
+      // A DRAFT ALREADY WAITING IS THE DRAFT THIS SEND CONTINUES.
+      //
+      // This used to answer 409 "already has a draft waiting for your approval
+      // — approve it in the queue, or delete it there first", which is a wall
+      // in front of the one thing a person actually wants: to keep working on
+      // that draft. The lookup is unchanged and still the reason one row
+      // stopped reaching Metricool eleven times; only the answer moves, from
+      // refusing to updating. lib/adopt-draft.ts holds the rule.
+      const decision = decideAdoption(already, network);
+      if (decision.action === 'update') {
+        adopt = { postId: decision.postId, metricoolPostId: decision.metricoolPostId };
       }
     }
   }
@@ -243,11 +255,20 @@ export async function POST(req: NextRequest) {
   // e2e harness can stand in for the scheduler here too. This route hard-coded
   // the production host, which is why the composer's own path was the one
   // door the mock could never watch.
-  const url = metricoolApiBase() + '/v2/scheduler/posts?blogId=' + encodeURIComponent(blogId) + '&userId=' + encodeURIComponent(userId);
+  // CREATE, or REPLACE the draft that is already waiting.
+  //
+  // Metricool's own shape: POST /posts makes one, PUT /posts/<id> replaces one
+  // WHOLE. Replace is what we want — the draft becomes exactly what the panel
+  // is showing — and the body above is built identically either way, so the
+  // copy, the video, the time, the YouTube Short type and the TikTok options
+  // all carry across rather than being half-updated.
+  const url = adopt
+    ? metricoolApiBase() + '/v2/scheduler/posts/' + encodeURIComponent(adopt.metricoolPostId) + '?blogId=' + encodeURIComponent(blogId) + '&userId=' + encodeURIComponent(userId)
+    : metricoolApiBase() + '/v2/scheduler/posts?blogId=' + encodeURIComponent(blogId) + '&userId=' + encodeURIComponent(userId);
 
   try {
     const r = await fetch(url, {
-      method: 'POST',
+      method: adopt ? 'PUT' : 'POST',
       headers: {
         'content-type': 'application/json',
         'X-Mc-Auth': token,
@@ -316,7 +337,7 @@ export async function POST(req: NextRequest) {
       // reads media_drive_file_id to know the post carries its video, and
       // lib/post-source.ts follows it back to the sheet row.
       const mediaCopyId = typeof payload.mediaUrl === 'string' ? (parseDriveFileId(payload.mediaUrl) || bucketKeyFromUrl(payload.mediaUrl) || streamCopyIdFromUrl(payload.mediaUrl)) : null;
-      const { error: insertError } = await admin.from('posts').insert({
+      const row = {
         user_id: user.id,
         draft_id: ownedDraftId,
         providers: [provider],
@@ -327,10 +348,18 @@ export async function POST(req: NextRequest) {
         metricool_post_id: id,
         status: status || 'pending_review',
         ...(mediaCopyId ? { media_drive_file_id: mediaCopyId } : {}),
-      });
-      if (insertError) throw insertError;
+      };
+      // The SAME row either way — written over the draft that was waiting, or
+      // inserted as a new one. Scoped to the caller even though this is the
+      // service-role client, which bypasses RLS: the id came from a lookup of
+      // the caller's own posts, and an eq on user_id keeps it that way if that
+      // ever stops being true.
+      const { error: writeError } = adopt
+        ? await admin.from('posts').update(row).eq('id', adopt.postId).eq('user_id', user.id)
+        : await admin.from('posts').insert(row);
+      if (writeError) throw writeError;
     } catch (err) {
-      reportError('schedule:posts-insert', err);
+      reportError(adopt ? 'schedule:posts-update' : 'schedule:posts-insert', err);
       // Said out loud rather than swallowed: the draft exists in Metricool and
       // this dashboard has no record of it, which is the one situation where a
       // person must go and look there instead of here.
@@ -362,6 +391,10 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
+      // Which of the two happened. Without it the panel would say "saved" for
+      // an update and leave a person wondering whether a second draft now
+      // exists — the exact anxiety the old 409 was trying to prevent.
+      updated: Boolean(adopt),
       ...(bookkeeping ? { warning: bookkeeping } : {}),
       id: id,
       status: status || 'pending_review',
