@@ -1,6 +1,8 @@
 import { reportError, redact } from '@/lib/report';
 import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
 import { apiBase as metricoolApiBase, normalizeMediaList } from '@/lib/metricool';
+import { mediaHandoverMessage, normalizeFailure, ourLinkNote } from '@/lib/media-normalize-reason';
+import { verifyPlayableMp4 } from '@/lib/media-verify';
 import { bucketKeyFromUrl } from '@/lib/video-bucket';
 import { streamCopyIdFromUrl } from '@/lib/media-url';
 import { metricoolRefusal } from '@/lib/metricool-refusal';
@@ -26,12 +28,21 @@ import { preflightPost } from '@/lib/post-preflight';
 import { modeFlags } from '@/lib/metricool-post';
 
 export const runtime = 'nodejs';
-// This route makes TWO sequential calls to Metricool now — normalise the media,
+// This route makes TWO sequential calls to Metricool — normalise the media,
 // then create the post — and normalising a large video is a file transfer, not
 // a metadata lookup. With no maxDuration the platform default (10s) killed the
 // request mid-normalise, so adding the media step would have turned a working
 // button into an unexplained timeout on exactly the posts that carry video.
-export const maxDuration = 60;
+//
+// SIXTY WAS NOT ENOUGH, and the arithmetic says so on its own: lib/metricool.ts
+// allows a VIDEO normalise four minutes, because Metricool is pulling a 96 MB
+// to 1.8 GB reel onto its own storage before it answers. A 240-second step
+// inside a 60-second function cannot finish — the platform kills the request at
+// 60 and returns a bodyless 504 that explains nothing, on precisely the posts
+// that carry the clinic's biggest files. Raised to the same ceiling
+// app/api/posts already runs at, so the two doors that hand Metricool a video
+// have the same clock.
+export const maxDuration = 300;
 
 const NETWORK_MAP: Record<string, string> = {
   facebook: 'facebook',
@@ -216,8 +227,36 @@ export async function POST(req: NextRequest) {
     // take is refused here rather than sent for it to drop.
     const norm = await normalizeMediaList([String(payload.mediaUrl)]);
     if (norm.degraded || !norm.media.length) {
+      // WHICH of five problems this is. The status was known here all along and
+      // discarded for one sentence that fits a 403, a 413, a 502, an expired
+      // link and a transfer that ran out of time equally well — and four of
+      // those are never fixed by "try again in a moment".
+      //
+      // The second half is our own side of it: one Range read of the very link
+      // Metricool was given, so the answer says whether the file is fine (and
+      // how big it is) rather than sending somebody to inspect a video copy
+      // that was never the problem. It runs only on the failure path.
+      const probe = await verifyPlayableMp4(String(payload.mediaUrl), null).then(
+        (v) => ({ ok: v.ok, message: v.ok ? '' : v.message, bytes: v.ok ? v.length ?? null : null }),
+        () => null,
+      );
+      const failure = normalizeFailure({
+        status: norm.failure?.status ?? null,
+        error: norm.failure?.error ?? null,
+        sizeBytes: probe?.bytes ?? null,
+      });
+      reportError('metricool:normalize-refused', new Error(failure.message), {
+        reason: failure.reason,
+        status: String(failure.status ?? ''),
+        network: provider,
+      });
       return NextResponse.json(
-        { error: 'media_unverified', message: 'Metricool did not take the video, so the post was not created. Try again in a moment; if it keeps happening, the video copy needs a look.' },
+        {
+          error: 'media_unverified',
+          reason: failure.reason,
+          status: failure.status,
+          message: mediaHandoverMessage(failure, ourLinkNote(probe)),
+        },
         { status: 422 },
       );
     }

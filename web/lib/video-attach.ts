@@ -19,6 +19,7 @@ import 'server-only';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { ensureShareableVideo } from '@/lib/media-library';
 import { metricoolReplacePost, normalizeMediaList, type Provider } from '@/lib/metricool';
+import { normalizeFailure } from '@/lib/media-normalize-reason';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { tiktokDataFor } from '@/lib/tiktok-meta';
 import { isAwaitingApproval, modeOfStatus } from '@/lib/post-mode';
@@ -92,10 +93,14 @@ export async function attachPendingVideos(args: {
   // as attached and went out with no video.
   const norm = await normalizeMediaList([made.url]);
   if (norm.degraded || !norm.media.length) {
-    const error = 'Metricool did not take the video, so nothing was attached \u2014 the drafts still wait for it.';
+    // Named, not just reported. This runs unattended in the sweep, so the one
+    // record of what happened is the register entry written below — and "did
+    // not take it" told a person nothing they could act on days later.
+    const failure = normalizeFailure({ status: norm.failure?.status ?? null, error: norm.failure?.error ?? null });
+    const error = failure.message + ' Nothing was attached \u2014 the drafts still wait for it.';
     void recordVideoEvent({
       userId: args.userId, videoKey: args.videoKey, event: 'copy_failed', actor: args.actor, title: args.title, link: args.videoLink,
-      detail: { ...(args.where || {}), reason: 'media_unverified', error, copyId: made.fileId },
+      detail: { ...(args.where || {}), reason: 'media_unverified', cause: failure.reason, status: String(failure.status ?? ''), error, copyId: made.fileId },
     });
     return { pending: posts.length, attached: 0, failed: posts.length, error };
   }

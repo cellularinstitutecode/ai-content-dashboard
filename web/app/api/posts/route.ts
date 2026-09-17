@@ -8,6 +8,7 @@ import { supabaseServer } from '@/lib/supabase';
 import { isAllowedEmail } from '@/lib/access';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { metricoolDeletePost, metricoolReplacePost, normalizeMediaList, type Provider } from '@/lib/metricool';
+import { normalizeFailure } from '@/lib/media-normalize-reason';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { tiktokDataFor } from '@/lib/tiktok-meta';
 import { cachedPublicCopy } from '@/lib/transcript-cache';
@@ -23,6 +24,21 @@ import { tabGid } from '@/lib/google-sources';
 import type { PostSource } from '@/lib/sheet-link';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { resolvePostSources, type RegisterEntryLike, type RunLike } from '@/lib/post-source';
+
+/** The draft's own public title, when the pack carries one. */
+function packTitleOf(pack: unknown): string | null {
+  const t = (pack && typeof pack === 'object' ? (pack as Record<string, unknown>).title : null);
+  return typeof t === 'string' && t.trim() ? t.trim() : null;
+}
+
+/** The primary keyword the research settled on for this draft, if any. */
+function packKeywordOf(pack: unknown): string | null {
+  const stamp = (pack && typeof pack === 'object' ? (pack as Record<string, unknown>)._semrush : null) as
+    | { primary?: unknown }
+    | null;
+  const k = stamp && typeof stamp === 'object' ? stamp.primary : null;
+  return typeof k === 'string' && k.trim() ? k.trim() : null;
+}
 
 export const runtime = 'nodejs';
 // Both mutating paths now make an upstream Metricool call before they touch the
@@ -231,6 +247,15 @@ export async function GET() {
         : videoPending(p.status, packs[String(p.draft_id || '')] ?? null, Boolean(p.media_drive_file_id)),
       source: sources[String(p.id || '')] ?? null,
       mediaUrl: p.media_drive_file_id ? (copyToMedia[String(p.media_drive_file_id)] ?? null) : null,
+      // The draft's own title and the keyword its research settled on.
+      //
+      // Both are already in the pack that was fetched above for the pending
+      // chip, and both were stopping here. Continuing a draft then had to
+      // rebuild the title from the media label — which is the FILENAME, and is
+      // how "Video_RyallxCellgenicxCellularInstitute_Rodrigo.mp4" ended up as
+      // the title on YouTube and TikTok.
+      packTitle: packTitleOf(packs[String(p.draft_id || '')] ?? null),
+      packKeyword: packKeywordOf(packs[String(p.draft_id || '')] ?? null),
     })),
     ...(packsUnavailable ? { packsUnavailable: true } : {}),
   });
@@ -446,8 +471,19 @@ export async function PATCH(req: Request) {
     if (norm.degraded) {
       // Refused, not warned about. A replace whose media Metricool did not
       // take would leave the post looking finished with no video in it.
+      //
+      // And refused WITH THE REASON. The same sentence used to cover a 403, a
+      // 413, a 502 and a transfer that ran out of time — see
+      // lib/media-normalize-reason.ts.
+      const failure = normalizeFailure({ status: norm.failure?.status ?? null, error: norm.failure?.error ?? null });
+      reportError('posts:normalize-refused', new Error(failure.message), { reason: failure.reason, status: String(failure.status ?? '') });
       return NextResponse.json(
-        { error: 'media_unverified', message: 'Metricool did not take the video just now, so the post was left as it was. Try again in a moment; if it keeps happening, the video copy needs a look.' },
+        {
+          error: 'media_unverified',
+          reason: failure.reason,
+          status: failure.status,
+          message: failure.message + ' The post was left exactly as it was.',
+        },
         { status: 502 },
       );
     }

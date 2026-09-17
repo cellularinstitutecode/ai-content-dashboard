@@ -112,9 +112,27 @@ export function looksLikeVideoUrl(url: string): boolean {
   return /\.(mp4|mov|m4v|webm)(\?|#|$)/i.test(String(url || ''));
 }
 
-export async function normalizeMedia(rawUrl: string): Promise<string> {
+export type NormalizeOutcome = {
+  /** What to put in the post: Metricool's own reference, or '' when it failed. */
+  url: string;
+  ok: boolean;
+  /** Metricool's status, when it answered at all. */
+  status: number | null;
+  /** The transport failure, when it did not. */
+  error: string | null;
+};
+
+/**
+ * Normalise one URL, keeping the reason when it does not work.
+ *
+ * The status was ALREADY KNOWN here — logged to a console nobody reads — while
+ * the person was told "the video copy needs a look" for a 403, a 413, a 502 and
+ * a timeout alike. lib/media-normalize-reason.ts turns this into the sentence.
+ */
+export async function normalizeMediaDetailed(rawUrl: string): Promise<NormalizeOutcome> {
   const url = String(rawUrl || '').trim();
-  if (!url) return '';
+  if (!url) return { url: '', ok: false, status: null, error: 'no url' };
+  let lastStatus: number | null = null;
   try {
     // 60s, not the client's usual 15. Normalising is not a metadata call: it is
     // Metricool PULLING the file onto its own storage, and the clinic's reels
@@ -145,9 +163,10 @@ export async function normalizeMedia(rawUrl: string): Promise<string> {
     for (const path of paths) {
       res = await metricoolFetch(path + '?url=' + encodeURIComponent(url), { timeoutMs });
       if (res.ok) { if (path.includes('/video/')) console.info('metricool:normalize-media via video endpoint'); break; }
+      lastStatus = res.status;
       console.warn('metricool:normalize-media non-ok', path, res.status);
     }
-    if (!res || !res.ok) return url;
+    if (!res || !res.ok) return { url, ok: false, status: lastStatus, error: null };
     const raw = await res.text();
     let data: unknown = null;
     try { data = JSON.parse(raw); } catch { data = raw; }
@@ -155,20 +174,29 @@ export async function normalizeMedia(rawUrl: string): Promise<string> {
     // A bare URL, quoted or not.
     if (typeof data === 'string') {
       const t = data.trim().replace(/^"|"$/g, '');
-      return /^https?:\/\//i.test(t) ? t : url;
+      return /^https?:\/\//i.test(t)
+        ? { url: t, ok: true, status: res.status, error: null }
+        : { url, ok: false, status: res.status, error: null };
     }
     const obj = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
     const inner = (obj.data && typeof obj.data === 'object' ? obj.data : obj) as Record<string, unknown>;
     for (const key of ['url', 'normalizedUrl', 'mediaUrl', 'mediaId', 'id']) {
       const v = inner[key];
-      if (typeof v === 'string' && v.trim()) return v.trim();
+      if (typeof v === 'string' && v.trim()) return { url: v.trim(), ok: true, status: res.status, error: null };
     }
     console.warn('metricool:normalize-media unrecognised response', raw.slice(0, 300));
-    return url;
+    return { url, ok: false, status: res.status, error: null };
   } catch (e) {
-    console.warn('metricool:normalize-media failed', e instanceof Error ? e.message : String(e));
-    return url;
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn('metricool:normalize-media failed', message);
+    return { url, ok: false, status: lastStatus, error: message };
   }
+}
+
+/** The URL to post, or the one we were given when it did not work. Unchanged for callers that only need that. */
+export async function normalizeMedia(rawUrl: string): Promise<string> {
+  const out = await normalizeMediaDetailed(rawUrl);
+  return out.url;
 }
 
 /**
@@ -182,9 +210,11 @@ export async function normalizeMedia(rawUrl: string): Promise<string> {
  */
 export async function normalizeMediaList(
   urls: readonly string[],
-): Promise<{ media: string[]; degraded: boolean }> {
+): Promise<{ media: string[]; degraded: boolean; failure: NormalizeOutcome | null }> {
   const media: string[] = [];
   let degraded = false;
+  /** The FIRST thing that went wrong, kept so the caller can say what it was. */
+  let failure: NormalizeOutcome | null = null;
   for (const u of urls) {
     // Compared against the TRIMMED input, because normalizeMedia trims before it
     // does anything. Comparing against the raw string made a URL with a trailing
@@ -192,7 +222,9 @@ export async function normalizeMediaList(
     // the post queued with a raw URL that Metricool drops in silence — which is
     // the one case this flag exists to catch.
     const trimmed = String(u || '').trim();
-    const n = await normalizeMedia(trimmed);
+    const out = await normalizeMediaDetailed(trimmed);
+    const n = out.url;
+    if (!out.ok && !failure) failure = out;
     if (!n) {
       // An input we cannot normalise to anything is not "no media requested" —
       // it is media that will not arrive. Skipping it quietly produced a post
@@ -205,7 +237,7 @@ export async function normalizeMediaList(
     if (n === trimmed) degraded = true;
     media.push(n);
   }
-  return { media, degraded };
+  return { media, degraded, failure };
 }
 
 // Metricool wants a wall-clock "YYYY-MM-DDTHH:MM:SS" plus an IANA timezone —

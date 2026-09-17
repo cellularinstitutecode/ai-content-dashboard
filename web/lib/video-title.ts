@@ -69,6 +69,34 @@ function cased(word: string): string {
 }
 
 /**
+ * Words that stay lower-case inside a title, the way a magazine would set it.
+ *
+ * A keyword phrase is typed by a searcher, not written by an editor — "stem
+ * cell therapy for knees" — and capitalising every word of it ("For Knees")
+ * is the small thing that makes a title look machine-made.
+ */
+const MINOR = new Set(['a', 'an', 'and', 'at', 'but', 'by', 'for', 'from', 'in', 'of', 'on', 'or', 'the', 'to', 'vs', 'with']);
+
+/**
+ * Title Case a phrase somebody searched for, keeping acronyms shouting.
+ *
+ * Exported because lib/post-title.ts builds titles out of the keyword research,
+ * and the casing rules — the acronym list above, the minor words here — belong
+ * in one place rather than in whichever file needed them second.
+ */
+export function titleCasePhrase(phrase: string | null | undefined): string {
+  const parts = words(String(phrase || ''));
+  return parts
+    .map((w, i) => {
+      const lower = w.toLowerCase();
+      if (i > 0 && MINOR.has(lower) && !ACRONYMS.has(w.toUpperCase())) return lower;
+      return cased(w);
+    })
+    .join(' ')
+    .trim();
+}
+
+/**
  * A clean, public title for a video.
  *
  * `fallback` is used when nothing survives the cleaning — a file called
