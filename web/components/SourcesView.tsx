@@ -29,6 +29,7 @@ import { mayStartBatch, reasons, runSummary, tally, tallyRows, type BatchReasons
 import { isDriveUrl, parseDriveFileId } from '@/lib/drive-url';
 import { parseFromRow, rowsBetween, rowsFrom } from '@/lib/rows-from';
 import { attachPlanFor, pendingPosts, postsByRow } from '@/lib/attach-plan';
+import { preparedByRow, rowKeyOf, type PreparedRow } from '@/lib/prepared-rows';
 import { ZOOM_MAX, ZOOM_MIN, frameGeometry, readStoredZoom, zoomIn, zoomLabel, zoomOut, zoomStorageKey } from '@/lib/sheet-zoom';
 
 /** How a batched row is getting on, in words rather than a spinner. */
@@ -495,6 +496,31 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     return () => { alive = false; };
   }, []);
 
+  /**
+   * WHICH DRAFT BELONGS TO WHICH ROW.
+   *
+   * video_runs has recorded this since the pipeline was built — spreadsheet,
+   * tab, row and the draft each was prepared into — and this screen never read
+   * it. So "Use in post" handed over the sheet's own copy column, which is a
+   * different text from the one the dashboard wrote, and the post that reached
+   * Metricool was not the post that was prepared.
+   */
+  const [preparedRows, setPreparedRows] = useState<Record<string, PreparedRow>>({});
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/videos/runs?limit=200')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!alive || !j?.ok) return;
+        // The rule — newest run wins — lives in lib/prepared-rows.ts with its
+        // tests, because "which draft is this row's" is the question that was
+        // being answered wrongly.
+        setPreparedRows(preparedByRow(Array.isArray(j.rows) ? j.rows : []));
+      })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+
   /** The fetchable copy of this row's video, if one has been made. */
   function shareableFor(v: VideoEntry): string {
     const id = parseDriveFileId(firstLink(v));
@@ -523,10 +549,41 @@ export default function SourcesView({ kind }: { kind: Tab }) {
       const id = parseDriveFileId(link);
       if (id && media) setShareable((prev) => ({ ...prev, [id]: media }));
     }
+    // THE TEXT THAT WAS PREPARED, not the sheet's own column.
+    //
+    // "The text that needs to be used has to be the one that was prepared."
+    // This row may have been through Prepare — the copy written from the
+    // transcript, with its AVISO, its verified citation and its title — and
+    // that draft is what must reach the composer. The sheet's copy column is
+    // the fallback for a row nobody has prepared, which is what it always was
+    // for; using it for a prepared row is how a post arrived carrying words
+    // that belonged to a different row.
+    let text = '';
+    let title = '';
+    let draftId = '';
+    const prepared = preparedRows[rowKeyOf(v.tab, v.row)];
+    if (prepared?.draftId) {
+      try {
+        const r = await fetch('/api/drafts?id=' + encodeURIComponent(prepared.draftId));
+        const j = r.ok ? await r.json() : null;
+        const pack = (j?.draft?.pack || {}) as Record<string, unknown>;
+        // tiktok is the caption the reel goes out with; linkedin is the long
+        // form. Either is the prepared text; the sheet's column is neither.
+        const body = [pack.tiktok, pack.linkedin, pack.instagram].find((x) => typeof x === 'string' && x.trim());
+        if (typeof body === 'string' && body.trim()) {
+          text = body;
+          title = typeof pack.title === 'string' ? pack.title : '';
+          draftId = prepared.draftId;
+        }
+      } catch {
+        // A draft that cannot be read is not a reason to refuse the hand-off;
+        // the sheet's copy still goes over, exactly as it did before.
+      }
+    }
     // A YouTube source is public and genuinely worth linking; a private Drive
     // link in the body is not, and the video is attached natively now anyway.
-    const text = [v.copy || v.title, media || !youtubeUrl ? '' : 'Watch: ' + youtubeUrl].filter(Boolean).join('\n\n');
-    handoff(text, media, media ? v.title || 'Video' : '', { tab: v.tab, row: v.row, link, format: v.format || '' });
+    if (!text) text = [v.copy || v.title, media || !youtubeUrl ? '' : 'Watch: ' + youtubeUrl].filter(Boolean).join('\n\n');
+    handoff(text, media, media ? v.title || 'Video' : '', { tab: v.tab, row: v.row, link, format: v.format || '' }, title, draftId);
   }
 
   async function load(kind: Tab, fresh: boolean) {
@@ -996,9 +1053,17 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     void prepareSelected([v]);
   }
 
-  function handoff(text: string, media: string, mediaLabel: string, from?: { tab: string; row: number; link: string; format?: string }) {
+  function handoff(
+    text: string,
+    media: string,
+    mediaLabel: string,
+    from?: { tab: string; row: number; link: string; format?: string },
+    title = '',
+    draftId = '',
+  ) {
     workspace.patch({
-      handoffText: text, handoffMedia: media, handoffMediaLabel: mediaLabel,
+      handoffText: text, handoffTitle: title, handoffDraftId: draftId,
+      handoffMedia: media, handoffMediaLabel: mediaLabel,
       // WHERE it came from, so the composer can send the row with the post.
       handoffTab: from?.tab || '', handoffRow: from?.row || 0, handoffLink: from?.link || '', handoffFormat: from?.format || '',
       handoffNonce: Date.now(),

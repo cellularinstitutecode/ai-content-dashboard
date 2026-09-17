@@ -13,6 +13,22 @@ export async function GET(req: NextRequest) {
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
+  // ONE draft, by id.
+  //
+  // The Video Library's "Use in post" needs the copy this app PREPARED for a
+  // row, and the only way to reach it was to page through every draft looking
+  // for one — so the button handed over the sheet's own column instead, and a
+  // row prepared by the dashboard went to Metricool with text nobody had
+  // written for it.
+  const wanted = (req.nextUrl.searchParams.get('id') || '').trim();
+  if (wanted) {
+    const { data: one, error: oneErr } = await sb
+      .from('drafts').select('*').eq('id', wanted).eq('user_id', user.id).maybeSingle();
+    if (oneErr) return NextResponse.json({ error: oneErr.message }, { status: 500 });
+    if (!one) return NextResponse.json({ error: 'not_found' }, { status: 404 });
+    return NextResponse.json({ draft: one });
+  }
+
   // Pagination: ?limit (1-50, default 10) & ?offset (>=0, default 0).
   const url = req.nextUrl;
   const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '10', 10) || 10, 1), 50);

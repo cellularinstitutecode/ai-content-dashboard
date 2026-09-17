@@ -332,6 +332,17 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
     handoffSeen.current = nonce;
     if (workspace.handoffText) setMText(workspace.handoffText);
     if (workspace.handoffMedia) { setMMedia(workspace.handoffMedia); setMMediaLabel(workspace.handoffMediaLabel || 'Image from Drive'); }
+    // THE TITLE AND THE DRAFT ARE PART OF THE HAND-OFF, AND ARE ALWAYS SET.
+    //
+    // Not "set when present": a hand-off that carries no title must CLEAR the
+    // one in the box. They did not survive review otherwise — a post about
+    // therapeutic plasma exchange sat under "Red Light Therapy at Cellular
+    // Institute", left behind by the draft opened before it, and that title is
+    // what YouTube and TikTok would have published.
+    setMTitle(workspace.handoffTitle || '');
+    setMDraftId(workspace.handoffDraftId || '');
+    setMKeyword(null);
+    setMSent(null);
     setMSource(workspace.handoffTab && workspace.handoffRow >= 2 ? { tab: workspace.handoffTab, row: workspace.handoffRow, link: workspace.handoffLink, format: workspace.handoffFormat || '' } : null);
     // THE CHANNELS COME WITH IT.
     //
@@ -350,7 +361,7 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
     // reel as Instagram and Facebook: the exact channels this is fixing.
     if (workspace.handoffTab && workspace.handoffRow >= 2) setMNetworks(DEFAULT_VIDEO_NETWORKS);
     setMStatus(null);
-    workspace.patch({ handoffText: '', handoffMedia: '', handoffMediaLabel: '', handoffTab: '', handoffRow: 0, handoffLink: '', handoffFormat: '' });
+    workspace.patch({ handoffText: '', handoffTitle: '', handoffDraftId: '', handoffMedia: '', handoffMediaLabel: '', handoffTab: '', handoffRow: 0, handoffLink: '', handoffFormat: '' });
     try { scrollToPublisher(); } catch { /* not mounted yet */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.handoffNonce]);
@@ -1373,6 +1384,9 @@ network, text: mText, publishAt: scheduleInstantFromInput(mDate) || mDate, blogI
 // under the video player, which is what this used to send.
 title: mTitle.trim() || undefined,
 format: mSource?.format || undefined,
+// The prepared draft this copy came from, so the route reads its pack for the
+// sheet's FORMATO and YouTube settings instead of guessing them from the text.
+...(mDraftId ? { draftId: mDraftId } : {}),
 // The row this was handed over from, so the queue can name it.
 ...(mSource ? { sheetTab: mSource.tab, sheetRow: mSource.row, sourceUrl: mSource.link } : {}),
 }),

@@ -24,6 +24,16 @@ export type Workspace = {
   // section's "Use in post" / "Use as hero image"). The composer consumes it
   // once — `handoffNonce` changing is the signal — and clears it.
   handoffText: string;
+  /**
+   * The title that belongs to THIS hand-off.
+   *
+   * Carried because the composer keeps its title across hand-offs otherwise:
+   * a post about plasma exchange went out titled "Red Light Therapy at
+   * Cellular Institute", left over from the draft looked at before it.
+   */
+  handoffTitle: string;
+  /** The prepared draft this copy came from, so Send updates it rather than making a second. */
+  handoffDraftId: string;
   handoffMedia: string;
   handoffMediaLabel: string;
   // WHERE it came from, when it came from a sheet row: the tab, the row and
@@ -37,7 +47,7 @@ export type Workspace = {
   handoffNonce: number;
 };
 
-const BLANK: Workspace = { topic: '', keyword: '', domain: '', draftId: '', source: '', handoffText: '', handoffMedia: '', handoffMediaLabel: '', handoffTab: '', handoffRow: 0, handoffLink: '', handoffFormat: '', handoffNonce: 0 };
+const BLANK: Workspace = { topic: '', keyword: '', domain: '', draftId: '', source: '', handoffText: '', handoffTitle: '', handoffDraftId: '', handoffMedia: '', handoffMediaLabel: '', handoffTab: '', handoffRow: 0, handoffLink: '', handoffFormat: '', handoffNonce: 0 };
 const STORE = 'chi:workspace:v1';
 const EVENT = 'chi:workspace';
 
