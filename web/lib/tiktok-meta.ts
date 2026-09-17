@@ -16,7 +16,9 @@
 // again without the block and says so, so a wrong name costs a preset, never
 // a post.
 //
-// No imports, so the test runner runs this file directly.
+// Imports only pure siblings, so the test runner runs this file directly.
+
+import { cleanVideoTitle, looksLikeFilename } from './video-title.ts';
 
 export type TiktokPrivacy = 'PUBLIC_TO_EVERYONE' | 'MUTUAL_FOLLOW_FRIENDS' | 'FOLLOWER_OF_CREATOR' | 'SELF_ONLY';
 
@@ -37,7 +39,10 @@ export const TIKTOK_TITLE_MAX = 150;
 /** The first line of the caption, cleaned, as TikTok's title. */
 export function tiktokTitleFrom(title: string | null | undefined, body?: string | null): string {
   const firstLine = String(body || '').split('\n').map((l) => l.trim()).find(Boolean) || '';
-  const raw = String(title || '').trim() || firstLine;
+  // Same rule as YouTube's: the Drive filename is not a public title. See
+  // lib/video-title.ts — "Reel_RedLightRyall_Rodrigo" was going out verbatim.
+  const supplied = String(title || '').trim();
+  const raw = (supplied && looksLikeFilename(supplied) ? cleanVideoTitle(supplied) : supplied) || firstLine;
   const clean = raw.replace(/[<>]/g, '').replace(/\s+/g, ' ').trim();
   if (clean.length <= TIKTOK_TITLE_MAX) return clean;
   const cut = clean.slice(0, TIKTOK_TITLE_MAX);

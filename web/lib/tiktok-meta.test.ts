@@ -10,7 +10,10 @@ test('the preset is public with comments, duet and stitch on, and no paid-partne
   assert.equal(d.disableStitch, false);
   assert.equal(d.commercialContentOwnBrand, false);
   assert.equal(d.commercialContentThirdParty, false);
-  assert.equal(d.title, 'Reel_RyallCellgenicScript16_Rodrigo');
+  // The FILENAME is not the title. This used to assert the raw Drive name went
+  // through untouched, which is exactly what put "Reel_..._Rodrigo" on the
+  // clinic's TikTok. See lib/video-title.ts.
+  assert.equal(d.title, 'Cellgenic Script at Cellular Institute');
 });
 
 test('the own-brand disclosure is an explicit setting, not a default', () => {

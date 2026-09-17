@@ -17,6 +17,7 @@
 // Pure, so the rules are unit-tested without a network (lib/youtube-meta.test.ts).
 
 /** Metricool's `youtubeData` object. Field names come from its scheduler schema. */
+import { cleanVideoTitle, looksLikeFilename } from './video-title.ts';
 import { isVerticalFormat } from './video-format.ts';
 
 export type YoutubeData = {
@@ -39,7 +40,15 @@ export const YOUTUBE_TITLE_MAX = 99;
  */
 export function youtubeTitleFrom(title: string | null | undefined, body?: string | null): string {
   const firstLine = String(body || '').split('\n').map((l) => l.trim()).find(Boolean) || '';
-  const raw = String(title || '').trim() || firstLine;
+  // A FILENAME IS NOT A TITLE.
+  //
+  // The title handed in here is the Drive file's name, and the clinic's files
+  // are named for whoever shot and edited them — so "Reel_RedLightRyall_Rodrigo"
+  // was going onto YouTube verbatim as the video's public title, staff names,
+  // "Reel_" prefix, extension and all. Cleaned into what the video is actually
+  // about (lib/video-title.ts); a title somebody actually typed is left alone.
+  const supplied = String(title || '').trim();
+  const raw = (supplied && looksLikeFilename(supplied) ? cleanVideoTitle(supplied) : supplied) || firstLine;
   const clean = raw
     .replace(/[<>]/g, '')
     // A title is one line. A stray newline or run of spaces from the sheet

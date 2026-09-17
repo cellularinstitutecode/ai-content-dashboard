@@ -154,6 +154,32 @@ test('the mode is the SERVER\u2019s, never the caller\u2019s', () => {
   }
 });
 
+test('BOTH send paths actually run the video rule \u2014 not just the function existing', () => {
+  // THE TEST THAT WAS GREEN WHILE THE RULE WAS FALSE.
+  //
+  // The version below asserts videoVerdict RETURNS pending for a video post
+  // with no video. It never asserted that anything CALLS it — and when posts
+  // stopped waiting for Approve, the only two callers were Approve and the
+  // Autopilot's approve, so the rule was not on the road at all. A LinkedIn
+  // post of transcript-written copy with no video published itself.
+  //
+  // A pure function asserted in isolation is not a test that the product obeys
+  // it. These are the call sites.
+  for (const door of ['lib/video-publish.ts', 'app/api/metricool/schedule/route.ts']) {
+    assert.match(
+      code(door),
+      /preflightPost\(/,
+      door + ' no longer runs the shared pre-flight \u2014 a post can reach Metricool without its video, over its limit, or in the past',
+    );
+  }
+  // And the sweep has to HAND IT the pack, or the rule has nothing to judge.
+  assert.match(
+    code('lib/video-autopilot.ts'),
+    /pack:\s*\{\s*kind:\s*'video'/,
+    'the sweep no longer tells publishVideoDraft the post was written from a video',
+  );
+});
+
 test('a video post with no video still does not go out', () => {
   // Unchanged by any of the above, and the one the clinic said first: "only
   // with the video included; if not, it doesn\u2019t go out." Scheduling on send
