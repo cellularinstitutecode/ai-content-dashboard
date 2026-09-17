@@ -1299,6 +1299,10 @@ const ok = results.filter((x) => x.ok).map((x) => x.network);
 // leave a person wondering whether there are now two of them — which is the
 // very anxiety the old refusal was trying to prevent.
 const updated = results.filter((x: any) => x.ok && x.data?.updated === true).length;
+// The draft that was waiting had already been removed in Metricool, so a
+// fresh one was made. Distinct from "updated" on purpose: saying updated
+// here would send somebody hunting for a draft that does not exist.
+const recreated = results.filter((x: any) => x.ok && x.data?.recreated === true).map((x: any) => x.network);
 // THE REASON, NOT JUST THE NAME.
 //
 // This used to project straight to `.network`, so "failed on linkedin" was the
@@ -1314,9 +1318,13 @@ const reasons = bad.map((x) => x.network + ': ' + x.why).join(' ');
 if (failed.length === 0) {
 // Kept, not cleared: the text stays where the person can see it, the button
 // turns into "Sent", and the green line above it says where the drafts went.
-setMStatus(updated ? 'Updated ' + updated + ' draft' + (updated === 1 ? '' : 's') + ' already waiting in your queue \u2014 no new ones were made. Approve there when you are happy.' : null);
+setMStatus([
+  updated ? 'Updated ' + updated + ' draft' + (updated === 1 ? '' : 's') + ' already waiting in your queue \u2014 no new ones were made.' : '',
+  recreated.length ? 'The ' + recreated.join(' and ') + ' draft' + (recreated.length === 1 ? '' : 's') + ' had already been removed in Metricool, so a fresh one was created.' : '',
+  (updated || recreated.length) ? 'Approve in the queue when you are happy.' : '',
+].filter(Boolean).join(' ') || null);
 setMSent({ key: mKey, networks: ok });
-if (updated) refreshPosts();
+if (updated || recreated.length) refreshPosts();
 } else if (ok.length === 0) {
 setMStatus('Error: failed on ' + failed.join(', ') + '. ' + reasons);
 } else {

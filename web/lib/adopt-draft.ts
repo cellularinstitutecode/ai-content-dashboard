@@ -67,3 +67,24 @@ export function decideAdoption(posts: readonly AdoptablePost[], network: string)
 
   return { action: 'create' };
 }
+
+/**
+ * Did the replace fail because the draft is no longer there?
+ *
+ * Metricool answers 404 to a PUT at a post id it does not have, which happens
+ * for two ordinary reasons: the draft was deleted in Metricool directly — which
+ * is exactly what clearing duplicates by hand does — or the post belongs to a
+ * different brand than the one being sent to, so the id is not found in THIS
+ * blog. Either way our row is stale, and the send should create rather than
+ * dead-end.
+ *
+ * Narrow on purpose. A rejected body (400), a refused credential (401/403), a
+ * rate limit (429) or an outage (5xx) must NEVER be retried as a create: the
+ * post may well exist, and creating a second one is how the duplicates this
+ * whole guard exists to prevent get made.
+ */
+export function replaceMissing(status: unknown): boolean {
+  const code = Number(status);
+  if (!Number.isFinite(code)) return false;
+  return code === 404 || code === 410;
+}
