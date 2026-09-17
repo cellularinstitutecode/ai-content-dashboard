@@ -129,6 +129,8 @@ export type NormalizeOutcome = {
    * a response body is not ours to display.
    */
   shape?: string;
+  /** Every endpoint tried, and what it answered. Reported when none worked. */
+  attempts?: { path: string; status: number }[];
 };
 
 /**
@@ -140,8 +142,10 @@ export type NormalizeOutcome = {
  */
 export async function normalizeMediaDetailed(rawUrl: string): Promise<NormalizeOutcome> {
   const url = String(rawUrl || '').trim();
-  if (!url) return { url: '', ok: false, status: null, error: 'no url' };
+  if (!url) return { url: '', ok: false, status: null, error: 'no url', attempts: [] };
   let lastStatus: number | null = null;
+  /** Which endpoints answered what. Reported when nothing worked. */
+  const attempts: { path: string; status: number }[] = [];
   try {
     // 60s, not the client's usual 15. Normalising is not a metadata call: it is
     // Metricool PULLING the file onto its own storage, and the clinic's reels
@@ -154,10 +158,19 @@ export async function normalizeMediaDetailed(rawUrl: string): Promise<NormalizeO
     // ever sent went through `image/url`, the only path the code knew. If
     // Metricool has no such endpoint it answers non-ok and the image one is
     // tried, exactly as before — and the log says which one answered.
+    // THE PATH, in the order most likely to be the right one.
+    //
+    // Every other call in this file is versioned — /v2/scheduler/posts — and
+    // this one alone was not. That may be correct (it has worked for smaller
+    // files) or may be why a large one comes back with an answer holding no
+    // reference; from here there is no way to tell, because this sandbox cannot
+    // reach app.metricool.com to ask. So both spellings are tried, cheaply: a
+    // wrong path 404s in milliseconds, and whichever answers is recorded in
+    // `attempts` and reported on the screen when the whole thing fails.
     const isVideo = looksLikeVideoUrl(url);
     const paths = isVideo
-      ? ['/actions/normalize/video/url', '/actions/normalize/image/url']
-      : ['/actions/normalize/image/url'];
+      ? ['/v2/actions/normalize/video/url', '/actions/normalize/video/url', '/v2/actions/normalize/image/url', '/actions/normalize/image/url']
+      : ['/v2/actions/normalize/image/url', '/actions/normalize/image/url'];
     // Four minutes for a video, one for an image.
     //
     // Sixty seconds was the figure from when the video came off a CDN. It now
@@ -171,11 +184,12 @@ export async function normalizeMediaDetailed(rawUrl: string): Promise<NormalizeO
     let res: Response | null = null;
     for (const path of paths) {
       res = await metricoolFetch(path + '?url=' + encodeURIComponent(url), { timeoutMs });
-      if (res.ok) { if (path.includes('/video/')) console.info('metricool:normalize-media via video endpoint'); break; }
+      attempts.push({ path, status: res.status });
+      if (res.ok) { console.info('metricool:normalize-media via', path); break; }
       lastStatus = res.status;
       console.warn('metricool:normalize-media non-ok', path, res.status);
     }
-    if (!res || !res.ok) return { url, ok: false, status: lastStatus, error: null };
+    if (!res || !res.ok) return { url, ok: false, status: lastStatus, error: null, attempts };
     const raw = await res.text();
     // Read the way a person would: find the reference in the answer, whatever
     // it is called and however deep it sits. The reader this replaced knew five
@@ -184,13 +198,13 @@ export async function normalizeMediaDetailed(rawUrl: string): Promise<NormalizeO
     // through it and a 477 MB upload that had already crossed the wire was
     // discarded over a key name. lib/metricool-normalize-parse.ts.
     const parsed = readNormalizedUrl(raw, url);
-    if (parsed.url) return { url: parsed.url, ok: true, status: res.status, error: null, shape: parsed.shape };
+    if (parsed.url) return { url: parsed.url, ok: true, status: res.status, error: null, shape: parsed.shape, attempts };
     console.warn('metricool:normalize-media unrecognised response', parsed.shape, raw.slice(0, 300));
-    return { url, ok: false, status: res.status, error: null, shape: parsed.shape };
+    return { url, ok: false, status: res.status, error: null, shape: parsed.shape, attempts };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.warn('metricool:normalize-media failed', message);
-    return { url, ok: false, status: lastStatus, error: message };
+    return { url, ok: false, status: lastStatus, error: message, attempts };
   }
 }
 

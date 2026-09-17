@@ -52,6 +52,25 @@ export function readableSize(bytes: number | null | undefined): string {
   return Math.max(1, Math.round(n / 1024)) + ' KB';
 }
 
+
+/**
+ * Which endpoints were tried and what each said, in one short clause.
+ *
+ * "v2/video 404 · video 200". Paths and status codes, nothing else — this is
+ * the fact that ends a guessing round, and it is not a secret.
+ */
+export function attemptTrace(attempts: readonly { path: string; status: number }[] | null | undefined): string {
+  const rows = (attempts || []).slice(0, 4).map((a) => {
+    const short = String(a.path || '')
+      .replace('/actions/normalize/', '/')
+      .replace(/^\//, '')
+      .replace(/\/url$/, '')
+      .replace('v2//', 'v2/');
+    return short + ' ' + a.status;
+  });
+  return rows.join(' \u00b7 ');
+}
+
 /**
  * What went wrong, from the status Metricool answered with.
  *
@@ -67,11 +86,15 @@ export function normalizeFailure(input: {
   sizeBytes?: number | null;
   /** The answer's structure in types, when it answered with one we could not read. */
   shape?: string | null;
+  /** Every endpoint tried, and its status. */
+  attempts?: readonly { path: string; status: number }[] | null;
 }): NormalizeFailure {
   const status = Number.isFinite(Number(input.status)) ? Number(input.status) : null;
   const size = readableSize(input.sizeBytes);
   const sized = size ? ' The file is ' + size + '.' : '';
 
+  const trace = attemptTrace(input.attempts);
+  const tried = trace ? ' Tried ' + trace + '.' : '';
   const err = String(input.error || '');
   if (err) {
     const timedOut = /timed out|timeout|abort/i.test(err);
@@ -112,7 +135,7 @@ export function normalizeFailure(input: {
     return {
       reason: 'refused',
       status,
-      message: 'Metricool answered 404 for the upload — it could not fetch the video from the link it was given.' + sized,
+      message: 'Metricool answered 404 for the upload — no such endpoint, or it could not fetch the video from the link it was given.' + sized + tried,
     };
   }
   if (status === 429) {
@@ -133,7 +156,7 @@ export function normalizeFailure(input: {
     return {
       reason: 'refused',
       status,
-      message: 'Metricool refused the video (' + status + ').' + sized,
+      message: 'Metricool refused the video (' + status + ').' + sized + tried,
     };
   }
   // The shape, in types, because this is the one failure whose fix is a key
@@ -144,7 +167,7 @@ export function normalizeFailure(input: {
     reason: 'unreadable',
     status,
     message: 'Metricool answered, but not with a reference this app could read, so the video would have been dropped silently.' + sized +
-      (shape ? ' It replied with ' + shape + '.' : ''),
+      (shape ? ' It replied with ' + shape + '.' : '') + tried,
   };
 }
 

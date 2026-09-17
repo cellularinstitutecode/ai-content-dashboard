@@ -21,7 +21,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { describeShape, readNormalizedUrl } from './metricool-normalize-parse.ts';
-import { normalizeFailure } from './media-normalize-reason.ts';
+import { attemptTrace, normalizeFailure } from './media-normalize-reason.ts';
 
 const SENT = 'https://studio.example.com/api/media/video/abc/1800000000/ff/video.mp4';
 const THEIRS = 'https://cdn.metricool.com/media/9f3a2b.mp4';
@@ -114,4 +114,30 @@ test('the message names the shape, so the next unknown answer is a five-minute f
   assert.equal(out.reason, 'unreadable');
   assert.match(out.message, /477 MB/);
   assert.match(out.message, /It replied with \{data:string, status:number\}\./);
+});
+
+test('the message says which endpoints were tried and what each answered', () => {
+  // Every other call in lib/metricool.ts is versioned (/v2/scheduler/posts) and
+  // the normalise was not. From this sandbox there is no way to ask which
+  // spelling is right — app.metricool.com is blocked — so both are tried and
+  // the answer is reported instead of guessed at for another round.
+  const attempts = [
+    { path: '/v2/actions/normalize/video/url', status: 404 },
+    { path: '/actions/normalize/video/url', status: 200 },
+  ];
+  assert.equal(attemptTrace(attempts), 'v2/video 404 \u00b7 video 200');
+  const out = normalizeFailure({ status: 200, shape: '{status:string}', attempts });
+  assert.match(out.message, /Tried v2\/video 404 · video 200\./);
+  // Nothing to report is nothing said, rather than an empty clause.
+  assert.equal(attemptTrace([]), '');
+  assert.ok(!/Tried/.test(normalizeFailure({ status: 200 }).message));
+});
+
+test('a 404 from every endpoint reads as "no such endpoint", not "your file is broken"', () => {
+  const out = normalizeFailure({
+    status: 404,
+    attempts: [{ path: '/v2/actions/normalize/video/url', status: 404 }, { path: '/actions/normalize/video/url', status: 404 }],
+  });
+  assert.match(out.message, /no such endpoint/);
+  assert.match(out.message, /Tried/);
 });
