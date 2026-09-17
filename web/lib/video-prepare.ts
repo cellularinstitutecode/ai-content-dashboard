@@ -15,7 +15,7 @@
 // It never publishes and never ticks a network column. Approve is still a person.
 import 'server-only';
 
-import { autoKeywordBrief, generateContentPack, judgeClaimSupport, type BrandContext, type ContentPack, type SemrushStamp } from '@/lib/ai';
+import { autoKeywordBrief, generateContentPack, judgeClaimSupport, writeTitle, type BrandContext, type ContentPack, type SemrushStamp } from '@/lib/ai';
 import { avisoNumberFor, checkCompliance } from '@/lib/compliance';
 import { resolveTranscript, type TranscriptOrigin } from '@/lib/video-transcript';
 import { keywordLineFrom } from '@/lib/video-row';
@@ -461,12 +461,18 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   // The raw `title` stays exactly where it is used for everything internal —
   // the banned-names guard below needs the editor's name precisely BECAUSE it
   // must never be published.
-  const publicTitle = professionalTitle({
+  // Computed here as the fallback, and written properly once the copy exists —
+  // a title drawn from what the speaker actually said beats one guessed from
+  // the subject line, and the copy is not written yet at this point.
+  const titleFallback = () => professionalTitle({
     supplied: input.title,
+    drafted: draftedTitle,
     keyword: brief.stamp.primary,
     spoken,
     filename: title,
   }).title;
+  /** What the model called it, once it had read the transcript and the copy. */
+  let draftedTitle = '';
 
   // The Instagram-style caption (short, hashtags, REF + AVISO) is the TikTok
   // caption; LinkedIn gets the longer, insight-led post plus the video link.
@@ -846,6 +852,23 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
       title,
     };
   }
+  // THE TITLE, WRITTEN FROM WHAT WAS SAID.
+  //
+  // Not the file name, which names whoever shot the video, and not the keyword
+  // alone, which is a guess about the video made from outside it. The words are
+  // already here: the transcript that produced this copy, and the copy itself.
+  //
+  // Budget-guarded and fail-open — an empty answer falls through to the keyword,
+  // then the transcript's own subject, then the file, exactly as before.
+  if (budgetMs <= 0 || canCheckClaim(remainingMs(startedAt, budgetMs, Date.now()))) {
+    draftedTitle = await writeTitle({
+      copy: tiktok || linkedin,
+      transcript: transcriptExcerpt(transcript, 3000),
+      subject,
+    });
+  }
+  const publicTitle = titleFallback();
+
   const videoPack: VideoPack = {
     ...pack,
     kind: 'video',

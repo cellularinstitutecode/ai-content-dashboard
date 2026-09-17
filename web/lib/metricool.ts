@@ -7,6 +7,7 @@ import { modeFlags, replacePostBody, type PostMode, type ReplacePostInput } from
 import type { YoutubeData } from '@/lib/youtube-meta';
 import type { TiktokData } from '@/lib/tiktok-meta';
 import { recordProviderOutcome } from '@/lib/provider-status';
+import { readNormalizedUrl } from '@/lib/metricool-normalize-parse';
 export { modeFlags, replacePostBody, type PostMode, type ReplacePostInput };
 
 export type Provider =
@@ -120,6 +121,14 @@ export type NormalizeOutcome = {
   status: number | null;
   /** The transport failure, when it did not. */
   error: string | null;
+  /**
+   * The answer's structure, in TYPES — "{data:string, status:number}".
+   *
+   * Carried so an unreadable reply diagnoses itself on the screen instead of in
+   * a console nobody reads. Types only: the shape is the fact worth having, and
+   * a response body is not ours to display.
+   */
+  shape?: string;
 };
 
 /**
@@ -168,24 +177,16 @@ export async function normalizeMediaDetailed(rawUrl: string): Promise<NormalizeO
     }
     if (!res || !res.ok) return { url, ok: false, status: lastStatus, error: null };
     const raw = await res.text();
-    let data: unknown = null;
-    try { data = JSON.parse(raw); } catch { data = raw; }
-
-    // A bare URL, quoted or not.
-    if (typeof data === 'string') {
-      const t = data.trim().replace(/^"|"$/g, '');
-      return /^https?:\/\//i.test(t)
-        ? { url: t, ok: true, status: res.status, error: null }
-        : { url, ok: false, status: res.status, error: null };
-    }
-    const obj = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
-    const inner = (obj.data && typeof obj.data === 'object' ? obj.data : obj) as Record<string, unknown>;
-    for (const key of ['url', 'normalizedUrl', 'mediaUrl', 'mediaId', 'id']) {
-      const v = inner[key];
-      if (typeof v === 'string' && v.trim()) return { url: v.trim(), ok: true, status: res.status, error: null };
-    }
-    console.warn('metricool:normalize-media unrecognised response', raw.slice(0, 300));
-    return { url, ok: false, status: res.status, error: null };
+    // Read the way a person would: find the reference in the answer, whatever
+    // it is called and however deep it sits. The reader this replaced knew five
+    // shapes and looked one level into `data` only when `data` was an object —
+    // so `{"data": "https://…"}`, the most ordinary REST shape there is, fell
+    // through it and a 477 MB upload that had already crossed the wire was
+    // discarded over a key name. lib/metricool-normalize-parse.ts.
+    const parsed = readNormalizedUrl(raw, url);
+    if (parsed.url) return { url: parsed.url, ok: true, status: res.status, error: null, shape: parsed.shape };
+    console.warn('metricool:normalize-media unrecognised response', parsed.shape, raw.slice(0, 300));
+    return { url, ok: false, status: res.status, error: null, shape: parsed.shape };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.warn('metricool:normalize-media failed', message);

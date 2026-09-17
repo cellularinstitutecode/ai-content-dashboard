@@ -244,6 +244,7 @@ export async function POST(req: NextRequest) {
         status: norm.failure?.status ?? null,
         error: norm.failure?.error ?? null,
         sizeBytes: probe?.bytes ?? null,
+        shape: norm.failure?.shape ?? null,
       });
       reportError('metricool:normalize-refused', new Error(failure.message), {
         reason: failure.reason,

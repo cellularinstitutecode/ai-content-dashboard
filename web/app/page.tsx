@@ -276,6 +276,14 @@ const [mText, setMText] = useState('');
 // "Video_RyallxCellgenicxCellularInstitute_Rodrigo.mp4" as the name of the
 // post. There was no way to see it before sending and no way to change it.
 const [mTitle, setMTitle] = useState('');
+/**
+ * The draft this post is continuing, when it is one.
+ *
+ * Carried so "Write the title" can read that draft's transcript — the words the
+ * speaker actually said are what make the title about the video rather than
+ * about the caption.
+ */
+const [mDraftId, setMDraftId] = useState<string>('');
 /** The keyword research behind this post: from the draft, or run from here. */
 const [mKeyword, setMKeyword] = useState<{ primary: string; volume: number | null } | null>(null);
 const [mKwBusy, setMKwBusy] = useState(false);
@@ -932,6 +940,7 @@ function continueDraft(p: any) {
   // The draft already knows both of these: prepareVideo titles the pack from
   // the keyword search it ran (lib/post-title.ts), and /api/posts now passes
   // them through instead of stopping at the route.
+  setMDraftId(String(p?.draft_id || ''));
   const keyword = p?.packKeyword ? String(p.packKeyword) : '';
   setMKeyword(keyword ? { primary: keyword, volume: null } : null);
   // env: {} on purpose — the strip list is a server setting, and the browser
@@ -1307,50 +1316,40 @@ setMAnalytics(data);
 // Is the box holding a filename rather than a title? Decided by the same rule
 // the server uses, so the panel and the post never disagree about it.
 const mTitleIsInternal = Boolean(mTitle.trim()) && looksInternal(mTitle, {});
-// The title the keyword research would give, ready to accept in one press.
-const mKeywordTitle = mKeyword?.primary
-  ? professionalTitle({ keyword: mKeyword.primary, env: {} }).title
-  : '';
+
 
 /**
- * Ask what people actually search for, and offer that as the title.
+ * Write the title from the video, not from the file.
  *
- * The research the prepared rows run has been server-side only: a post written
- * or continued here had no way to reach it, so the one screen where a title is
- * chosen was also the one place with no idea what the clinic is trying to be
- * found under. Seeded from the title when there is one, else from the first
- * line of the copy — which is what the post is about when nobody has said.
+ * "Instead of the keyword search I want to make sure it drafts it with AI
+ *  taking into consideration what was said from the copy and the transcription
+ *  of the video."
+ *
+ * Both halves are sent: the copy in the box, and — when this post came from a
+ * draft — the transcript excerpt on that draft, which is the part that makes
+ * the title about what the speaker actually said. The answer goes through the
+ * same rules as a typed title (lib/post-title.ts), so a model naming the
+ * presenter has its title refused rather than published.
  */
-async function researchTitle() {
+async function draftTitle() {
   if (mKwBusy) return;
-  const seed = (mTitleIsInternal ? '' : mTitle.trim()) ||
-    mText.split(/\n/).map((l) => l.trim()).find((l) => l && !/^[#@]/.test(l) && !/^(AVISO|REF)/i.test(l)) || '';
-  if (!seed) { setMStatus('Write the title or the first line of the post first — the keyword search needs something to look up.'); return; }
   setMKwBusy(true);
   try {
-    const r = await fetch('/api/keywords?topic=' + encodeURIComponent(seed.slice(0, 120)));
+    const r = await fetch('/api/title', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: mText, draftId: mDraftId || undefined }),
+    });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(friendlyError(data, 'The keyword search did not answer.'));
-    // researchKeywords returns its rows under `keywords`, best first.
-    const rows: any[] = Array.isArray(data?.keywords) ? data.keywords : [];
-    const best = rows.find((k) => k && String(k.keyword || '').trim());
-    if (!best) {
-      // Semrush answers 200 with ok:false and a note when the key is unset or
-      // the account is out of units — a fact worth repeating rather than
-      // flattening into "no data".
-      const note = typeof data?.note === 'string' && data.note.trim() ? ' (' + data.note.trim() + ')' : '';
-      setMStatus('No keyword data came back for “' + seed.slice(0, 60) + '”' + note + '. The title is yours to write.');
-      setMKeyword(null);
-      return;
-    }
-    const primary = String(best.keyword).trim();
-    setMKeyword({ primary, volume: Number.isFinite(Number(best.volume)) ? Number(best.volume) : null });
-    // Only FILLS an empty or filename title. A title somebody wrote is never
-    // overwritten by a search they pressed to inform it.
-    if (!mTitle.trim() || mTitleIsInternal) setMTitle(professionalTitle({ keyword: primary, env: {} }).title);
-    setMStatus(null);
+    if (!r.ok) throw new Error(friendlyError(data, 'The title could not be written just now.'));
+    const title = String(data?.title || '').trim();
+    if (!title) throw new Error('The writer did not answer with a usable title.');
+    setMTitle(title);
+    setMStatus(data?.fromTranscript
+      ? 'Title written from the video\u2019s transcript and this copy. Edit it if you like.'
+      : 'Title written from this copy. Edit it if you like.');
   } catch (e) {
-    setMStatus(friendlyError(e, 'The keyword search did not answer just now.'));
+    setMStatus(friendlyError(e, 'The title could not be written just now.'));
   } finally {
     setMKwBusy(false);
   }
@@ -2020,10 +2019,10 @@ className={"mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring
     It used to be the media label — the filename — and was never shown. */}
 <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
 <label htmlFor="composer-title" className="text-[12px] font-medium text-ink-muted">Title <span className="font-normal text-ink-faint">— what YouTube and TikTok show</span></label>
-<button type="button" onClick={() => void researchTitle()} disabled={mKwBusy}
-  title="Ask Semrush what people actually search for, and title the post that way"
+<button type="button" onClick={() => void draftTitle()} disabled={mKwBusy}
+  title="Written from the video’s transcript and the post itself — not from the file name"
   className="rounded-full bg-subtle px-2.5 py-1 text-[11px] font-semibold text-ink-muted ring-1 ring-line transition hover:ring-accent disabled:opacity-50">
-  {mKwBusy ? 'Searching…' : '🔑 Keyword search'}
+  {mKwBusy ? 'Writing…' : '✨ Write the title'}
 </button>
 </div>
 <input id="composer-title" value={mTitle} onChange={(e) => setMTitle(e.target.value)}
@@ -2031,17 +2030,13 @@ className={"mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring
   className="mt-1 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
 {mTitleIsInternal && (
   <p className="mt-1.5 text-[12px] font-medium text-amber-700">
-    That is the file’s name, not a title. <button type="button" className="underline" onClick={() => setMTitle(professionalTitle({ keyword: mKeyword?.primary || '', filename: mTitle, env: {} }).title)}>Clean it up</button>
-    {' '}or press Keyword search.
+    That is the file’s name, not a title. Press <span className="font-semibold">Write the title</span> and it will be written from the video.
   </p>
 )}
 {mKeyword && (
   <p className="mt-1.5 text-[11px] text-ink-muted">
     🔑 Keyword research: <span className="font-semibold text-ink">{mKeyword.primary}</span>
     {mKeyword.volume ? ' · ' + mKeyword.volume.toLocaleString() + ' searches a month' : ''}
-    {mKeywordTitle && mKeywordTitle !== mTitle && (
-      <> — <button type="button" className="font-semibold text-accent underline" onClick={() => setMTitle(mKeywordTitle)}>use it in the title</button></>
-    )}
   </p>
 )}
 <label htmlFor="composer-text" className="mt-4 block text-[12px] font-medium text-ink-muted">What should it say?</label>
@@ -2106,7 +2101,7 @@ Too long for {networkLabel(mLimit.network)} by {mOverBy.toLocaleString()} charac
 <span>✓ Scheduled on {mSent.networks.map((n) => networkLabel(n)).join(', ')}. {mSent.networks.length === 1 ? 'It goes' : 'They go'} out at the time above on {mSent.networks.length === 1 ? 'its' : 'their'} own — delete or reschedule below before then if you change your mind.</span>
 <span className="mt-1.5 flex flex-wrap gap-3">
 <button type="button" className="font-semibold text-emerald-900 underline" onClick={() => { const el = typeof document !== 'undefined' ? document.getElementById('publishing-queue') : null; if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Show the queue</button>
-<button type="button" className="font-semibold text-emerald-900 underline" onClick={() => { setMText(''); setMTitle(''); setMKeyword(null); setMMedia(''); setMMediaLabel(''); setMSource(null); setMSent(null); setMStatus(null); }}>Write another post</button>
+<button type="button" className="font-semibold text-emerald-900 underline" onClick={() => { setMText(''); setMTitle(''); setMKeyword(null); setMDraftId(''); setMMedia(''); setMMediaLabel(''); setMSource(null); setMSent(null); setMStatus(null); }}>Write another post</button>
 </span>
 </div>
 )}

@@ -107,5 +107,10 @@ test('the composer sends the title a person can see, not the filename', () => {
   assert.ok(!/title: mMediaLabel/.test(page), 'the media label is the FILENAME — it must never be the post title again');
   assert.match(page, /title: mTitle\.trim\(\) \|\| undefined/, 'the title box is what goes to Metricool');
   assert.match(page, /id="composer-title"/, 'and it has to be visible above the copy');
-  assert.match(page, /\/api\/keywords\?topic=/, 'with the keyword search reachable from there');
+  // The title is WRITTEN from the video now, not looked up: "instead of the
+  // keyword search I want to make sure it drafts it with AI taking into
+  // consideration what was said from the copy and the transcription of the
+  // video". The keyword search still runs where it belongs — server-side, when
+  // a row is prepared — and still shapes the copy; it just no longer names it.
+  assert.match(page, /\/api\/title/, 'with a way to write the title from the video');
 });
