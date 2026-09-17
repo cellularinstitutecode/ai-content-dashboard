@@ -1,8 +1,15 @@
 // web/lib/compliance.ts
-// The advertising rule for the clinic's Instagram and Facebook posts, as pure
-// functions so it can be unit-tested and applied identically everywhere:
+// The advertising rule for the clinic's SOCIAL posts, as pure functions so it
+// can be unit-tested and applied identically everywhere.
 //
-//   Every Instagram / Facebook post must carry
+// It started as an Instagram and Facebook rule and is not one any more:
+// LinkedIn and TikTok were added on 9 September and YouTube on 10 September,
+// because complianceGate was answering "does not apply" for the very networks
+// the clinic's video work goes to. SOCIAL_NETWORKS below is the list, and
+// complianceNetworksLabel() builds every sentence from it so the wording can
+// never again claim a narrower rule than the one being enforced.
+//
+//   Every post on one of those networks must carry
 //     1. an AVISO DE PUBLICIDAD line with the clinic's COFEPRIS advertising
 //        permit number (e.g. "AVISO DE PUBLICIDAD: 2623022002A00090"), and
 //     2. a "REF:" line citing a scientific study that supports what the post
@@ -31,6 +38,37 @@ export const DEFAULT_AVISO_NUMBER = '2623022002A00090';
  * it is hosted on has never been what the rule turns on.
  */
 const SOCIAL_NETWORKS = new Set(['instagram', 'facebook', 'ig', 'fb', 'linkedin', 'tiktok', 'youtube']);
+
+/** Proper names for the network ids, for a sentence a person reads. */
+const NETWORK_NAMES: Record<string, string> = {
+  instagram: 'Instagram', ig: 'Instagram', facebook: 'Facebook', fb: 'Facebook',
+  linkedin: 'LinkedIn', tiktok: 'TikTok', youtube: 'YouTube',
+};
+
+/**
+ * The networks this rule covers, named, for the sentence shown when a post is
+ * refused — derived from SOCIAL_NETWORKS rather than typed out beside it.
+ *
+ * Every message used to say "Instagram and Facebook posts…" and kept saying it
+ * for a week after LinkedIn, TikTok and YouTube joined the set, so somebody
+ * with none of those two selected was told their post failed a rule about two
+ * networks they were not posting to. Reading the set is what stops that
+ * happening again the next time it changes.
+ *
+ * `only` narrows it to the networks actually selected, which is what the
+ * composer wants; with no argument it names them all.
+ */
+export function complianceNetworksLabel(only?: readonly string[] | null): string {
+  const ids = (only && only.length ? only.map((p) => String(p || '').trim().toLowerCase()).filter((p) => SOCIAL_NETWORKS.has(p)) : [...SOCIAL_NETWORKS]);
+  const names: string[] = [];
+  for (const id of ids) {
+    const name = NETWORK_NAMES[id] || id;
+    if (!names.includes(name)) names.push(name);
+  }
+  if (!names.length) return 'These';
+  if (names.length === 1) return names[0];
+  return names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+}
 
 export function appliesTo(providers: readonly string[] | string | null | undefined): boolean {
   const list = Array.isArray(providers) ? providers : providers ? [providers] : [];
@@ -66,8 +104,12 @@ const DOI_RE = /\b(10\.\d{4,9}\/[^\s"'<>)\]]+)/i;
 
 export type ComplianceCheck = {
   ok: boolean;
-  /** Which required lines are missing. */
-  missing: ('aviso' | 'ref')[];
+  /**
+   * What is wrong. 'ref' means there is no REF line at all; 'doi' means there
+   * IS one and it carries no DOI. Told apart on purpose: one message for both
+   * sent people hunting for a line that was already sitting in front of them.
+   */
+  missing: ('aviso' | 'ref' | 'doi')[];
   /** The permit number found in the text, when an AVISO line is present. */
   avisoFound: string | null;
   /** True when the AVISO line is present but carries a different number. */
@@ -85,7 +127,7 @@ export type ComplianceCheck = {
  */
 export function checkCompliance(text: string, expectedAviso?: string | null): ComplianceCheck {
   const t = String(text || '');
-  const missing: ('aviso' | 'ref')[] = [];
+  const missing: ('aviso' | 'ref' | 'doi')[] = [];
   const av = AVISO_RE.exec(t);
   const avisoFound = av ? av[1].toUpperCase() : null;
   const expected = (expectedAviso || '').trim().toUpperCase() || DEFAULT_AVISO_NUMBER;
@@ -98,7 +140,8 @@ export function checkCompliance(text: string, expectedAviso?: string | null): Co
   // reaches Crossref, so a plausible-looking reference without one was passing every
   // check while nothing had ever confirmed the study exists — the exact failure the
   // "never invent a citation" instruction is there to prevent, with no way to catch it.
-  if (!ref || !doi) missing.push('ref');
+  if (!ref) missing.push('ref');
+  else if (!doi) missing.push('doi');
   return { ok: missing.length === 0, missing, avisoFound, avisoMismatch, ref, doi: doi ? doi.replace(/[.,;]+$/, '') : null };
 }
 
@@ -119,7 +162,7 @@ export function ensureAviso(text: string, avisoNumber?: string | null): string {
 }
 
 /** Sentence for a person, when a post is refused. */
-export function complianceMessage(check: ComplianceCheck): string {
+export function complianceMessage(check: ComplianceCheck, networks?: readonly string[] | null): string {
   if (check.ok) return '';
   const parts: string[] = [];
   if (check.missing.includes('aviso')) {
@@ -128,7 +171,8 @@ export function complianceMessage(check: ComplianceCheck): string {
       : 'the AVISO DE PUBLICIDAD line is missing');
   }
   if (check.missing.includes('ref')) parts.push('the REF line citing a scientific study is missing');
-  return 'Instagram and Facebook posts must carry the advertising notice and a scientific reference — ' + parts.join(', and ') + '.';
+  if (check.missing.includes('doi')) parts.push('the REF line has no DOI — it needs one like 10.1016/j.example.2024.01.001, which is what lets the citation be checked');
+  return complianceNetworksLabel(networks) + ' posts must carry the advertising notice and a scientific reference \u2014 ' + parts.join(', and ') + '.';
 }
 
 /** The instruction handed to the writer for Instagram / Facebook copy. */

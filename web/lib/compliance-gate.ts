@@ -36,7 +36,7 @@ export async function complianceGate(userId: string, text: string, providers: re
   const aviso = await avisoForUser(userId);
   if (!appliesTo(providers)) return { ok: true, applies: false, aviso, check: null, message: '' };
   const check = checkCompliance(text, aviso);
-  return { ok: check.ok, applies: true, aviso, check, message: check.ok ? '' : complianceMessage(check) };
+  return { ok: check.ok, applies: true, aviso, check, message: check.ok ? '' : complianceMessage(check, Array.isArray(providers) ? providers : providers ? [providers] : null) };
 }
 
 /** The JSON body a refused request returns — the same shape everywhere. */
