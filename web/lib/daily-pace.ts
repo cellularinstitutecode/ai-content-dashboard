@@ -14,7 +14,7 @@
 //     afternoon run would refill.
 //  3. WHEN TODAY STARTS. On the clinic's clock, not the server's: Vercel runs
 //     in UTC, and the nightly run at 07:00 UTC is 02:00 in Cancún — the same
-//     day whose 09:00 and 17:00 slots it is about to book.
+//     day whose 08:00 and 17:00 slots it is about to book.
 //
 // Pure and import-free: the test runner strips types and runs this directly.
 

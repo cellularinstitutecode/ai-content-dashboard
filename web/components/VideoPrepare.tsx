@@ -129,7 +129,7 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, bat
   const [tiktok, setTiktok] = useState('');
   const [clips, setClips] = useState<ClipOption[]>([]);
   const [clipUrl, setClipUrl] = useState('');
-  // The next free planner slot (09:00 / 17:00 Cancún), read from the server.
+  // The next free planner slot (08:00 / 17:00 Cancún), read from the server.
   // This used to be "tomorrow 9 AM" on the BROWSER's clock — from a UTC
   // machine that is tomorrow 09:00 UTC, labelled Cancún.
   const [when, setWhen] = useState('');

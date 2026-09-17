@@ -1,9 +1,9 @@
 // GET /api/schedule/next-slots?n=3
 //
-// The next free posting slots on the clinic's planner — 09:00 and 17:00
+// The next free posting slots on the clinic's planner — 08:00 and 17:00
 // Cancún by default, skipping instants a post already holds — as UTC
 // instants. The composer's time chips and the Prepare panel's default read
-// this instead of computing "tomorrow 9 AM" on the browser's own clock,
+// this instead of computing "tomorrow 8 AM" on the browser's own clock,
 // which on a UTC machine labelled 14:18 UTC as 2:18 PM Cancún.
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';

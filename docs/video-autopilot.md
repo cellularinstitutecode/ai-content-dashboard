@@ -77,10 +77,11 @@ person published something. Approve is still a person, exactly as before.
   (signs them; rotating it invalidates every outstanding link). System Status's
   **video_media** check reports both, and goes red only when one is genuinely
   missing — not because of which host it resolved.
-- **Timing:** the next free weekday at 09:00 clinic time, one post per slot.
-  Working off a backlog therefore spreads across mornings instead of stacking
-  thirty posts on one — which would read as spam on every network. Override the
-  hour with `VIDEO_AUTOPILOT_TIME` (e.g. `14:30`).
+- **Timing:** the next free slot on the clinic's clock — **08:00 and 17:00**,
+  two a day, every day — one post per slot. Working off a backlog therefore
+  spreads across days instead of stacking thirty posts on one, which would read
+  as spam on every network. Change the grid with `VIDEO_AUTOPILOT_TIMES`
+  (e.g. `08:00,13:00,17:00`); `VIDEO_POST_DAYS=weekdays` limits it to Monday–Friday.
 - **Every post carries the AVISO line and the REF citation** — LinkedIn
   included. `lib/compliance.ts` scopes the advertising rule to Instagram and
   Facebook, so the writer is only asked for a citation on those two; the
