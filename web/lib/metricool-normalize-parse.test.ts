@@ -198,3 +198,44 @@ test('the method is tried both ways, and the trace says which', () => {
     'GET is the default and stays unsaid; POST is the fact worth printing',
   );
 });
+
+// --- THE REGRESSION: STOPPING ON A STATUS RATHER THAN ON AN ANSWER ----------
+//
+// "I tried 186, which wasn't as large of a file, and it still didn't go
+//  through." Size was never the variable.
+//
+// Until #249 there was ONE call here — /actions/normalize/image/url — and every
+// video reached Metricool through it. #249 added a /video/ endpoint, tried it
+// first, and broke out of the loop on the first response that was merely `ok`.
+// The moment that endpoint answered 200 with something that is not a media
+// reference, this app stopped and never reached the endpoint that had been
+// working. Every video since failed at the door, whatever its size.
+
+test('the loop stops on a usable answer, not on a status', () => {
+  const src2 = readFileSync(new URL('../lib/metricool.ts', import.meta.url), 'utf8');
+  const fn = src2.slice(src2.indexOf('export async function normalizeMediaDetailed'), src2.indexOf('/** The URL to post'));
+  // A non-ok response continues to the next endpoint…
+  assert.match(fn, /if \(!res\.ok\) \{[\s\S]*?continue;/, 'a refusal must not end the search');
+  // …and so does a 200 that yields nothing usable. This is the line whose
+  // absence cost every video for two days.
+  assert.ok(!/if \(res\.ok\)[\s\S]{0,80}break/.test(fn), 'breaking on a status is the bug itself');
+  assert.match(fn, /parsed\.url && !sameUrl\(parsed\.url, url\)/, 'only a reference that is not our own ends it');
+  // The endpoint that worked before the regression leads.
+  const order = fn.slice(fn.indexOf('const paths ='), fn.indexOf('const budgetMs'));
+  assert.ok(
+    order.indexOf("'/actions/normalize/image/url'") < order.indexOf("'/actions/normalize/video/url'"),
+    'the path that demonstrably worked is tried first: "it worked" beats every theory about which is more correct',
+  );
+});
+
+test('trying harder cannot run the request off its own clock', () => {
+  // Metricool PULLS the file, so two attempts on a 477 MB reel is two
+  // transfers. Four attempts at four minutes each is twenty minutes inside a
+  // five-minute function: the platform kills it and the person sees nothing at
+  // all, which is worse than a named refusal.
+  const src2 = readFileSync(new URL('../lib/metricool.ts', import.meta.url), 'utf8');
+  const fn = src2.slice(src2.indexOf('export async function normalizeMediaDetailed'), src2.indexOf('/** The URL to post'));
+  assert.match(fn, /const deadline = Date\.now\(\) \+ budgetMs/, 'one clock across every attempt');
+  assert.match(fn, /timeoutMs: left/, 'each attempt gets what is left, not a fresh four minutes');
+  assert.match(fn, /if \(left < 10_000\) break/, 'and an attempt that cannot finish is not started');
+});

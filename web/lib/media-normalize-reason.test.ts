@@ -97,7 +97,9 @@ test('the route that hands Metricool a video can outlive the transfer it starts'
   const declared = /export const maxDuration = (\d+)/.exec(route);
   assert.ok(declared, 'the schedule route must declare a duration');
   const seconds = Number(declared![1]);
-  const videoNormalizeMs = Number(/const timeoutMs = isVideo \? (\d+)_000/.exec(src('lib/metricool.ts'))?.[1] || 0);
+  // Renamed from timeoutMs to budgetMs when it became one clock across every
+  // attempt rather than a fresh four minutes per attempt.
+  const videoNormalizeMs = Number(/const budgetMs = isVideo \? (\d+)_000/.exec(src('lib/metricool.ts'))?.[1] || 0);
   assert.ok(videoNormalizeMs > 0, 'the video normalise timeout must be readable');
   assert.ok(
     seconds >= videoNormalizeMs,
