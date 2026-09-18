@@ -16,7 +16,14 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import type { BrandContext } from '@/lib/ai';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+// THE ARITHMETIC, as with the schedule route.
+//
+// lib/images.ts allows each generation attempt 50 seconds and has four rungs,
+// and the vision check runs after whichever one answers — inside a 60-second
+// function. So a first attempt that ran long was killed by the platform with a
+// bodyless 504, and the rungs below it never ran at all. At `quality: high` a
+// generation is slower still, which would have made that the ordinary case.
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   try {

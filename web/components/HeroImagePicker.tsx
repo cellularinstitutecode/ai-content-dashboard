@@ -19,7 +19,7 @@
 //   Drop a file   the photo on your desk, downscaled in the browser and stored
 //                 beside the generated ones.
 //   Describe it   the prompt, prefilled from the post and yours to edit.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
 import { friendlyError } from '@/lib/friendly-error';
 
@@ -81,7 +81,12 @@ export default function HeroImagePicker({
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState('');
   const [status, setStatus] = useState<string | null>(null);
-  const [prompt, setPrompt] = useState('');
+  /**
+   * What is in the box, once somebody has typed. Until then the box SHOWS the
+   * default derived from the post — derived, not copied into state by an
+   * effect, which is a cascading render and a lint warning for the same reason.
+   */
+  const [typedPrompt, setTypedPrompt] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -89,18 +94,25 @@ export default function HeroImagePicker({
     () => currentPrompt?.trim() || 'A real treatment room at the clinic, photographed as it is: ' + topic,
     [currentPrompt, topic],
   );
-  useEffect(() => { setPrompt(defaultPrompt); }, [defaultPrompt]);
+  const prompt = typedPrompt ?? defaultPrompt;
 
-  // The team's Drive folder, read once when the library tab is first opened.
-  useEffect(() => {
-    if (tab !== 'library' || images.length || loading) return;
+  /**
+   * The team's Drive folder, read when the tab is opened.
+   *
+   * On the CLICK rather than in an effect: an effect that fires a fetch and
+   * flips a loading flag synchronously is a cascading render, and "read it when
+   * they ask for it" is what was meant anyway.
+   */
+  function openLibrary() {
+    setTab('library');
+    if (images.length || loading) return;
     setLoading(true);
     fetch('/api/sources?kind=images')
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => setImages(Array.isArray(j?.images) ? j.images : []))
       .catch(() => setStatus('The image library could not be read just now.'))
       .finally(() => setLoading(false));
-  }, [tab, images.length, loading]);
+  }
 
   async function send(body: Record<string, unknown>, label: string) {
     if (!draftId) { setStatus('Save the draft first — there is nothing to attach the picture to yet.'); return; }
@@ -123,8 +135,14 @@ export default function HeroImagePicker({
     }
   }
 
-  /** A Drive photo, copied into the dashboard's own store so a network can fetch it. */
-  async function useFromLibrary(img: DriveImage) {
+  /**
+   * A Drive photo, copied into the dashboard's own store so a network can fetch it.
+   *
+   * NOT named useSomething: eslint's rules-of-hooks reads any `use*` function as
+   * a React hook, and calling one from an onClick is an error — which is what
+   * this was called and what CI caught.
+   */
+  async function attachFromLibrary(img: DriveImage) {
     setBusy(img.id);
     setStatus(null);
     try {
@@ -163,7 +181,7 @@ export default function HeroImagePicker({
     <section className="mt-3 rounded-2xl border border-line bg-white p-4" aria-label="Choose the picture">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[13px] font-semibold text-ink">The picture</span>
-        <button type="button" className={tabStyle('library')} onClick={() => setTab('library')}>📁 Our library</button>
+        <button type="button" className={tabStyle('library')} onClick={openLibrary}>📁 Our library</button>
         <button type="button" className={tabStyle('upload')} onClick={() => setTab('upload')}>⬆ Drop a file</button>
         <button type="button" className={tabStyle('prompt')} onClick={() => setTab('prompt')}>✏️ Describe it</button>
       </div>
@@ -181,7 +199,7 @@ export default function HeroImagePicker({
                 key={img.id}
                 type="button"
                 disabled={Boolean(busy)}
-                onClick={() => void useFromLibrary(img)}
+                onClick={() => void attachFromLibrary(img)}
                 title={img.name}
                 className="group overflow-hidden rounded-xl ring-1 ring-line transition hover:ring-accent disabled:opacity-50"
               >
@@ -216,7 +234,7 @@ export default function HeroImagePicker({
           <textarea
             id="hero-prompt"
             value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
+            onChange={(e) => setTypedPrompt(e.target.value)}
             rows={3}
             className="mt-1 w-full resize-none rounded-2xl bg-subtle p-3 text-[13px] text-ink ring-1 ring-line focus:ring-accent"
           />

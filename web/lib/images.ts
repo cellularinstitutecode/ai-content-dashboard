@@ -237,6 +237,17 @@ type GeneratedImage = { bytes: Buffer; contentType: string; ext: string; model: 
 // last fallback's complaint.
 async function generateImageBytes(prompt: string): Promise<GeneratedImage> {
   const attempts: { model: string; body: Record<string, unknown> }[] = [
+    // HIGH, not medium.
+    //
+    // "Honestly the photos look too AI." Quality is the lever that answers that
+    // most directly: at medium the model spends less on the things that read as
+    // synthetic — hands, skin, the way light falls on a real surface — and
+    // those are exactly what a clinical photograph is judged on.
+    //
+    // It was medium because "medium keeps latency inside serverless limits",
+    // and that was true of a 60-second function. This route now runs at the
+    // ceiling app/api/posts uses, and the rung below catches a generation that
+    // still runs long, so the trade no longer has to be made in advance.
     {
       model: PRIMARY_MODEL,
       body: {
@@ -244,7 +255,21 @@ async function generateImageBytes(prompt: string): Promise<GeneratedImage> {
         prompt,
         n: 1,
         size: '1536x1024',
-        quality: 'medium', // medium keeps latency inside serverless limits
+        quality: 'high',
+        output_format: 'jpeg',
+        output_compression: 80,
+      },
+    },
+    // The old first rung, kept as the second: a model that will not do `high`,
+    // or a day when it is too slow, still produces an image rather than none.
+    {
+      model: PRIMARY_MODEL,
+      body: {
+        model: PRIMARY_MODEL,
+        prompt,
+        n: 1,
+        size: '1536x1024',
+        quality: 'medium',
         output_format: 'jpeg',
         output_compression: 80,
       },
