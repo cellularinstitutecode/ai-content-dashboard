@@ -14,6 +14,7 @@ import { tightestLimit, networkLabel, parseVideoUrl, draftLabel, PUBLISH_NETWORK
 import { filterQueue, matchesQueueSearch } from "@/lib/queue-search";
 import MediaPicker from "@/components/MediaPicker";
 import SchedulePack from "@/components/SchedulePack";
+import HeroImagePicker from "@/components/HeroImagePicker";
 import { useWorkspace } from "@/components/workspace";
 import { appliesTo as complianceApplies, checkCompliance, complianceNetworksLabel, ensureAviso, DEFAULT_AVISO_NUMBER } from "@/lib/compliance";
 import { PanelLoader } from "@/components/LoadingScreen";
@@ -214,7 +215,7 @@ const [attachingId, setAttachingId] = useState<string | null>(null);
  * kept as well, and lib/pack-schedule.ts turns it into one post per channel.
  */
 const [genPack, setGenPack] = useState<Record<string, unknown> | null>(null);
-const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string; verification?: { status?: string; score?: number | null; issues?: string[]; advisory?: string[]; textDetected?: boolean } } | null>(null);
+const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string; prompt?: string; verification?: { status?: string; score?: number | null; issues?: string[]; advisory?: string[]; textDetected?: boolean } } | null>(null);
 const [genImageLoading, setGenImageLoading] = useState(false);
 const [lastDraftId, setLastDraftId] = useState<string | null>(null);
 const [modalImgBusy, setModalImgBusy] = useState(false);
@@ -1803,6 +1804,14 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
 )}
 {keywordSource === 'none' && output && (
   <p className="mb-3 text-[11px] text-ink-faint">{semrushDraftNote(keywordReason as any)}</p>
+)}
+{output && lastDraftId && (
+  <HeroImagePicker
+    draftId={lastDraftId}
+    topic={prompt}
+    currentPrompt={genImage?.prompt || null}
+    onPicked={(img) => setGenImage({ url: img.url, alt: img.alt, model: img.model, verification: img.verification as never })}
+  />
 )}
 {output && genPack && (
   <SchedulePack

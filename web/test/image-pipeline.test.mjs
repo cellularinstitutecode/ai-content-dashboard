@@ -121,19 +121,43 @@ test('a deprecated parameter falls down the request ladder instead of failing', 
 });
 
 test('a model-access failure falls through to the fallback model', async () => {
+  // FOUR rungs on the primary model's ladder, not two: quality leads at `high`
+  // — the setting that answers "the photos look too AI" most directly — and
+  // steps down to `medium` before giving up on the parameter altogether, whose
+  // accepted values have moved between model generations. Only then does a
+  // different model get asked.
   script = [
-    imageErr('gen-rich', 404, 'model not found'),
+    imageErr('gen-high', 404, 'model not found'),
+    imageErr('gen-medium', 404, 'model not found'),
     imageErr('gen-minimal', 404, 'model not found'),
     imageOk('gen-fallback'),
     verifierSays('verify', { approved: true, textDetected: false, score: 90, issues: [] }),
   ];
   const img = await generatePackImage({ topic: 'cell culture' });
   assert.equal(img.model, 'gpt-image-1-mini');
-  // The middle rung drops `quality` but keeps asking for JPEG: a PNG from this
+
+  const high = calls.find((c) => c.label === 'gen-high');
+  assert.equal(high.body.quality, 'high', 'the first rung asks for the quality a clinical photograph is judged on');
+  const medium = calls.find((c) => c.label === 'gen-medium');
+  assert.equal(medium.body.quality, 'medium', 'and the rung below it steps down rather than failing');
+
+  // The minimal rung drops `quality` but keeps asking for JPEG: a PNG from this
   // rung is 2-5 MB against the JPEG's 250-500 KB, kept for the draft's life.
-  const middle = calls.find((c) => c.label === 'gen-minimal');
-  assert.equal(middle.body.output_format, 'jpeg', 'the second rung must still ask for JPEG');
-  assert.equal('quality' in middle.body, false, 'the second rung drops `quality`');
+  const minimal = calls.find((c) => c.label === 'gen-minimal');
+  assert.equal(minimal.body.output_format, 'jpeg', 'the third rung must still ask for JPEG');
+  assert.equal('quality' in minimal.body, false, 'the third rung drops `quality`');
+});
+
+test('the team’s own direction reaches the prompt, and the brand rules survive it', async () => {
+  // "The photos look too AI" was a direction nobody could give: the prompt was
+  // built from the post and a rotating style variant, and the only control was
+  // to press New image and hope.
+  script = [imageOk('gen'), verifierSays('verify', { approved: true, textDetected: false, score: 90, issues: [] })];
+  await generatePackImage({ topic: 'plasma exchange', direction: 'the real treatment room, nurse at the machine' });
+  const prompt = String(calls[0].body.prompt || '');
+  assert.match(prompt, /Direction from the team \(follow this closely\): the real treatment room, nurse at the machine/);
+  // The no-text mandate is not something a direction can talk its way out of.
+  assert.match(prompt, /Absolutely NO text of any kind/);
 });
 
 test('exhausted credit surfaces a real error rather than a silent no-op', async () => {

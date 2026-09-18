@@ -7,15 +7,23 @@
 // ready-for-review runs that don't have an image yet. Idempotent: a draft
 // that already carries `_image` returns it without spending anything.
 import { isAllowedEmail } from '@/lib/access';
+import { decodeDataUrl } from '@/lib/data-url';
 import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
-import { generatePackImage, imagesEnabled, removeSuperseded, type PackImage } from '@/lib/images';
+import { generatePackImage, imagesEnabled, removeSuperseded, storeBytes, type PackImage } from '@/lib/images';
 import { checkRateLimit } from '@/lib/rate-limit';
 import type { BrandContext } from '@/lib/ai';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+// THE ARITHMETIC, as with the schedule route.
+//
+// lib/images.ts allows each generation attempt 50 seconds and has four rungs,
+// and the vision check runs after whichever one answers — inside a 60-second
+// function. So a first attempt that ran long was killed by the platform with a
+// bodyless 504, and the rungs below it never ran at all. At `quality: high` a
+// generation is slower still, which would have made that the ordinary case.
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   try {
@@ -38,6 +46,20 @@ export async function POST(req: NextRequest) {
     const regenerate = body?.regenerate === true;
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
 
+    // A PHOTO, OR A DIRECTION — because "press New image and hope" was the only
+    // control there was.
+    //
+    //   direction  what the team wants the picture to be, in their own words.
+    //   useUrl     a real photograph already in the clinic's library, used as
+    //              it is. No generation, no credits, and nothing that "looks
+    //              too AI" because it is not.
+    //   dataUrl    a file dropped on the panel, stored in the same bucket the
+    //              generated ones live in.
+    const direction = typeof body?.prompt === 'string' ? body.prompt.trim().slice(0, 600) : '';
+    const useUrl = typeof body?.useUrl === 'string' ? body.useUrl.trim() : '';
+    const dataUrl = typeof body?.dataUrl === 'string' ? body.dataUrl : '';
+    const givenAlt = typeof body?.alt === 'string' ? body.alt.trim().slice(0, 300) : '';
+
     // Scoped explicitly to the owner as well as by RLS — every sibling route
     // (drafts, posts, templates, brand) does both, and this was the only
     // draft read/write in the codebase relying on RLS alone.
@@ -57,8 +79,42 @@ export async function POST(req: NextRequest) {
     // A stored image the checker marked as containing text is never good
     // enough to serve as "done": content images must be text-free, so treat
     // it like a regenerate request (next composition variant) instead.
+    // A PHOTOGRAPH THE CLINIC CHOSE. Saved as the hero image exactly as given —
+    // no generation, no verification: the text rule exists because an image
+    // MODEL writes gibberish signage, and a real photograph of the clinic is
+    // not that. It is their picture; they have seen it.
+    if (useUrl || dataUrl) {
+      let url = useUrl;
+      let source: 'library' | 'upload' = 'library';
+      if (!url) {
+        const decoded = decodeDataUrl(dataUrl);
+        if (!decoded.ok) return NextResponse.json({ error: 'bad_image', message: decoded.message }, { status: 400 });
+        url = await storeBytes(decoded.bytes, decoded.contentType, decoded.ext, 'upload');
+        source = 'upload';
+      } else if (!/^https:\/\/\S+$/i.test(url)) {
+        return NextResponse.json({ error: 'bad_image', message: 'That image address is not one a network can fetch.' }, { status: 400 });
+      }
+      const chosen = {
+        url,
+        prompt: direction || '',
+        alt: givenAlt || 'Photograph chosen by the clinic',
+        model: source === 'upload' ? 'uploaded' : 'library',
+        createdAt: new Date().toISOString(),
+        variant: 0,
+        source,
+      };
+      const { data: freshRow } = await sb.from('drafts').select('pack').eq('id', id).eq('user_id', user.id).maybeSingle();
+      const currentPack = (freshRow as { pack?: Record<string, unknown> } | null)?.pack ?? pack;
+      const { error: setErr } = await sb.from('drafts').update({ pack: { ...currentPack, _image: chosen } })
+        .eq('id', id).eq('user_id', user.id);
+      if (setErr) return NextResponse.json({ error: setErr.message }, { status: 500 });
+      return NextResponse.json({ image: chosen });
+    }
+
     const existingHasText = existing?.verification?.textDetected === true;
-    if (existing?.url && !regenerate && !existingHasText) {
+    // A direction is itself a request for a new image: somebody typed what they
+    // want, and returning the cached one would answer a different question.
+    if (existing?.url && !regenerate && !existingHasText && !direction) {
       return NextResponse.json({ image: existing, cached: true });
     }
     const advanceVariant = regenerate || existingHasText;
@@ -98,6 +154,7 @@ export async function POST(req: NextRequest) {
       topic: String((d as { topic?: string }).topic || 'regenerative medicine'),
       pack,
       brand,
+      direction,
       // Fresh generations start at variant 0; each regenerate (explicit, or
       // forced by a text-flagged stored image) advances to the next
       // composition (hero shot → macro lab → lifestyle → still-life → …).

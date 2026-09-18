@@ -15,12 +15,13 @@
 // is sent (lib/pack-schedule.ts): the right length for that network, the
 // advertising notice and the citation where the rule applies, and a picture
 // where the network refuses to post without one.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { MediaPreview } from '@/components/MediaPicker';
 import { friendlyError } from '@/lib/friendly-error';
 import { METRICOOL_BLOG_ID, metricoolPlannerUrl } from '@/lib/metricool-links';
 import { planFromPack, scheduleReady } from '@/lib/pack-schedule';
+import { nextDayAt, themeLabel, weekFromThemes, type PlannerTheme } from '@/lib/planner-slot';
 import { fmtScheduleDateTime, scheduleInputValue, scheduleInstantFromInput, scheduleTzLabel } from '@/lib/schedule-clock';
 
 const LABEL: Record<string, string> = { instagram: 'Instagram', facebook: 'Facebook', linkedin: 'LinkedIn' };
@@ -51,6 +52,33 @@ export default function SchedulePack({
   // than being hidden.
   const [chosen, setChosen] = useState<string[]>(() => plans.filter((p) => p.ready).map((p) => p.network));
   const [when, setWhen] = useState<string>(() => (slots[0] ? scheduleInputValue(slots[0]) : ''));
+  // THE WEEKLY PLANNER, HERE.
+  //
+  // It has held a theme per day since it was built, and the only thing that
+  // could use it was the Autopilot — which writes its OWN post for the slot. A
+  // post already written, the one on this screen, could not be put on a day at
+  // all.
+  const [themes, setThemes] = useState<PlannerTheme[]>([]);
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/templates')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!alive) return;
+        const rows = Array.isArray(j?.templates) ? j.templates : [];
+        setThemes(rows.map((t: Record<string, unknown>) => ({
+          id: String(t.id || ''),
+          name: String(t.name || 'Theme'),
+          days: Array.isArray(t.weekdays) ? (t.weekdays as unknown[]).map((d) => Number(d)).filter((d) => Number.isFinite(d)) : [],
+          time: String(t.time_of_day || '09:00'),
+          networks: Array.isArray(t.providers) ? (t.providers as unknown[]).map((x) => String(x)) : [],
+        })));
+      })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  const week = useMemo(() => weekFromThemes(themes), [themes]);
+
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
@@ -156,9 +184,32 @@ export default function SchedulePack({
         <label htmlFor="pack-when" className="text-[12px] font-medium text-ink-muted">When should they go out?</label>
         <span className="text-[11px] text-ink-faint">All times {scheduleTzLabel()} time</span>
       </div>
-      {/* The weekly planner's own next free slots, which is what was asked for:
-          the planner, here, rather than a date typed twice. */}
-      <div className="mt-1 flex flex-wrap gap-2">
+      {/* THE PLANNER ITSELF: a day, with its theme and its time. Picking one
+          sets the next time that day comes round — and today only counts while
+          its slot is still ahead, or a post would be scheduled into a morning
+          that has already gone and refused at the door. */}
+      <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4 lg:grid-cols-7">
+        {week.map((d) => {
+          const time = d.themes[0]?.time || '09:00';
+          const value = nextDayAt(d.day, time);
+          const on = when === value;
+          return (
+            <button
+              key={d.day}
+              type="button"
+              onClick={() => setWhen(value)}
+              title={themeLabel(d.themes)}
+              className={'rounded-xl p-2 text-left ring-1 transition hover:ring-accent ' +
+                (on ? 'bg-accent/10 ring-accent' : 'bg-subtle ring-line')}
+            >
+              <span className="block text-[12px] font-semibold text-ink">{d.name}</span>
+              <span className="block truncate text-[10px] text-ink-muted">{themeLabel(d.themes)}</span>
+            </button>
+          );
+        })}
+      </div>
+      {/* And the next free slots the composer already offered. */}
+      <div className="mt-2 flex flex-wrap gap-2">
         {slots.map((slot) => (
           <button
             key={slot}

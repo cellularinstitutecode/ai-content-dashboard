@@ -67,7 +67,7 @@ export type PackImage = {
   verification?: ImageVerification;
   // 'brand-card' marks a typographic card painted by lib/brand-card.ts from
   // approved text: its words are deliberate, so the text rule does not apply.
-  source?: 'generated' | 'brand-card';
+  source?: 'generated' | 'brand-card' | 'library' | 'upload';
 };
 
 const BUCKET = process.env.IMAGE_BUCKET || 'content-images';
@@ -126,6 +126,18 @@ export function buildImagePrompt(opts: {
   pack?: Record<string, unknown> | null;
   brand?: BrandContext | null;
   variant?: number;
+  /**
+   * What the team asked for, in their own words.
+   *
+   * Added because "the photos look too AI" is a direction nobody could give:
+   * the prompt was built entirely from the post and a rotating style variant,
+   * and the only control was to press New image and hope. It is inserted as
+   * DIRECTION rather than replacing the prompt, so the no-text mandate and the
+   * brand's palette still hold — an image with words in it is refused by the
+   * verifier either way, and a prompt that loses the brand block paints
+   * somebody else's clinic.
+   */
+  direction?: string | null;
 }): string {
   const brandName = opts.brand?.name || 'a premium regenerative medicine and longevity clinic';
   const excerpt = excerptOf(opts.pack);
@@ -144,7 +156,10 @@ export function buildImagePrompt(opts: {
     `Editorial hero photograph for ${brandName}.`,
     `Subject: ${opts.topic}.`,
     excerpt ? `Context from the article: ${excerpt}` : '',
-    variant,
+    // The team's own direction outranks the rotating style variant: when
+    // somebody has said what they want, a composition picked by a counter is
+    // noise. Both are kept when there is no direction.
+    String(opts.direction || '').trim() ? `Direction from the team (follow this closely): ${String(opts.direction).trim()}` : variant,
     visual,
     'Style: warm, quiet, premium editorial photograph; soft directional light; calm, confident, trustworthy mood; photorealistic; shallow depth of field.',
     'Strict rules (must all hold): the image contains ZERO written characters in any language or script;',
@@ -222,6 +237,17 @@ type GeneratedImage = { bytes: Buffer; contentType: string; ext: string; model: 
 // last fallback's complaint.
 async function generateImageBytes(prompt: string): Promise<GeneratedImage> {
   const attempts: { model: string; body: Record<string, unknown> }[] = [
+    // HIGH, not medium.
+    //
+    // "Honestly the photos look too AI." Quality is the lever that answers that
+    // most directly: at medium the model spends less on the things that read as
+    // synthetic — hands, skin, the way light falls on a real surface — and
+    // those are exactly what a clinical photograph is judged on.
+    //
+    // It was medium because "medium keeps latency inside serverless limits",
+    // and that was true of a 60-second function. This route now runs at the
+    // ceiling app/api/posts uses, and the rung below catches a generation that
+    // still runs long, so the trade no longer has to be made in advance.
     {
       model: PRIMARY_MODEL,
       body: {
@@ -229,7 +255,21 @@ async function generateImageBytes(prompt: string): Promise<GeneratedImage> {
         prompt,
         n: 1,
         size: '1536x1024',
-        quality: 'medium', // medium keeps latency inside serverless limits
+        quality: 'high',
+        output_format: 'jpeg',
+        output_compression: 80,
+      },
+    },
+    // The old first rung, kept as the second: a model that will not do `high`,
+    // or a day when it is too slow, still produces an image rather than none.
+    {
+      model: PRIMARY_MODEL,
+      body: {
+        model: PRIMARY_MODEL,
+        prompt,
+        n: 1,
+        size: '1536x1024',
+        quality: 'medium',
         output_format: 'jpeg',
         output_compression: 80,
       },
@@ -445,6 +485,8 @@ export async function generatePackImage(opts: {
   pack?: Record<string, unknown> | null;
   brand?: BrandContext | null;
   variant?: number;
+  /** What the team asked for, passed through to buildImagePrompt. */
+  direction?: string | null;
 }): Promise<PackImage> {
   // Record how this went before handing the result (or the failure) on, so
   // /api/health can say whether images WORK rather than whether a key is set.
@@ -466,6 +508,7 @@ async function generateBestPackImage(opts: {
   pack?: Record<string, unknown> | null;
   brand?: BrandContext | null;
   variant?: number;
+  direction?: string | null;
 }): Promise<PackImage> {
   const baseVariant = Math.abs(Math.round(opts.variant ?? 0)) % STYLE_VARIANTS.length;
   const started = Date.now();
