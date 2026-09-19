@@ -14,12 +14,25 @@
 // check off rather than blocking the row.
 import 'server-only';
 
+import { openingLookBack } from '@/lib/cadence';
 import { openingLineOf } from '@/lib/opening-line';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
-/** How many recent posts to look back over. */
-const LOOK_BACK = 12;
+/**
+ * How many recent posts to look back over.
+ *
+ * Derived rather than typed in. It was 12, which was a comfortable fortnight
+ * when a pair of reels was all that published — and about four hours once the
+ * weekly strategy added fourteen posts a week on top. The guard that measures
+ * the finished copy (`repeatsOpening`, lib/video-prepare.ts) reads this whole
+ * list, so a window narrower than the cadence means last week's opening is
+ * already out of sight when this week's slot comes round.
+ *
+ * lib/cadence.ts holds the arithmetic, so adding a slot widens the window
+ * instead of silently shrinking it.
+ */
+const LOOK_BACK = openingLookBack();
 
 type DraftRow = { pack?: unknown };
 
