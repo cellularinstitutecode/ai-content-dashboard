@@ -6,8 +6,20 @@
 // voice, performance hint, keyword brief), scores the result against a
 // rubric with a self-critique retry, and stages it for human review.
 //
-// It NEVER publishes. Runs stop at ready_for_review; approval (a human
-// action) pushes a Metricool DRAFT (autoPublish: false) and a posts row.
+// Runs stop at ready_for_review, and approval is what pushes a Metricool post
+// and writes a posts row.
+//
+// WHO APPROVES. A person, by default and on any account that has not said
+// otherwise — this engine has never published anything by itself and still
+// does not, unless AUTOPILOT_AUTOSCHEDULE is turned on. With that setting on,
+// `autoSchedule` may approve a run ITSELF, and only one that clears every bar
+// in lib/autoschedule.ts: a DOI verified against Crossref (not merely shaped
+// like one), a score at or above the threshold, no safety flag at all, and a
+// picture wherever the network refuses a post without one. Anything short of
+// that waits in the queue with the reason written on its card. That floor
+// fails CLOSED, which is the opposite of every other guard in this codebase,
+// for the obvious reason: the cost of waiting is a button, and the cost of
+// guessing is a published medical advertisement.
 //
 // Design constraints honored:
 // - Cache-first & budget-guarded: every Semrush call goes through the
@@ -50,6 +62,8 @@ import { NETWORKS_NEEDING_MEDIA } from '@/lib/composer';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
 import { ANGLE_HISTORY, chooseAngle, type AngleType, type PastAngle } from '@/lib/angle-rotation';
+import { autoScheduleVerdict, holdNote } from '@/lib/autoschedule';
+import { autoSchedules } from '@/lib/autopilot-mode';
 import { usableLeadHours, leadProblem } from '@/lib/lead-window';
 import { videoVerdict, pendingRefusal, type PackLike } from '@/lib/video-required';
 
@@ -1070,6 +1084,90 @@ export async function expireStaleRuns(scopeUserId?: string): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
+// The engine's own Approve.
+// ---------------------------------------------------------------------------
+
+/**
+ * Send a finished run without a person, when it clears every bar.
+ *
+ * WHAT REPLACED THE HUMAN. Until now every post this engine wrote was read by
+ * somebody before it went out, and that person was the last check on four
+ * things the code computed and then ignored: a Crossref verdict stamped on the
+ * pack and never consulted, a score nothing ever refused a run for, a safety
+ * rubric whose flags only coloured a card, and a picture that was best-effort
+ * on a network that refuses posts without one. lib/autoschedule.ts is those
+ * four checks, made binding. If any of them cannot be established, the run
+ * waits — this is the one guard in the codebase that fails CLOSED.
+ *
+ * Nothing here weakens approveRun: the compliance gate, the video rule and the
+ * Metricool handoff all still run inside it, and can still refuse.
+ *
+ * Fail-soft in the other direction too: if this function throws, the run stays
+ * ready_for_review and a person can approve it by hand. A broken auto-send
+ * must never lose the post.
+ */
+async function autoSchedule(
+  db: ReturnType<typeof supabaseAdmin>,
+  run: RunRow,
+  template: TemplateRow,
+): Promise<void> {
+  try {
+    // The pack carries both signals: the Crossref verdict stamped at
+    // generation time (lib/ai.ts) and the hero image stamped at draft time.
+    let pack: Record<string, unknown> | null = null;
+    if (run.draft_id) {
+      const { data, error } = await db
+        .from('drafts').select('pack').eq('id', run.draft_id).eq('user_id', run.user_id).maybeSingle();
+      if (error) {
+        // Unread, this would read as "no citation" and hold every post on an
+        // account whose drafts table hiccuped — silently, forever.
+        reportError('autopilot:autoschedule-draft', error, { runId: run.id });
+        return;
+      }
+      pack = (data as { pack?: Record<string, unknown> } | null)?.pack || null;
+    }
+    const compliance = pack?._compliance as { citation?: { status?: string } } | undefined;
+    const image = pack?._image as { url?: string; verification?: { textDetected?: boolean } } | undefined;
+    // An image the checker flagged for text is treated as no image, exactly as
+    // the ship-point treats it (see approveRun): it can never be attached, so
+    // a post that needs one does not have one.
+    const hasImage = Boolean(image?.url) && image?.verification?.textDetected !== true;
+
+    const verdict = autoScheduleVerdict({
+      citation: compliance?.citation?.status ?? null,
+      score: run.score?.total ?? null,
+      threshold: SCORE_THRESHOLD,
+      safetyFlags: run.score?.safetyFlags?.length ?? 0,
+      networks: template.providers || [],
+      hasMedia: hasImage || Boolean(run.angle?.media?.url),
+      claimSupport: null,
+    });
+
+    if (!verdict.ok) {
+      // The reason goes on the card. "Held" with no explanation is how a queue
+      // becomes a pile nobody trusts.
+      const { error } = await db
+        .from('template_runs')
+        .update({ log: logLine(run, 'hold', holdNote(verdict)) })
+        .eq('id', run.id)
+        .eq('state', 'ready_for_review');
+      if (error) reportError('autopilot:autoschedule-hold', error, { runId: run.id });
+      return;
+    }
+
+    const result = await approveRun(run.id, run.user_id, { schedule: true });
+    if (!result.ok) {
+      // approveRun has already written its own explanation and put the run
+      // back in the queue; this only records that it was the engine asking.
+      reportError('autopilot:autoschedule-refused', new Error(result.note), { runId: run.id });
+    }
+  } catch (err) {
+    // The run is still ready_for_review. Nothing is lost.
+    reportError('autopilot:autoschedule', err, { runId: run.id });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The advancer: move due runs forward, one resumable step at a time.
 // ---------------------------------------------------------------------------
 
@@ -1252,7 +1350,19 @@ export async function advanceRuns(opts: {
         if (!updated) break; // another worker advanced this run — leave it alone
         run = updated as RunRow;
         advanced++;
-        if (run.state === 'ready_for_review') { ready++; break; }
+        if (run.state === 'ready_for_review') {
+          ready++;
+          // The post is finished. With AUTOPILOT_AUTOSCHEDULE on, and only if
+          // it clears every bar in lib/autoschedule.ts, the engine presses its
+          // own Approve here. Off — the default — this whole block is skipped
+          // and the run waits for a person exactly as it always has.
+          //
+          // approveRun claims ready_for_review -> approved conditionally, so a
+          // reviewer pressing Approve at this same moment does not produce two
+          // posts: one of the two claims wins and the other stops.
+          if (autoSchedules()) await autoSchedule(db, run, template);
+          break;
+        }
       } catch (e) {
         errors++;
         // The attempt was already recorded by the claim above.
@@ -1298,7 +1408,14 @@ export type ApproveOptions = {
    * true  → the post goes straight into Metricool's live queue and publishes
    *         at the run's slot (the reviewer pressed "Approve & schedule");
    * false → it lands in the review queue as before (the default).
-   * Either way a person pressed the button; the engine never sets this.
+   *
+   * WHO SETS IT. A person, or — since AUTOPILOT_AUTOSCHEDULE existed — the
+   * engine itself, from `autoSchedule` above, and only for a run that clears
+   * every bar in lib/autoschedule.ts. That setting is off by default, so on an
+   * account that has not turned it on this is still only ever a person.
+   *
+   * It does not soften anything below: the compliance gate, the video rule and
+   * the Metricool handoff all run the same way whoever asked.
    */
   schedule?: boolean;
 };
