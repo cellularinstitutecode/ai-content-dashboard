@@ -48,6 +48,7 @@ import { metricoolSchedulePost, readPostId, type Provider as McProvider } from '
 import { ensureDraftImage, type PackImage } from '@/lib/images';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
+import { ANGLE_HISTORY, chooseAngle, type AngleType, type PastAngle } from '@/lib/angle-rotation';
 import { usableLeadHours, leadProblem } from '@/lib/lead-window';
 import { videoVerdict, pendingRefusal, type PackLike } from '@/lib/video-required';
 
@@ -67,7 +68,9 @@ export type TemplateStrategy = {
   max_regens?: number;
 };
 
-export type AngleType = 'answer' | 'commercial' | 'defense' | 'opportunity';
+// One definition, in lib/angle-rotation.ts, where the rotation that walks these
+// four lives — re-exported here because this is where callers look for it.
+export type { AngleType };
 
 export type Angle = {
   type: AngleType;
@@ -278,7 +281,8 @@ function decideAngle(
   questions: SemKeyword[],
   movers: KeywordMovers | null,
   recent: Set<string>,
-  learned: Map<string, number> = new Map()
+  learned: Map<string, number> = new Map(),
+  history: readonly PastAngle[] = []
 ): Angle {
   const related = [brief.primary, ...brief.supporting].filter((k): k is SemKeyword => Boolean(k));
   // Learning loop: keywords that measurably earned engagement for THIS
@@ -395,16 +399,11 @@ function decideAngle(
       intent: null,
     };
   }
-  // Rotate the starting angle by occurrence so week 1..4 differ, then take
-  // the first available from that rotation.
-  const order: AngleType[] = ['answer', 'commercial', 'defense', 'opportunity'];
-  const start = occurrenceIndex % order.length;
-  for (let i = 0; i < order.length; i++) {
-    const want = order[(start + i) % order.length];
-    const hit = available.find((a) => a.type === want);
-    if (hit) return hit;
-  }
-  return available[0];
+  // Rotate by occurrence so week 1..4 differ, and skip what this template has
+  // already published — see lib/angle-rotation.ts, which holds the rule and its
+  // tests. Fail-open: with every candidate used it returns the rotation's own
+  // first choice rather than nothing.
+  return chooseAngle(available, occurrenceIndex, history) || available[0];
 }
 
 async function stepResearch(run: RunRow, template: TemplateRow, strategy: TemplateStrategy): Promise<Partial<RunRow>> {
@@ -491,6 +490,27 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
     }
   } catch (err) { /* view optional */ reportError('autopilot:keyword-performance', err); }
 
+  // What this template itself has already published.
+  //
+  // `template_runs.angle` has recorded every decided angle since the table
+  // existed, and until now the only thing that read it was the review card —
+  // the engine could not see its own history, so "a repeat is unlikely" rested
+  // entirely on the four-way rotation. Newest first, capped, and fail-soft: an
+  // unreadable history means the rotation behaves exactly as it did before.
+  let angleHistory: PastAngle[] = [];
+  try {
+    const { data: past, error: pastError } = await db
+      .from('template_runs')
+      .select('angle, scheduled_for')
+      .eq('template_id', run.template_id)
+      .not('angle', 'is', null)
+      .lt('scheduled_for', run.scheduled_for)
+      .order('scheduled_for', { ascending: false })
+      .limit(ANGLE_HISTORY);
+    if (pastError) reportError('autopilot:angle-history', pastError, { runId: run.id });
+    angleHistory = (past || []).map((r) => (r as { angle?: PastAngle }).angle);
+  } catch (err) { /* history is a tiebreak, never a blocker */ reportError('autopilot:angle-history', err); }
+
   // Live data (all cache-first + unit-floor guarded).
   const bundle = await researchBundle(seedTopic, { relatedLimit: 12, questionLimit: 6 });
   let movers: KeywordMovers | null = null;
@@ -504,7 +524,7 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
   // so passing the brief's own slice meant the SAME array joined to itself: the
   // six question keywords fetched and paid for were narrowed back to three, and
   // the wider `related` set never reached the angle picker at all.
-  const angle = decideAngle(occurrenceIndex, seedTopic, bundle.brief, bundle.questions, movers, recent, learned);
+  const angle = decideAngle(occurrenceIndex, seedTopic, bundle.brief, bundle.questions, movers, recent, learned, angleHistory);
 
   // AI strategist note: 2-3 sentences of editorial direction for the writer,
   // grounded in the chosen angle. Purely additive — skipped without API keys.
@@ -726,8 +746,14 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   } else {
     try {
       await db.from('draft_keywords').insert({
-        user_id: run.user_id,
-        topic: angle.seedTopic,
+        // `angle.query`, not `angle.seedTopic`. stepResearch builds its
+        // anti-repeat set from the TOPIC column and compares candidate
+        // `angle.query` values against it — which is what recordDraftKeywords
+        // writes on the Semrush path. This branch wrote the pillar name there
+        // instead, so nothing it published was ever matched: the anti-repeat
+        // was inert in cache-only mode, the exact mirror of the bug the comment
+        // in stepResearch describes fixing on the other path.
+        topic: angle.query,
         keyword: angle.query,
         volume: angle.volume != null ? Math.round(angle.volume) : null,
         difficulty: angle.difficulty != null ? Math.round(angle.difficulty) : null,
