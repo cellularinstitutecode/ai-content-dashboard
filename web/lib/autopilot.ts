@@ -46,6 +46,7 @@ import { keywordMovers, primaryDomain, topOrganicKeywords, type KeywordMovers } 
 import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
 import { metricoolSchedulePost, readPostId, type Provider as McProvider } from '@/lib/metricool';
 import { ensureDraftImage, type PackImage } from '@/lib/images';
+import { NETWORKS_NEEDING_MEDIA } from '@/lib/composer';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
 import { ANGLE_HISTORY, chooseAngle, type AngleType, type PastAngle } from '@/lib/angle-rotation';
@@ -763,6 +764,39 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
     } catch (err) { /* learnings are best-effort */ reportError('autopilot:record-learnings', err); }
   }
 
+  // The picture, made with the post rather than at the door.
+  //
+  // WHY HERE. ensureDraftImage ran in exactly two places: a reviewer opening
+  // the queue (app/AutopilotQueue.tsx), and approve — where it sits inside a
+  // try/catch that, by design, never blocks approval. So with nobody in the
+  // loop an Instagram post could reach Metricool with media: [], and Instagram
+  // refuses a text-only post. Generating it here means the review card has its
+  // picture without waiting for a poll, and a gate at the door can REQUIRE an
+  // image rather than hope one turned up.
+  //
+  // Only for networks that refuse text alone (composer.ts's own set), so a
+  // LinkedIn-only or blog-only template spends no image credit. Best-effort
+  // like every other enrichment in this step: a failed image is a line in the
+  // log, never a failed run. ensureDraftImage is idempotent, so a redraft
+  // reuses the stored one unless the text checker flagged it.
+  let imageNote = '';
+  const needsImage = (template.providers || []).some(
+    (p) => NETWORKS_NEEDING_MEDIA.has(String(p || '').trim().toLowerCase())
+  );
+  if (needsImage && draftId) {
+    try {
+      const img = await ensureDraftImage(draftId, run.user_id);
+      imageNote = img?.url
+        ? ' — hero image ready'
+        : ' — no hero image yet (images are off, or the generator returned none)';
+    } catch (err) {
+      // Said out loud on the card. A picture that quietly failed is how a post
+      // reaches the door with nothing to show and no explanation for it.
+      reportError('autopilot:draft-image', err, { runId: run.id });
+      imageNote = ' — the hero image could not be generated; it can be rerolled in the queue';
+    }
+  }
+
   return {
     state: 'drafted',
     draft_id: draftId,
@@ -772,7 +806,8 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
       run,
       'draft',
       'Drafted via ' + provider + ' for channels: ' + (template.providers || []).join(', ') +
-        (media ? ' — matched clip "' + media.title + '" will attach on approval' : '')
+        (media ? ' — matched clip "' + media.title + '" will attach on approval' : '') +
+        imageNote
     ),
   };
 }
