@@ -67,6 +67,16 @@ export type TemplateStrategy = {
   format?: ContentType;
   lead_hours?: number;
   max_regens?: number;
+  /**
+   * A standing instruction for every occurrence of this template.
+   *
+   * Not an angle and not a topic: the clinic's written strategy carries two
+   * rules that are true every time a pillar comes round — never claim Cancún
+   * is categorically better than other destinations, and recovery services may
+   * be introduced but never promoted. They had nowhere to live, so they were
+   * enforced by nobody. This is where they live.
+   */
+  rule?: string;
 };
 
 // One definition, in lib/angle-rotation.ts, where the rotation that walks these
@@ -161,6 +171,10 @@ export function normalizeStrategy(raw: unknown): TemplateStrategy {
     format,
     lead_hours: lead != null && lead >= 1 && lead <= 96 ? Math.round(lead) : 24,
     max_regens: regens != null && regens >= 0 && regens <= 2 ? Math.round(regens) : 1,
+    // Clamped like every other field here, because this one reaches the model
+    // as an instruction it must obey: a 4,000-word "rule" pasted into a
+    // template would crowd out the brief it is meant to qualify.
+    rule: typeof s.rule === 'string' && s.rule.trim() ? s.rule.trim().slice(0, 400) : undefined,
   };
 }
 
@@ -570,6 +584,11 @@ function topicPromptFor(angle: Angle, strategy: TemplateStrategy): string {
     GOAL_INSTRUCTION[strategy.goal || 'rank'],
   ];
   if (angle.strategistNote) parts.push('Strategist direction: ' + angle.strategistNote);
+  // Before the reviewer's note, after the strategist's: a standing rule is not
+  // advice about this week's post, it is a condition on every post this pillar
+  // ever produces. The two the clinic wrote down are the difference between an
+  // educational post about recovery and an advertisement for HBOT.
+  if (strategy.rule) parts.push('STANDING RULE for this pillar (must follow): ' + strategy.rule);
   if (angle.reviewerNote) parts.push('REVIEWER FEEDBACK (must address): ' + angle.reviewerNote);
   return parts.join(' ');
 }

@@ -110,6 +110,7 @@ async function callGenerate(topic: string, provider: AiProvider): Promise<string
 
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [strategyBusy, setStrategyBusy] = useState(false);
   const [draft, setDraft] = useState<Template>(emptyDraft());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -217,6 +218,33 @@ export default function TemplatesPage() {
     }
   }
 
+  // "Load the weekly strategy": the clinic's written calendar, in one request.
+  //
+  // One request rather than fourteen because POST /api/templates is rate
+  // limited per user, and a client loop would be refused part-way through and
+  // leave half a week behind. The route decides what to create and what to
+  // update (lib/strategy-seed.ts) — pressing this twice leaves fourteen slots,
+  // not twenty-eight, and touches nothing else in the account.
+  async function loadStrategy() {
+    if (!window.confirm(
+      'Load the clinic\u2019s weekly content strategy?\n\n'
+      + 'Fourteen slots \u2014 two a day, Monday to Sunday \u2014 each rotating its own bank of angles so the same pillar never reads the same way twice.\n\n'
+      + 'Nothing publishes from this. Every post is written ahead of time and waits in the review queue. Slots already loaded are brought up to date rather than duplicated, and your own templates are left alone.'
+    )) return;
+    setErr(null);
+    setStrategyBusy(true);
+    try {
+      const j = await api<{ message?: string }>('/api/templates/strategy', { method: 'POST' });
+      setStatus(j.message || 'The weekly strategy is loaded.');
+      await load();
+      announce('templates', 'autopilot');
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setStrategyBusy(false);
+    }
+  }
+
   // The weekly planner saves straight through the same route as the form.
   async function savePlanned(t: PlannerTemplate) {
     await api('/api/templates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(t) });
@@ -303,7 +331,14 @@ export default function TemplatesPage() {
         {err && <div role="alert" aria-live="assertive" style={{ color: '#d70015', fontSize: 14 }}>Error: {err}</div>}
         {status && <div role="status" aria-live="polite" style={{ color: '#248a3d', fontSize: 14 }}>{status}</div>}
 
-        <WeeklyPlanner templates={templates as PlannerTemplate[]} onSave={savePlanned} onDelete={removePlanned} onToggle={togglePlanned} />
+        <WeeklyPlanner
+          templates={templates as PlannerTemplate[]}
+          onSave={savePlanned}
+          onDelete={removePlanned}
+          onToggle={togglePlanned}
+          onLoadStrategy={loadStrategy}
+          loadingStrategy={strategyBusy}
+        />
 
         <section style={card}>
           <h2 style={{ marginTop: 0, marginBottom: 20, fontSize: 17 }}>New template</h2>
