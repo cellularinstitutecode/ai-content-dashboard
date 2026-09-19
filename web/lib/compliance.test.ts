@@ -29,7 +29,17 @@ test('the rule applies to every network the clinic advertises on', () => {
   assert.equal(appliesTo(['tiktok']), true);
   // A therapeutic claim in a video description is still advertising.
   assert.equal(appliesTo(['youtube']), true);
-  assert.equal(appliesTo(['twitter', 'blog']), false);
+  // And the blog, which used to be outside the set and was therefore the ONE
+  // format that skipped the AVISO and the citation — while being the
+  // longest-lived thing the clinic publishes, on its own domain, indexed, long
+  // after a post has scrolled away. Same reasoning as LinkedIn's, one format
+  // later: an 800-word article making a therapeutic claim is advertising.
+  assert.equal(appliesTo(['blog']), true);
+  assert.equal(appliesTo(['blog', 'instagram']), true);
+  // Twitter stays outside it: the clinic does not advertise there, and adding
+  // a channel to this set without also stamping its copy (lib/ai.ts) is how a
+  // format arrives missing the line it is about to be refused for.
+  assert.equal(appliesTo(['twitter']), false);
   assert.equal(appliesTo([]), false);
   assert.equal(appliesTo(null), false);
 });

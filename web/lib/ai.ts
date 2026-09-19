@@ -587,7 +587,10 @@ export async function generateContentPack(
   // only this stamping stayed narrow, so those three arrived without the line
   // and were refused at the door. The AVISO is a fixed permit number, not a
   // claim — appending it is bookkeeping, and leaving it off was the bug.
-  for (const key of ['instagram', 'facebook', 'linkedin', 'tiktok', 'youtube'] as const) {
+  // `blog` joined them the day the gate started covering articles. Same
+  // failure, one format later: the gate widens, the stamping does not, and the
+  // copy arrives without the line it is about to be refused for.
+  for (const key of ['instagram', 'facebook', 'linkedin', 'tiktok', 'youtube', 'blog'] as const) {
     const current = (pack as Record<string, unknown>)[key];
     if (typeof current === 'string' && current.trim()) {
       (pack as Record<string, unknown>)[key] = ensureAviso(current, aviso);
@@ -605,7 +608,7 @@ export async function generateContentPack(
   if (citation.status === 'verified' || citation.status === 'unavailable') {
     const source = checkCompliance(pack.instagram, aviso).ref || checkCompliance(pack.facebook, aviso).ref || '';
     if (source) {
-      for (const key of ['linkedin', 'tiktok', 'youtube'] as const) {
+      for (const key of ['linkedin', 'tiktok', 'youtube', 'blog'] as const) {
         const current = (pack as Record<string, unknown>)[key];
         if (typeof current === 'string' && current.trim() && !checkCompliance(current, aviso).doi) {
           (pack as Record<string, unknown>)[key] = ensureAviso(current.replace(/\s+$/, '') + '\n\nREF: ' + source, aviso);

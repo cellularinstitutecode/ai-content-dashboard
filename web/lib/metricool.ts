@@ -8,12 +8,19 @@ import type { YoutubeData } from '@/lib/youtube-meta';
 import type { TiktokData } from '@/lib/tiktok-meta';
 import { recordProviderOutcome } from '@/lib/provider-status';
 import { readNormalizedUrl } from '@/lib/metricool-normalize-parse';
+import { metricoolNetworks, type McNetwork } from '@/lib/metricool-networks';
 export { modeFlags, replacePostBody, type PostMode, type ReplacePostInput };
+export { metricoolNetworks };
 
-export type Provider =
-  | 'instagram' | 'facebook' | 'twitter' | 'linkedin'
-  | 'tiktok' | 'youtube' | 'gmb' | 'pinterest' | 'threads'
-  | 'bluesky';
+/**
+ * The networks this client posts to.
+ *
+ * Derived from lib/metricool-networks.ts rather than written out again, so the
+ * LIST that filters a template's channels and the TYPE that describes them
+ * cannot drift apart. That file is pure, which is what lets the filter be
+ * tested — this one reaches half the app through `@/` aliases.
+ */
+export type Provider = McNetwork;
 
 export interface SchedulePostInput {
   text: string;
