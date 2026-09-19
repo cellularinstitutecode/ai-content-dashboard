@@ -20,7 +20,7 @@ export type PlannerTemplate = {
   weekdays?: number[];
   time_of_day?: string;
   active?: boolean;
-  strategy?: { mode?: string; topic?: string; format?: string; goal?: string; pillars?: string[] };
+  strategy?: { mode?: string; topic?: string; format?: string; goal?: string; pillars?: string[]; rule?: string };
 };
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -38,7 +38,14 @@ const FORMATS: { id: string; label: string }[] = [
   { id: 'email', label: 'Email' },
 ];
 
-type Draft = { day: number; topic: string; format: string; time: string; providers: string[]; goal: string; id?: string };
+type Draft = { day: number; topic: string; format: string; time: string; providers: string[]; goal: string; id?: string;
+  /**
+   * A slot that rotates a bank of angles rather than repeating one theme —
+   * what "Load the weekly strategy" creates. This form has no field for an
+   * angle bank, so for these it edits the day, time, format, goal and channels
+   * and leaves the rotation exactly as it found it.
+   */
+  rotating?: { name: string; angles: number } };
 
 const inputStyle: React.CSSProperties = { width: '100%', padding: 8, borderRadius: 6, background: '#f5f5f7', border: '1px solid rgba(0,0,0,0.1)', color: '#1d1d1f', marginTop: 4, boxSizing: 'border-box', fontSize: 13 };
 const btn: React.CSSProperties = { background: '#0071e3', color: '#fff', border: 'none', borderRadius: 999, padding: '7px 13px', cursor: 'pointer', fontSize: 12, fontWeight: 600 };
@@ -49,11 +56,16 @@ export default function WeeklyPlanner({
   onSave,
   onDelete,
   onToggle,
+  onLoadStrategy,
+  loadingStrategy = false,
 }: {
   templates: PlannerTemplate[];
   onSave: (t: PlannerTemplate) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onToggle: (t: PlannerTemplate, active: boolean) => Promise<void>;
+  /** Fill the week from the clinic's written strategy. Optional, so this component still stands alone. */
+  onLoadStrategy?: () => Promise<void> | void;
+  loadingStrategy?: boolean;
 }) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
@@ -76,6 +88,7 @@ export default function WeeklyPlanner({
   }
   function startEdit(day: number, t: PlannerTemplate) {
     setError(null);
+    const angles = t.strategy?.mode === 'pillars' ? (t.strategy?.pillars || []).length : 0;
     setDraft({
       day,
       id: t.id,
@@ -84,26 +97,48 @@ export default function WeeklyPlanner({
       time: t.time_of_day || '09:00',
       providers: t.providers || [],
       goal: t.strategy?.goal || 'rank',
+      rotating: angles ? { name: t.name || 'This slot', angles } : undefined,
     });
   }
 
   async function commit() {
     if (!draft) return;
-    if (!draft.topic.trim()) { setError('Give this slot a theme — what should every ' + DAYS[DAY_INDEX.indexOf(draft.day)] + ' post be about?'); return; }
+    // A rotating slot has an angle bank instead of a theme, and this form has
+    // no field for one — so asking for a theme would be asking for something
+    // it does not have, and saving one would replace the rotation with it.
+    if (!draft.rotating && !draft.topic.trim()) { setError('Give this slot a theme — what should every ' + DAYS[DAY_INDEX.indexOf(draft.day)] + ' post be about?'); return; }
     if (!draft.providers.length) { setError('Pick at least one channel.'); return; }
     setBusy(true); setError(null);
     try {
       const existing = draft.id ? templates.find((t) => t.id === draft.id) : undefined;
       // A slot edited here keeps the other weekdays it may already have.
       const weekdays = Array.from(new Set([...(existing?.weekdays || []).filter((w) => w !== draft.day), draft.day])).sort();
+      // THE ONE THAT USED TO GO WRONG. This form writes `mode: 'fixed_topic'`
+      // and a name built from the theme box. Run that over a slot loaded from
+      // the weekly strategy and a six-week pillar rotation silently became one
+      // fixed topic — with an empty topic, because the box was empty, because
+      // the slot never had one. A rotating slot therefore keeps its name, its
+      // mode and its bank, and this form changes only what it actually shows.
+      const rotating = Boolean(draft.rotating);
       await onSave({
         id: draft.id,
-        name: DAYS[DAY_INDEX.indexOf(draft.day)] + ' · ' + draft.topic.trim().slice(0, 60),
+        name: rotating
+          ? (existing?.name || draft.rotating?.name || 'Untitled slot')
+          : DAYS[DAY_INDEX.indexOf(draft.day)] + ' · ' + draft.topic.trim().slice(0, 60),
         providers: draft.providers,
         weekdays: existing && existing.weekdays && existing.weekdays.length > 1 ? weekdays : [draft.day],
         time_of_day: draft.time,
         active: existing?.active ?? true,
-        strategy: { mode: 'fixed_topic', topic: draft.topic.trim(), format: draft.format, goal: draft.goal, pillars: existing?.strategy?.pillars || [] },
+        strategy: rotating
+          ? {
+              ...(existing?.strategy || {}),
+              mode: 'pillars',
+              pillars: existing?.strategy?.pillars || [],
+              rule: existing?.strategy?.rule,
+              format: draft.format,
+              goal: draft.goal,
+            }
+          : { mode: 'fixed_topic', topic: draft.topic.trim(), format: draft.format, goal: draft.goal, pillars: existing?.strategy?.pillars || [] },
       });
       setDraft(null);
     } catch (e: any) {
@@ -122,6 +157,16 @@ export default function WeeklyPlanner({
             A theme for each day of the week. Every occurrence is researched and written fresh — a new angle, keyword and citation each time — so a Monday post never reads like last Monday&apos;s. Add as many slots to a day as you like.
           </p>
         </div>
+        {onLoadStrategy && (
+          <div style={{ textAlign: 'right' }}>
+            <button type="button" style={btn} disabled={loadingStrategy} onClick={() => void onLoadStrategy()}>
+              {loadingStrategy ? 'Loading…' : 'Load the weekly strategy'}
+            </button>
+            <div style={{ fontSize: 11, opacity: .6, marginTop: 5, maxWidth: 230 }}>
+              Fills the week from the clinic&apos;s written strategy: 14 slots, two a day. Nothing publishes — every post waits for your approval.
+            </div>
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(150px, 1fr))', gap: 10, marginTop: 18, overflowX: 'auto' }}>
@@ -139,7 +184,9 @@ export default function WeeklyPlanner({
                     <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.3 }}>{t.strategy?.topic || t.name || 'Untitled'}</div>
                     <div style={{ fontSize: 10, opacity: .6, marginTop: 3 }}>
                       {t.time_of_day || '—'} · {FORMATS.find((f) => f.id === (t.strategy?.format || 'social'))?.label || 'Social post'}
-                      {auto ? ' · fresh angle weekly' : ' · fixed text'}
+                      {auto ? (t.strategy?.mode === 'pillars' && (t.strategy?.pillars || []).length
+                        ? ' · ' + (t.strategy?.pillars || []).length + ' angles, one a week'
+                        : ' · fresh angle weekly') : ' · fixed text'}
                     </div>
                     <div style={{ fontSize: 10, opacity: .6, marginTop: 2 }}>{(t.providers || []).join(', ') || 'no channels'}</div>
                     <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
@@ -162,9 +209,18 @@ export default function WeeklyPlanner({
             <h3 style={{ margin: 0, fontSize: 14 }}>{draft.id ? 'Edit' : 'New'} slot · every {DAYS[DAY_INDEX.indexOf(draft.day)]}</h3>
             <button type="button" style={ghost} onClick={() => setDraft(null)}>Cancel</button>
           </div>
-          <label style={{ display: 'block', fontSize: 12, marginTop: 12 }}>Theme — what every {DAYS[DAY_INDEX.indexOf(draft.day)]} post is about
-            <input id="planner-topic" style={inputStyle} value={draft.topic} onChange={(e) => setDraft({ ...draft, topic: e.target.value })} placeholder="e.g. Stem cell safety and what to ask your provider" />
-          </label>
+          {draft.rotating ? (
+            <div style={{ fontSize: 12, marginTop: 12, background: '#fff', border: '1px solid rgba(0,0,0,0.08)', borderRadius: 8, padding: 10 }}>
+              <div style={{ fontWeight: 600 }}>{draft.rotating.name}</div>
+              <div style={{ opacity: .65, marginTop: 3 }}>
+                From the weekly strategy: {draft.rotating.angles} angles, one a week, so this slot does not repeat itself for {draft.rotating.angles} weeks. The rotation is kept as it is — change the day, time, format, goal or channels below.
+              </div>
+            </div>
+          ) : (
+            <label style={{ display: 'block', fontSize: 12, marginTop: 12 }}>Theme — what every {DAYS[DAY_INDEX.indexOf(draft.day)]} post is about
+              <input id="planner-topic" style={inputStyle} value={draft.topic} onChange={(e) => setDraft({ ...draft, topic: e.target.value })} placeholder="e.g. Stem cell safety and what to ask your provider" />
+            </label>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginTop: 10 }}>
             <label style={{ fontSize: 12 }}>Format
               <select style={inputStyle} value={draft.format} onChange={(e) => setDraft({ ...draft, format: e.target.value })}>
