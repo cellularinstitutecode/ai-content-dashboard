@@ -56,7 +56,10 @@ import {
 } from '@/lib/semrush';
 import { keywordMovers, primaryDomain, topOrganicKeywords, type KeywordMovers } from '@/lib/semrush-domain';
 import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
-import { metricoolSchedulePost, readPostId, type Provider as McProvider } from '@/lib/metricool';
+import { metricoolSchedulePost, readPostId } from '@/lib/metricool';
+import { metricoolNetworks, wantsBlog } from '@/lib/metricool-networks';
+import { professionalTitle } from '@/lib/post-title';
+import { publishArticle, wordpressConfigured } from '@/lib/wordpress';
 import { ensureDraftImage, type PackImage } from '@/lib/images';
 import { NETWORKS_NEEDING_MEDIA } from '@/lib/composer';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
@@ -1398,10 +1401,10 @@ export async function advanceRuns(opts: {
 // Approval: the ONLY path that talks to the scheduler — and it stays a draft.
 // ---------------------------------------------------------------------------
 
-const MC_PROVIDERS: McProvider[] = [
-  'instagram', 'facebook', 'twitter', 'linkedin', 'tiktok',
-  'youtube', 'gmb', 'pinterest', 'threads', 'bluesky',
-];
+// The list of Metricool networks used to be written out here as well. It is in
+// lib/metricool-networks.ts now — one definition, and a pure one, so the two
+// other doors that send this column onward can use the same filter instead of
+// casting the raw column and hoping.
 
 export type ApproveOptions = {
   /**
@@ -1509,8 +1512,18 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   const providers: string[] = (t && Array.isArray((t as { providers?: string[] }).providers))
     ? ((t as { providers?: string[] }).providers as string[])
     : [];
-  // A template with no usable network is not something to stage silently.
-  if (!providers.length) {
+  // A template with no usable DESTINATION is not something to stage silently.
+  //
+  // This used to test `providers.length`, which is not the same question. A
+  // blog-only template has one provider and no Metricool network, so it sailed
+  // past this guard, skipped the handoff block below (`if (mcProviders.length)`
+  // is false), left `handoffFailed` false because nothing was attempted — and
+  // wrote a `posts` row returning ok: true. The post then sat on the calendar
+  // marked "waiting for your approval", having been sent nowhere, and could
+  // never publish. Exactly the state the comment above the insert says this
+  // function refuses to record.
+  const wantsArticle = wantsBlog(providers);
+  if (!metricoolNetworks(providers).length && !wantsArticle) {
     await releaseClaim(db, run, 'approve-failed', 'Approval could not proceed: the template has no networks selected. Returned for review.');
     return { ok: false, note: 'That template has no networks selected, so there was nowhere to send it. It is back in your queue.' };
   }
@@ -1526,7 +1539,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     return { ok: false, note: 'The draft has no content, so nothing was sent. The run is back in your queue.' };
   }
 
-  const mcProviders = providers.filter((p): p is McProvider => (MC_PROVIDERS as string[]).includes(p));
+  const mcProviders = metricoolNetworks(providers);
   // Pick the copy for a network we are actually posting to. This used
   // providers[0], which is whatever the user clicked FIRST in the template
   // editor — including 'blog', which is not a Metricool network. A template
@@ -1636,6 +1649,61 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     }
   }
 
+  // The article, for a template that publishes one.
+  //
+  // Same rule as the handoff above: a failure is a failure. The run goes back
+  // in the queue with the reason, and no `posts` row is written — an article
+  // recorded as published when WordPress refused it is the same lie as a post
+  // recorded as scheduled when Metricool refused it.
+  if (!handoffFailed && wantsArticle) {
+    if (!wordpressConfigured()) {
+      handoffFailed = true;
+      note =
+        'This template publishes a blog article, but no WordPress site is configured — so there was nowhere to send it. ' +
+        'Set WORDPRESS_BASE_URL, WORDPRESS_USER and WORDPRESS_APP_PASSWORD, then approve again.';
+    } else {
+      // The article's own copy, not the Instagram caption: `pack.blog` is the
+      // 600-900 word piece the writer produced for exactly this.
+      const article = String((pack as unknown as Record<string, string>).blog || '').trim();
+      const aviso = await avisoForUser(run.user_id);
+      const body = ensureAviso(article, aviso);
+      const check = checkCompliance(body, aviso);
+      if (!article) {
+        handoffFailed = true;
+        note = 'This template publishes a blog article, but the draft has no article in it. Nothing was published; the run is back in your queue.';
+      } else if (!check.ok) {
+        // The gate now covers articles (lib/compliance.ts). It is the longest
+        // -lived thing the clinic publishes and it used to be the one format
+        // that skipped this.
+        handoffFailed = true;
+        note = 'Not published: ' + complianceMessage(check, ['blog']) + ' Edit the draft, then approve again.';
+      } else {
+        // The headline, through the same rules every published title goes
+        // through (lib/post-title.ts): never a file name, never a person's
+        // name, never an internal string. The angle's query is what this
+        // occurrence is actually about; the template name is the fallback.
+        const chosen = professionalTitle({
+          keyword: run.angle?.query || '',
+          spoken: String((t as { name?: string } | null)?.name || ''),
+        });
+        const published = await publishArticle({
+          title: chosen.title || String((t as { name?: string } | null)?.name || 'Cellular Institute'),
+          html: body,
+          date: run.scheduled_for,
+          featuredImageUrl: packImage?.url || null,
+        });
+        if (published.ok) {
+          note += (note ? ' ' : '') + 'Article published to WordPress (' + published.status + ')' +
+            (published.link ? ': ' + published.link : '') + '.' +
+            (published.note ? ' ' + published.note : '');
+        } else {
+          handoffFailed = true;
+          note = published.message + ' The run is back in your queue.';
+        }
+      }
+    }
+  }
+
   if (handoffFailed) {
     // Same treatment the empty-draft path above gets: the claim already moved
     // this run to `approved`, and no other transition accepts that state, so
@@ -1660,7 +1728,10 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     // live. See modeOf() there: 'scheduled' is also the column default and
     // part of Metricool's own vocabulary, so it cannot mean "a person said
     // yes to this".
-    status: opts.schedule && mcProviders.length ? 'approved' : 'pending_review',
+    // An article that WordPress accepted counts too: a blog-only run that
+    // reached this line has published something, and recording it as still
+    // waiting for approval is the same disagreement this row exists to avoid.
+    status: opts.schedule && (mcProviders.length || wantsArticle) ? 'approved' : 'pending_review',
   }).select('id').maybeSingle();
   // READ, not assumed. The Metricool post already exists at this point — with
   // opts.schedule it is in the LIVE queue with autoPublish: true — so a

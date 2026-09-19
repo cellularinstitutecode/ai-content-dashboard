@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { isAllowedEmail } from '@/lib/access';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { metricoolDeletePost, metricoolReplacePost, normalizeMediaList, type Provider } from '@/lib/metricool';
+import { metricoolDeletePost, metricoolReplacePost, metricoolNetworks, normalizeMediaList } from '@/lib/metricool';
 import { normalizeFailure } from '@/lib/media-normalize-reason';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { tiktokDataFor } from '@/lib/tiktok-meta';
@@ -575,7 +575,12 @@ export async function PATCH(req: Request) {
     try {
       await metricoolReplacePost(String(existing.metricool_post_id), {
         text: String(existing.text || ''),
-        providers: (existing.providers || []) as Provider[],
+        // Filtered, not cast. `posts.providers` is whatever the row was
+        // created with, and older rows (and any template carrying `blog`) can
+        // hold a channel Metricool has never heard of — one of those in the
+        // list can fail the whole multi-network call and leave the post where
+        // it was, with a message about Metricool rather than about the entry.
+        providers: metricoolNetworks(existing.providers),
         publicationDate: nextDate,
         media,
         mode,
