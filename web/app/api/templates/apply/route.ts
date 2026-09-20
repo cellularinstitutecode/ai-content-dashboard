@@ -172,7 +172,12 @@ export async function POST(req: NextRequest) {
   // Metricool's review queue — where the dashboard would then refuse to
   // approve any of them, but a person working inside Metricool could still
   // publish them. Refuse up front rather than half-create.
-  const gate = await complianceGate(user.id, text, providers as string[]);
+  // Gated on what this route actually SENDS, not on the raw column. Since the
+  // gate started covering articles, gating on the raw list meant a template
+  // carrying `blog` alongside a non-gated network was refused for missing an
+  // AVISO and a DOI — naming a channel this route never touches, on copy that
+  // was only going to that other network.
+  const gate = await complianceGate(user.id, text, mcProviders as string[]);
   if (!gate.ok) {
     return NextResponse.json(
       { ...gateRefusal(gate), message: gate.message + ' Edit the template text, then apply it again.' },

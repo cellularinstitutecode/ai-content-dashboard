@@ -114,9 +114,89 @@ test('a scheduled article carries the date WordPress asks for', async () => {
   assert.equal(result.ok && result.id, 42);
   const body = JSON.parse(String(calls[0].init.body));
   assert.equal(body.status, 'future');
-  assert.equal(body.date, '2026-10-05T17:00:00');
+  // `date_gmt` ONLY. WordPress reads `date` as the site's LOCAL wall clock and
+  // only falls back to `date_gmt`, so sending the same UTC string as both —
+  // which this did at first — publishes a Cancún article five hours late, and
+  // on a UTC+ site can date it into the past, where a scheduled post becomes
+  // an immediate one.
   assert.equal(body.date_gmt, '2026-10-05T17:00:00');
+  assert.equal(body.date, undefined, 'sending date too would override date_gmt with local time');
   assert.equal(wpDate(at), '2026-10-05T17:00:00', 'no milliseconds, no trailing Z');
+});
+
+test('a draft approval is a draft in WordPress too', () => {
+  // The queue's "Approve" (schedule: false) sends Metricool a reviewable
+  // draft. Before this, the article path ignored that and used the configured
+  // `future`, so the clinic's website got a self-publishing post while the
+  // calendar row still read "waiting for your approval".
+  const { fetchImpl, calls } = fakeWp([{ body: { id: 7, link: 'l', status: 'draft' } }]);
+  return publishArticle(
+    { title: 'T', html: 'B', date: '2026-10-05T17:00:00Z', status: 'draft' },
+    { config: CONFIG, fetchImpl },
+  ).then((result) => {
+    assert.equal(result.ok, true);
+    const body = JSON.parse(String(calls[0].init.body));
+    assert.equal(body.status, 'draft');
+    // A draft still carries its date, so publishing it later keeps the slot.
+    assert.equal(body.date_gmt, '2026-10-05T17:00:00');
+  });
+});
+
+test('a block that already carries a tag does not disable the rest', () => {
+  // One stray tag used to return the whole body untouched, shipping every
+  // `## Heading` as literal hashes and burying the AVISO and REF lines.
+  const mixed = '<p>Written by the model</p>\n\n## A heading\n\nA plain paragraph.';
+  const html = toHtml(mixed);
+  assert.match(html, /<p>Written by the model<\/p>/);
+  assert.match(html, /<h2>A heading<\/h2>/);
+  assert.match(html, /<p>A plain paragraph\.<\/p>/);
+  assert.doesNotMatch(html, /## A heading/);
+});
+
+test('a hero image is named for what it actually is', async () => {
+  // WordPress runs wp_check_filetype_and_ext and refuses a mismatch between
+  // extension and MIME as a security failure — so naming a webp `.jpg`, which
+  // this did, meant every webp hero was silently rejected.
+  for (const [type, ext] of [['image/webp', 'webp'], ['image/png', 'png'], ['image/jpeg', 'jpg'], ['image/gif', 'gif']] as const) {
+    const { fetchImpl, calls } = fakeWp([
+      { headers: { 'content-type': type } },
+      { body: { id: 5 } },
+      { body: { id: 9, link: 'l', status: 'future' } },
+    ]);
+    await publishArticle(
+      { title: 'T', html: 'B', date: '2026-10-05T17:00:00Z', featuredImageUrl: 'https://cdn.example/hero' },
+      { config: CONFIG, fetchImpl },
+    );
+    const disposition = String((calls[1].init.headers as Record<string, string>)['Content-Disposition']);
+    assert.match(disposition, new RegExp('\\.' + ext + '"$'), type + ' must upload as .' + ext);
+  }
+  // A charset parameter must not defeat the lookup.
+  const withParam = fakeWp([
+    { headers: { 'content-type': 'image/png; charset=binary' } },
+    { body: { id: 5 } },
+    { body: { id: 9, link: 'l', status: 'future' } },
+  ]);
+  await publishArticle(
+    { title: 'T', html: 'B', date: '2026-10-05T17:00:00Z', featuredImageUrl: 'https://cdn.example/hero' },
+    { config: CONFIG, fetchImpl: withParam.fetchImpl },
+  );
+  assert.match(String((withParam.calls[1].init.headers as Record<string, string>)['Content-Disposition']), /\.png"$/);
+});
+
+test('an HTML error page served as a picture is refused, not uploaded', async () => {
+  // An expired signed URL answering 200 with an error page would otherwise be
+  // uploaded to the media library as the article's hero.
+  const { fetchImpl, calls } = fakeWp([
+    { headers: { 'content-type': 'text/html' } },
+    { body: { id: 9, link: 'l', status: 'future' } },
+  ]);
+  const result = await publishArticle(
+    { title: 'T', html: 'B', date: '2026-10-05T17:00:00Z', featuredImageUrl: 'https://cdn.example/expired' },
+    { config: CONFIG, fetchImpl },
+  );
+  assert.equal(result.ok, true, 'the article still goes up');
+  assert.match(result.ok ? result.note : '', /text\/html/);
+  assert.equal(calls.length, 2, 'no upload was attempted');
 });
 
 test('a scheduled article with no time is refused before it is sent', async () => {

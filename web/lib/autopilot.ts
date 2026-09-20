@@ -85,6 +85,14 @@ export type TemplateStrategy = {
   lead_hours?: number;
   max_regens?: number;
   /**
+   * Written by "Load the weekly strategy", and only by it.
+   *
+   * The seed overwrites a template only when this is present (see
+   * lib/strategy-seed.ts), so it has to survive normalisation — a mark that
+   * silently vanished on write would turn every re-seed into a duplicate.
+   */
+  seeded?: string;
+  /**
    * A standing instruction for every occurrence of this template.
    *
    * Not an angle and not a topic: the clinic's written strategy carries two
@@ -192,6 +200,7 @@ export function normalizeStrategy(raw: unknown): TemplateStrategy {
     // as an instruction it must obey: a 4,000-word "rule" pasted into a
     // template would crowd out the brief it is meant to qualify.
     rule: typeof s.rule === 'string' && s.rule.trim() ? s.rule.trim().slice(0, 400) : undefined,
+    seeded: typeof s.seeded === 'string' && s.seeded.trim() ? s.seeded.trim().slice(0, 40) : undefined,
   };
 }
 
@@ -529,6 +538,11 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
   // the engine could not see its own history, so "a repeat is unlikely" rested
   // entirely on the four-way rotation. Newest first, capped, and fail-soft: an
   // unreadable history means the rotation behaves exactly as it did before.
+  //
+  // PUBLISHED, not merely attempted. Without the state filter a run that failed
+  // at drafting, or one a reviewer skipped, still spent one of the six history
+  // slots and ruled its query out — so a template with a bad week had its
+  // rotation narrowed by posts that were never written.
   let angleHistory: PastAngle[] = [];
   try {
     const { data: past, error: pastError } = await db
@@ -536,6 +550,7 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
       .select('angle, scheduled_for')
       .eq('template_id', run.template_id)
       .not('angle', 'is', null)
+      .eq('state', 'approved')
       .lt('scheduled_for', run.scheduled_for)
       .order('scheduled_for', { ascending: false })
       .limit(ANGLE_HISTORY);
@@ -572,7 +587,10 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
       },
     ]);
     if (note && note.trim()) angle.strategistNote = note.trim().slice(0, 500);
-  } catch (err) { /* optional */ reportError('autopilot:recent-angles', err); }
+    // Labelled for what it wraps. This said 'autopilot:recent-angles', so a
+    // model outage was filed under the angle rotation and whoever went looking
+    // for it started in the wrong place.
+  } catch (err) { /* optional */ reportError('autopilot:strategist-note', err); }
 
   return {
     state: 'researched',
@@ -1606,6 +1624,56 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     try { packImage = shippable(await ensureDraftImage(run.draft_id, run.user_id)); } catch { packImage = null; }
   }
 
+  // THE ARTICLE IS DECIDED BEFORE ANYTHING IS SENT.
+  //
+  // Everything about an article that can be refused — no WordPress configured,
+  // no article in the draft, an article missing its AVISO or citation — is
+  // knowable without calling anybody. Checking it here, before the Metricool
+  // handoff, is what keeps a refusal a refusal instead of a half-send: the
+  // first version of this ran the checks AFTER Metricool had already accepted
+  // the post, so a revoked WordPress password left three promo posts live,
+  // scheduled, unrecorded, and unreachable from this app — and pressing
+  // Approve again sent three more.
+  let article: { body: string; title: string } | null = null;
+  if (wantsArticle) {
+    const refuse = async (why: string) => {
+      await releaseClaim(db, run, 'approve-failed', why);
+      return { ok: false as const, note: why };
+    };
+    if (!wordpressConfigured()) {
+      return refuse(
+        'This template publishes a blog article, but no WordPress site is configured — so there was nowhere to send it. ' +
+        'Set WORDPRESS_BASE_URL, WORDPRESS_USER and WORDPRESS_APP_PASSWORD, then approve again. Nothing was sent anywhere.',
+      );
+    }
+    // The article's own copy, not the Instagram caption: `pack.blog` is the
+    // 600-900 word piece the writer produced for exactly this.
+    const raw = String((pack as unknown as Record<string, string>).blog || '').trim();
+    if (!raw) {
+      return refuse('This template publishes a blog article, but the draft has no article in it. Nothing was sent anywhere; the run is back in your queue.');
+    }
+    const articleAviso = await avisoForUser(run.user_id);
+    const body = ensureAviso(raw, articleAviso);
+    const articleCheck = checkCompliance(body, articleAviso);
+    if (!articleCheck.ok) {
+      // The gate covers articles now (lib/compliance.ts). An article is the
+      // longest-lived thing the clinic publishes and it used to be the one
+      // format that skipped this.
+      return refuse('Not published: ' + complianceMessage(articleCheck, ['blog']) + ' Edit the draft, then approve again. Nothing was sent anywhere.');
+    }
+    // The headline, through the same rules every published title goes through
+    // (lib/post-title.ts): never a file name, never a person's name, never an
+    // internal string.
+    const chosen = professionalTitle({
+      keyword: run.angle?.query || '',
+      spoken: String((t as { name?: string } | null)?.name || ''),
+    });
+    article = {
+      body,
+      title: chosen.title || String((t as { name?: string } | null)?.name || 'Cellular Institute'),
+    };
+  }
+
   let note = 'Staged for publishing review.';
   // Did the Metricool handoff actually happen? The local `posts` row exists to
   // mirror Metricool; writing one after a FAILED handoff put a post in the
@@ -1649,58 +1717,40 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     }
   }
 
-  // The article, for a template that publishes one.
+  // The article, already checked, now sent.
   //
-  // Same rule as the handoff above: a failure is a failure. The run goes back
-  // in the queue with the reason, and no `posts` row is written — an article
-  // recorded as published when WordPress refused it is the same lie as a post
-  // recorded as scheduled when Metricool refused it.
-  if (!handoffFailed && wantsArticle) {
-    if (!wordpressConfigured()) {
-      handoffFailed = true;
-      note =
-        'This template publishes a blog article, but no WordPress site is configured — so there was nowhere to send it. ' +
-        'Set WORDPRESS_BASE_URL, WORDPRESS_USER and WORDPRESS_APP_PASSWORD, then approve again.';
+  // WHAT HAPPENS WHEN THIS FAILS AND METRICOOL DID NOT. Nothing has gone
+  // anywhere, so the run is released and a retry is safe — the ordinary path.
+  //
+  // WHAT HAPPENS WHEN METRICOOL ALREADY SUCCEEDED. The run is NOT released,
+  // because releasing it invites a retry and a retry re-sends to Metricool:
+  // there is no idempotency key and no unique constraint on `posts`, so every
+  // attempt would add another live post for the same slot. The promo posts are
+  // real and they are recorded; the article's failure is said out loud on the
+  // run and in the answer, and publishing it is a decision for a person rather
+  // than something to retry blindly.
+  let articleFailure = '';
+  if (!handoffFailed && article) {
+    const published = await publishArticle({
+      title: article.title,
+      html: article.body,
+      date: run.scheduled_for,
+      featuredImageUrl: packImage?.url || null,
+      // A draft approval is a draft EVERYWHERE. Without this the queue's
+      // "Approve" (schedule: false) sent Metricool a reviewable draft and
+      // WordPress a scheduled post that publishes itself — while the calendar
+      // row read "waiting for your approval".
+      status: opts.schedule ? undefined : 'draft',
+    });
+    if (published.ok) {
+      note += (note ? ' ' : '') + 'Article ' + (published.status === 'draft' ? 'saved to WordPress as a draft' : 'published to WordPress (' + published.status + ')') +
+        (published.link ? ': ' + published.link : '') + '.' +
+        (published.note ? ' ' + published.note : '');
+    } else if (metricoolPostId) {
+      articleFailure = published.message;
     } else {
-      // The article's own copy, not the Instagram caption: `pack.blog` is the
-      // 600-900 word piece the writer produced for exactly this.
-      const article = String((pack as unknown as Record<string, string>).blog || '').trim();
-      const aviso = await avisoForUser(run.user_id);
-      const body = ensureAviso(article, aviso);
-      const check = checkCompliance(body, aviso);
-      if (!article) {
-        handoffFailed = true;
-        note = 'This template publishes a blog article, but the draft has no article in it. Nothing was published; the run is back in your queue.';
-      } else if (!check.ok) {
-        // The gate now covers articles (lib/compliance.ts). It is the longest
-        // -lived thing the clinic publishes and it used to be the one format
-        // that skipped this.
-        handoffFailed = true;
-        note = 'Not published: ' + complianceMessage(check, ['blog']) + ' Edit the draft, then approve again.';
-      } else {
-        // The headline, through the same rules every published title goes
-        // through (lib/post-title.ts): never a file name, never a person's
-        // name, never an internal string. The angle's query is what this
-        // occurrence is actually about; the template name is the fallback.
-        const chosen = professionalTitle({
-          keyword: run.angle?.query || '',
-          spoken: String((t as { name?: string } | null)?.name || ''),
-        });
-        const published = await publishArticle({
-          title: chosen.title || String((t as { name?: string } | null)?.name || 'Cellular Institute'),
-          html: body,
-          date: run.scheduled_for,
-          featuredImageUrl: packImage?.url || null,
-        });
-        if (published.ok) {
-          note += (note ? ' ' : '') + 'Article published to WordPress (' + published.status + ')' +
-            (published.link ? ': ' + published.link : '') + '.' +
-            (published.note ? ' ' + published.note : '');
-        } else {
-          handoffFailed = true;
-          note = published.message + ' The run is back in your queue.';
-        }
-      }
+      handoffFailed = true;
+      note = published.message + ' Nothing was sent anywhere; the run is back in your queue.';
     }
   }
 
@@ -1720,7 +1770,10 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   const { data: inserted, error: insertError } = await db.from('posts').insert({
     user_id: userId,
     draft_id: run.draft_id,
-    providers,
+    // What was actually SENT to Metricool, not what the template lists. A row
+    // carrying `blog` is read back by the reschedule path and sent onward; an
+    // entry that never went to Metricool has no business in that column.
+    providers: mcProviders.length ? mcProviders : providers,
     text,
     publication_date: run.scheduled_for,
     metricool_post_id: metricoolPostId,
@@ -1772,6 +1825,24 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     .update({ log: logLine(run, 'approve', note) })
     .eq('id', run.id);
   if (logError) reportError('autopilot:approve-log', logError, { runId: run.id });
+
+  // A PARTIAL: the promo posts went out, the article did not.
+  //
+  // Said as a failure, because something a person asked for did not happen —
+  // but the run is NOT released and the row above is written, because the
+  // Metricool post is real and a retry would send a second one. Publishing the
+  // article is a decision for a person now, not a button to press again.
+  if (articleFailure) {
+    const partial = note + ' BUT THE ARTICLE WAS NOT PUBLISHED: ' + articleFailure +
+      ' The promo posts above are scheduled and recorded; approving this run again would send them a second time, so fix WordPress and publish the article from the draft.';
+    const { error: partialError } = await db
+      .from('template_runs')
+      .update({ log: logLine(run, 'approve-partial', partial) })
+      .eq('id', run.id);
+    if (partialError) reportError('autopilot:approve-partial-log', partialError, { runId: run.id });
+    return { ok: false, note: partial + bookkeeping };
+  }
+
   return { ok: true, note: note + bookkeeping };
 }
 

@@ -1,11 +1,11 @@
 // web/app/api/templates/strategy/route.ts
 // "Load the weekly strategy" — the written calendar, written into the database.
 //
-// WHY THIS IS A ROUTE AND NOT FOURTEEN CLICKS. POST /api/templates is rate
+// WHY THIS IS A ROUTE AND NOT FIFTEEN CLICKS. POST /api/templates is rate
 // limited per user (it makes the org-wide Autopilot spend AI and Semrush
-// credit), so a client loop writing fourteen templates would be refused
+// credit), so a client loop writing fifteen templates would be refused
 // somewhere around the fourth and leave a half-built calendar behind. One
-// request, one rate-limit bucket, all fourteen or none of them.
+// request, one rate-limit bucket, all fifteen or none of them.
 //
 // WHAT IT CANNOT DO. It cannot make anything publish. A seeded template
 // produces drafts that wait in the review queue exactly like every other
@@ -19,7 +19,7 @@ import { NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { normalizeStrategy } from '@/lib/autopilot';
-import { planSeed, seedSummary, type SeedRow } from '@/lib/strategy-seed';
+import { planSeed, seedSummary, type ExistingTemplate, type SeedRow } from '@/lib/strategy-seed';
 import { supabaseServer } from '@/lib/supabase';
 import { reportError } from '@/lib/report';
 
@@ -57,11 +57,16 @@ export async function POST() {
   const userId = auth.userId;
 
   // What is already here. Read, not assumed: pressing this twice must leave
-  // fourteen templates, not twenty-eight, and this table has no unique key to
-  // fall back on.
+  // fifteen templates, not thirty, and this table has no unique key to fall
+  // back on.
+  //
+  // `strategy` as well as the name: the mark inside it is what says a row
+  // belongs to this seed and may be overwritten. Without it the seed would be
+  // matching on name alone, which is how somebody's own "Nutrition" template
+  // got absorbed.
   const { data: existing, error: readError } = await sb
     .from('schedule_templates')
-    .select('id, name')
+    .select('id, name, strategy')
     .eq('user_id', userId);
   if (readError) {
     // Fail closed. Writing without knowing what is there is exactly how the
@@ -76,7 +81,7 @@ export async function POST() {
     );
   }
 
-  const plan = planSeed((existing || []) as { id?: unknown; name?: unknown }[]);
+  const plan = planSeed((existing || []) as ExistingTemplate[]);
   const now = new Date().toISOString();
   const fresh = plan.create.map((r) => dbRow(userId, r, now));
   const existingRows = plan.update.map((r) => dbRow(userId, r, now));
@@ -89,7 +94,21 @@ export async function POST() {
    * mixed batch would try to insert the new templates with `id: null` and be
    * refused by the primary key. Splitting them is what makes a first press and
    * a second press both work.
+   *
+   * WHICH LEGS HAVE ALREADY RUN. A retry used to re-enter this function and
+   * re-run the INSERT leg with it — so an insert that succeeded followed by an
+   * upsert that failed with any message containing "strategy" wrote fifteen
+   * brand-new templates on top of the fifteen just written, and answered
+   * `ok: true`. Thirty templates, thirty posts a week, at full model and
+   * Semrush cost, from the one route whose whole purpose is to make a second
+   * press safe.
+   *
+   * Nothing re-enters `write` today (the degrade path is gone), but the flags
+   * stay: the next person to add a retry gets the safe behaviour for free.
    */
+  let inserted = false;
+  let updated = false;
+
   async function write(withStrategy: boolean): Promise<{ message: string } | null> {
     const strip = (rows: Row[]) =>
       withStrategy
@@ -99,29 +118,40 @@ export async function POST() {
             delete copy.strategy;
             return copy;
           });
-    if (fresh.length) {
+    if (fresh.length && !inserted) {
       const { error } = await sb.from('schedule_templates').insert(strip(fresh)).select('id');
       if (error) return { message: error.message };
+      inserted = true;
     }
-    if (existingRows.length) {
+    if (existingRows.length && !updated) {
       const { error } = await sb.from('schedule_templates').upsert(strip(existingRows)).select('id');
       if (error) return { message: error.message };
+      updated = true;
     }
     return null;
   }
 
-  let failure = await write(true);
-  // The same graceful degrade POST /api/templates carries: a database without
-  // the autopilot migration has no strategy column. The calendar is still
-  // worth having; the rotation is what waits for the migration.
-  let withoutStrategy = false;
-  if (failure && /strategy/i.test(failure.message)) {
-    failure = await write(false);
-    withoutStrategy = !failure;
-  }
+  const failure = await write(true);
   if (failure) {
     reportError('templates:strategy-write', new Error(failure.message));
-    return NextResponse.json({ error: 'write_failed', message: failure.message }, { status: 500 });
+    // NO DEGRADE PATH HERE, deliberately, and this used to have one.
+    //
+    // Writing the rows without their `strategy` — which is what a database
+    // missing the autopilot migration forces — produces fifteen templates that
+    // are inert (`mode` defaults to 'off', so they write nothing) AND unmarked,
+    // so the next press cannot recognise them and creates fifteen more. A
+    // calendar that does nothing and doubles on retry is worse than a refusal
+    // that names the migration.
+    const migrationMissing = /strategy/i.test(failure.message);
+    return NextResponse.json(
+      {
+        error: migrationMissing ? 'migration_missing' : 'write_failed',
+        message: migrationMissing
+          ? 'This database has not had the Autopilot migration run yet, so the rotation has nowhere to be stored — and slots written without it would do nothing. Run web/supabase/autopilot.sql (GO-LIVE.md, step 2), then press this again. Nothing was changed.'
+          : failure.message,
+      },
+      { status: migrationMissing ? 409 : 500 },
+    );
   }
 
   return NextResponse.json({
@@ -129,10 +159,7 @@ export async function POST() {
     created: plan.create.length,
     updated: plan.update.length,
     duplicates: plan.duplicates,
-    message:
-      seedSummary(plan) +
-      (withoutStrategy
-        ? ' The rotation could not be saved because this database has not had the autopilot migration run yet — the slots are there, but they will not write anything until it has.'
-        : ''),
+    collisions: plan.collisions,
+    message: seedSummary(plan),
   });
 }

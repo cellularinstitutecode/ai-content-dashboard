@@ -228,8 +228,9 @@ export default function TemplatesPage() {
   async function loadStrategy() {
     if (!window.confirm(
       'Load the clinic\u2019s weekly content strategy?\n\n'
-      + 'Fourteen slots \u2014 two a day, Monday to Sunday \u2014 each rotating its own bank of angles so the same pillar never reads the same way twice.\n\n'
-      + 'Nothing publishes from this. Every post is written ahead of time and waits in the review queue. Slots already loaded are brought up to date rather than duplicated, and your own templates are left alone.'
+      + 'Fifteen slots: fourteen social posts \u2014 two a day, Monday to Sunday \u2014 plus one blog article on Monday. Each rotates its own bank of angles, so the same pillar never reads the same way twice.\n\n'
+      + 'Nothing is published by this. Every post is written ahead of time and waits in the review queue; the article reaches WordPress only when you approve it.\n\n'
+      + 'Slots already loaded are brought up to date rather than duplicated. Templates you wrote yourself are never touched \u2014 if one happens to share a name with a slot, it is left exactly as it is and the new slot is added beside it.'
     )) return;
     setErr(null);
     setStrategyBusy(true);

@@ -6,12 +6,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   BLOG_SLOT,
+  SEED_MARK,
   STRATEGY_PROVIDERS,
+  isSeeded,
   matchKey,
   planSeed,
   seedRows,
   seedSummary,
 } from './strategy-seed.ts';
+
+/** What the account looks like after a successful press. */
+const asSeeded = () => seedRows().map((r, i) => ({ id: 'id-' + i, name: r.name, strategy: r.strategy }));
 import { POSTS_PER_WEEK } from './content-strategy.ts';
 
 /** Fourteen social slots plus the weekly article. */
@@ -59,8 +64,7 @@ test('a first press creates everything and updates nothing', () => {
 test('a second press updates in place — fifteen stays fifteen', () => {
   // THE POINT OF THIS FILE. schedule_templates has no unique key, so without
   // this the button is a way to double the calendar every time it is pressed.
-  const existing = seedRows().map((r, i) => ({ id: 'id-' + i, name: r.name }));
-  const plan = planSeed(existing);
+  const plan = planSeed(asSeeded());
   assert.equal(plan.create.length, 0);
   assert.equal(plan.update.length, SLOTS);
   for (const row of plan.update) assert.match(row.id || '', /^id-\d+$/, 'an update must carry the id it replaces');
@@ -71,19 +75,23 @@ test('somebody else\'s templates are never claimed, renamed or touched', () => {
     { id: 'a', name: 'Monday promo — knees' },
     { id: 'b', name: 'Newsletter teaser' },
     { id: 'c', name: '' },
-    { id: '', name: 'Nutrition' },
+    { id: '', name: 'Nutrition', strategy: seedRows()[0].strategy },
   ];
   const plan = planSeed(mine);
-  // The id-less row cannot be updated, so Nutrition is created rather than
-  // silently written over something this seed cannot address.
+  // The id-less row cannot be addressed, so Nutrition is created alongside
+  // rather than written over something this seed cannot address.
   assert.equal(plan.create.length, SLOTS);
   assert.equal(plan.update.length, 0);
   const ids = plan.update.map((r) => r.id);
   assert.ok(!ids.includes('a') && !ids.includes('b') && !ids.includes('c'));
 });
 
-test('matching ignores case and spacing, because a person may have retyped the name', () => {
-  const existing = [{ id: 'x', name: '  nutrition  ' }, { id: 'y', name: 'SLEEP' }];
+test('matching ignores case and spacing on rows the seed owns', () => {
+  const mark = seedRows()[0].strategy;
+  const existing = [
+    { id: 'x', name: '  nutrition  ', strategy: mark },
+    { id: 'y', name: 'SLEEP', strategy: mark },
+  ];
   const plan = planSeed(existing);
   assert.equal(plan.update.length, 2);
   assert.deepEqual(plan.update.map((r) => r.id).sort(), ['x', 'y']);
@@ -92,17 +100,48 @@ test('matching ignores case and spacing, because a person may have retyped the n
   assert.equal(matchKey(null), '');
 });
 
+test('a template the seed did not write is NEVER overwritten, whatever it is called', () => {
+  // THE ONE THAT NEARLY COST SOMEBODY THEIR WORK. The seed's names are
+  // ordinary words. Matching on name alone meant a template a person had
+  // written and called "Nutrition" was absorbed on the first press — channels,
+  // days, time and strategy replaced, text emptied — while the confirm dialog
+  // promised their templates would be left alone.
+  const mine = [
+    { id: 'mine', name: 'Nutrition', strategy: { mode: 'fixed_topic', topic: 'my own thing' } },
+    { id: 'plain', name: 'Sleep' },
+    { id: 'nostrategy', name: 'Recovery', strategy: null },
+  ];
+  const plan = planSeed(mine);
+  assert.equal(plan.update.length, 0, 'nothing of theirs is updated');
+  assert.equal(plan.create.length, SLOTS, 'the slots are created alongside');
+  // And the collision is reported rather than discovered on the calendar.
+  assert.deepEqual(plan.collisions.sort(), ['Nutrition', 'Recovery', 'Sleep']);
+  assert.match(seedSummary(plan), /You already have a template called/);
+  assert.match(seedSummary(plan), /NOT touched/);
+});
+
+test('the mark is what makes a row ours, and it survives a round trip', () => {
+  for (const row of seedRows()) assert.equal(row.strategy.seeded, SEED_MARK);
+  assert.equal(isSeeded({ strategy: { seeded: SEED_MARK } }), true);
+  assert.equal(isSeeded({ strategy: { seeded: 'something else' } }), false);
+  assert.equal(isSeeded({ strategy: { mode: 'pillars' } }), false);
+  assert.equal(isSeeded({ strategy: null }), false);
+  assert.equal(isSeeded({}), false);
+  assert.equal(isSeeded(undefined), false);
+});
+
 test('a duplicated name updates the first and says so about the rest', () => {
   // Deleting the extra would be this seed removing somebody's work. Saying
   // nothing would leave two posts in one slot with no explanation.
+  const mark = seedRows()[0].strategy;
   const plan = planSeed([
-    { id: 'first', name: 'Prevention' },
-    { id: 'second', name: 'prevention' },
+    { id: 'first', name: 'Prevention', strategy: mark },
+    { id: 'second', name: 'prevention', strategy: mark },
   ]);
   assert.deepEqual(plan.duplicates, ['Prevention']);
   assert.equal(plan.update.length, 1);
   assert.equal(plan.update[0].id, 'first');
-  assert.match(seedSummary(plan), /more than one template named "Prevention"/);
+  assert.match(seedSummary(plan), /more than one slot named "Prevention"/);
   assert.match(seedSummary(plan), /left alone/);
 });
 
@@ -110,7 +149,7 @@ test('the summary is a sentence, not a pair of numbers', () => {
   assert.match(seedSummary(planSeed([])), /^15 slots added — 15 posts a week/);
   assert.match(seedSummary(planSeed([])), /plus the Monday article/);
   assert.match(seedSummary(planSeed([])), /waiting in the review queue\.$/);
-  const second = seedSummary(planSeed(seedRows().map((r, i) => ({ id: 'id-' + i, name: r.name }))));
+  const second = seedSummary(planSeed(asSeeded()));
   assert.match(second, /15 brought up to date/);
   assert.match(second, /review queue/, 'it must say that nothing publishes from this');
 });

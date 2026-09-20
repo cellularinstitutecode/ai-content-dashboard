@@ -38,6 +38,20 @@ export type WordPressConfig = {
 
 const STATUSES: readonly string[] = ['future', 'draft', 'publish', 'pending', 'private'];
 
+/**
+ * The picture formats WordPress takes, and the extension each one must carry.
+ *
+ * Anything else — an HTML error page served with HTTP 200 from an expired
+ * signed URL, say — is refused rather than uploaded as a "picture".
+ */
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+};
+
 /** Trim a site URL down to its origin + path, with no trailing slash and no /wp-json tail. */
 export function normalizeBaseUrl(raw: string): string {
   let value = String(raw || '').trim();
@@ -87,11 +101,16 @@ export function authHeader(user: string, appPassword: string): string {
 }
 
 /**
- * The date WordPress wants for a scheduled post.
+ * The date WordPress wants for a scheduled post: UTC, ISO-8601, no trailing Z.
  *
- * `date_gmt` in ISO-8601 without the trailing Z, which is what the REST API
- * documents and what it returns. A `future` post with no date is rejected by
- * WordPress, so this is not optional on that path.
+ * This is `date_gmt` and ONLY `date_gmt`. WordPress reads `date` as the site's
+ * LOCAL wall clock and only consults `date_gmt` when `date` is absent — so
+ * sending the same UTC string as both (which this did at first) publishes a
+ * Cancún article five hours late, and on a UTC+ site can date it into the past,
+ * where WordPress turns a scheduled post into an immediate one.
+ *
+ * A `future` post with no date is rejected by WordPress, so this is not
+ * optional on that path.
  */
 export function wpDate(at: string | Date): string {
   const d = at instanceof Date ? at : new Date(String(at));
@@ -139,16 +158,26 @@ export type PublishOptions = {
   env?: Record<string, string | undefined>;
 };
 
-/** Markdown-ish body to HTML: enough for paragraphs and the H2 lines the writer produces. */
+/**
+ * Markdown-ish body to HTML: enough for paragraphs and the H2 lines the writer
+ * produces (lib/ai.ts asks for "H2/H3 style lines").
+ *
+ * BLOCK BY BLOCK, not all-or-nothing. The first version returned the whole
+ * body untouched the moment it saw a single tag anywhere — so one stray `<p>`
+ * from the model, or a `<div>` around an embed, shipped every `## Heading` in
+ * the article as literal hashes, and left the AVISO and REF lines buried in
+ * whatever the model had written. A block that already carries a tag is left
+ * alone; its neighbours are still converted.
+ */
 export function toHtml(body: string): string {
   const text = String(body || '').trim();
   if (!text) return '';
-  if (/<(p|h[1-6]|ul|ol|div|section|article)\b/i.test(text)) return text;
   return text
     .split(/\n{2,}/)
     .map((block) => block.trim())
     .filter(Boolean)
     .map((block) => {
+      if (/<(p|h[1-6]|ul|ol|li|div|section|article|figure|blockquote|table)\b/i.test(block)) return block;
       const heading = /^(#{2,4})\s+(.*)$/.exec(block);
       if (heading) {
         const level = Math.min(6, heading[1].length);
@@ -196,11 +225,21 @@ export async function uploadFeaturedImage(
     const signal = AbortSignal.timeout(timeoutMs);
     const src = await doFetch(imageUrl, { signal });
     if (!src.ok) return { id: null, note: 'the hero image could not be downloaded (HTTP ' + src.status + ')' };
-    const type = src.headers.get('content-type') || 'image/jpeg';
+    // Parameters stripped: `image/jpeg; charset=binary` is a media type the
+    // extension table below would not recognise.
+    const type = (src.headers.get('content-type') || 'image/jpeg').split(';')[0].trim().toLowerCase();
     const bytes = new Uint8Array(await src.arrayBuffer());
     if (!bytes.length) return { id: null, note: 'the hero image came back empty' };
 
-    const name = 'hero-' + Date.now() + (type.includes('png') ? '.png' : '.jpg');
+    // THE EXTENSION HAS TO AGREE WITH THE TYPE. WordPress runs
+    // wp_check_filetype_and_ext and refuses a mismatch as a security failure,
+    // so naming a webp `.jpg` — which this did — meant every webp hero was
+    // silently rejected and every such article went up with no picture.
+    const ext = IMAGE_EXTENSIONS[type];
+    if (!ext) {
+      return { id: null, note: 'the hero image came back as ' + type + ', which WordPress will not accept as a picture' };
+    }
+    const name = 'hero-' + Date.now() + '.' + ext;
     const res = await doFetch(apiUrl(config.baseUrl, 'media'), {
       method: 'POST',
       headers: {
@@ -267,7 +306,9 @@ export async function publishArticle(input: PublishInput, opts: PublishOptions =
   }
 
   const payload: Record<string, unknown> = { title, content: html, status };
-  if (date) { payload.date = date; payload.date_gmt = date; }
+  // `date_gmt` alone — see wpDate. Sending `date` too would override it with
+  // the same string read as local time.
+  if (date) payload.date_gmt = date;
   if (featuredMedia) payload.featured_media = featuredMedia;
   if (config.category) payload.categories = [config.category];
 

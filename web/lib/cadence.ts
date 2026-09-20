@@ -25,13 +25,25 @@ export const VIDEO_SLOTS_PER_DAY = DEFAULT_POST_TIMES.length;
 export const VIDEO_POSTS_PER_WEEK = VIDEO_SLOTS_PER_DAY * 7;
 
 /**
- * Drafts written in a full week: the strategy's fourteen plus the reels.
+ * The weekly article, which is a slot like any other and writes a draft like
+ * any other — but lives in lib/strategy-seed.ts rather than in the day map,
+ * because the strategy document does not mention it.
+ *
+ * Counted here by hand for that reason, and asserted against the seed in the
+ * tests, because the whole point of this file is that the window widens when
+ * the calendar does. It did not when the article was added.
+ */
+export const ARTICLES_PER_WEEK = 1;
+
+/**
+ * Drafts written in a full week: the strategy's fourteen, its article, and the
+ * reels.
  *
  * `drafts` is the table the opening-line guard reads, and every one of these
  * writes a row into it, so this is the right unit — not "posts", which counts
  * one draft once per network.
  */
-export const DRAFTS_PER_WEEK = POSTS_PER_WEEK + VIDEO_POSTS_PER_WEEK;
+export const DRAFTS_PER_WEEK = POSTS_PER_WEEK + ARTICLES_PER_WEEK + VIDEO_POSTS_PER_WEEK;
 
 /** Never look back over fewer rows than the guard managed before this file existed. */
 export const MIN_LOOK_BACK = 12;

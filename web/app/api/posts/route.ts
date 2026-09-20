@@ -572,6 +572,22 @@ export async function PATCH(req: Request) {
   }
 
   if (existing.metricool_post_id) {
+    // Filtering can empty the list — a legacy row naming a network this app no
+    // longer recognises. metricoolReplacePost throws on an empty list, and the
+    // catch below would report that local refusal as "Metricool did not accept
+    // the approval", which sends somebody to look at the wrong system.
+    const rowNetworks = metricoolNetworks(existing.providers);
+    if (!rowNetworks.length) {
+      return NextResponse.json(
+        {
+          error: 'no_known_networks',
+          message: 'This post lists no network this app can post to, so it cannot be '
+            + (action === 'reschedule' ? 'moved' : 'approved')
+            + ' from here. Open it in Metricool, or recreate it from the draft.',
+        },
+        { status: 409 },
+      );
+    }
     try {
       await metricoolReplacePost(String(existing.metricool_post_id), {
         text: String(existing.text || ''),
@@ -580,7 +596,7 @@ export async function PATCH(req: Request) {
         // hold a channel Metricool has never heard of — one of those in the
         // list can fail the whole multi-network call and leave the post where
         // it was, with a message about Metricool rather than about the entry.
-        providers: metricoolNetworks(existing.providers),
+        providers: rowNetworks,
         publicationDate: nextDate,
         media,
         mode,
