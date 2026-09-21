@@ -1,5 +1,5 @@
 {
-  "_comment": "The four crons from vercel.json, as Dokploy Schedule Jobs that run inside the app container. lib/deploy-schedules.test.ts asserts this list and vercel.json never drift apart. Create each one DISABLED until cutover: both copies share the same database, and a cron that runs twice prepares every video twice.",
+  "_comment": "The four crons from vercel.json, as Dokploy Schedule Jobs that run inside the app container. lib/deploy-schedules.test.ts asserts this list and vercel.json never drift apart. ENABLE THESE ON ONE HOST ONLY: both copies share the same database, and a cron that runs twice prepares every video twice. The autopilot tick is hourly rather than daily — lib/lead-window.ts does its arithmetic against that interval, so changing it here means changing it there.",
   "timezone": "UTC",
   "schedules": [
     {
@@ -11,7 +11,7 @@
     {
       "name": "autopilot-tick",
       "path": "/api/autopilot/tick",
-      "cronExpression": "30 6 * * *",
+      "cronExpression": "0 * * * *",
       "command": "node scripts/cron-tick.mjs autopilot/tick"
     },
     {

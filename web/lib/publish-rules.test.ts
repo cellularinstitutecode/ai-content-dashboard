@@ -100,9 +100,17 @@ test("the Autopilot's live publish is reachable only through an explicit request
 
 // --- 3. NOTHING AUTOMATIC ---------------------------------------------------
 
-test('no daily cron can publish anything', () => {
-  // The crons run unattended, on a schedule, with no person watching. If any
-  // could reach a live publish, "only once I have approved" would be false.
+test('no cron route reaches a publish of its own', () => {
+  // The crons run unattended, on a schedule, with no person watching — hourly
+  // now, rather than once a day, which makes this worth more than it was.
+  //
+  // THE PROMISE IS NARROWER THAN IT WAS, and this test says which part is left.
+  // Since AUTOPILOT_AUTOSCHEDULE there IS a path from a tick to a live post:
+  // advanceRuns → autoSchedule → approveRun, off by default, and refused by
+  // lib/autoschedule.ts and lib/weekly-pace.ts on anything short of perfect.
+  // What must stay true is that no cron ROUTE publishes on its own account —
+  // every unattended send goes through that one gated door, where the bars are
+  // written down and tested, rather than through a second one nobody audited.
   for (const cron of ['app/api/autopilot/tick/route.ts', 'app/api/videos/watch/route.ts', 'app/api/maintenance/prune/route.ts']) {
     const body = src(cron);
     for (const forbidden of ['approveRun', 'autoPublish', "'scheduled'"]) {

@@ -21,7 +21,6 @@ import { normalizeStrategy } from '@/lib/autopilot';
 import { cleanTime, cleanWeekdays, isUsableTime } from '@/lib/template-input';
 import { reportError } from '@/lib/report';
 import { leadProblem, retryBudgetProblem } from '@/lib/lead-window';
-import { SCHEDULE_TZ, tzOffsetMs } from '@/lib/timezone';
 
 
 export type PlannerTemplate = {
@@ -204,30 +203,27 @@ export async function saveTemplate(
     // is least able to notice.
     notes.push('No weekdays are set, so this template will never fire until some are chosen.');
   }
-  // A lead the daily pass can never reach. Raised by advanceRuns anyway, but a
-  // person who typed 4 should be told it is being treated as more, rather than
-  // discovering it by reading the engine.
+  // A lead too short for the engine to finish the draft in time. Raised by
+  // advanceRuns anyway, but a person who typed 1 should be told it is being
+  // treated as more, rather than discovering it by reading the engine.
+  //
+  // No longer a function of the slot time: the tick is hourly, so evenly spaced
+  // ticks reach every slot alike — see lib/lead-window.ts for the arithmetic
+  // that used to depend on catching one daily cron.
   {
-    const [hh, mm] = time.split(':').map((n) => parseInt(n, 10) || 0);
     const strat = normalizeStrategy(row.strategy ?? existing?.strategy);
-    // time_of_day is clinic-LOCAL wall clock; the engine schedules in UTC, and
-    // the tick cadence this is measured against is UTC too. tzOffsetMs gives the
-    // zone's offset at this instant (Cancún has no DST, but the helper does not
-    // depend on that).
-    const offsetMin = tzOffsetMs(new Date(), SCHEDULE_TZ) / 60000;
-    const slotUtc = ((Math.round(hh * 60 + mm - offsetMin) % 1440) + 1440) % 1440;
     const lead = strat.lead_hours ?? 24;
-    const bad = leadProblem(lead, slotUtc);
+    const bad = leadProblem(lead);
     if (bad) notes.push(bad.message);
     // A second, quieter note — and only when the lead is not already broken,
-    // because saying "this can never run" and "this has no second attempt" in
-    // the same breath buries the first. Below this floor the occurrence gets
-    // exactly one daily pass, so one transient failure costs the whole post:
-    // attempts stops at 1, under MAX_ATTEMPTS, so the run is never marked
-    // failed and never retried — it just quietly expires. The engine's own
-    // justification for MAX_ATTEMPTS = 2 assumes this floor is met.
+    // because saying "this cannot be ready in time" and "this has no second
+    // attempt" in the same breath buries the first. Below that floor one
+    // transient failure costs the whole post: attempts stops short of
+    // MAX_ATTEMPTS, so the run is never marked failed and never retried — it
+    // just quietly expires. The engine's own justification for MAX_ATTEMPTS = 2
+    // assumes this floor is met.
     else {
-      const thin = retryBudgetProblem(lead, slotUtc);
+      const thin = retryBudgetProblem(lead);
       if (thin) notes.push(thin.message);
     }
   }

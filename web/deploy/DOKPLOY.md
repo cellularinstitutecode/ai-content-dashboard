@@ -61,7 +61,7 @@ Dokploy → the application → **Schedules → Create**, one per entry in
 |---|---|---|
 | `maintenance-prune` | `0 5 * * *` | `node scripts/cron-tick.mjs maintenance/prune` |
 | `metricool-sync` | `0 6 * * *` | `node scripts/cron-tick.mjs metricool/sync` |
-| `autopilot-tick` | `30 6 * * *` | `node scripts/cron-tick.mjs autopilot/tick` |
+| `autopilot-tick` | `0 * * * *` | `node scripts/cron-tick.mjs autopilot/tick` |
 | `videos-watch` | `*/15 * * * *` | `node scripts/cron-tick.mjs videos/watch` |
 
 Shell type `sh`, timezone `UTC`, and **leave each one disabled**. They exist so
