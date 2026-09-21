@@ -258,6 +258,9 @@ export async function normalizeMediaDetailed(rawUrl: string): Promise<NormalizeO
   }
 }
 
+export { acceptEcho } from '@/lib/metricool-echo';
+import { acceptEcho } from '@/lib/metricool-echo';
+
 /** The URL to post, or the one we were given when it did not work. Unchanged for callers that only need that. */
 export async function normalizeMedia(rawUrl: string): Promise<string> {
   const out = await normalizeMediaDetailed(rawUrl);
@@ -301,6 +304,35 @@ export async function normalizeMediaList(
     // Metricool's own reference, never the URL it was given.
     if (n === trimmed) {
       degraded = true;
+      // THE ONE QUESTION LEFT, AND THE ONLY WAY TO ANSWER IT.
+      //
+      // The trace from row 191 settles what these endpoints are:
+      //
+      //   image 200 · video 404 · v2/video 404 · v2/image 404
+      //   image POST 500 · video POST 404 · v2/video POST 404 · v2/image POST 404
+      //
+      // Every video path, in every spelling, 404. Only
+      // /actions/normalize/image/url exists at all, and it hands the link back.
+      // So "Metricool pulls the file onto its own storage" was only ever true
+      // for IMAGES; there is no video equivalent to call.
+      //
+      // Which leaves one thing nobody here knows: does Metricool fetch the
+      // media URL ITSELF when the post publishes? The echo was read as "no"
+      // — but that reading was formed in September, when the URL we handed
+      // over was a Vercel function that could not serve the file to anyone.
+      // Of course the post published empty. The link was broken.
+      //
+      // The link is not broken now. It is a Drive copy this app fetched back
+      // with no credentials and read an mp4 header from. So the September
+      // conclusion may simply not apply, and the only way to find out is to
+      // let one post through and look at it in Metricool.
+      //
+      // OFF BY DEFAULT, and it stays off unless somebody sets it deliberately:
+      // the cost of being wrong is a reel published to YouTube and TikTok with
+      // no video in it. `degraded` stays true either way, so the post is still
+      // marked and still says what happened.
+      if (acceptEcho()) continue;
+
       // And it is a FAILURE, with everything known about it. This was the hole:
       // an echoed URL set `degraded` without setting `failure`, so the caller
       // had nothing to explain it with and printed the bare fallback sentence —

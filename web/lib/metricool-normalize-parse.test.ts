@@ -24,6 +24,7 @@ import { describeShape, readNormalizedUrl } from './metricool-normalize-parse.ts
 import { attemptTrace, normalizeFailure } from './media-normalize-reason.ts';
 import { readFileSync } from 'node:fs';
 import { looksLikeVideoUrl, mayBeVideoUrl } from './metricool-normalize-parse.ts';
+import { acceptEcho } from './metricool-echo.ts';
 
 const SENT = 'https://studio.example.com/api/media/video/abc/1800000000/ff/video.mp4';
 const THEIRS = 'https://cdn.metricool.com/media/9f3a2b.mp4';
@@ -275,4 +276,38 @@ test('the video endpoints are only reachable when the URL is a video candidate',
   // And the budget follows the same boolean: a 149 MB pull cannot finish in the
   // image budget of one minute.
   assert.match(src, /const budgetMs = isVideo \? 240_000 : 60_000;/);
+});
+
+test('an echoed link is refused unless somebody deliberately says otherwise', () => {
+  // The trace from row 191 settles what Metricool's normalise endpoints are:
+  //
+  //   image 200 · video 404 · v2/video 404 · v2/image 404
+  //   image POST 500 · video POST 404 · v2/video POST 404 · v2/image POST 404
+  //
+  // Every video path 404s. There is no "normalise a video from a URL" call to
+  // make, so the echo is not a failure of ours to fix — it is the only answer
+  // that endpoint has for a video.
+  //
+  // Whether Metricool then fetches the URL itself at publish time is the open
+  // question, and the September reading of "no" was taken when our link was a
+  // Vercel function that could serve nobody. This setting exists to run that
+  // test once, on a link that genuinely works.
+  const src = readFileSync(new URL('../lib/metricool.ts', import.meta.url), 'utf8');
+  assert.match(src, /import \{ acceptEcho \} from '@\/lib\/metricool-echo';/);
+  assert.match(src, /if \(acceptEcho\(\)\) continue;/, 'it must skip the failure, not the degraded flag');
+
+  // `degraded` stays set either way: a post that went out this way is still
+  // marked, because the whole point is to look at it afterwards.
+  const order = src.indexOf('degraded = true;\n      // THE ONE QUESTION LEFT');
+  assert.ok(order > 0, 'degraded must be set BEFORE the opt-out is considered');
+});
+
+test('nothing but an explicit yes turns it on', () => {
+  // A reel published to YouTube and TikTok with no video in it is the cost of
+  // getting this wrong, so there is no clever parsing here.
+  for (const raw of ['on', 'true', '1', 'yes', 'ON', ' Yes '])
+    assert.equal(acceptEcho({ METRICOOL_ACCEPT_ECHO: raw }), true, JSON.stringify(raw));
+  for (const raw of [undefined, '', '   ', 'off', 'false', '0', 'no', 'maybe', 'onn'])
+    assert.equal(acceptEcho({ METRICOOL_ACCEPT_ECHO: raw }), false, JSON.stringify(raw));
+  assert.equal(acceptEcho({}), false, 'unset is off');
 });
