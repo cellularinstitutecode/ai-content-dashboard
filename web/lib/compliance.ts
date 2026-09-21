@@ -39,10 +39,29 @@ export const DEFAULT_AVISO_NUMBER = '2623022002A00090';
  */
 const SOCIAL_NETWORKS = new Set(['instagram', 'facebook', 'ig', 'fb', 'linkedin', 'tiktok', 'youtube']);
 
-/** Proper names for the network ids, for a sentence a person reads. */
+/**
+ * And the blog, which is not a social network and was therefore exempt from a
+ * rule that has nothing to do with social networks.
+ *
+ * The same reasoning as LinkedIn's and YouTube's, one step further: the rule is
+ * about advertising a clinic's therapies in Mexico, and an 800-word article
+ * making a therapeutic claim is advertising by any reading. It was the ONE
+ * format that skipped the AVISO and the citation — and the longest-lived thing
+ * the clinic publishes, sitting on its own domain being indexed, long after a
+ * post has scrolled away.
+ *
+ * Kept separate from SOCIAL_NETWORKS only so the refusal sentence can say
+ * "blog articles" rather than listing it among the networks.
+ */
+const ARTICLE_CHANNELS = new Set(['blog']);
+
+/** Every channel the rule covers. */
+const GATED_CHANNELS = new Set([...SOCIAL_NETWORKS, ...ARTICLE_CHANNELS]);
+
+/** Proper names for the channel ids, for a sentence a person reads. */
 const NETWORK_NAMES: Record<string, string> = {
   instagram: 'Instagram', ig: 'Instagram', facebook: 'Facebook', fb: 'Facebook',
-  linkedin: 'LinkedIn', tiktok: 'TikTok', youtube: 'YouTube',
+  linkedin: 'LinkedIn', tiktok: 'TikTok', youtube: 'YouTube', blog: 'blog article',
 };
 
 /**
@@ -59,7 +78,7 @@ const NETWORK_NAMES: Record<string, string> = {
  * composer wants; with no argument it names them all.
  */
 export function complianceNetworksLabel(only?: readonly string[] | null): string {
-  const ids = (only && only.length ? only.map((p) => String(p || '').trim().toLowerCase()).filter((p) => SOCIAL_NETWORKS.has(p)) : [...SOCIAL_NETWORKS]);
+  const ids = (only && only.length ? only.map((p) => String(p || '').trim().toLowerCase()).filter((p) => GATED_CHANNELS.has(p)) : [...GATED_CHANNELS]);
   const names: string[] = [];
   for (const id of ids) {
     const name = NETWORK_NAMES[id] || id;
@@ -72,7 +91,7 @@ export function complianceNetworksLabel(only?: readonly string[] | null): string
 
 export function appliesTo(providers: readonly string[] | string | null | undefined): boolean {
   const list = Array.isArray(providers) ? providers : providers ? [providers] : [];
-  return list.some((p) => SOCIAL_NETWORKS.has(String(p || '').trim().toLowerCase()));
+  return list.some((p) => GATED_CHANNELS.has(String(p || '').trim().toLowerCase()));
 }
 
 /**
@@ -175,12 +194,20 @@ export function complianceMessage(check: ComplianceCheck, networks?: readonly st
   return complianceNetworksLabel(networks) + ' posts must carry the advertising notice and a scientific reference \u2014 ' + parts.join(', and ') + '.';
 }
 
-/** The instruction handed to the writer for Instagram / Facebook copy. */
+/**
+ * The instruction handed to the writer for Instagram / Facebook copy.
+ *
+ * It names those two because they are the two the writer is asked to compose
+ * the citation FOR; the app copies the verified REF onto the other gated
+ * channels itself (lib/ai.ts), which is why they are not listed here as
+ * something to write separately — a second citation would need verifying a
+ * second time.
+ */
 export const REF_INSTRUCTION =
   ' Compliance (Mexican health-advertising rules for this clinic): the "instagram" and "facebook" values MUST each end with' +
   ' a line that starts with "REF: " citing ONE real, peer-reviewed study that supports the post\'s main claim, in the form' +
   ' Author, A.B., et al. (Year). "Title." Journal, volume(issue), pages. DOI: 10.xxxx/xxxxx — only cite a study you are' +
   ' confident exists, and it MUST carry its real DOI, because the DOI is checked against Crossref and a citation without' +
-  ' one is rejected; never invent a citation. The same citation also carries the LinkedIn and TikTok versions of this post,' +
-  ' so it has to support what all of them claim. Put the REF line last, after the hashtags — the app moves it into its' +
-  ' final position. Do NOT write an "AVISO DE PUBLICIDAD" line yourself; the app adds it.';
+  ' one is rejected; never invent a citation. The same citation also carries the LinkedIn, TikTok and blog-article versions' +
+  ' of this post, so it has to support what all of them claim. Put the REF line last, after the hashtags — the app moves it' +
+  ' into its final position. Do NOT write an "AVISO DE PUBLICIDAD" line yourself; the app adds it.';

@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
 import { supabaseServer } from '@/lib/supabase';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
-import { metricoolConfigured, metricoolSchedulePost, readPostId, type Provider } from '@/lib/metricool';
+import { metricoolConfigured, metricoolSchedulePost, metricoolNetworks, readPostId } from '@/lib/metricool';
 import { reportError } from '@/lib/report';
 import { isAllowedEmail } from '@/lib/access';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -85,6 +85,25 @@ export async function POST(req: NextRequest) {
   if (providers.length === 0) {
     return NextResponse.json({ error: 'template has no providers selected' }, { status: 400 });
   }
+  // The channels Metricool can actually take. This route used to cast the raw
+  // column — which the templates UI lets a person put `blog` into — straight to
+  // Provider[], and one unknown entry can fail the whole multi-network call and
+  // take the real networks down with it. `blog` is an article, and this route
+  // schedules the template's fixed text; an article is written by the engine
+  // and published by approveRun, so there is nothing for this door to do with
+  // it beyond leaving it alone.
+  const mcProviders = metricoolNetworks(providers);
+  if (mcProviders.length === 0) {
+    return NextResponse.json(
+      {
+        error: 'no_social_networks',
+        message: providers.includes('blog')
+          ? 'This template only publishes a blog article, which is written and published by the Autopilot rather than scheduled from here.'
+          : 'None of this template’s channels is a network this app can post to.',
+      },
+      { status: 400 },
+    );
+  }
 
   // An AI template carries no fixed text - Autopilot writes each post the day
   // it is due. Materialising it here would schedule empty posts.
@@ -153,7 +172,12 @@ export async function POST(req: NextRequest) {
   // Metricool's review queue — where the dashboard would then refuse to
   // approve any of them, but a person working inside Metricool could still
   // publish them. Refuse up front rather than half-create.
-  const gate = await complianceGate(user.id, text, providers as string[]);
+  // Gated on what this route actually SENDS, not on the raw column. Since the
+  // gate started covering articles, gating on the raw list meant a template
+  // carrying `blog` alongside a non-gated network was refused for missing an
+  // AVISO and a DOI — naming a channel this route never touches, on copy that
+  // was only going to that other network.
+  const gate = await complianceGate(user.id, text, mcProviders as string[]);
   if (!gate.ok) {
     return NextResponse.json(
       { ...gateRefusal(gate), message: gate.message + ' Edit the template text, then apply it again.' },
@@ -180,7 +204,7 @@ export async function POST(req: NextRequest) {
     try {
       const res = await metricoolSchedulePost({
         text,
-        providers: providers as Provider[],
+        providers: mcProviders,
         publicationDate: slot.toISOString(),
       });
       metricoolId = readPostId(res);
@@ -194,7 +218,11 @@ export async function POST(req: NextRequest) {
       .from('posts')
       .insert({
         user_id: user.id,
-        providers,
+        // What was actually SENT, not what the template lists. The row exists
+        // to mirror Metricool, and a rescheduled post reads this column back
+        // and sends it again — so an entry that never went out must not be in
+        // it.
+        providers: mcProviders,
         text,
         publication_date: slot.toISOString(),
         metricool_post_id: metricoolId,

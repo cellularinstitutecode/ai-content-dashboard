@@ -40,6 +40,10 @@ test('the template carries its own history into the decision', () => {
   // Read from the table that has been recording it all along...
   assert.match(autopilot, /from\('template_runs'\)\s*\n?\s*\.select\('angle, scheduled_for'\)/);
   assert.match(autopilot, /\.lt\('scheduled_for', run\.scheduled_for\)/, 'only occurrences BEFORE this one');
+  // PUBLISHED, not merely attempted: a failed or skipped run used to spend a
+  // history slot and rule its query out, narrowing the rotation with posts
+  // that were never written.
+  assert.match(autopilot, /\.eq\('state', 'approved'\)/, 'only occurrences that actually went out');
   assert.match(autopilot, /\.limit\(ANGLE_HISTORY\)/, 'and capped, so an old template keeps its bank');
 
   // ...and handed to the chooser, which is where the rule and its tests live.
