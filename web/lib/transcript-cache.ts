@@ -203,6 +203,33 @@ export async function rememberPublicCopy(videoId: string, copy: { id: string; ur
  * behind would have the next run hand Metricool a URL for a file that no longer exists,
  * which is worse than making a fresh copy.
  */
+/**
+ * The SOURCE video a copy was made from, or null.
+ *
+ * The composer holds a copy's URL, not the video's: what came back from the
+ * picker or the hand-off weeks ago. When that copy is one Metricool will not
+ * take — a Drive link, any Drive link — the only way to make a better one is
+ * to find the original it was made from. Keyed on the copy's id, which for a
+ * Drive copy is the copied file's own id.
+ */
+export async function sourceOfPublicCopy(copyFileId: string): Promise<string | null> {
+  const id = String(copyFileId || '').trim();
+  if (!id) return null;
+  const r = await supabaseAdmin()
+    .from('video_transcripts')
+    .select('video_id')
+    .eq('public_copy_id', id)
+    .limit(1)
+    .maybeSingle()
+    .then((x) => x, (e: unknown) => ({ data: null, error: e as { message?: string } }));
+  if (r.error) {
+    reportError('transcript-cache:copy-source', r.error, { copyFileId: id });
+    return null;
+  }
+  const videoId = String((r.data as { video_id?: string | null } | null)?.video_id || '').trim();
+  return videoId || null;
+}
+
 export async function forgetPublicCopy(copyFileId: string): Promise<void> {
   const id = String(copyFileId || '').trim();
   if (!id) return;

@@ -37,6 +37,8 @@
 //
 // Pure: `./x.ts` imports only, so the test runner reads this file directly.
 import { bucketUploadMaxBytes } from './video-bucket-key.ts';
+import { directUploadEnabled } from './metricool-upload-parse.ts';
+import { parseDriveFileId } from './drive-url.ts';
 
 /**
  * Above this, a Drive download link answers with Google's "cannot scan this
@@ -183,6 +185,16 @@ export function cachedCopyUsable(
   // stood in front of the stream route: once a row held one, this function
   // said "usable" and PUBLIC_MEDIA_BASE_URL was never consulted for it.
   if (isDriveConfirmUrl(url)) return false;
+  // AND NO OTHER DRIVE COPY EITHER, while the bytes can go straight into
+  // Metricool instead. The 21 September finding was not about the confirm=t
+  // address: Metricool hands back a Drive link of ANY shape, which its own
+  // client code says outright ("for Google Drive links, ensure the user has
+  // linked Google Drive in their Metricool account"). A cached Drive copy is
+  // therefore a link that will be refused exactly as it was — and it stood in
+  // front of the upload, because the cache is consulted before the router.
+  // The copy is not deleted and not remade: when the upload fails, the router
+  // reuses it rather than making a second world-readable copy.
+  if (parseDriveFileId(String(url || '')) && directUploadEnabled(env)) return false;
   const streamed = String(copyId || '').startsWith('stream:');
   return streamed ? servesWholeVideos(base, env) : true;
 }

@@ -27,7 +27,7 @@ import { MediaKeyMissing, mediaUrlIsFresh, mediaVideoUrl, parseStreamCopyId, str
 import { MediaBaseUnresolved, publicBase } from '@/lib/public-base';
 import { reportError } from '@/lib/report';
 import { cachedCopyUsable, copyRouteFor, type DirectUploadState } from '@/lib/copy-source';
-import { directUploadPossible, uploadVideoToMetricool, type DirectUpload } from '@/lib/metricool-upload';
+import { directUploadPossible, isMetricoolCopyId, uploadVideoToMetricool, type DirectUpload } from '@/lib/metricool-upload';
 import { recordVideoEvent } from '@/lib/video-register';
 import { driveVideoKey, type VideoActor } from '@/lib/video-event';
 
@@ -256,9 +256,22 @@ export async function ensureShareableVideo(
     } else if (route.source === 'drive') {
       // Under ~100 MB Google serves the file itself rather than its scan page,
       // and this is the path that worked before any of the rest of this existed.
-      const name = String(title || 'video').replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 80) + '.mp4';
-      const copy = await publicVideoCopy(fileId, name);
-      made = { fileId: copy.fileId, url: copy.url, sizeBytes: staged.sizeBytes ?? null, where: 'drive' };
+      //
+      // A Drive copy this video already has is REUSED, not remade. The cache
+      // check above sets a Drive copy aside while the upload is on, so the
+      // upload gets its turn — but when the upload fails and this is the route
+      // left, making another world-readable copy of the same footage on every
+      // press is exactly what rememberPublicCopy exists to prevent.
+      const priorDrive = known?.url && parseDriveFileId(known.url) && !parseStreamCopyId(known.id) && !isMetricoolCopyId(known.id)
+        ? known
+        : null;
+      if (priorDrive) {
+        made = { fileId: priorDrive.id, url: priorDrive.url, sizeBytes: staged.sizeBytes ?? null, where: 'drive' };
+      } else {
+        const name = String(title || 'video').replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 80) + '.mp4';
+        const copy = await publicVideoCopy(fileId, name);
+        made = { fileId: copy.fileId, url: copy.url, sizeBytes: staged.sizeBytes ?? null, where: 'drive' };
+      }
     } else if (staged.reason === 'too_large' || staged.reason === 'upload_limit') {
       // THE APP'S OWN DOMAIN. Nothing is copied and nothing is stored: the URL
       // is a signed pointer at the clinic's own file, which this app streams

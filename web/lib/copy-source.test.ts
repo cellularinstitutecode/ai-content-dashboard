@@ -92,6 +92,34 @@ test('a broken copy already in the cache is not handed out again', () => {
   assert.equal(cachedCopyUsable('1a2b3c', 'https://ai-content-dashboard-pi.vercel.app', VERCEL), true);
 });
 
+test('a cached Drive copy of any shape is set aside while the bytes can go straight into Metricool', () => {
+  // The screen after #297 still showed Drive's player and still said "handed
+  // the same link straight back": the cache answered before the router, and
+  // the cache held a Drive copy. Metricool hands back a Drive link of ANY
+  // shape, not only the confirm=t one.
+  const base = 'https://ai-content-dashboard-pi.vercel.app';
+  const uc = 'https://drive.google.com/uc?export=download&id=1a2b3c4d5e6f7g8h9i0jklmnopqrstuv';
+  const confirm = 'https://drive.usercontent.google.com/download?id=1a2b3c4d5e6f7g8h9i0jklmnopqrstuv&export=download&confirm=t';
+  assert.equal(cachedCopyUsable('1a2b3c4d5e6f7g8h9i0jklmnopqrstuv', base, VERCEL, uc), false);
+  assert.equal(cachedCopyUsable('1a2b3c4d5e6f7g8h9i0jklmnopqrstuv', base, VERCEL, confirm), false);
+  // With the upload switched off the older reading holds: the plain link is reused, the confirm=t one never.
+  assert.equal(cachedCopyUsable('1a2b3c4d5e6f7g8h9i0jklmnopqrstuv', base, { ...VERCEL, METRICOOL_DIRECT_UPLOAD: 'off' }, uc), true);
+  assert.equal(cachedCopyUsable('1a2b3c4d5e6f7g8h9i0jklmnopqrstuv', base, { ...VERCEL, METRICOOL_DIRECT_UPLOAD: 'off' }, confirm), false);
+  // A bucket URL is never a Drive link.
+  assert.equal(cachedCopyUsable('videos/abc.mp4', base, VERCEL, 'https://xyz.supabase.co/storage/v1/object/public/content-videos/videos/abc.mp4'), true);
+});
+
+test('the send door re-routes a Drive link through the copy maker, and the drive route reuses a prior copy', () => {
+  const route = src('app/api/metricool/schedule/route.ts');
+  assert.match(route, /if \(mediaUrl && parseDriveFileId\(mediaUrl\)\)/, 'a Drive link in the composer is not sent as is');
+  assert.match(route, /ensureShareableVideo\(/, 'the copy maker is asked at the send');
+  assert.match(route, /sourceOfPublicCopy\(copyFileId\)/, 'and the source video is found from the copy');
+  assert.match(route, /normalizeMediaList\(\[mediaUrl\]\)/, 'what is normalised is the re-routed link');
+  assert.match(route, /\.\.\.\(mediaRerouted \? \{ mediaUrl \} : \{\}\)/, 'and the panel is told which copy went out');
+  const lib = src('lib/media-library.ts');
+  assert.match(lib, /const priorDrive = known\?\.url && parseDriveFileId\(known\.url\)/, 'a second Drive copy is never made when one exists');
+});
+
 // --- IT IS USED WHERE THE COPY IS MADE --------------------------------------
 
 test('the copy maker chooses by size and re-checks what it cached', () => {
@@ -202,10 +230,13 @@ test('a cached large-file Drive copy is never usable, whatever the host', () => 
   assert.equal(isDriveConfirmUrl(confirm), true);
   assert.equal(cachedCopyUsable('1AbC_dEfGhIjKlMnOpQrStUvWxYz012345', 'https://media.example.traefik.me', dokploy, confirm), false, 'with a streaming host: stream instead');
   assert.equal(cachedCopyUsable('1AbC_dEfGhIjKlMnOpQrStUvWxYz012345', 'https://x.vercel.app', {}, confirm), false, 'without one: fall to the refusal');
-  // The ordinary under-100 MB Drive copy is untouched: it works.
+  // The ordinary under-100 MB Drive copy is set aside too while the bytes can
+  // go straight into Metricool (#298) — Metricool hands back a Drive link of
+  // any shape — and reused only with that upload switched off.
   const uc = 'https://drive.google.com/uc?export=download&id=1AbC_dEfGhIjKlMnOpQrStUvWxYz012345';
   assert.equal(isDriveConfirmUrl(uc), false);
-  assert.equal(cachedCopyUsable('1AbC_dEfGhIjKlMnOpQrStUvWxYz012345', 'https://x.vercel.app', {}, uc), true);
+  assert.equal(cachedCopyUsable('1AbC_dEfGhIjKlMnOpQrStUvWxYz012345', 'https://x.vercel.app', {}, uc), false);
+  assert.equal(cachedCopyUsable('1AbC_dEfGhIjKlMnOpQrStUvWxYz012345', 'https://x.vercel.app', { METRICOOL_DIRECT_UPLOAD: 'off' }, uc), true);
   // And a streamed copy is still judged by its host, exactly as before.
   assert.equal(cachedCopyUsable('stream:abc', 'https://media.example.traefik.me', dokploy, 'https://media.example.traefik.me/api/media/video/a/b/c/video.mp4'), true);
   assert.equal(cachedCopyUsable('stream:abc', 'https://x.vercel.app', { VERCEL_PROJECT_PRODUCTION_URL: 'x.vercel.app' }, 'https://x.vercel.app/api/media/video/a/b/c/video.mp4'), false);
