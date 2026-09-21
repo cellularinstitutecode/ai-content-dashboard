@@ -246,14 +246,28 @@ export async function POST(req: NextRequest) {
       const made = await ensureShareableVideo(
         'https://drive.google.com/file/d/' + sourceFileId + '/view',
         typeof payload.title === 'string' ? payload.title : '',
-        { userId: user.id, actor: 'button' },
+        { userId: user.id, actor: 'button', blogId },
       );
       if (made.ok && made.url !== mediaUrl) {
         console.info('metricool/schedule: re-routed a Drive link to', new URL(made.url).host);
         mediaUrl = made.url;
         mediaRerouted = true;
       } else if (!made.ok) {
+        // REFUSED HERE, WITH THIS REASON. The first version of this block
+        // reported the failure and fell through to normalising the Drive link
+        // — which Metricool hands straight back — so the screen printed the
+        // same echo sentence as before and the one fact that mattered (what
+        // the upload answered) reached nobody. A Drive link is not sendable;
+        // there is nothing below worth asking with it.
         reportError('metricool/schedule:reroute', new Error(made.message), { code: made.code || made.reason, network: provider });
+        return NextResponse.json(
+          {
+            error: 'media_unverified',
+            reason: 'reroute',
+            message: 'The video in this post is a Drive link, which Metricool hands straight back, and a copy it would take could not be made: ' + made.message,
+          },
+          { status: 422 },
+        );
       }
     }
   }

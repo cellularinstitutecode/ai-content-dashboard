@@ -106,7 +106,8 @@ function mergeHeaders(base: Record<string, string>, extra: Record<string, string
 export async function uploadVideoToMetricool(
   fileId: string,
   name?: string | null,
-  opts: { budgetMs?: number } = {},
+  /** `blogId`: the brand the post is for, so the file lands in that brand's library. */
+  opts: { budgetMs?: number; blogId?: string | null } = {},
 ): Promise<DirectUpload> {
   const id = String(fileId || '').trim();
   if (!id) return { ok: false, reason: 'failed', message: 'No video id.' };
@@ -140,6 +141,7 @@ export async function uploadVideoToMetricool(
       method: 'PUT',
       body: JSON.stringify({ filename, contentType }),
       timeoutMs: Math.min(TRANSACTION_MS, Math.max(5_000, left())),
+      blogId: opts.blogId,
     });
     txStatus = res.status;
     txText = await res.text();

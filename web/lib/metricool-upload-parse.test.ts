@@ -190,7 +190,7 @@ test('when the upload was tried and failed, the refusal says what Metricool answ
 test('the copy maker tries the upload only when the bucket would not take the file', () => {
   const lib = src('lib/media-library.ts');
   assert.match(lib, /available: !staged\.ok && directUploadPossible\(sizeBytes\)/);
-  assert.match(lib, /uploadVideoToMetricool\(fileId, title\)/);
+  assert.match(lib, /uploadVideoToMetricool\(fileId, title, \{ blogId: who\?\.blogId \}\)/, 'for the brand the post is for');
   assert.match(lib, /where: 'metricool'/, 'and records where the bytes went');
   // A failed upload is a NOTE on the refusal, never a thrown error.
   assert.match(lib, /directUpload = \{ available: false, note: direct\.message \}/);

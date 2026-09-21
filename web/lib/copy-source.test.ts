@@ -115,6 +115,14 @@ test('the send door re-routes a Drive link through the copy maker, and the drive
   assert.match(route, /ensureShareableVideo\(/, 'the copy maker is asked at the send');
   assert.match(route, /sourceOfPublicCopy\(copyFileId\)/, 'and the source video is found from the copy');
   assert.match(route, /normalizeMediaList\(\[mediaUrl\]\)/, 'what is normalised is the re-routed link');
+  // The screen after #298 printed the old echo sentence AGAIN: the re-route
+  // had failed and the route fell through to normalising the Drive link. What
+  // the upload answered is the only fact worth showing, so a failed re-route
+  // is the refusal, not a log line.
+  const reroute = route.slice(route.indexOf('} else if (!made.ok) {'), route.indexOf('if (mediaUrl) {'));
+  assert.match(reroute, /reason: 'reroute'/, 'a failed re-route refuses the send with its own reason');
+  assert.match(reroute, /made\.message/, 'and carries what the copy maker said');
+  assert.match(route, /actor: 'button', blogId \}/, 'the upload lands in the brand the post is for');
   assert.match(route, /\.\.\.\(mediaRerouted \? \{ mediaUrl \} : \{\}\)/, 'and the panel is told which copy went out');
   const lib = src('lib/media-library.ts');
   assert.match(lib, /const priorDrive = known\?\.url && parseDriveFileId\(known\.url\)/, 'a second Drive copy is never made when one exists');

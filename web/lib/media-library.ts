@@ -148,8 +148,12 @@ async function removeMade(made: { fileId: string; where: CopyWhere }): Promise<v
 export async function ensureShareableVideo(
   videoLink: string,
   title?: string | null,
-  /** Who to credit in the register. Optional so existing callers keep compiling. */
-  who?: { userId?: string; actor?: VideoActor },
+  /**
+   * Who to credit in the register, and which Metricool brand the video is for
+   * (the direct upload lands it in that brand's library). Optional so existing
+   * callers keep compiling.
+   */
+  who?: { userId?: string; actor?: VideoActor; blogId?: string | null },
 ): Promise<
   | { ok: true; url: string; fileId: string; created: boolean }
   | { ok: false; reason: 'not_drive' | 'failed'; code?: string; message: string }
@@ -213,7 +217,7 @@ export async function ensureShareableVideo(
     // exactly as they did, and the refusal says what the upload answered.
     let directUpload: DirectUploadState = { available: !staged.ok && directUploadPossible(sizeBytes) };
     if (directUpload.available) {
-      direct = await uploadVideoToMetricool(fileId, title);
+      direct = await uploadVideoToMetricool(fileId, title, { blogId: who?.blogId });
       if (!direct.ok) {
         reportError('media-library:direct-upload', new Error(direct.message), {
           fileId, reason: direct.reason, status: String(direct.status ?? ''), shape: direct.shape ?? '',
