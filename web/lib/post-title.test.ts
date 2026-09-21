@@ -114,3 +114,23 @@ test('the composer sends the title a person can see, not the filename', () => {
   // a row is prepared — and still shapes the copy; it just no longer names it.
   assert.match(page, /\/api\/title/, 'with a way to write the title from the video');
 });
+
+
+test('which rung produced a title is recorded, and so is a model skipped for budget', () => {
+  // THE REPEAT ON YOUTUBE. Four different reels went up as "Therapeutic Plasma
+  // Exchange Removes…". The drafted title is budget-gated in lib/video-prepare.ts
+  // — it is only asked for when the request has CLAIM_CHECK_MS left after
+  // download, transcription, keywords, copy and the claim check — and when it
+  // is skipped the next rung is the KEYWORD, which is the same phrase for every
+  // video about the same therapy. Nothing recorded which rung had fired, so the
+  // repeat could be seen on YouTube and traced from nowhere.
+  const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  const prep = src('lib/video-prepare.ts');
+  assert.match(prep, /titleSkipped = 'budget';/, 'a skipped model is named as such');
+  assert.match(prep, /const chosen = titleChoice\(\);/, 'the whole choice is kept, not just the string');
+  assert.equal((prep.match(/titleSource: chosen\.source,/g) || []).length, 2, 'on the pack AND on the prepare result');
+  assert.match(prep, /titleSource\?: string;/);
+  // And the register carries it, from both doors that prepare a video.
+  const sweep = src('lib/video-autopilot.ts');
+  assert.equal((sweep.match(/titleSource: (?:opts\.)?prepared\.titleSource \?\? null/g) || []).length, 2, 'both prepared events');
+});

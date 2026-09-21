@@ -74,6 +74,10 @@ export type VideoPack = ContentPack & {
   format?: string | null;
   /** The sheet's YOUTUBE cell ("Unlisted", a link…), for the privacy preset. */
   sheetYoutube?: string | null;
+  /** Which rung produced `title` (lib/post-title.ts): written | drafted | keyword | spoken | filename | clinic. */
+  titleSource?: string;
+  /** The model's title was never asked for, because the request had no budget left. */
+  titleSkipped?: 'budget' | null;
 };
 
 /**
@@ -128,6 +132,10 @@ export type PrepareOk = {
   linkedin: string;
   tiktok: string;
   pack: VideoPack;
+  /** Which rung produced `title` (lib/post-title.ts): written | drafted | keyword | spoken | filename | clinic. */
+  titleSource?: string;
+  /** The model's title was never asked for, because the request had no budget left. */
+  titleSkipped?: 'budget' | null;
 };
 
 export type PrepareFail = {
@@ -464,15 +472,24 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
   // Computed here as the fallback, and written properly once the copy exists —
   // a title drawn from what the speaker actually said beats one guessed from
   // the subject line, and the copy is not written yet at this point.
-  const titleFallback = () => professionalTitle({
+  const titleChoice = () => professionalTitle({
     supplied: input.title,
     drafted: draftedTitle,
     keyword: brief.stamp.primary,
     spoken,
     filename: title,
-  }).title;
+  });
   /** What the model called it, once it had read the transcript and the copy. */
   let draftedTitle = '';
+  /**
+   * Why there was no drafted title, when there was none. The rung that fires
+   * instead is the KEYWORD, and a keyword is the same for every video about
+   * the same therapy — which is how four different reels went up as
+   * "Therapeutic Plasma Exchange Removes…". Until this was recorded, nothing
+   * anywhere said which rung had produced a title, so the repeat could only be
+   * seen on YouTube and could not be traced from the register.
+   */
+  let titleSkipped: 'budget' | null = null;
 
   // The Instagram-style caption (short, hashtags, REF + AVISO) is the TikTok
   // caption; LinkedIn gets the longer, insight-led post plus the video link.
@@ -866,14 +883,19 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
       transcript: transcriptExcerpt(transcript, 3000),
       subject,
     });
+  } else {
+    titleSkipped = 'budget';
   }
-  const publicTitle = titleFallback();
+  const chosen = titleChoice();
+  const publicTitle = chosen.title;
 
   const videoPack: VideoPack = {
     ...pack,
     kind: 'video',
     claimSupport,
     title: publicTitle,
+    titleSource: chosen.source,
+    titleSkipped,
     sourceUrl: url,
     videoId: t.videoId || '',
     transcript: transcriptExcerpt(transcript, KEPT_TRANSCRIPT),
@@ -897,6 +919,8 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     // this function except in a refusal message, where it names the file
     // somebody has to go and look at.
     title: publicTitle,
+    titleSource: chosen.source,
+    titleSkipped,
     videoId: t.videoId || '',
     transcript: { source: t.origin, language: t.language, chars: transcript.length, preview: transcript.slice(0, 600), full: transcript },
     keywords: semrush,
