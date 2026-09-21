@@ -70,6 +70,13 @@ test('and is REFUSED, by name, when the only address is a Vercel function', () =
   assert.match(message, /PUBLIC_MEDIA_BASE_URL/, 'the setting that fixes it is named');
   assert.match(message, /180 and 182/, 'and the fact that dates it');
   assert.match(message, /under 100 MB/, 'with the answer that needs nobody');
+  // ALL THREE ROUTES. The message used to offer two, and the one it left out is
+  // the bucket — the route rows 180 and 182 actually went out on, and the only
+  // one already proven from this deployment. Somebody reading the old text
+  // would have gone and bought a container they may not have needed.
+  assert.match(message, /SUPABASE_UPLOAD_MAX_BYTES/, 'the proven route must be offered');
+  assert.match(message, /Storage → Settings/, 'and where the limit actually lives');
+  assert.match(message, /THREE WAYS OUT/);
 });
 
 test('a broken copy already in the cache is not handed out again', () => {
@@ -127,4 +134,43 @@ test('the title is written on arrival, not on a button press', () => {
     /if \(!handedTitle \|\| looksInternal/.test(handoff),
     'only when there is nothing usable: a title somebody wrote is never overwritten',
   );
+});
+
+
+test('the refusal quotes the cap this project HAS, not a number from memory', () => {
+  // "past the 50 MB storage limit" was written as though 50 MB were a fact
+  // about Supabase. It is the FREE PLAN's fixed limit, and
+  // lib/video-bucket-key.ts has carried SUPABASE_UPLOAD_MAX_BYTES since it was
+  // written — so on a project that had already raised it, the diagnostic named
+  // a limit the project did not have and sent the reader to the wrong fix.
+  const at = (uploadMaxBytes: number) => {
+    const out = copyRouteFor({
+      staged: false,
+      sizeBytes: 149 * 1024 * 1024,
+      base: 'https://ai-content-dashboard-pi.vercel.app',
+      env: { VERCEL_PROJECT_PRODUCTION_URL: 'ai-content-dashboard-pi.vercel.app' },
+      uploadMaxBytes,
+    });
+    return out.source === 'refuse' ? out.message : '';
+  };
+  assert.match(at(50 * 1024 * 1024), /past the 50 MB Supabase upload limit/);
+  assert.match(at(120 * 1024 * 1024), /past the 120 MB Supabase upload limit/);
+  assert.doesNotMatch(at(120 * 1024 * 1024), /past the 50 MB Supabase/, 'the old hardcoded number is gone');
+});
+
+test('the big reels are told the truth about which route survives them', () => {
+  // The clinic's reels run to well over a gigabyte (lib/video-bucket-key.ts).
+  // Raising the Supabase cap fixes a 149 MB file and cannot fix those: a
+  // serverless function will not carry 1.8 GB down from Drive and back up to
+  // Supabase. Offering route 1 without saying so would buy one reel and lose
+  // the next.
+  const out = copyRouteFor({
+    staged: false,
+    sizeBytes: 1800 * 1024 * 1024,
+    base: 'https://ai-content-dashboard-pi.vercel.app',
+    env: { VERCEL_PROJECT_PRODUCTION_URL: 'ai-content-dashboard-pi.vercel.app' },
+  });
+  const message = out.source === 'refuse' ? out.message : '';
+  assert.match(message, /1 GB reels/, 'the durable answer must be marked as the durable one');
+  assert.match(message, /no\s+serverless function will ever carry/);
 });
