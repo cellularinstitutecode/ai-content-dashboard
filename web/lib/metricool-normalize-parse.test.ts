@@ -309,7 +309,10 @@ test('an echoed link is refused unless somebody deliberately says otherwise', ()
 
   // `degraded` stays set either way: a post that went out this way is still
   // marked, because the whole point is to look at it afterwards.
-  const block = src.slice(src.indexOf('if (n === trimmed) {'), src.indexOf('media.push(n);'));
+  // `&& !out.ok`: a URL already on Metricool's storage comes back unchanged
+  // AND ok (lib/metricool-upload-parse.ts), and that is the file where it
+  // belongs, not an echo.
+  const block = src.slice(src.indexOf('if (n === trimmed && !out.ok) {'), src.indexOf('media.push(n);'));
   assert.ok(block.indexOf('degraded = true;') < block.indexOf('if (acceptEcho())'), 'degraded before the opt-out');
   assert.match(block, /failure = \{ \.\.\.out, ok: false, echoed: true \}/, 'and off, an echo is still a failure');
 

@@ -19,6 +19,7 @@ import { deleteBucketVideo, isBucketVideoKey } from '@/lib/video-bucket';
 import { forgetPublicCopy } from '@/lib/transcript-cache';
 import { freshCopyUrl } from '@/lib/media-library';
 import { isStreamCopyId, mediaVideoUrl, parseStreamCopyId } from '@/lib/media-url';
+import { isMetricoolCopyId } from '@/lib/metricool-upload-parse';
 import { publicBase } from '@/lib/public-base';
 import { modeOfStatus, videoPending, APPROVED_STATUS } from '@/lib/post-mode';
 import { tabGid } from '@/lib/google-sources';
@@ -778,6 +779,12 @@ export async function DELETE(req: Request) {
         if (isStreamCopyId(String(copyId))) {
           // Nothing of ours exists to remove, and nothing to forget: the
           // mapping is still true and re-minting it costs one HMAC.
+        } else if (isMetricoolCopyId(String(copyId))) {
+          // The bytes live in Metricool's own storage now (lib/metricool-upload.ts)
+          // and are not this app's to remove. The record is forgotten so the
+          // next attach uploads afresh rather than trusting a file Metricool
+          // may have cleared out.
+          await forgetPublicCopy(String(copyId));
         } else if (isBucketVideoKey(String(copyId))) {
           await deleteBucketVideo(String(copyId));
           await forgetPublicCopy(String(copyId));

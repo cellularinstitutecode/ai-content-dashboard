@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { friendlyErrorFromResponse } from '@/lib/friendly-error';
 import { drivePreviewUrl, previewKindOf } from '@/lib/media-preview';
+import { isMetricoolHostedUrl } from '@/lib/metricool-upload-parse';
 
 export type ShareableVideo = { videoId: string; title: string; url: string; source: string; updatedAt: string };
 
@@ -197,7 +198,17 @@ export default function MediaPicker({ value, label, onChange, hint }: {
              * before it will record it at all.
              */
             ? 'Attached and verified — the copy was fetched back with no credentials, the same request Metricool makes. The player above is Drive’s own, and a just-copied video can say “still being processed” there for a few minutes: that is Drive building its preview, not the attachment. What goes to Metricool is the download link, which does not wait for it.'
-            : 'This is exactly what goes out with the post. If it plays here, it is attached.'}
+            : isMetricoolHostedUrl(value)
+              /*
+               * The same lesson, the other way round. This file was UPLOADED
+               * into Metricool's own storage — every byte read out of Drive,
+               * the full length acknowledged — and the post carries Metricool's
+               * address for it. That storage answers Metricool; it need not
+               * answer this browser, so a blank player here is not a missing
+               * video. The draft in Metricool is where the proof is.
+               */
+              ? 'Uploaded into Metricool’s own storage and verified by length. The post carries Metricool’s address for the file, so nothing has to be fetched from Drive or from this app. If the player above stays blank, that storage is answering Metricool rather than this browser — open the draft in Metricool to see it.'
+              : 'This is exactly what goes out with the post. If it plays here, it is attached.'}
         </p>
       </div>
     );

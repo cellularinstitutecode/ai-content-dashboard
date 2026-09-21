@@ -45,7 +45,18 @@ import { bucketUploadMaxBytes } from './video-bucket-key.ts';
  */
 export const DRIVE_DIRECT_MAX_BYTES = 100 * 1024 * 1024;
 
-export type CopySource = 'bucket' | 'drive' | 'stream';
+export type CopySource = 'bucket' | 'drive' | 'stream' | 'metricool';
+
+/**
+ * Whether the bytes can be pushed straight into Metricool's storage.
+ *
+ * `available` is the caller's answer to "is that route open for this file"
+ * (switched on, Metricool configured, the file fits the scratch disk). `note`
+ * is what happened when it was tried and did not work, for the refusal to
+ * repeat — so a person reads WHY the one route that needs no host failed,
+ * instead of being sent to buy one.
+ */
+export type DirectUploadState = { available: boolean; note?: string | null };
 
 export type CopyRoute =
   | { source: CopySource }
@@ -101,10 +112,25 @@ export function copyRouteFor(input: {
    * must not depend on the ambient environment.
    */
   uploadMaxBytes?: number;
+  /**
+   * Can the file be uploaded straight into Metricool (lib/metricool-upload.ts)?
+   * Omitted means the caller did not consider it, and the older order holds.
+   */
+  directUpload?: DirectUploadState | null;
 }): CopyRoute {
   if (input.staged) return { source: 'bucket' };
   const size = Number(input.sizeBytes);
   const known = Number.isFinite(size) && size > 0;
+  // STRAIGHT INTO METRICOOL, before any route that hands over a link.
+  //
+  // Every route below ends with Metricool asked to fetch a URL, and on 21
+  // September row 191 settled what that gets a video from this deployment:
+  // a Drive link is handed straight back at any size, and a link served by a
+  // Vercel function cannot deliver a whole reel. Uploading the bytes to the
+  // storage Metricool already trusts needs no host at all, which is why it
+  // goes first — and why a failure here costs one call and falls through to
+  // exactly the routes that ran before it existed.
+  if (input.directUpload?.available) return { source: 'metricool' };
   // Under Google's scan threshold a Drive copy serves the file itself. It is
   // the oldest path here and it works; it was demoted to a rescue in #253 for
   // a problem that only exists ABOVE this size.
@@ -113,9 +139,13 @@ export function copyRouteFor(input: {
   const cap = Number.isFinite(Number(input.uploadMaxBytes)) && Number(input.uploadMaxBytes) > 0
     ? Number(input.uploadMaxBytes)
     : bucketUploadMaxBytes();
+  const directNote = String(input.directUpload?.note || '').trim();
   return {
     source: 'refuse',
     message:
+      (directNote
+        ? 'Uploading this video straight into Metricool was tried first and did not work: ' + directNote.replace(/\.?$/, '.') + ' '
+        : '') +
       'This video is ' + (known ? mb(size) : 'too large') + ' — past the ' + mb(cap) + ' Supabase upload limit and past ' +
       'the 100 MB above which Google answers a Drive link with its virus-scan page instead of the file. That leaves ' +
       'streaming it from this app, and these links are built from a Vercel function, which cannot hand a whole video ' +

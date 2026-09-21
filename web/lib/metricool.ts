@@ -66,7 +66,7 @@ export function metricoolConfigured(): boolean {
 // cannot explain — see the schedule/insights routes.
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-async function metricoolFetch(
+export async function metricoolFetch(
   path: string,
   init: RequestInit & { timeoutMs?: number } = {},
 ): Promise<Response> {
@@ -119,6 +119,7 @@ async function metricoolFetch(
 // because callers have always imported them from this file.
 export { looksLikeVideoUrl, mayBeVideoUrl } from '@/lib/metricool-normalize-parse';
 import { mayBeVideoUrl } from '@/lib/metricool-normalize-parse';
+import { isMetricoolHostedUrl } from '@/lib/metricool-upload-parse';
 
 export type NormalizeOutcome = {
   /** What to put in the post: Metricool's own reference, or '' when it failed. */
@@ -148,6 +149,17 @@ export type NormalizeOutcome = {
    * fell through the caller entirely.
    */
   echoed?: boolean;
+  /**
+   * The URL was already on Metricool's own storage, so nothing was asked.
+   *
+   * A file this app uploaded straight into Metricool (lib/metricool-upload.ts)
+   * lives on static.metricool.com or a metricool-* bucket — the hosts
+   * Metricool's own clients send in `media` without a normalise step. Asking
+   * anyway gets the URL handed back, which the caller would read as an echo
+   * and refuse: the one route that moves the file would fail at the very
+   * check that exists to catch files that did not move.
+   */
+  hosted?: boolean;
 };
 
 /**
@@ -173,6 +185,11 @@ function sameUrl(a: string, b: string): boolean {
 export async function normalizeMediaDetailed(rawUrl: string): Promise<NormalizeOutcome> {
   const url = String(rawUrl || '').trim();
   if (!url) return { url: '', ok: false, status: null, error: 'no url', attempts: [] };
+  // Already where a normalise would put it. See `hosted` above.
+  if (isMetricoolHostedUrl(url)) {
+    console.info('metricool:normalize-media already hosted, sent as is');
+    return { url, ok: true, status: null, error: null, attempts: [], hosted: true };
+  }
   let lastStatus: number | null = null;
   let lastShape = '';
   let sawEcho = false;
@@ -296,9 +313,11 @@ export async function normalizeMediaList(
       if (!failure) failure = out;
       continue;
     }
-    if (n === trimmed) {
+    if (n === trimmed && !out.ok) {
       // Unchanged means normalise did not happen — every success path returns
-      // Metricool's own reference, never the URL it was given.
+      // Metricool's own reference, never the URL it was given. The one
+      // exception is a URL already on Metricool's storage (`hosted`), which
+      // comes back unchanged AND ok, and is the file exactly where it belongs.
       degraded = true;
       // THE ONE QUESTION LEFT, AND THE ONLY WAY TO ANSWER IT.
       //
