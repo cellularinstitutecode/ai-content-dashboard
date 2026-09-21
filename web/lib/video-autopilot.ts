@@ -751,7 +751,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
             actor: 'sweep',
             title: prepared.title,
             link: videoLink,
-            detail: { ...where, transcriptSource: prepared.transcript.source, hasKeywords: prepared.hasKeywords, wrote },
+            detail: { ...where, transcriptSource: prepared.transcript.source, hasKeywords: prepared.hasKeywords, wrote, titleSource: prepared.titleSource ?? null, titleSkipped: prepared.titleSkipped ?? null },
           });
           const sent = posted.filter((p) => p.ok).map((p) => p.network);
           const refused = posted.filter((p) => !p.ok);
@@ -1201,6 +1201,8 @@ export async function completeRow(opts: {
     detail: {
       ...where,
       transcriptSource: opts.prepared.transcript.source,
+      titleSource: opts.prepared.titleSource ?? null,
+      titleSkipped: opts.prepared.titleSkipped ?? null,
       hasKeywords: opts.prepared.hasKeywords,
       // What reached the sheet, and what was left alone because a person had
       // already written there — the distinction `wrote` exists to record.
@@ -1249,9 +1251,16 @@ const YES_TICK = /^(x|✓|✔|yes|si|sí|true|posted|done)$/i;
  */
 export async function handOffToMetricool(args: {
   userId: string;
-  prepared: { linkedin: string; tiktok: string; draftId: string | null };
+  prepared: {
+    linkedin: string;
+    tiktok: string;
+    draftId: string | null;
+    /** The drafted public title (lib/video-prepare.ts). Absent for a row whose copy a person wrote. */
+    title?: string | null;
+  };
   networks: string[];
   videoLink: string;
+  /** The sheet's "título del video" cell: the fallback when nothing was drafted. */
   title: string;
   /** The sheet's FORMATO cell, so a landscape video is kept off a vertical feed. */
   format?: string | null;
@@ -1264,7 +1273,12 @@ export async function handOffToMetricool(args: {
   /** "2026 CELLULAR HOPE · row 179", for the sentence a skipped network gets. */
   rowLabel?: string | null;
 }): Promise<PublishOutcome[]> {
-  const { userId, prepared, networks, videoLink, title, format, sheetYoutube, published = [] } = args;
+  const { userId, prepared, networks, videoLink, title: sheetTitle, format, sheetYoutube, published = [] } = args;
+  // The drafted title when there is one, else the sheet cell. Two of the three
+  // callers already pass the drafted title as `title` too, so for them this is
+  // a no-op; it makes the rule hold for any caller rather than for the ones
+  // that happened to remember.
+  const title = String(prepared.title || '').trim() || sheetTitle;
 
   // Make the copy whenever any network is going out and there is a file.
   //
