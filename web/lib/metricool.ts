@@ -326,6 +326,10 @@ export async function normalizeMediaList(
       // left it set (and skipped the push), so the flag changed nothing and
       // printed the identical sentence. Off by default; the cost of being
       // wrong is a reel on YouTube and TikTok with no video in it.
+      // TESTED 21 SEPTEMBER: NO. Metricool stored the echoed Drive link as
+      // given, could not preview it, and would have published without it.
+      // The switch stays, off, so the record of the test stays with the code
+      // — but the answer is a plain .mp4 on a plain host, and nothing else.
       if (acceptEcho()) {
         accepted = true;
       } else if (!failure) {
