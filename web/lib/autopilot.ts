@@ -68,7 +68,7 @@ import { ANGLE_HISTORY, chooseAngle, type AngleType, type PastAngle } from '@/li
 import { autoScheduleVerdict, holdNote } from '@/lib/autoschedule';
 import { autoSchedules } from '@/lib/autopilot-mode';
 import { usableLeadHours } from '@/lib/lead-window';
-import { weeklyPaceVerdict, weeklyCeiling, paceNote, ROLLING_WINDOW_DAYS, PACE_SCAN_LIMIT } from '@/lib/weekly-pace';
+import { weeklyPaceVerdict, weeklyCeiling, paceNote, ROLLING_WINDOW_DAYS, PACE_SCAN_LIMIT, NOT_PUBLISHING } from '@/lib/weekly-pace';
 import { videoVerdict, pendingRefusal, type PackLike } from '@/lib/video-required';
 
 // ---------------------------------------------------------------------------
@@ -1177,8 +1177,15 @@ async function autoSchedule(
     const edge = ROLLING_WINDOW_DAYS * 24 * 60 * 60 * 1000;
     const { data: nearby, error: paceError } = await db
       .from('posts')
-      .select('publication_date, status')
+      // draft_id, because a reel fanned out to three networks is three rows and
+      // one post; the ceiling is counted in drafts. id as the fallback key.
+      .select('id, draft_id, publication_date, status')
       .eq('user_id', run.user_id)
+      // The statuses weeklyPaceVerdict would discard anyway, dropped here so
+      // they do not spend the scan budget. `posts.status` is NOT NULL with a
+      // default, so this cannot silently drop a row for being null — and the
+      // module still filters, which keeps it right about case variants.
+      .not('status', 'in', '(' + [...NOT_PUBLISHING].join(',') + ')')
       // Both sides: a seven-day window containing this slot can start a week
       // before it and end a week after, and the worst one is whichever of
       // those it is. Asking only for the past would miss a slot dropped into
@@ -1187,12 +1194,26 @@ async function autoSchedule(
       .lte('publication_date', new Date(slotMs + edge).toISOString())
       .limit(PACE_SCAN_LIMIT + 1);
     if (paceError) {
-      // Fail closed. An uncountable calendar is not permission to add to it,
-      // and the run keeps its place in the queue for a person.
+      // Fail closed — but SAY SO. autoSchedule is only reached at the moment a
+      // run turns ready_for_review, and ready_for_review is not in
+      // ACTIVE_STATES, so no later tick comes back to it. Returning silently
+      // therefore demoted the post to manual approval permanently, with a blank
+      // card: the exact "held with no explanation" this file refuses to create.
       reportError('autopilot:autoschedule-pace', paceError, { runId: run.id });
+      await hold(
+        db,
+        run,
+        'Held for you because the calendar could not be read just now, so there was no way to tell '
+          + 'whether this week already has enough posts in it. Nothing was sent. Approve it yourself if the week looks right.',
+      );
       return;
     }
-    const rows = (nearby || []) as { publication_date?: string | null; status?: string | null }[];
+    const rows = (nearby || []) as {
+      id?: string | null;
+      draft_id?: string | null;
+      publication_date?: string | null;
+      status?: string | null;
+    }[];
     const pace = weeklyPaceVerdict({
       slot: run.scheduled_for,
       scheduled: rows.slice(0, PACE_SCAN_LIMIT),
