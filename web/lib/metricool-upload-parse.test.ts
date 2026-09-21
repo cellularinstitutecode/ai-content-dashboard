@@ -19,11 +19,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
+  acceptedValues,
   directUploadEnabled,
   isMetricoolCopyId,
   isMetricoolHostedUrl,
   metricoolCopyId,
   readUploadTransaction,
+  refusedFields,
 } from './metricool-upload-parse.ts';
 import { copyRouteFor } from './copy-source.ts';
 
@@ -187,18 +189,62 @@ test('when the upload was tried and failed, the refusal says what Metricool answ
   assert.match(message, /THREE WAYS OUT/, 'and the older ways out still follow');
 });
 
-test('a validation refusal reaches the screen with what Metricool said, after every spelling was tried', () => {
-  // The first real send answered 400: the endpoint exists and the BODY was
-  // refused. Metricool's validation errors name the fields, and the screen
-  // said "400" while the names went to a console nobody reads.
+// --- what the real sends taught --------------------------------------------------
+
+/** Metricool's actual answer to #300's body, verbatim from the screen. */
+const METRICOOL_400 = '{"status":"BAD_REQUEST","code":"400","title":"ValidationError","detail":{"resourceType":"Resource type is required","parts":"Parts list is required"}}';
+
+test('the refusal names the fields it wants, and they are read rather than guessed', () => {
+  assert.deepEqual(refusedFields(METRICOOL_400), ['resourcetype', 'parts']);
+  assert.deepEqual(refusedFields('{"detail":{"parts":"At least one part is required"}}'), ['parts']);
+  assert.deepEqual(refusedFields('{"errors":[{"field":"resourceType","message":"x"}]}'), ['resourcetype']);
+  assert.deepEqual(refusedFields('not json'), []);
+  assert.deepEqual(refusedFields('{"status":"BAD_REQUEST"}'), []);
+});
+
+test('a wrong enum value gets the accepted list back, and the list is read', () => {
+  const jackson = 'JSON parse error: Cannot deserialize value of type `com.metricool.ResourceType` from String "FILE": not one of the values accepted for Enum class: [IMAGE, VIDEO, DOCUMENT]';
+  assert.deepEqual(acceptedValues(jackson), ['IMAGE', 'VIDEO', 'DOCUMENT']);
+  assert.deepEqual(acceptedValues('{"detail":{"resourceType":"must be one of allowed values [image, video]"}}'), ['image', 'video']);
+  assert.deepEqual(acceptedValues(METRICOOL_400), [], 'a missing field is not a wrong value');
+});
+
+test('a multipart reply is read part by part, with its upload id and key', () => {
+  const p1 = SIGNED + '&partNumber=1&uploadId=abc.def';
+  const p2 = SIGNED + '&partNumber=2&uploadId=abc.def';
+  const tx = readUploadTransaction(JSON.stringify({
+    id: 'tx_7', uploadId: 'abc.def', key: 'uploads/12345/reel.mp4',
+    parts: [{ partNumber: 2, url: p2 }, { partNumber: 1, url: p1 }],
+  }));
+  assert.equal(tx.parts.length, 2);
+  assert.equal(tx.parts[0].partNumber, 1, 'in numbered order, whatever order the reply used');
+  assert.equal(tx.uploadUrl, p1, 'the first part is where a single-part upload goes');
+  assert.equal(tx.uploadId, 'abc.def');
+  assert.equal(tx.key, 'uploads/12345/reel.mp4');
+  assert.equal(tx.id, 'tx_7');
+  assert.equal(tx.fileUrl, FILE, 'the object is the part address without its query');
+  // A plain signed PUT has no parts and no upload id.
+  const single = readUploadTransaction(JSON.stringify({ uploadUrl: SIGNED }));
+  assert.equal(single.parts.length, 1, 'a lone signed address is still one part');
+  assert.equal(single.uploadId, null);
+});
+
+test('the uploader sends what Metricool asked for, learns from each refusal, and completes the upload', () => {
   const lib = src('lib/metricool-upload.ts');
-  assert.match(lib, /It said: ' \+ lastDetail/, 'the refusal body is the diagnosis, so it is shown');
-  assert.match(lib, /redact\(txText\)/, 'redacted, because it is theirs');
-  assert.match(lib, /fileName: filename, name: filename/, 'every spelling of the name');
-  assert.match(lib, /mimeType: contentType, type: contentType/, 'every spelling of the type');
-  assert.match(lib, /fileSize: sizeBytes, contentLength: sizeBytes/, 'every spelling of the size');
-  assert.match(lib, /upload-transactions\?folder=PLANNER/, 'and the folder Metricool’s own client names');
-  assert.match(lib, /if \(res\.status !== 400 && res\.status !== 422\) break;/, 'only a validation refusal is re-asked');
+  // The two fields the 400 named, by name.
+  assert.match(lib, /resourceType,\s*type: resourceType,\s*parts,/, 'resourceType and parts lead the body');
+  assert.match(lib, /const enumGuesses = \['VIDEO'/, 'VIDEO first: Metricool’s library lists images and videos');
+  assert.match(lib, /const partShapes: unknown\[\]\[\] = \[\[partObject\], \[1\]\]/, 'a part is an object, then a bare number');
+  // Each refusal is read for what it says.
+  assert.match(lib, /acceptedValues\(text\)/, 'an enum list in the refusal is the value to send');
+  assert.match(lib, /refusedFields\(text\)/, 'a named field is the shape to change');
+  assert.match(lib, /It said: ' \+ opened\.detail/, 'and the last refusal reaches the screen');
+  assert.match(lib, /redact\(String\(text \|\| ''\)\)/, 'redacted, because it is theirs');
+  // A multipart upload is not a file until it is completed.
+  assert.match(lib, /const multipart = Boolean\(tx\.uploadId\)/);
+  assert.match(lib, /but the multipart upload could not be completed, so Metricool has no file yet/, 'never reported as a success');
+  assert.match(lib, /Completion tried: ' \+ done\.tried\.join/, 'and every door tried is named');
+  assert.match(lib, /'\/complete', method: 'POST'/, 'the conventional door first');
 });
 
 test('the copy maker tries the upload only when the bucket would not take the file', () => {

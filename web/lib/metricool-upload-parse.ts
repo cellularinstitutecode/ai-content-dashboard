@@ -109,9 +109,24 @@ export function metricoolCopyIdFromUrl(url: string | null | undefined): string |
 
 // --- reading the transaction ---------------------------------------------------
 
+/** One pre-signed part address of a multipart upload. */
+export type UploadPart = { partNumber: number | null; url: string };
+
 export type UploadTransaction = {
   /** Where the bytes go: a pre-signed address, or null when none was found. */
   uploadUrl: string | null;
+  /**
+   * Every pre-signed part address, in the order the reply gave them.
+   *
+   * Metricool's transaction is a multipart one — it asks for `parts` before it
+   * will open — so the reply is expected to carry one signed address per part.
+   * `uploadUrl` is the first of them.
+   */
+  parts: UploadPart[];
+  /** S3's multipart upload id, when the reply named one. A reply with one needs completing. */
+  uploadId: string | null;
+  /** The object key, when the reply named one. */
+  key: string | null;
   /** PUT to a pre-signed URL, or POST a form (S3's presigned-post shape). */
   method: 'PUT' | 'POST';
   /** Headers the reply asked to be sent with the bytes. Verbatim. */
@@ -143,8 +158,10 @@ const FILE_KEY = /download|public|file|media|final|result|resource|location|href
 const HEADERS_KEY = /^(headers|requiredHeaders|uploadHeaders|signedHeaders)$/i;
 const FIELDS_KEY = /^(fields|formFields|formData)$/i;
 const METHOD_KEY = /^(method|httpMethod|verb)$/i;
-const ID_KEY = /^(id|transactionId|transaction_id|uploadId|upload_id)$/i;
+const ID_KEY = /^(id|transactionId|transaction_id)$/i;
+const UPLOAD_ID_KEY = /^(uploadId|upload_id|multipartUploadId)$/i;
 const KEY_KEY = /^(key|objectKey|object_key|path|filename|fileName)$/i;
+const PART_NUMBER_KEY = /^(partNumber|part_number|number|part|index)$/i;
 const BUCKET_KEY = /^(bucket|bucketName|bucket_name)$/i;
 const REGION_KEY = /^(region|awsRegion|aws_region)$/i;
 
@@ -180,7 +197,9 @@ function stringMap(node: unknown): Record<string, string> | null {
  * that but a bucket and a key were named, it is built from those.
  */
 export function readUploadTransaction(raw: string): UploadTransaction {
-  const empty: UploadTransaction = { uploadUrl: null, method: 'PUT', headers: {}, fields: null, fileUrl: null, id: null, shape: 'empty' };
+  const empty: UploadTransaction = {
+    uploadUrl: null, parts: [], uploadId: null, key: null, method: 'PUT', headers: {}, fields: null, fileUrl: null, id: null, shape: 'empty',
+  };
   const text = String(raw || '').trim();
   if (!text) return empty;
 
@@ -208,9 +227,11 @@ export function readUploadTransaction(raw: string): UploadTransaction {
   let fields: Record<string, string> | null = null;
   let method: 'PUT' | 'POST' | null = null;
   let id: string | null = null;
+  let uploadId: string | null = null;
   let key: string | null = null;
   let bucket: string | null = null;
   let region: string | null = null;
+  const parts: UploadPart[] = [];
 
   let seen = 0;
   const walk = (node: unknown, k: string, depth: number): void => {
@@ -220,6 +241,13 @@ export function readUploadTransaction(raw: string): UploadTransaction {
       return;
     }
     if (typeof node === 'object') {
+      // A part: an object holding a signed address, with its number beside it.
+      const own = Object.entries(node as Record<string, unknown>);
+      const signed = own.find(([, v]) => isHttpUrl(v) && isPresignedUrl(String(v)));
+      if (signed) {
+        const num = own.find(([ok, ov]) => PART_NUMBER_KEY.test(ok) && Number.isFinite(Number(ov)));
+        parts.push({ partNumber: num ? Number(num[1]) : null, url: String(signed[1]).trim() });
+      }
       if (HEADERS_KEY.test(k)) {
         const m = stringMap(node);
         if (m && !Object.keys(headers).length) headers = m;
@@ -250,6 +278,7 @@ export function readUploadTransaction(raw: string): UploadTransaction {
       if (!v) return;
       if (METHOD_KEY.test(k) && /^(put|post)$/i.test(v)) method = v.toUpperCase() as 'PUT' | 'POST';
       else if (ID_KEY.test(k) && !id && /^[A-Za-z0-9_.:/-]{1,200}$/.test(v)) id = v;
+      else if (UPLOAD_ID_KEY.test(k) && !uploadId && /^[^\s]{1,400}$/.test(v)) uploadId = v;
       else if (KEY_KEY.test(k) && !key && /^[^\s]{1,400}$/.test(v)) key = v;
       else if (BUCKET_KEY.test(k) && !bucket && /^[a-z0-9.-]{3,63}$/.test(v)) bucket = v;
       else if (REGION_KEY.test(k) && !region && /^[a-z]{2}-[a-z]+-\d$/.test(v)) region = v;
@@ -257,9 +286,11 @@ export function readUploadTransaction(raw: string): UploadTransaction {
   };
   walk(data, '', 0);
 
+  // Parts in their numbered order; the first is where a single-part upload goes.
+  parts.sort((a, b) => (a.partNumber ?? Number.MAX_SAFE_INTEGER) - (b.partNumber ?? Number.MAX_SAFE_INTEGER));
   // A presigned POST (S3's form shape) signs the FIELDS, not the address, so
   // its address is a plain bucket URL under whatever key the reply chose.
-  const uploadUrl: string | null = signedUnderUploadKey || signedAnywhere || plainUnderUploadKey || (fields ? plainAnywhere : null) || null;
+  const uploadUrl: string | null = (parts[0]?.url) || signedUnderUploadKey || signedAnywhere || plainUnderUploadKey || (fields ? plainAnywhere : null) || null;
   const uploaded = uploadUrl ? stripQuery(uploadUrl) : null;
   const formKey = fields ? String((fields as Record<string, string>).key || '').trim() : '';
   let fileUrl: string | null = plainUnderFileKey && plainUnderFileKey !== uploaded ? plainUnderFileKey : null;
@@ -285,11 +316,50 @@ export function readUploadTransaction(raw: string): UploadTransaction {
 
   return {
     uploadUrl,
+    parts,
+    uploadId: uploadId as string | null,
+    key: keyName,
     method: method || (fields ? 'POST' : 'PUT'),
     headers,
     fields,
     fileUrl,
-    id: (id as string | null) || keyName,
+    id: (id as string | null) || (uploadId as string | null) || keyName,
     shape: describeShape(data),
   };
+}
+
+// --- reading a refusal ---------------------------------------------------------
+
+/**
+ * The values an enum field accepts, when a refusal lists them.
+ *
+ * A Java backend answering a wrong enum value says so in the Jackson way:
+ * "not one of the values accepted for Enum class: [IMAGE, VIDEO]". The list
+ * is the fix, so it is read rather than re-guessed.
+ */
+export function acceptedValues(refusal: string): string[] {
+  const text = String(refusal || '');
+  const m = /accepted for Enum class:\s*\[([^\]]+)\]/i.exec(text) || /(?:allowed|accepted|expected|valid)\s+values?[^[]{0,40}\[([^\]]+)\]/i.exec(text);
+  if (!m) return [];
+  return m[1].split(',').map((s) => s.trim().replace(/^["']|["']$/g, '')).filter((s) => /^[A-Za-z0-9_-]{1,40}$/.test(s));
+}
+
+/**
+ * The field names a validation refusal complains about, lower-cased.
+ *
+ * Metricool's shape: {"status":"BAD_REQUEST","title":"ValidationError",
+ * "detail":{"resourceType":"Resource type is required","parts":"…"}}. Any
+ * key under `detail` (or `errors`, `fieldErrors`) is a field it wants.
+ */
+export function refusedFields(refusal: string): string[] {
+  let data: unknown;
+  try { data = JSON.parse(String(refusal || '')); } catch { return []; }
+  if (!data || typeof data !== 'object') return [];
+  const d = data as Record<string, unknown>;
+  const detail = d.detail ?? d.errors ?? d.fieldErrors ?? d.violations;
+  if (!detail || typeof detail !== 'object') return [];
+  if (Array.isArray(detail)) {
+    return detail.map((e) => String((e as { field?: unknown })?.field || '').toLowerCase()).filter(Boolean);
+  }
+  return Object.keys(detail as Record<string, unknown>).map((k) => k.toLowerCase());
 }
