@@ -41,7 +41,7 @@ import { driveMediaStream, probeDriveMedia } from '@/lib/google-sources';
 import { DISK_SAFE_BYTES } from '@/lib/media-route';
 import { metricoolConfigured, metricoolFetch } from '@/lib/metricool';
 import { directUploadEnabled, isMetricoolHostedUrl, metricoolCopyId, readUploadTransaction } from '@/lib/metricool-upload-parse';
-import { reportError } from '@/lib/report';
+import { redact, reportError } from '@/lib/report';
 
 export { directUploadEnabled, isMetricoolHostedUrl, isMetricoolCopyId, metricoolCopyId } from '@/lib/metricool-upload-parse';
 
@@ -132,27 +132,71 @@ export async function uploadVideoToMetricool(
   }
 
   // 1. THE TRANSACTION. Metricool names where the bytes go.
+  //
+  // THE FIRST SEND ANSWERED 400. So the endpoint exists — the 404 this was
+  // written against never came — and what it refused was the BODY: the
+  // field names, which the public docs do not give. Metricool's validation
+  // errors name the fields ("text: must not be null", lib/metricool.ts has
+  // one quoted), and the first version of this threw that answer at a
+  // console nobody reads and told the screen "400". The answer is the fix,
+  // so it reaches the screen now.
+  //
+  // And before giving up, the same request is asked with every spelling of
+  // the three facts an upload needs — name, type, size — in one body (a Java
+  // backend ignores the ones it does not know), and again under the
+  // PLANNER folder Metricool's own client names when it normalises. Four
+  // small calls at most, none of them moving a byte.
   const filename = (String(name || probe.name || 'video').replace(/[^A-Za-z0-9._ -]+/g, '_').replace(/\.(mp4|mov|m4v)$/i, '').slice(0, 80) || 'video') + '.mp4';
   const contentType = 'video/mp4';
+  const bodies: Record<string, unknown>[] = [
+    { filename, contentType },
+    {
+      filename, fileName: filename, name: filename,
+      contentType, mimeType: contentType, type: contentType,
+      ...(sizeBytes != null ? { size: sizeBytes, fileSize: sizeBytes, contentLength: sizeBytes } : {}),
+      folder: 'PLANNER',
+    },
+  ];
+  const paths = ['/v2/media/s3/upload-transactions', '/v2/media/s3/upload-transactions?folder=PLANNER'];
   let txStatus: number | null = null;
   let txText = '';
+  /** What each attempt answered — "400 · 400 · 400 · 400" — and the last body, redacted. */
+  const tried: string[] = [];
+  let lastDetail = '';
   try {
-    const res = await metricoolFetch('/v2/media/s3/upload-transactions', {
-      method: 'PUT',
-      body: JSON.stringify({ filename, contentType }),
-      timeoutMs: Math.min(TRANSACTION_MS, Math.max(5_000, left())),
-      blogId: opts.blogId,
-    });
-    txStatus = res.status;
-    txText = await res.text();
-    if (!res.ok) {
-      console.warn('metricool:upload-transaction non-ok', res.status, txText.slice(0, 200));
+    let opened = false;
+    for (const path of paths) {
+      for (const body of bodies) {
+        if (left() < 15_000) break;
+        const res = await metricoolFetch(path, {
+          method: 'PUT',
+          body: JSON.stringify(body),
+          timeoutMs: Math.min(TRANSACTION_MS, Math.max(5_000, left())),
+          blogId: opts.blogId,
+        });
+        txStatus = res.status;
+        txText = await res.text();
+        tried.push(String(res.status));
+        if (res.ok) { opened = true; break; }
+        lastDetail = redact(txText).replace(/\s+/g, ' ').trim().slice(0, 300);
+        console.warn('metricool:upload-transaction non-ok', res.status, path, Object.keys(body).length, 'keys', lastDetail.slice(0, 200));
+        // Only a validation refusal is worth re-asking with other words.
+        if (res.status !== 400 && res.status !== 422) break;
+      }
+      if (opened) break;
+      if (txStatus !== 400 && txStatus !== 422) break;
+    }
+    if (!opened) {
+      const status = txStatus ?? 0;
       return {
         ok: false,
-        reason: res.status === 401 || res.status === 403 ? 'refused' : res.status >= 500 ? 'unreachable' : 'refused',
-        status: res.status,
+        reason: status >= 500 ? 'unreachable' : 'refused',
+        status: txStatus,
         sizeBytes,
-        message: 'Metricool answered ' + res.status + ' when asked to open an upload' + (res.status === 404 ? ' — no such endpoint on this account' : '') + '.',
+        message: 'Metricool answered ' + status + ' when asked to open an upload' +
+          (status === 404 ? ' — no such endpoint on this account' : '') +
+          (tried.length > 1 ? ' (' + tried.join(' · ') + ' across ' + tried.length + ' spellings of the request)' : '') +
+          (lastDetail ? '. It said: ' + lastDetail : '.'),
       };
     }
   } catch (e) {
