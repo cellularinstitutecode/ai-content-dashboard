@@ -24,6 +24,7 @@ import { cachedPublicCopy } from '@/lib/transcript-cache';
 import { freshCopyUrl } from '@/lib/media-library';
 import { publicBase, publicBaseSource } from '@/lib/public-base';
 import { isStreamCopyId } from '@/lib/media-url';
+import { isMetricoolCopyId } from '@/lib/metricool-upload-parse';
 import { isBucketVideoKey } from '@/lib/video-bucket-key';
 import { copyRouteFor, servesWholeVideos } from '@/lib/copy-source';
 import { readableSize } from '@/lib/media-normalize-reason';
@@ -108,7 +109,7 @@ export async function GET(req: NextRequest) {
     const known = await cachedPublicCopy(fileId);
     if (known?.url) {
       copyUrl = freshCopyUrl(known.id, known.url, fileId);
-      const kind = isStreamCopyId(known.id) ? 'stream' : isBucketVideoKey(known.id) ? 'bucket' : 'drive';
+      const kind = isStreamCopyId(known.id) ? 'stream' : isMetricoolCopyId(known.id) ? 'metricool' : isBucketVideoKey(known.id) ? 'bucket' : 'drive';
       const host = (() => { try { return new URL(copyUrl).host; } catch { return ''; } })();
       out.copy = { kind, id: known.id, host, url: copyUrl };
       findings.push('Its copy is a ' + kind + ' copy, served from ' + (host || 'an unreadable address') + '.');

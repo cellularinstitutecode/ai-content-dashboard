@@ -75,12 +75,26 @@ published something.
   3. **The app serves the file itself.** Everything above the bucket's limit
      goes out as a signed link on this app's own domain
      (`/api/media/video/…/video.mp4`), which streams the bytes out of Drive on
-     demand. Nothing is copied, nothing is stored, and there is no size limit.
+     demand. Nothing is copied, nothing is stored, and there is no size limit —
+     but only a long-lived host can serve it; a Vercel function cannot hand
+     Metricool a whole reel, and a Drive link is handed straight back at any
+     size (row 191, 21 September).
+  4. **The file is uploaded straight into Metricool.** For anything the bucket
+     will not take, the app now does what Metricool's own media library does:
+     opens an upload transaction (`PUT /v2/media/s3/upload-transactions`), is
+     handed a pre-signed S3 address, and puts the bytes there itself, streamed
+     out of Drive through the function's scratch disk (up to 360 MB). The
+     resulting Metricool-hosted URL goes into the post as is — it needs no
+     host of ours and no normalise step. `METRICOOL_DIRECT_UPLOAD=off` turns it
+     off; when it fails, the routes above run exactly as before and the refusal
+     says what Metricool answered.
 
   Whichever path is used, the URL is **read back anonymously before any post is
   created** — the first sixteen bytes must be an MP4 header and the length must
   match the source. A URL that fails is deleted and reported, never sent. Your
-  originals' sharing is never changed.
+  originals' sharing is never changed. (The direct upload is the one exception:
+  its bytes came straight out of Drive and the storage answered 2xx for the
+  full length, and Metricool's storage need not answer strangers.)
 
   Two settings decide those links: `PUBLIC_MEDIA_BASE_URL` (the https origin
   that serves them — optional, and only worth setting to the Dokploy copy if

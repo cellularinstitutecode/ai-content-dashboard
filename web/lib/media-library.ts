@@ -26,7 +26,8 @@ import { disposalFor, type CopyWhere } from '@/lib/copy-disposal';
 import { MediaKeyMissing, mediaUrlIsFresh, mediaVideoUrl, parseStreamCopyId, streamCopyId, streamCopyIdFromUrl } from '@/lib/media-url';
 import { MediaBaseUnresolved, publicBase } from '@/lib/public-base';
 import { reportError } from '@/lib/report';
-import { cachedCopyUsable, copyRouteFor } from '@/lib/copy-source';
+import { cachedCopyUsable, copyRouteFor, type DirectUploadState } from '@/lib/copy-source';
+import { directUploadPossible, uploadVideoToMetricool, type DirectUpload } from '@/lib/metricool-upload';
 import { recordVideoEvent } from '@/lib/video-register';
 import { driveVideoKey, type VideoActor } from '@/lib/video-event';
 
@@ -189,22 +190,49 @@ export async function ensureShareableVideo(
     return { ok: true, url, fileId: known.id, created: false };
   }
 
+  /** The direct upload's outcome, kept outside the try so the catch can name it. */
+  let direct: DirectUpload | null = null;
   try {
     // THE FILE ITSELF, in a bucket this app controls, as <id>.mp4 — not a Drive
     // download link, which Google answers with its virus-scan page for a file
     // over ~100 MB, so Metricool stored a web page as the video. A file too big
-    // to stage keeps the Drive copy; either way the URL is read back before it
-    // is recorded (lib/media-verify.ts), and a copy that is not the video is
-    // removed and reported instead of handed on.
+    // to stage is uploaded straight into Metricool (below), and only then does
+    // it fall to the Drive copy or the stream; either way the URL is read back
+    // before it is recorded (lib/media-verify.ts), and a copy that is not the
+    // video is removed and reported instead of handed on.
     const staged = await stageVideoInBucket(fileId);
     let made: { fileId: string; url: string; sizeBytes: number | null; where: CopyWhere };
+    const sizeBytes = staged.ok ? staged.sizeBytes : (staged.sizeBytes ?? null);
+
+    // STRAIGHT INTO METRICOOL when the bucket would not take it. Every other
+    // route hands Metricool a link and asks it to fetch: a Drive link is
+    // handed straight back at any size (row 191, 21 September) and a link
+    // served from Vercel cannot carry a whole reel. This one pushes the bytes
+    // onto Metricool's own storage — the route its media library uses — and
+    // needs no host of ours at all. When it fails, the older routes run
+    // exactly as they did, and the refusal says what the upload answered.
+    let directUpload: DirectUploadState = { available: !staged.ok && directUploadPossible(sizeBytes) };
+    if (directUpload.available) {
+      direct = await uploadVideoToMetricool(fileId, title);
+      if (!direct.ok) {
+        reportError('media-library:direct-upload', new Error(direct.message), {
+          fileId, reason: direct.reason, status: String(direct.status ?? ''), shape: direct.shape ?? '',
+        });
+        directUpload = { available: false, note: direct.message };
+      }
+    }
+
     // WHICH SOURCE, BY SIZE. The bucket when it fits (what rows 180 and 182
-    // used), a Drive copy under Google's scan threshold, and this app's own
-    // stream only from a host that can actually deliver a whole file.
+    // used), the direct upload when it worked, a Drive copy under Google's
+    // scan threshold, and this app's own stream only from a host that can
+    // actually deliver a whole file. publicBase() throws when there is no
+    // address, which is the right sentence for every route but the upload —
+    // the one route that needs no address of ours.
     const route = copyRouteFor({
       staged: staged.ok,
-      sizeBytes: staged.ok ? staged.sizeBytes : (staged.sizeBytes ?? null),
-      base: publicBase(),
+      sizeBytes,
+      base: direct?.ok ? servingBase : publicBase(),
+      directUpload,
     });
     if (route.source === 'refuse') {
       // No attempt first. A Drive copy at Google's confirm=t address WAS tried
@@ -221,6 +249,10 @@ export async function ensureShareableVideo(
     }
     if (staged.ok) {
       made = { fileId: staged.key, url: staged.url, sizeBytes: staged.sizeBytes, where: 'bucket' };
+    } else if (route.source === 'metricool' && direct?.ok) {
+      // The bytes are on Metricool's storage. The URL goes into `media` as is:
+      // lib/metricool.ts sends a Metricool-hosted URL without a normalise.
+      made = { fileId: direct.copyId, url: direct.url, sizeBytes: direct.sizeBytes, where: 'metricool' };
     } else if (route.source === 'drive') {
       // Under ~100 MB Google serves the file itself rather than its scan page,
       // and this is the path that worked before any of the rest of this existed.
@@ -242,7 +274,15 @@ export async function ensureShareableVideo(
       throw Object.assign(new Error(staged.message), { stageReason: staged.reason });
     }
 
-    let verdict = await verifyPlayableMp4(made.url, made.sizeBytes);
+    // A direct upload is verified by the upload itself: Drive's byte count
+    // matched what left the disk, and the storage answered 2xx. It is not
+    // fetched back anonymously, because Metricool's storage need not answer
+    // strangers for Metricool to read it — and the check exists to catch a
+    // web page stored as a video, which bytes read straight out of Drive
+    // cannot be.
+    let verdict = made.where === 'metricool' && direct?.ok
+      ? { ok: true as const, length: direct.bytes }
+      : await verifyPlayableMp4(made.url, made.sizeBytes);
 
     // THE DRIVE COPY, last and only as a rescue. It is the path that started
     // all of this \u2014 Google answers a download link for a file over ~100 MB
@@ -311,6 +351,15 @@ export async function ensureShareableVideo(
     if (advice.reason === 'out_of_space') {
       const folder = await driveFolderReport();
       if (!folder.error) advice = storageAdvice(folder.inSharedDrive);
+    }
+    // The upload that needs none of the above was tried first. What it
+    // answered is the most useful fact on the screen, so it leads.
+    if (direct && !direct.ok) {
+      advice = {
+        ...advice,
+        message: 'Uploading this video straight into Metricool was tried first and did not work: ' +
+          direct.message.replace(/\.?$/, '.') + ' ' + advice.message,
+      };
     }
     // Registered with the CAUSE. While the copies folder is not in a Shared
     // Drive this is the single most common thing that happens to a video, and
