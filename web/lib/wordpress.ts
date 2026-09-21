@@ -177,11 +177,32 @@ export function toHtml(body: string): string {
     .map((block) => block.trim())
     .filter(Boolean)
     .map((block) => {
-      if (/<(p|h[1-6]|ul|ol|li|div|section|article|figure|blockquote|table)\b/i.test(block)) return block;
-      const heading = /^(#{2,4})\s+(.*)$/.exec(block);
+      // A block that STARTS with a tag is HTML and is passed through whole.
+      //
+      // Enumerating element names was the first attempt, and it wrapped what it
+      // did not recognise: a `</div>` closing an embed two blocks below its
+      // opener does not match an opening-tag pattern, so it came out as
+      // `<p></div></p>` — invalid, and worse than the all-or-nothing version
+      // this replaced, which at least shipped the embed intact. Same for the
+      // `<tr>` rows of a table.
+      if (/^</.test(block)) return block;
+      const heading = /^(#{1,6})\s+(.*)$/.exec(block);
       if (heading) {
-        const level = Math.min(6, heading[1].length);
+        // One hash is an H1 and the article already has a title, so it becomes
+        // an H2 like the rest. Six is WordPress's floor.
+        const level = Math.min(6, Math.max(2, heading[1].length));
         return '<h' + level + '>' + heading[2].trim() + '</h' + level + '>';
+      }
+      // A list, which a 900-word clinical article nearly always has and which
+      // shipped as literal hyphens before. Ordered or not; every line has to be
+      // a list item, so a paragraph that merely opens with a dash is untouched.
+      const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
+      const bullet = lines.length > 0 && lines.every((l) => /^[-*•]\s+/.test(l));
+      const numbered = lines.length > 0 && lines.every((l) => /^\d+[.)]\s+/.test(l));
+      if (bullet || numbered) {
+        const tag = bullet ? 'ul' : 'ol';
+        const items = lines.map((l) => '<li>' + l.replace(/^([-*•]|\d+[.)])\s+/, '') + '</li>').join('');
+        return '<' + tag + '>' + items + '</' + tag + '>';
       }
       return '<p>' + block.replace(/\n/g, '<br />') + '</p>';
     })

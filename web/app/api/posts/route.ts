@@ -8,6 +8,7 @@ import { supabaseServer } from '@/lib/supabase';
 import { isAllowedEmail } from '@/lib/access';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { metricoolDeletePost, metricoolReplacePost, metricoolNetworks, normalizeMediaList } from '@/lib/metricool';
+import { wantsBlog } from '@/lib/metricool-networks';
 import { normalizeFailure } from '@/lib/media-normalize-reason';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { tiktokDataFor } from '@/lib/tiktok-meta';
@@ -520,6 +521,20 @@ export async function PATCH(req: Request) {
     // Attaching is NOT approving. The replace below carries the video to
     // Metricool and the post stays exactly where it was in the queue, waiting
     // for a person — which is the whole point of the rule.
+    // A blog row is not a Metricool post that went missing — it is an article,
+    // and this route has no way to publish one. Saying "send it for review
+    // first" points at an action that does not exist, in a system that is not
+    // the one holding the article.
+    if (!existing.metricool_post_id && wantsBlog(existing.providers)) {
+      return NextResponse.json(
+        {
+          error: 'article_not_here',
+          message: 'This is a blog article, not a Metricool post. It is already in WordPress — publish it there. '
+            + 'Nothing in this dashboard can publish it for you.',
+        },
+        { status: 409 },
+      );
+    }
     if (!existing.metricool_post_id) {
       return NextResponse.json(
         { error: 'not_in_metricool', message: 'This post was never sent to Metricool, so there is nothing to attach the video to. Send it for review first.' },
@@ -551,7 +566,11 @@ export async function PATCH(req: Request) {
     }
     // The last door before a live post: Instagram / Facebook copy must carry
     // the advertising notice and a scientific reference.
-    const gate = await complianceGate(user.id, String(existing.text || ''), (existing.providers || []) as string[]);
+    // Gated on the channels this route will actually send to. The raw column
+    // can hold `blog`, which the gate covers now — so a legacy row going only
+    // to Instagram was refused with a message naming an article. The same
+    // defect, in the same shape, as the one fixed in templates/apply.
+    const gate = await complianceGate(user.id, String(existing.text || ''), metricoolNetworks(existing.providers));
     if (!gate.ok) return NextResponse.json(gateRefusal(gate), { status: 422 });
 
     // And the video rule, at the same door rather than in a mechanism of its

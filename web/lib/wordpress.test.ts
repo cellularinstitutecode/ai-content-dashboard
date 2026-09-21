@@ -305,3 +305,18 @@ test('the configured category is applied, and no category means no field', async
   await publishArticle({ title: 'T', html: 'B', date: '2026-10-05T17:00:00Z' }, { config: CONFIG, fetchImpl: without.fetchImpl });
   assert.equal(JSON.parse(String(without.calls[0].init.body)).categories, undefined);
 });
+
+test('a markdown list becomes a list, and an orphan closing tag is not wrapped', () => {
+  // Both are shapes a 900-word clinical article actually takes. The list
+  // shipped as literal hyphens; the closing tag came out as `<p></div></p>`,
+  // which is invalid and which the all-or-nothing version never produced.
+  assert.equal(toHtml('- one\n- two'), '<ul><li>one</li><li>two</li></ul>');
+  assert.equal(toHtml('1. first\n2. second'), '<ol><li>first</li><li>second</li></ol>');
+  assert.match(toHtml('<div class="e">\n\nWords.\n\n</div>\n\nNext.'), /<\/div>\n<p>Next\.<\/p>$/);
+  assert.doesNotMatch(toHtml('<div class="e">\n\nWords.\n\n</div>'), /<p><\/div><\/p>/);
+  // A paragraph that merely opens with a dash is still a paragraph.
+  assert.match(toHtml('- not a list because prose continues\nplain line'), /^<p>- not a list/);
+  // Every heading level lands on a real heading rather than literal hashes.
+  assert.equal(toHtml('# Title'), '<h2>Title</h2>', 'the article already has a title, so H1 becomes H2');
+  assert.equal(toHtml('##### Five'), '<h5>Five</h5>');
+});

@@ -1181,6 +1181,16 @@ async function runAgent(session: Session, input: string, userId: string | null, 
               // single edit.
               lead_hours: current.lead_hours,
               max_regens: current.max_regens,
+              // The same trap, twice as expensive. `rule` carries the clinic's
+              // standing instructions (never claim Cancun is categorically
+              // better; recovery services are introduced, never promoted), and
+              // `seeded` is what tells "Load the weekly strategy" that a row is
+              // its own. Dropping the rule publishes a post without a rule it
+              // was written to obey; dropping the mark makes the next press
+              // create a SECOND copy of that slot — two articles and six promo
+              // posts every Monday, for one plain-language edit.
+              rule: current.rule,
+              seeded: current.seeded,
             },
           });
           toolResult = out.ok

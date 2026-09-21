@@ -142,13 +142,27 @@ export async function POST() {
     // so the next press cannot recognise them and creates fifteen more. A
     // calendar that does nothing and doubles on retry is worse than a refusal
     // that names the migration.
-    const migrationMissing = /strategy/i.test(failure.message);
+    // "Nothing was changed" is only true if NOTHING was written. The insert leg
+    // runs first, so a mixed press — some slots new, some to update — can have
+    // committed up to fifteen rows before the upsert failed, and saying
+    // otherwise sends somebody looking in the wrong place.
+    const partial = inserted || updated;
+    // And the migration can only be the explanation when the leg that carries
+    // `strategy` had not yet succeeded. If the insert wrote rows WITH a
+    // strategy column and the upsert then failed mentioning it, the column
+    // plainly exists and this is a policy or constraint problem — telling the
+    // operator to run a migration they already have wastes the one piece of
+    // information they were given.
+    const migrationMissing = /strategy/i.test(failure.message) && !inserted;
     return NextResponse.json(
       {
         error: migrationMissing ? 'migration_missing' : 'write_failed',
-        message: migrationMissing
-          ? 'This database has not had the Autopilot migration run yet, so the rotation has nowhere to be stored — and slots written without it would do nothing. Run web/supabase/autopilot.sql (GO-LIVE.md, step 2), then press this again. Nothing was changed.'
-          : failure.message,
+        message: (migrationMissing
+          ? 'This database has not had the Autopilot migration run yet, so the rotation has nowhere to be stored — and slots written without it would do nothing. Run web/supabase/autopilot.sql (GO-LIVE.md, step 2), then press this again.'
+          : 'The weekly strategy could not be written: ' + failure.message)
+          + (partial
+            ? ' Some slots were already created before this failed — press the button again once it is fixed, and they will be brought up to date rather than duplicated.'
+            : ' Nothing was changed.'),
       },
       { status: migrationMissing ? 409 : 500 },
     );

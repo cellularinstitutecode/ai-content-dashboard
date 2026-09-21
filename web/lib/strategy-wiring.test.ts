@@ -11,7 +11,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { seedRows } from './strategy-seed.ts';
+import { SEED_MARK, isSeeded, seedRows } from './strategy-seed.ts';
+import { normalizeStrategy } from './template-strategy.ts';
 
 const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 
@@ -21,9 +22,12 @@ test('a standing rule survives normalizeStrategy and reaches the writer', () => 
   // this line the two rules the clinic wrote down would vanish on write, with
   // nothing anywhere to show they had.
   const autopilot = src('lib/autopilot.ts');
-  assert.match(autopilot, /rule\?: string;/, 'TemplateStrategy must carry it');
-  assert.match(autopilot, /rule: typeof s\.rule === 'string'/, 'normalizeStrategy must keep it');
-  assert.match(autopilot, /\.slice\(0, 400\)/, 'and clamp it, because it reaches the model as an instruction');
+  const strategy = src('lib/template-strategy.ts');
+  assert.match(strategy, /rule\?: string;/, 'TemplateStrategy must carry it');
+  assert.match(strategy, /rule: typeof s\.rule === 'string'/, 'normalizeStrategy must keep it');
+  assert.match(strategy, /\.slice\(0, 400\)/, 'and clamp it, because it reaches the model as an instruction');
+  // Exercised, not grepped: a rule survives the trip the route actually makes.
+  assert.equal(normalizeStrategy({ mode: 'pillars', rule: '  keep me  ' }).rule, 'keep me');
   assert.match(
     autopilot,
     /STANDING RULE for this pillar \(must follow\): ' \+ strategy\.rule/,
@@ -111,7 +115,26 @@ test('the seed mark survives the engine\'s normaliser', () => {
   // The route passes every row through normalizeStrategy, which rebuilds the
   // object from known keys — so a mark it did not know about would vanish on
   // write and turn every re-seed into a duplicate.
-  const autopilot = src('lib/autopilot.ts');
-  assert.match(autopilot, /seeded\?: string;/);
-  assert.match(autopilot, /seeded: typeof s\.seeded === 'string'/);
+  const strategy = src('lib/template-strategy.ts');
+  assert.match(strategy, /seeded\?: string;/);
+  assert.match(strategy, /seeded: typeof s\.seeded === 'string'/);
+  // And the round trip the whole mark depends on, exercised rather than
+  // grepped: what the route WRITES must still read back as ours.
+  for (const row of seedRows()) {
+    assert.equal(normalizeStrategy(row.strategy).seeded, SEED_MARK, row.name);
+    assert.equal(isSeeded({ id: 'x', name: row.name, strategy: normalizeStrategy(row.strategy) }), true, row.name);
+  }
+});
+
+test('an assistant edit keeps the mark and the standing rule', () => {
+  // THE ONE A USER TRIGGERS BY ASKING. The assistant's update_schedule rebuilds
+  // strategy from a fixed key list, and it did not carry `seeded` or `rule`.
+  // "Make the Weekly article aim at traffic" therefore un-marked the row, and
+  // the next press created a SECOND Monday article beside it — two articles and
+  // six promo posts a week, from one plain-language edit.
+  const assistant = src('app/api/assistant/route.ts');
+  const build = assistant.slice(assistant.indexOf('strategy: {'));
+  const obj = build.slice(0, build.indexOf('},'));
+  assert.match(obj, /rule: current\.rule/, 'the standing rule must survive an edit');
+  assert.match(obj, /seeded: current\.seeded/, 'and so must the mark');
 });

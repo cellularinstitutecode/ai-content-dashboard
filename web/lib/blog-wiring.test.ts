@@ -71,22 +71,47 @@ test('everything refusable about the article is decided BEFORE anything is sent'
 test('a send that succeeded is never thrown away for a retry', () => {
   // Releasing the run after Metricool accepted invites a second send. The
   // article failure is recorded instead, and the post is kept.
+  //
+  // THE CONDITION MATTERS, and the first version of this test pinned the wrong
+  // one: it asserted `else if (metricoolPostId)`, which asks whether an id
+  // could be PARSED out of the answer. readPostId returns null for a
+  // successful POST whose envelope has no recognisable id, so a 200 plus a
+  // WordPress refusal released the run and told the reviewer "nothing was sent
+  // anywhere" while three posts were live.
   const autopilot = src('lib/autopilot.ts');
-  assert.match(autopilot, /} else if \(metricoolPostId\) \{\s*\n\s*articleFailure = published\.message;/);
+  assert.match(autopilot, /} else if \(metricoolSent\) \{/, 'the guard must be "the send happened", not "the id parsed"');
+  assert.doesNotMatch(autopilot, /else if \(metricoolPostId\)/, 'the old guard is gone');
+  assert.match(autopilot, /metricoolSent = true;/);
   assert.match(autopilot, /BUT THE ARTICLE WAS NOT PUBLISHED/);
   assert.match(autopilot, /approving this run again would send them a second time/);
   assert.match(autopilot, /logLine\(run, 'approve-partial', partial\)/);
 });
 
-test('a draft approval is a draft in WordPress too', () => {
+test('a run that already sent something is never rescued back into the queue', () => {
+  // rescueStrandedApprovals asked the `posts` table whether an approval really
+  // happened — the one artifact that is MISSING in exactly the case where the
+  // send succeeded and the insert failed. So a transient database error turned
+  // into a second live Metricool post, and for the Monday slot a second
+  // published article, one cron tick later.
   const autopilot = src('lib/autopilot.ts');
-  assert.match(autopilot, /status: opts\.schedule \? undefined : 'draft'/);
+  assert.match(autopilot, /logLine\(run, 'sent',/, 'the send is recorded on the run before anything else can fail');
+  assert.match(
+    autopilot,
+    /\(row\.log \|\| \[\]\)\.some\(\(entry\) => entry\.step === 'sent' \|\| entry\.step === 'approve' \|\| entry\.step === 'approve-partial'\)\) continue;/,
+    'and the rescue reads it before deciding nothing was published',
+  );
 });
 
 test('the article is sent scheduled to its slot, with the hero image', () => {
+  // Scoped to the publishArticle call. Unanchored, these two matched anywhere
+  // in a 2,000-line file — including a comment.
   const autopilot = src('lib/autopilot.ts');
-  assert.match(autopilot, /date: run\.scheduled_for/);
-  assert.match(autopilot, /featuredImageUrl: packImage\?\.url/);
+  const call = autopilot.slice(autopilot.indexOf('const published = await publishArticle({'));
+  const args = call.slice(0, call.indexOf('});'));
+  assert.ok(args.length > 40, 'the publishArticle call is gone');
+  assert.match(args, /date: run\.scheduled_for/);
+  assert.match(args, /featuredImageUrl: packImage\?\.url/);
+  assert.match(args, /status: opts\.schedule \? undefined : 'draft'/);
 });
 
 test('the article body is the article, not the Instagram caption', () => {
