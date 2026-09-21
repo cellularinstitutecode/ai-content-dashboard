@@ -1,130 +1,135 @@
 // web/lib/lead-window.ts
-// Whether a template's lead time can ever line up with the daily tick.
+// Whether a template's lead time can ever line up with the engine's tick.
 //
-// THE BUG THIS EXISTS FOR. Autopilot's cron fires ONCE A DAY (vercel.json:
-// "30 6 * * *" = 06:30 UTC), and `expireStaleRuns` runs BEFORE `advanceRuns` in
-// the same request, killing anything more than two hours past its slot. So a run
-// is only ever workable if that single daily tick falls inside
+// THE BUG THIS EXISTS FOR. Autopilot's cron used to fire ONCE A DAY (06:30
+// UTC), and `expireStaleRuns` runs BEFORE `advanceRuns` in the same request,
+// killing anything more than two hours past its slot. So a run was only ever
+// workable if that single daily tick fell inside
 //
 //     [ scheduled_for − lead_hours , scheduled_for + 2h ]
 //
-// A 09:00 Cancún slot is 14:00 UTC. The 06:30 tick on the slot day needs
-// lead ≥ 7.5h to be inside the window; by the next morning's tick the slot is
-// 16.5h old and already expired. So `lead_hours: 4` — a perfectly reasonable
-// thing to type into a box labelled "Prepare drafts (hours before slot)", which
-// accepts a minimum of 1 — means the run is NEVER researched, NEVER drafted,
-// and is marked failed every single morning. Forever. And the failure message
-// blames the slot time, which is not the cause.
+// which made the floor depend on the slot's UTC time: a 09:00 Cancún slot is
+// 14:00 UTC, so it needed lead ≥ 7.5h to be reached at all, and `lead_hours: 4`
+// — a perfectly reasonable thing to type into a box whose minimum is 1 — meant
+// the run was NEVER researched, NEVER drafted, and was marked failed every
+// single morning. Forever, with a failure message blaming the slot time.
 //
-// No imports: the test runner strips types and runs this file directly.
+// WHAT CHANGED, AND WHY THIS FILE IS SMALLER FOR IT. The tick is hourly now
+// (vercel.json: "0 * * * *"). Evenly spaced ticks hold the same count in a
+// window of a given width wherever it sits in the day, so the slot time drops
+// out of the arithmetic completely — and with it the old 8-to-19-hour floors,
+// which were never about the work and only ever about catching one cron.
+//
+// WHAT IS LEFT IS A REAL FLOOR, and it is about the work. A run passes through
+// three states to reach review, `advanceRuns` steps one run as far as its
+// budget allows, and that budget is shared with up to three other runs. So the
+// honest worst case is one step per tick: a lead has to be at least
+// STEPS_TO_READY ticks wide for the post to be finished BEFORE its slot, and
+// MAX_ATTEMPTS ticks wider than that to have anything left over for a failed
+// step. Both are hours now rather than most of a day.
+//
+// This file is the one place that knows the cadence, so lead-window.test.ts
+// asserts TICK_INTERVAL_MINUTES against vercel.json itself, and STEPS_TO_READY
+// against the engine's own state list. A cron or a state edited without this
+// constant would put every floor back to being quietly wrong, which is the
+// failure this file was written for in the first place.
+//
+// Pure: `./x.ts` imports only, so the test runner reads this file directly.
+import { MAX_ATTEMPTS } from './planner-constants.ts';
 
-/** When the daily cron fires, in minutes past midnight UTC. Mirrors vercel.json. */
-export const TICK_UTC_MINUTES = 6 * 60 + 30;
+/** How often the engine wakes, in minutes. Mirrors vercel.json's autopilot cron. */
+export const TICK_INTERVAL_MINUTES = 60;
 
 /** How long after its slot a run survives before expireStaleRuns retires it. */
 export const EXPIRY_GRACE_HOURS = 2;
 
 /**
- * The smallest lead, in whole hours, that lets the daily tick reach a slot at
- * this UTC time.
+ * States a run passes through on its way to review: planned → researched →
+ * drafted → ready_for_review. Three steps, so three ticks in the worst case
+ * where each tick affords exactly one.
  *
- * The tick at 06:30 must fall at or after `slot − lead`, and the slot must not
- * already be more than the grace period old. For a slot LATER in the UTC day
- * than the tick, that means the lead has to span the gap between them. For a
- * slot EARLIER in the UTC day, the previous day's tick is the one that has to
- * reach it, so the lead must span the wrap-around too.
- *
- * @param slotUtcMinutes minutes past midnight UTC of the slot.
+ * Mirrors ACTIVE_STATES in lib/autopilot.ts, which is server-only and cannot be
+ * imported here; the test asserts the two agree.
  */
-export function minimumLeadHours(slotUtcMinutes: number): number {
-  const slot = ((Math.round(slotUtcMinutes) % 1440) + 1440) % 1440;
-  let gap = slot - TICK_UTC_MINUTES;
-  // A slot at or before the tick is reached by the tick on the SAME day only if
-  // it is still inside the grace window; otherwise yesterday's tick had to have
-  // covered it, which is a full day of lead away.
-  if (gap < -EXPIRY_GRACE_HOURS * 60) gap += 1440;
-  // A slot inside the grace window needs no lead at all — the tick that fires
-  // just after it still finds it alive.
-  if (gap <= 0) return 0;
-  return Math.ceil(gap / 60);
+export const STEPS_TO_READY = 3;
+
+/** Whole hours spanned by n ticks, rounded up — the box only accepts hours. */
+function tickHours(ticks: number): number {
+  return Math.ceil((TICK_INTERVAL_MINUTES * ticks) / 60);
 }
 
 /**
- * Is this lead usable for this slot, and if not, what would be?
+ * The smallest lead, in whole hours, that can finish a draft before its slot.
+ *
+ * No longer a function of the slot time: see the header. It is the number of
+ * ticks the pipeline needs, at the pessimistic rate of one step per tick.
+ */
+export function minimumLeadHours(): number {
+  return tickHours(STEPS_TO_READY);
+}
+
+/**
+ * The lead that leaves a retry budget, rather than merely enough ticks to
+ * finish when nothing goes wrong.
+ *
+ * Deliberately NOT merged into `minimumLeadHours`: a lead below the first is
+ * BROKEN (the post cannot be ready in time), while a lead below this one merely
+ * has no second chance. lib/autopilot.ts sets MAX_ATTEMPTS to 2 and justifies
+ * it with "an eligibility window that is only ever a couple of ticks wide" —
+ * this is the lead that makes that sentence true.
+ */
+export function retryBudgetLeadHours(): number {
+  return tickHours(STEPS_TO_READY + MAX_ATTEMPTS);
+}
+
+/**
+ * Is this lead usable, and if not, what would be?
  *
  * Returns `null` when the setting is fine, so a caller can treat a truthy
  * result as the problem to report.
  */
-export function leadProblem(
-  leadHours: number,
-  slotUtcMinutes: number,
-): { minimum: number; message: string } | null {
-  const minimum = minimumLeadHours(slotUtcMinutes);
+export function leadProblem(leadHours: number): { minimum: number; message: string } | null {
+  const minimum = minimumLeadHours();
   if (leadHours >= minimum) return null;
   return {
     minimum,
     message:
       'A lead of ' + leadHours + (leadHours === 1 ? ' hour' : ' hours') +
-      ' is too short for this slot: the daily pass runs once, and it would never fall inside the window, so every post would be marked failed the next morning. ' +
+      ' is too short: the engine wakes once an hour and a post takes ' + STEPS_TO_READY +
+      ' passes to research, write and score, so the slot can come round with the draft unfinished. ' +
       'Use at least ' + minimum + ' hours.',
   };
 }
 
 /**
- * The lead a template should actually be saved with.
- *
- * Raising it is the right direction: preparing a draft EARLIER than asked costs
- * nothing and is invisible, whereas honouring a too-short lead produces a
- * template that silently never runs.
- */
-export function usableLeadHours(leadHours: number, slotUtcMinutes: number): number {
-  return Math.max(leadHours, minimumLeadHours(slotUtcMinutes));
-}
-
-/**
- * The lead that puts TWO daily ticks inside the window, not merely one.
- *
- * `minimumLeadHours` answers "can this template ever run at all" — one tick
- * inside the window. That is the floor below which a template is broken, and it
- * is not the same as the floor at which a template is RESILIENT.
- *
- * MAX_ATTEMPTS is 2, and lib/autopilot.ts justifies that number with "an
- * eligibility window that is only ever a couple of ticks wide." That assumption
- * does not hold at the default lead of 24h: a 09:00 Cancún slot is 15:00 UTC, so
- * the window opens 15:00 the day before and exactly ONE 06:30 tick falls inside
- * it. One bad morning leaves attempts at 1 — below the limit, so the run stays
- * `planned` — and no second tick ever comes, so it expires unattempted. The
- * retry budget can never be spent, and a single transient failure silently
- * costs the whole occurrence.
- *
- * A day of extra lead adds exactly one more tick. Preparing a draft earlier
- * costs nothing and is invisible; losing a week's post to one blip is not.
- */
-export function twoTickLeadHours(slotUtcMinutes: number): number {
-  return minimumLeadHours(slotUtcMinutes) + 24;
-}
-
-/**
  * Does this lead give the occurrence a second chance?
  *
- * Distinct from `leadProblem`, and deliberately NOT merged into it: a lead
- * below the one-tick floor is BROKEN (the template can never run), while a lead
- * below the two-tick floor merely has no retry budget. Reporting them with one
- * sentence would either overstate the first or understate the second, and the
- * caller shows them differently — a refusal versus a warning.
+ * Below this floor a single transient failure costs the whole post: `attempts`
+ * stops short of MAX_ATTEMPTS, so the run is never marked failed and never
+ * retried — it just quietly expires at its slot.
  */
 export function retryBudgetProblem(
   leadHours: number,
-  slotUtcMinutes: number,
 ): { recommended: number; message: string } | null {
-  const recommended = twoTickLeadHours(slotUtcMinutes);
+  const recommended = retryBudgetLeadHours();
   if (leadHours >= recommended) return null;
   return {
     recommended,
     message:
       'A lead of ' + leadHours + (leadHours === 1 ? ' hour' : ' hours') +
-      ' gives this slot only one daily pass to get the draft ready, so a single failed morning loses the whole occurrence — ' +
+      ' leaves this slot no spare passes, so one failed step loses the whole occurrence — ' +
       'it is never retried, and it is reported as having missed its time. Use at least ' + recommended +
       ' hours to give it a second attempt.',
   };
+}
+
+/**
+ * The lead a template should actually be run with.
+ *
+ * Raising it is the right direction: preparing a draft EARLIER than asked costs
+ * nothing and is invisible, whereas honouring a too-short lead produces a
+ * template whose posts are reliably late.
+ */
+export function usableLeadHours(leadHours: number): number {
+  return Math.max(leadHours, minimumLeadHours());
 }

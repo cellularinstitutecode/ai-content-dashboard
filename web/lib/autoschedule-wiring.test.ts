@@ -35,7 +35,16 @@ test('the verdict decides, and the reason is written on the card', () => {
   assert.match(autopilot, /threshold: SCORE_THRESHOLD/, 'the threshold stays in planner-constants.ts');
   assert.match(autopilot, /safetyFlags: run\.score\?\.safetyFlags\?\.length \?\? 0/);
   assert.match(autopilot, /if \(!verdict\.ok\)/);
-  assert.match(autopilot, /logLine\(run, 'hold', holdNote\(verdict\)\)/, 'a held post must say why');
+  // The write moved into a `hold` helper when the weekly ceiling gave the
+  // engine a SECOND reason to hold a run; both go through it, so the two
+  // cannot drift into writing the card differently.
+  assert.match(autopilot, /await hold\(db, run, holdNote\(verdict\)\)/, 'a held post must say why');
+  assert.match(autopilot, /logLine\(run, 'hold', note\)/, 'and the helper really does write it to the card');
+  assert.match(
+    autopilot,
+    /\.eq\('state', 'ready_for_review'\);\n\s*if \(error\) reportError\('autopilot:autoschedule-hold'/,
+    'predicated, so a hold note cannot land on a run a reviewer just approved',
+  );
 });
 
 test('a text-flagged image counts as no image', () => {

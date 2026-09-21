@@ -24,8 +24,8 @@
 // Design constraints honored:
 // - Cache-first & budget-guarded: every Semrush call goes through the
 //   existing unit-floor/cache layer, so a tick can never drain the balance.
-// - Idempotent, resumable steps: the daily cron advances each run one state
-//   at a time; a failure retries next tick, and unique(template_id,
+// - Idempotent, resumable steps: the hourly cron advances each run as far as
+//   its budget allows; a failure retries next tick, and unique(template_id,
 //   scheduled_for) makes planning re-entrant.
 // - Fail-soft: a missing key or empty report degrades the angle choice, it
 //   never throws the whole tick.
@@ -67,7 +67,8 @@ import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@
 import { ANGLE_HISTORY, chooseAngle, type AngleType, type PastAngle } from '@/lib/angle-rotation';
 import { autoScheduleVerdict, holdNote } from '@/lib/autoschedule';
 import { autoSchedules } from '@/lib/autopilot-mode';
-import { usableLeadHours, leadProblem } from '@/lib/lead-window';
+import { usableLeadHours } from '@/lib/lead-window';
+import { weeklyPaceVerdict, weeklyCeiling, paceNote, ROLLING_WINDOW_DAYS, PACE_SCAN_LIMIT } from '@/lib/weekly-pace';
 import { videoVerdict, pendingRefusal, type PackLike } from '@/lib/video-required';
 
 // ---------------------------------------------------------------------------
@@ -136,11 +137,14 @@ export type RunRow = {
 };
 
 const ACTIVE_STATES = ['planned', 'researched', 'drafted'] as const;
-// MAX_ATTEMPTS is two, not three. The cron fires once a day and `advanceRuns`
-// takes at most one attempt per run per tick, inside an eligibility window that
-// is only ever a couple of ticks wide - so with a limit of 3 a broken run could
-// never reach `failed`, never showed up under "Needs attention", and simply went
-// quiet.
+// MAX_ATTEMPTS is two, not three. `advanceRuns` takes at most one attempt per
+// run per tick, inside an eligibility window that is only ever a couple of ticks
+// wide - so with a limit of 3 a broken run could never reach `failed`, never
+// showed up under "Needs attention", and simply went quiet.
+//
+// The tick is hourly rather than daily now, which makes that window WIDER, not
+// narrower: lib/lead-window.ts turns this number into the lead a template needs
+// to have anything left over for a failed step.
 //
 // These four moved to lib/planner-constants.ts so the assistant's playbook can
 // interpolate them rather than restate them from memory and drift.
@@ -180,7 +184,7 @@ export async function planRuns(scopeUserId?: string): Promise<{ planned: number;
   if (scopeUserId) q = q.eq('user_id', scopeUserId);
   // Surface the query error instead of discarding it. A dropped error here read
   // as "no templates", so a missing table or a rotated service-role key made the
-  // daily cron answer {ok:true, planned:0} - green in Vercel, dead in reality.
+  // cron answer {ok:true, planned:0} - green in Vercel, dead in reality.
   const { data: templates, error: tplErr } = await q;
   if (tplErr) throw new Error('planRuns: could not read templates - ' + tplErr.message);
   if (!Array.isArray(templates) || templates.length === 0) return { planned: 0, templates: 0 };
@@ -1085,6 +1089,29 @@ export async function expireStaleRuns(scopeUserId?: string): Promise<number> {
  * ready_for_review and a person can approve it by hand. A broken auto-send
  * must never lose the post.
  */
+/**
+ * Put the reason on the card and leave the run where it is.
+ *
+ * "Held" with no explanation is how a queue becomes a pile nobody trusts, and
+ * there are two things that can hold a run now — the post and the week — so
+ * this is one helper rather than two copies that could drift apart.
+ *
+ * Predicated on ready_for_review, so a reviewer who approved it in the same
+ * moment does not get a hold note written over their post.
+ */
+async function hold(
+  db: ReturnType<typeof supabaseAdmin>,
+  run: RunRow,
+  note: string,
+): Promise<void> {
+  const { error } = await db
+    .from('template_runs')
+    .update({ log: logLine(run, 'hold', note) })
+    .eq('id', run.id)
+    .eq('state', 'ready_for_review');
+  if (error) reportError('autopilot:autoschedule-hold', error, { runId: run.id });
+}
+
 async function autoSchedule(
   db: ReturnType<typeof supabaseAdmin>,
   run: RunRow,
@@ -1125,12 +1152,55 @@ async function autoSchedule(
     if (!verdict.ok) {
       // The reason goes on the card. "Held" with no explanation is how a queue
       // becomes a pile nobody trusts.
-      const { error } = await db
-        .from('template_runs')
-        .update({ log: logLine(run, 'hold', holdNote(verdict)) })
-        .eq('id', run.id)
-        .eq('state', 'ready_for_review');
-      if (error) reportError('autopilot:autoschedule-hold', error, { runId: run.id });
+      await hold(db, run, holdNote(verdict));
+      return;
+    }
+
+    // THE WEEK, not the post. Everything above asks whether this one is fit to
+    // go out; a calendar that has quietly doubled passes all of it, fifteen
+    // extra times. See lib/weekly-pace.ts for why that is a live possibility
+    // and not a hypothetical.
+    //
+    // A hold here is final until a person acts, exactly like every other hold:
+    // ready_for_review is not in ACTIVE_STATES, so no later tick revisits it.
+    // That is the fail-closed direction — a week that emptied out afterwards
+    // costs somebody a button, a week that did not costs the clinic a second
+    // set of posts.
+    const slotMs = Date.parse(run.scheduled_for);
+    if (!Number.isFinite(slotMs)) {
+      // Not reachable from a `timestamptz not null` column, but a NaN here
+      // would THROW in the window arithmetic below rather than hold — and an
+      // uncountable week holding is the entire point of this block.
+      await hold(db, run, paceNote(weeklyPaceVerdict({ slot: run.scheduled_for, scheduled: [] })));
+      return;
+    }
+    const edge = ROLLING_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    const { data: nearby, error: paceError } = await db
+      .from('posts')
+      .select('publication_date, status')
+      .eq('user_id', run.user_id)
+      // Both sides: a seven-day window containing this slot can start a week
+      // before it and end a week after, and the worst one is whichever of
+      // those it is. Asking only for the past would miss a slot dropped into
+      // the middle of an already-full week.
+      .gte('publication_date', new Date(slotMs - edge).toISOString())
+      .lte('publication_date', new Date(slotMs + edge).toISOString())
+      .limit(PACE_SCAN_LIMIT + 1);
+    if (paceError) {
+      // Fail closed. An uncountable calendar is not permission to add to it,
+      // and the run keeps its place in the queue for a person.
+      reportError('autopilot:autoschedule-pace', paceError, { runId: run.id });
+      return;
+    }
+    const rows = (nearby || []) as { publication_date?: string | null; status?: string | null }[];
+    const pace = weeklyPaceVerdict({
+      slot: run.scheduled_for,
+      scheduled: rows.slice(0, PACE_SCAN_LIMIT),
+      ceiling: weeklyCeiling(process.env.AUTOPILOT_WEEKLY_CEILING),
+      truncated: rows.length > PACE_SCAN_LIMIT,
+    });
+    if (!pace.ok) {
+      await hold(db, run, paceNote(pace));
       return;
     }
 
@@ -1163,7 +1233,7 @@ export async function advanceRuns(opts: {
   //
   // Every `continue` below used to end the run's turn in silence, and the
   // caller answered {ok: true, advanced: 0} — a shape indistinguishable from a
-  // quiet day. For the daily tick that is merely unhelpful. For the Retry
+  // quiet day. For the cron tick that is merely unhelpful. For the Retry
   // button it is a lie: a reviewer presses Retry on a red card, the request
   // succeeds, and nothing whatsoever has happened, with no log line and no
   // message. The worst case is a template switched off, where Retry is a
@@ -1231,19 +1301,16 @@ export async function advanceRuns(opts: {
 
     // Respect the lead window unless this is an explicit run-now.
     //
-    // RAISED to whatever the daily tick can actually reach. The cron fires once
-    // a day and expireStaleRuns retires anything two hours past its slot, so a
-    // lead shorter than the gap between the tick and the slot means this
-    // `continue` fires on every tick that could still help — and by the next
-    // morning the run is already stale and marked failed. Every occurrence,
-    // forever, with a message blaming the slot time. lib/lead-window.ts works
-    // out the floor; honouring a too-short lead is the one choice that produces
-    // a template which silently never runs.
+    // RAISED to whatever the tick can actually reach. expireStaleRuns retires
+    // anything two hours past its slot, so a lead too short to fit the pipeline
+    // means this `continue` fires on every tick that could still help — and the
+    // run is stale and marked failed before it ever gets a pass. Every
+    // occurrence, forever, with a message blaming the slot time.
+    // lib/lead-window.ts works out the floor from the tick interval; honouring
+    // a too-short lead is the one choice that produces a template whose posts
+    // are reliably late.
     const slotAt = new Date(raw.scheduled_for);
-    const effectiveLead = usableLeadHours(
-      strategy.lead_hours ?? 24,
-      slotAt.getUTCHours() * 60 + slotAt.getUTCMinutes(),
-    );
+    const effectiveLead = usableLeadHours(strategy.lead_hours ?? 24);
     const leadMs = effectiveLead * 60 * 60 * 1000;
     if (!opts.runId && slotAt.getTime() - leadMs > Date.now()) continue;
 

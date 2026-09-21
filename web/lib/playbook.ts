@@ -117,7 +117,7 @@ them alone and they keep their stored values.
 
 How a slot becomes a post:
 
-- A daily tick materialises the upcoming slots, ${HORIZON_DAYS} days ahead, for
+- An hourly tick materialises the upcoming slots, ${HORIZON_DAYS} days ahead, for
   every active template that has a strategy. A template in \`off\` mode is left
   alone — it belongs to the older Apply flow, which posts its stored text.
 - A tick then takes each run as far as it can in one go: research → choose an
@@ -160,9 +160,10 @@ stops them reusing each other's keywords, not each other's subjects. Use \`list_
 see what already exists before adding more, and \`create_schedule\` to build them
 — do not just describe the shape when the user has asked for it to be set up.
 
-Practical limits worth saying out loud: the tick runs once a day, so a template
-added today starts producing from the next tick; and more blogs a day means more
-AI and Semrush spend per day, in direct proportion.
+Practical limits worth saying out loud: the tick runs hourly, so a template
+added today starts producing within the hour; a slot still needs enough lead for
+the engine to research, write and score it before its time; and more posts a day
+means more AI and Semrush spend per day, in direct proportion.
 
 # WHAT YOU MAY DO
 

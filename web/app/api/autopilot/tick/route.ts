@@ -1,6 +1,6 @@
 // web/app/api/autopilot/tick/route.ts
 // The Autopilot heartbeat. Called two ways:
-//   1. Vercel Cron (daily, see vercel.json) with Authorization: Bearer CRON_SECRET
+//   1. Vercel Cron (hourly, see vercel.json) with Authorization: Bearer CRON_SECRET
 //      → plans upcoming runs for ALL users and advances due ones.
 //   2. A signed-in user ("Run engine now" button) → same, scoped to that user.
 // Steps are idempotent and resumable, so overlapping or repeated ticks are safe.

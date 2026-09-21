@@ -11,7 +11,7 @@
     },
     {
       "path": "/api/autopilot/tick",
-      "schedule": "30 6 * * *"
+      "schedule": "0 * * * *"
     },
     {
       "path": "/api/videos/watch",
