@@ -189,7 +189,7 @@ export async function draftAndQueue(
     // success. `degraded` is the signal that the normalise did not happen, and
     // metricoolSchedulePost already reads it.
     const norm = await normalizeMediaList([String(item.mediaUrl)]);
-    if (norm.degraded) {
+    if (norm.failure) {
       return {
         ...base,
         draftId,

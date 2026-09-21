@@ -92,7 +92,8 @@ export async function attachPendingVideos(args: {
   // it did not take is NOT sent as a fallback: that produced drafts that read
   // as attached and went out with no video.
   const norm = await normalizeMediaList([made.url]);
-  if (norm.degraded || !norm.media.length) {
+  // `failure`, not `degraded` — see normalizeMediaList on METRICOOL_ACCEPT_ECHO.
+  if (norm.failure || !norm.media.length) {
     // Named, not just reported. This runs unattended in the sweep, so the one
     // record of what happened is the register entry written below — and "did
     // not take it" told a person nothing they could act on days later.

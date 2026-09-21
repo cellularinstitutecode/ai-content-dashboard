@@ -278,31 +278,27 @@ export async function normalizeMedia(rawUrl: string): Promise<string> {
  */
 export async function normalizeMediaList(
   urls: readonly string[],
-): Promise<{ media: string[]; degraded: boolean; failure: NormalizeOutcome | null }> {
+): Promise<{ media: string[]; degraded: boolean; failure: NormalizeOutcome | null; accepted: boolean }> {
   const media: string[] = [];
   let degraded = false;
+  /** An echo was let through by METRICOOL_ACCEPT_ECHO. Marked, so the caller can say so. */
+  let accepted = false;
   /** The FIRST thing that went wrong, kept so the caller can say what it was. */
   let failure: NormalizeOutcome | null = null;
   for (const u of urls) {
-    // Compared against the TRIMMED input, because normalizeMedia trims before it
-    // does anything. Comparing against the raw string made a URL with a trailing
-    // newline look normalised when it had not been: n !== u, degraded false, and
-    // the post queued with a raw URL that Metricool drops in silence — which is
-    // the one case this flag exists to catch.
     const trimmed = String(u || '').trim();
     const out = await normalizeMediaDetailed(trimmed);
     const n = out.url;
-    if (!out.ok && !failure) failure = out;
     if (!n) {
-      // An input we cannot normalise to anything is not "no media requested" —
-      // it is media that will not arrive. Skipping it quietly produced a post
-      // with an empty media list, reported as a success.
+      // Nothing came back at all. Skipping it quietly produced a post with an
+      // empty media list, reported as a success.
       if (trimmed) degraded = true;
+      if (!failure) failure = out;
       continue;
     }
-    // Unchanged means normalise did not happen — every success path returns
-    // Metricool's own reference, never the URL it was given.
     if (n === trimmed) {
+      // Unchanged means normalise did not happen — every success path returns
+      // Metricool's own reference, never the URL it was given.
       degraded = true;
       // THE ONE QUESTION LEFT, AND THE ONLY WAY TO ANSWER IT.
       //
@@ -317,32 +313,33 @@ export async function normalizeMediaList(
       // for IMAGES; there is no video equivalent to call.
       //
       // Which leaves one thing nobody here knows: does Metricool fetch the
-      // media URL ITSELF when the post publishes? The echo was read as "no"
-      // — but that reading was formed in September, when the URL we handed
+      // media URL ITSELF when the post publishes? The echo was read as "no" in
+      // #274 — but rows 184 and 186 went out WITH their video two days before
+      // #274 existed, on the bucket route, and nobody recorded whether that
+      // was a copy or an echo. And the "no" was formed when the URL we handed
       // over was a Vercel function that could not serve the file to anyone.
-      // Of course the post published empty. The link was broken.
       //
-      // The link is not broken now. It is a Drive copy this app fetched back
-      // with no credentials and read an mp4 header from. So the September
-      // conclusion may simply not apply, and the only way to find out is to
-      // let one post through and look at it in Metricool.
-      //
-      // OFF BY DEFAULT, and it stays off unless somebody sets it deliberately:
-      // the cost of being wrong is a reel published to YouTube and TikTok with
-      // no video in it. `degraded` stays true either way, so the post is still
-      // marked and still says what happened.
-      if (acceptEcho()) continue;
-
-      // And it is a FAILURE, with everything known about it. This was the hole:
-      // an echoed URL set `degraded` without setting `failure`, so the caller
-      // had nothing to explain it with and printed the bare fallback sentence —
-      // no status, no shape, no endpoints. Two rounds of "it still says the
-      // same thing" came out of that.
-      if (!failure) failure = { ...out, ok: false, echoed: true };
+      // The link is not broken now. So with METRICOOL_ACCEPT_ECHO on, the
+      // echoed URL goes into the post, `degraded` and `accepted` both stay
+      // true so the post is marked, and `failure` is NOT set — because every
+      // caller refuses on `failure`, and the first version of this switch
+      // left it set (and skipped the push), so the flag changed nothing and
+      // printed the identical sentence. Off by default; the cost of being
+      // wrong is a reel on YouTube and TikTok with no video in it.
+      if (acceptEcho()) {
+        accepted = true;
+      } else if (!failure) {
+        // A FAILURE, with everything known about it. This was the hole: an
+        // echoed URL set `degraded` without setting `failure`, so the caller
+        // had nothing to explain it with and printed the bare fallback.
+        failure = { ...out, ok: false, echoed: true };
+      }
+    } else if (!out.ok && !failure) {
+      failure = out;
     }
     media.push(n);
   }
-  return { media, degraded, failure };
+  return { media, degraded, failure, accepted };
 }
 
 // Metricool wants a wall-clock "YYYY-MM-DDTHH:MM:SS" plus an IANA timezone —
