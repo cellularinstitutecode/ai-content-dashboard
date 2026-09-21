@@ -113,6 +113,27 @@ export function canWriteCopy(remaining: number): boolean {
  * its clock costs the whole prepare, and a draft published with an unverified
  * citation and a flag on it is a far better outcome than no draft at all.
  */
+/**
+ * Room to ask the model for the video's public title.
+ *
+ * One short call (lib/ai.ts writeTitle) with a 12-second timeout of its own,
+ * so 12 seconds is the whole cost. Checked BEFORE the claim check, and with its
+ * own threshold rather than the claim check's: the title is PUBLIC — it is the
+ * name of the video on YouTube — where the claim verdict is internal and a
+ * missing one publishes flagged. When the two compete for the last seconds of
+ * a request, the title is the one a reader will see.
+ *
+ * It used to run last and borrow CLAIM_CHECK_MS, so any row that finished the
+ * claim check with under fifteen seconds left got no drafted title and fell
+ * through to the keyword rung — the same phrase for every video about the same
+ * therapy. Four different reels went up as "Therapeutic Plasma Exchange
+ * Removes…" that way.
+ */
+export const TITLE_MS = 12_000;
+export function canWriteTitle(remaining: number): boolean {
+  return remaining >= TITLE_MS;
+}
+
 export const CLAIM_CHECK_MS = 15_000;
 export function canCheckClaim(remaining: number): boolean {
   return remaining >= CLAIM_CHECK_MS;

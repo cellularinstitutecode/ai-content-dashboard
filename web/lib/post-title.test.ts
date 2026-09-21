@@ -134,3 +134,35 @@ test('which rung produced a title is recorded, and so is a model skipped for bud
   const sweep = src('lib/video-autopilot.ts');
   assert.equal((sweep.match(/titleSource: (?:opts\.)?prepared\.titleSource \?\? null/g) || []).length, 2, 'both prepared events');
 });
+
+
+test('the title is asked for BEFORE the claim check, with a budget of its own', () => {
+  // THE FIX for the repeat. Last in line and borrowing CLAIM_CHECK_MS, the
+  // drafted title was the first thing a slow row lost, and the keyword rung it
+  // fell to is the same phrase for every video about one therapy.
+  const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  const prep = src('lib/video-prepare.ts');
+  const title = prep.indexOf('draftedTitle = await writeTitle({');
+  const ladder = prep.indexOf('// RUNG 1');
+  assert.ok(title > 0 && ladder > 0);
+  assert.ok(title < ladder, 'the title must be written before the claim ladder runs');
+  assert.match(prep, /canWriteTitle\(remainingMs\(startedAt, budgetMs, Date\.now\(\)\)\)/, 'its own threshold');
+  assert.doesNotMatch(prep.slice(title - 400, title), /canCheckClaim/, 'not the claim check\u2019s');
+  const budget = src('lib/prepare-budget.ts');
+  assert.match(budget, /export const TITLE_MS = 12_000;/);
+  assert.match(budget, /export function canWriteTitle\(remaining: number\): boolean \{\s*return remaining >= TITLE_MS;/);
+});
+
+test('a send whose posts row could not be written is named, not forgotten', () => {
+  // Metricool took the post; the row the duplicate guard reads did not get
+  // written. One reportError and a silent `ok: true` is how a video ends up on
+  // YouTube twice. The insert is retried, and a lost one reaches the register.
+  const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  const pub = src('lib/video-publish.ts');
+  assert.match(pub, /for \(let attempt = 0; attempt < 3 && !recorded; attempt\+\+\)/, 'three tries');
+  assert.match(pub, /return \{ network, ok: true, metricoolPostId, recorded \};/, 'the outcome says whether the row exists');
+  assert.match(pub, /recorded\?: boolean;/);
+  const sweep = src('lib/video-autopilot.ts');
+  assert.equal((sweep.match(/networks: sent, unrecorded,/g) || []).length, 3, 'all three queued events carry it');
+  assert.equal((sweep.match(/const unrecorded = /g) || []).length, 3);
+});

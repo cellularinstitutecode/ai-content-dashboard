@@ -754,6 +754,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
             detail: { ...where, transcriptSource: prepared.transcript.source, hasKeywords: prepared.hasKeywords, wrote, titleSource: prepared.titleSource ?? null, titleSkipped: prepared.titleSkipped ?? null },
           });
           const sent = posted.filter((p) => p.ok).map((p) => p.network);
+          const unrecorded = posted.filter((p) => p.ok && p.recorded === false).map((p) => p.network);
           const refused = posted.filter((p) => !p.ok);
           if (sent.length || refused.length) {
             void recordVideoEvent({
@@ -763,7 +764,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
               actor: 'sweep',
               title: prepared.title,
               link: videoLink,
-              detail: { ...where, networks: sent, refused: refused.map((p) => ({ network: p.network, reason: p.reason, message: p.message })) },
+              detail: { ...where, networks: sent, unrecorded, refused: refused.map((p) => ({ network: p.network, reason: p.reason, message: p.message })) },
             });
           }
         }
@@ -964,6 +965,7 @@ async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string 
   }, { onConflict: 'spreadsheet_id,tab,row_key' });
   if (runError) reportError('video-queue:run', runError, { tab: a.tab, row: String(a.row) });
   const sent = posted.filter((p) => p.ok).map((p) => p.network);
+  const unrecorded = posted.filter((p) => p.ok && p.recorded === false).map((p) => p.network);
   const refused = posted.filter((p) => !p.ok);
   void recordVideoEvent({
     userId: a.userId,
@@ -972,7 +974,7 @@ async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string 
     actor: a.actor,
     title: draftTitle,
     link: a.videoLink,
-    detail: { tab: a.tab, row: a.row, gid: a.gid, existingCopy: true, networks: sent, refused: refused.map((p) => ({ network: p.network, reason: p.reason, message: p.message })) },
+    detail: { tab: a.tab, row: a.row, gid: a.gid, existingCopy: true, networks: sent, unrecorded, refused: refused.map((p) => ({ network: p.network, reason: p.reason, message: p.message })) },
   });
   return { draftId, metricool: posted };
 }
@@ -1211,6 +1213,7 @@ export async function completeRow(opts: {
     },
   });
   const sent = metricool.filter((m) => m.ok).map((m) => m.network);
+  const unrecorded = metricool.filter((m) => m.ok && m.recorded === false).map((m) => m.network);
   const refused = metricool.filter((m) => !m.ok);
   if (sent.length || refused.length) {
     void recordVideoEvent({
@@ -1222,7 +1225,7 @@ export async function completeRow(opts: {
       link: opts.videoLink,
       // A compliance refusal reads very differently from an outage, and both
       // need to still be visible next week.
-      detail: { ...where, networks: sent, refused: refused.map((m) => ({ network: m.network, reason: m.reason, message: m.message })) },
+      detail: { ...where, networks: sent, unrecorded, refused: refused.map((m) => ({ network: m.network, reason: m.reason, message: m.message })) },
     });
   }
 
