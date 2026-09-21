@@ -12,19 +12,32 @@
 // buy.
 //
 // Metricool's own media library does not pull from a link either. It asks the
-// API for an upload transaction — PUT /v2/media/s3/upload-transactions with a
-// filename and content type — is handed a pre-signed S3 address, and PUTs the
-// bytes there. That is what this does: the file is streamed out of Drive with
-// the service account that already reads it, staged on the scratch disk so its
-// length is known, and pushed to the address Metricool named. The result is a
-// file on storage Metricool trusts, which its own clients send in `media`
-// without a normalise step at all.
+// API for an upload transaction — PUT /v2/media/s3/upload-transactions — is
+// handed pre-signed S3 addresses, and PUTs the bytes there. That is what this
+// does: the file is streamed out of Drive with the service account that
+// already reads them, staged on the scratch disk so its length is known, and
+// pushed to the address Metricool named. The result is a file on storage
+// Metricool trusts, which its own clients send in `media` without a normalise
+// step at all.
 //
-// What is NOT known is the transaction's exact reply, which the public docs do
-// not describe. lib/metricool-upload-parse.ts reads it for the two addresses
-// that matter and reports the shape in types when it cannot; a reply nobody
-// anticipated is then one key name away from working, on the screen, instead
-// of a console line nobody reads.
+// WHAT THE FIRST SENDS TAUGHT. The public docs do not describe this endpoint,
+// so it was written blind and each real send has bought one fact:
+//
+//   #297  "Metricool answered 400" — so the endpoint EXISTS (not the 404 the
+//         code was braced for) and refused the body.
+//   #300  The body, shown: {"title":"ValidationError","detail":{"resourceType":
+//         "Resource type is required","parts":"Parts list is required"}} and,
+//         with a folder named, "At least one part is required".
+//
+// So the transaction is a MULTIPART one: it wants a resource type and a list
+// of parts, and hands back (this is the expectation) one signed address per
+// part, plus S3's upload id — which means the upload must be COMPLETED after
+// the parts are in, or the object never exists. The remaining unknowns are
+// the enum's spelling, the part descriptor's shape, and the completion call.
+// Each is asked in the most likely way first, the refusal is read for what it
+// says (a Java backend names the accepted enum values and the field it could
+// not read), and every answer reaches the screen in types — so the next send
+// is a fact and not another guess.
 //
 // Never throws. A failure here is one more route that did not work, and the
 // caller has the older routes — and the refusal — to fall back on.
@@ -40,7 +53,15 @@ import { pipeline } from 'node:stream/promises';
 import { driveMediaStream, probeDriveMedia } from '@/lib/google-sources';
 import { DISK_SAFE_BYTES } from '@/lib/media-route';
 import { metricoolConfigured, metricoolFetch } from '@/lib/metricool';
-import { directUploadEnabled, isMetricoolHostedUrl, metricoolCopyId, readUploadTransaction } from '@/lib/metricool-upload-parse';
+import {
+  acceptedValues,
+  directUploadEnabled,
+  isMetricoolHostedUrl,
+  metricoolCopyId,
+  readUploadTransaction,
+  refusedFields,
+  type UploadTransaction,
+} from '@/lib/metricool-upload-parse';
 import { redact, reportError } from '@/lib/report';
 
 export { directUploadEnabled, isMetricoolHostedUrl, isMetricoolCopyId, metricoolCopyId } from '@/lib/metricool-upload-parse';
@@ -55,10 +76,14 @@ export { directUploadEnabled, isMetricoolHostedUrl, isMetricoolCopyId, metricool
  */
 export const DIRECT_UPLOAD_MAX_BYTES = DISK_SAFE_BYTES;
 
-/** The transaction request. One small JSON call; it should not take long. */
-const TRANSACTION_MS = 30_000;
+const TRANSACTIONS_PATH = '/v2/media/s3/upload-transactions';
+/** One small JSON call; it should not take long. */
+const CALL_MS = 30_000;
 /** What the whole route may spend, inside a 300-second function. */
 const DEFAULT_BUDGET_MS = 270_000;
+/** Small calls that move no bytes: how many to spend on the transaction and on completing it. */
+const MAX_OPEN_CALLS = 6;
+const MAX_COMPLETE_CALLS = 5;
 
 export type DirectUpload =
   | { ok: true; url: string; copyId: string; bytes: number; sizeBytes: number | null }
@@ -82,6 +107,11 @@ function mb(bytes: number): string {
   return Math.round(bytes / 1024 / 1024) + ' MB';
 }
 
+/** A refusal body as one short, redacted line for the screen. */
+function said(text: string): string {
+  return redact(String(text || '')).replace(/\s+/g, ' ').trim().slice(0, 300);
+}
+
 /**
  * Ours first, theirs on top — by name, case-insensitively.
  *
@@ -96,6 +126,151 @@ function mergeHeaders(base: Record<string, string>, extra: Record<string, string
     out[k] = v;
   }
   return out;
+}
+
+type Opened = { tx: UploadTransaction; status: number; tried: string[] };
+type NotOpened = { tx: null; status: number | null; tried: string[]; detail: string; shape?: string };
+
+/**
+ * Open the transaction, learning from each refusal.
+ *
+ * The body carries the two fields Metricool asked for by name — resourceType
+ * and parts — alongside the file's name, type and size under every spelling
+ * (a Java backend ignores the ones it does not know). Two things are still
+ * guessed and corrected from the answer: the enum's value, which a wrong
+ * guess gets listed back ("accepted for Enum class: [...]"), and whether a
+ * part is an object or a bare number, which a wrong guess gets named back as
+ * the field it could not read.
+ */
+async function openTransaction(
+  input: { filename: string; contentType: string; sizeBytes: number | null; blogId?: string | null; left: () => number },
+): Promise<Opened | NotOpened> {
+  const { filename, contentType, sizeBytes } = input;
+  const enumGuesses = ['VIDEO', 'video', 'MEDIA', 'FILE'];
+  const partObject = {
+    partNumber: 1, number: 1,
+    ...(sizeBytes != null ? { size: sizeBytes, contentLength: sizeBytes, length: sizeBytes } : {}),
+    contentType, filename, fileName: filename, name: filename,
+  };
+  const partShapes: unknown[][] = [[partObject], [1]];
+  const bodyFor = (resourceType: string, parts: unknown[]) => ({
+    resourceType,
+    type: resourceType,
+    parts,
+    filename, fileName: filename, name: filename,
+    contentType, mimeType: contentType,
+    ...(sizeBytes != null ? { size: sizeBytes, fileSize: sizeBytes, contentLength: sizeBytes, totalSize: sizeBytes } : {}),
+    partCount: parts.length, numberOfParts: parts.length,
+  });
+
+  const tried: string[] = [];
+  let detail = '';
+  let lastStatus: number | null = null;
+  let enumIdx = 0;
+  let shapeIdx = 0;
+  let learnedEnum: string | null = null;
+  for (let call = 0; call < MAX_OPEN_CALLS; call++) {
+    if (input.left() < 20_000) break;
+    const resourceType = learnedEnum || enumGuesses[Math.min(enumIdx, enumGuesses.length - 1)];
+    const parts = partShapes[Math.min(shapeIdx, partShapes.length - 1)];
+    const res = await metricoolFetch(TRANSACTIONS_PATH, {
+      method: 'PUT',
+      body: JSON.stringify(bodyFor(resourceType, parts)),
+      timeoutMs: Math.min(CALL_MS, Math.max(5_000, input.left())),
+      blogId: input.blogId,
+    });
+    const text = await res.text();
+    lastStatus = res.status;
+    tried.push(String(res.status));
+    if (res.ok) {
+      const tx = readUploadTransaction(text);
+      console.info('metricool:upload-transaction opened', tx.shape, 'parts', tx.parts.length, 'uploadId', Boolean(tx.uploadId));
+      return { tx, status: res.status, tried };
+    }
+    detail = said(text);
+    console.warn('metricool:upload-transaction non-ok', res.status, resourceType, JSON.stringify(parts).slice(0, 60), detail.slice(0, 200));
+    if (res.status !== 400 && res.status !== 422) break;
+
+    // READ THE REFUSAL. An enum list is the value to send; a complaint that
+    // names `parts` (or a Jackson "cannot deserialize" about it) is the other
+    // shape; a complaint about neither is not one more spelling will fix.
+    const accepted = acceptedValues(text);
+    const fields = refusedFields(text);
+    const lower = text.toLowerCase();
+    if (accepted.length && !learnedEnum) {
+      learnedEnum = accepted.find((v) => /video/i.test(v)) || accepted.find((v) => /media|file/i.test(v)) || accepted[0];
+      continue;
+    }
+    if (/resourcetype/.test(lower) && !fields.includes('parts') && enumIdx < enumGuesses.length - 1 && !learnedEnum) {
+      enumIdx++;
+      continue;
+    }
+    if ((fields.includes('parts') || /parts/.test(lower)) && shapeIdx < partShapes.length - 1) {
+      shapeIdx++;
+      continue;
+    }
+    if (enumIdx < enumGuesses.length - 1 && !learnedEnum) { enumIdx++; continue; }
+    break;
+  }
+  return { tx: null, status: lastStatus, tried, detail };
+}
+
+/**
+ * Complete a multipart upload, asking the likeliest doors in turn.
+ *
+ * S3 does not have the object until the multipart upload is completed with
+ * the parts' ETags, and Metricool's own door for that is not documented. The
+ * transaction's reply is read first for a completion address of its own; then
+ * the conventional spellings under the transaction's path. A 404 or 405 is
+ * "not this door"; a 400 is "this door, other words", and its text is kept.
+ */
+async function completeUpload(
+  input: { tx: UploadTransaction; etag: string | null; bytes: number; blogId?: string | null; left: () => number },
+): Promise<{ ok: true; status: number; text: string; tried: string[] } | { ok: false; tried: string[]; detail: string; status: number | null }> {
+  const { tx, etag } = input;
+  const ref = tx.id || tx.uploadId || tx.key || '';
+  const part = { partNumber: 1, number: 1, eTag: etag, etag, ETag: etag, size: input.bytes };
+  const body = {
+    parts: [part],
+    ...(tx.uploadId ? { uploadId: tx.uploadId } : {}),
+    ...(tx.key ? { key: tx.key } : {}),
+    ...(tx.id ? { id: tx.id, transactionId: tx.id } : {}),
+  };
+  const doors: { path: string; method: 'POST' | 'PUT' | 'PATCH' }[] = [];
+  const enc = encodeURIComponent(ref);
+  if (ref) {
+    doors.push({ path: TRANSACTIONS_PATH + '/' + enc + '/complete', method: 'POST' });
+    doors.push({ path: TRANSACTIONS_PATH + '/' + enc, method: 'POST' });
+    doors.push({ path: TRANSACTIONS_PATH + '/' + enc, method: 'PUT' });
+    doors.push({ path: TRANSACTIONS_PATH + '/' + enc + '/completion', method: 'POST' });
+  }
+  doors.push({ path: TRANSACTIONS_PATH + '/complete', method: 'POST' });
+  doors.push({ path: TRANSACTIONS_PATH + '/completions', method: 'POST' });
+
+  const tried: string[] = [];
+  let detail = '';
+  let lastStatus: number | null = null;
+  for (const door of doors.slice(0, MAX_COMPLETE_CALLS)) {
+    if (input.left() < 10_000) break;
+    const res = await metricoolFetch(door.path, {
+      method: door.method,
+      body: JSON.stringify(body),
+      timeoutMs: Math.min(CALL_MS, Math.max(5_000, input.left())),
+      blogId: input.blogId,
+    });
+    const text = await res.text();
+    lastStatus = res.status;
+    tried.push(door.method + ' ' + door.path.replace(TRANSACTIONS_PATH, '…').replace(enc, '{id}') + ' ' + res.status);
+    if (res.ok) {
+      console.info('metricool:upload-complete via', door.method, door.path);
+      return { ok: true, status: res.status, text, tried };
+    }
+    if (res.status === 400 || res.status === 422 || res.status === 409) detail = said(text);
+    console.warn('metricool:upload-complete non-ok', door.method, door.path, res.status, said(text).slice(0, 160));
+    // A door that is not there costs nothing; a server error is not "try the next spelling".
+    if (res.status >= 500) break;
+  }
+  return { ok: false, tried, detail, status: lastStatus };
 }
 
 /**
@@ -132,100 +307,48 @@ export async function uploadVideoToMetricool(
   }
 
   // 1. THE TRANSACTION. Metricool names where the bytes go.
-  //
-  // THE FIRST SEND ANSWERED 400. So the endpoint exists — the 404 this was
-  // written against never came — and what it refused was the BODY: the
-  // field names, which the public docs do not give. Metricool's validation
-  // errors name the fields ("text: must not be null", lib/metricool.ts has
-  // one quoted), and the first version of this threw that answer at a
-  // console nobody reads and told the screen "400". The answer is the fix,
-  // so it reaches the screen now.
-  //
-  // And before giving up, the same request is asked with every spelling of
-  // the three facts an upload needs — name, type, size — in one body (a Java
-  // backend ignores the ones it does not know), and again under the
-  // PLANNER folder Metricool's own client names when it normalises. Four
-  // small calls at most, none of them moving a byte.
   const filename = (String(name || probe.name || 'video').replace(/[^A-Za-z0-9._ -]+/g, '_').replace(/\.(mp4|mov|m4v)$/i, '').slice(0, 80) || 'video') + '.mp4';
   const contentType = 'video/mp4';
-  const bodies: Record<string, unknown>[] = [
-    { filename, contentType },
-    {
-      filename, fileName: filename, name: filename,
-      contentType, mimeType: contentType, type: contentType,
-      ...(sizeBytes != null ? { size: sizeBytes, fileSize: sizeBytes, contentLength: sizeBytes } : {}),
-      folder: 'PLANNER',
-    },
-  ];
-  const paths = ['/v2/media/s3/upload-transactions', '/v2/media/s3/upload-transactions?folder=PLANNER'];
-  let txStatus: number | null = null;
-  let txText = '';
-  /** What each attempt answered — "400 · 400 · 400 · 400" — and the last body, redacted. */
-  const tried: string[] = [];
-  let lastDetail = '';
+  let opened: Opened | NotOpened;
   try {
-    let opened = false;
-    for (const path of paths) {
-      for (const body of bodies) {
-        if (left() < 15_000) break;
-        const res = await metricoolFetch(path, {
-          method: 'PUT',
-          body: JSON.stringify(body),
-          timeoutMs: Math.min(TRANSACTION_MS, Math.max(5_000, left())),
-          blogId: opts.blogId,
-        });
-        txStatus = res.status;
-        txText = await res.text();
-        tried.push(String(res.status));
-        if (res.ok) { opened = true; break; }
-        lastDetail = redact(txText).replace(/\s+/g, ' ').trim().slice(0, 300);
-        console.warn('metricool:upload-transaction non-ok', res.status, path, Object.keys(body).length, 'keys', lastDetail.slice(0, 200));
-        // Only a validation refusal is worth re-asking with other words.
-        if (res.status !== 400 && res.status !== 422) break;
-      }
-      if (opened) break;
-      if (txStatus !== 400 && txStatus !== 422) break;
-    }
-    if (!opened) {
-      const status = txStatus ?? 0;
-      return {
-        ok: false,
-        reason: status >= 500 ? 'unreachable' : 'refused',
-        status: txStatus,
-        sizeBytes,
-        message: 'Metricool answered ' + status + ' when asked to open an upload' +
-          (status === 404 ? ' — no such endpoint on this account' : '') +
-          (tried.length > 1 ? ' (' + tried.join(' · ') + ' across ' + tried.length + ' spellings of the request)' : '') +
-          (lastDetail ? '. It said: ' + lastDetail : '.'),
-      };
-    }
+    opened = await openTransaction({ filename, contentType, sizeBytes, blogId: opts.blogId, left });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     reportError('metricool-upload:transaction', e, { fileId: id });
     return { ok: false, reason: 'unreachable', sizeBytes, message: 'Metricool could not be reached to open an upload: ' + message };
   }
-  const tx = readUploadTransaction(txText);
-  if (!tx.uploadUrl || !tx.fileUrl) {
+  if (!opened.tx) {
+    const status = opened.status ?? 0;
+    return {
+      ok: false,
+      reason: status >= 500 ? 'unreachable' : 'refused',
+      status: opened.status,
+      sizeBytes,
+      message: 'Metricool answered ' + status + ' when asked to open an upload' +
+        (status === 404 ? ' — no such endpoint on this account' : '') +
+        (opened.tried.length > 1 ? ' (' + opened.tried.join(' · ') + ' across ' + opened.tried.length + ' spellings of the request)' : '') +
+        (opened.detail ? '. It said: ' + opened.detail : '.'),
+    };
+  }
+  const tx = opened.tx;
+  if (!tx.uploadUrl) {
     // The one failure whose fix is a key name. Types only: the reply may
     // carry a credential, and the shape is the diagnosis.
-    console.warn('metricool:upload-transaction unreadable', txStatus, tx.shape, txText.slice(0, 300));
+    console.warn('metricool:upload-transaction unreadable', opened.status, tx.shape);
     return {
       ok: false,
       reason: 'unreadable',
-      status: txStatus,
+      status: opened.status,
       shape: tx.shape,
       sizeBytes,
-      message: 'Metricool opened an upload but this app could not find the ' + (tx.uploadUrl ? 'file address' : 'upload address') +
-        ' in its answer (it replied with ' + tx.shape + ').',
+      message: 'Metricool opened an upload but this app could not find a signed upload address in its answer (it replied with ' + tx.shape + ').',
     };
   }
-  if (!isMetricoolHostedUrl(tx.fileUrl)) {
-    // Recorded so the trusted-host list can be widened by one line, not sent:
-    // a file address on a host Metricool does not trust is a normalise that
-    // will echo, which is the failure this route exists to end.
-    console.warn('metricool:upload-transaction unfamiliar host', tx.fileUrl.slice(0, 120));
+  if (tx.parts.length > 1) {
+    // The whole file goes up as ONE part. If Metricool signed several because
+    // we declared one, something is being read wrongly; better to say so.
+    console.warn('metricool:upload-transaction signed', tx.parts.length, 'parts for one declared');
   }
-  console.info('metricool:upload-transaction opened', tx.method, tx.shape);
 
   // 2. THE BYTES, out of Drive and onto the scratch disk.
   let dir: string | null = null;
@@ -265,19 +388,63 @@ export async function uploadVideoToMetricool(
       });
     }
     if (!up.ok) {
-      const detail = (await up.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
+      const detail = said(await up.text().catch(() => ''));
       console.warn('metricool:upload non-ok', up.status, detail);
       return {
         ok: false,
         reason: 'refused',
         status: up.status,
         sizeBytes,
-        message: 'The storage Metricool named refused the upload (' + up.status + ')' + (detail ? ': ' + detail : '.'),
+        message: 'Metricool opened the upload (it replied with ' + tx.shape + ') but the storage it named refused the bytes (' + up.status + ')' +
+          (detail ? ': ' + detail : '.'),
       };
     }
+    const etag = (up.headers.get('etag') || '').trim() || null;
     await up.text().catch(() => '');
-    console.info('metricool:upload done', bytes, 'bytes');
-    return { ok: true, url: tx.fileUrl, copyId: metricoolCopyId(tx.id || new URL(tx.fileUrl).pathname), bytes, sizeBytes };
+    console.info('metricool:upload done', bytes, 'bytes', 'etag', Boolean(etag));
+
+    // 4. COMPLETION. A multipart upload is not an object until it is completed;
+    // a plain pre-signed PUT already is. The reply said which by naming an
+    // upload id — or not.
+    const multipart = Boolean(tx.uploadId) || /[?&](uploadId|partNumber)=/i.test(tx.uploadUrl);
+    let fileUrl = tx.fileUrl;
+    const done = await completeUpload({ tx, etag, bytes, blogId: opts.blogId, left });
+    if (done.ok) {
+      const after = readUploadTransaction(done.text);
+      if (after.fileUrl && isMetricoolHostedUrl(after.fileUrl)) fileUrl = after.fileUrl;
+      else if (!fileUrl && after.fileUrl) fileUrl = after.fileUrl;
+    } else if (multipart) {
+      return {
+        ok: false,
+        reason: 'refused',
+        status: done.status,
+        shape: tx.shape,
+        sizeBytes,
+        message: 'The bytes went up (' + mb(bytes) + ', part 1 accepted' + (etag ? ' with an ETag' : ', no ETag returned') +
+          ') but the multipart upload could not be completed, so Metricool has no file yet. The transaction replied with ' + tx.shape +
+          '. Completion tried: ' + done.tried.join(' · ') + (done.detail ? '. It said: ' + done.detail : '.'),
+      };
+    } else {
+      console.warn('metricool:upload-complete not found, single PUT taken as complete', done.tried.join(' · '));
+    }
+
+    if (!fileUrl) {
+      return {
+        ok: false,
+        reason: 'unreadable',
+        shape: tx.shape,
+        sizeBytes,
+        message: 'The bytes went up (' + mb(bytes) + ') but neither the transaction nor its completion named the file’s address. The transaction replied with ' +
+          tx.shape + (done.ok ? '; completion replied with ' + readUploadTransaction(done.text).shape : '') + '.',
+      };
+    }
+    if (!isMetricoolHostedUrl(fileUrl)) {
+      // Recorded so the trusted-host list can be widened by one line, not sent:
+      // a file address on a host Metricool does not trust is a normalise that
+      // will echo, which is the failure this route exists to end.
+      console.warn('metricool:upload unfamiliar host', fileUrl.slice(0, 120));
+    }
+    return { ok: true, url: fileUrl, copyId: metricoolCopyId(tx.key || tx.id || new URL(fileUrl).pathname), bytes, sizeBytes };
   } catch (e) {
     reportError('metricool-upload:transfer', e, { fileId: id });
     const aborted = e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError');
