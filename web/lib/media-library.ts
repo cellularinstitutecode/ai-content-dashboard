@@ -206,16 +206,31 @@ export async function ensureShareableVideo(
       sizeBytes: staged.ok ? staged.sizeBytes : (staged.sizeBytes ?? null),
       base: publicBase(),
     });
+    // ONE ATTEMPT BEFORE REFUSING, because the Drive copy costs almost nothing
+    // and the only thing that was ever stopping it is a warning page.
+    //
+    // `files.copy` happens INSIDE Drive: a 283 MB reel never travels through
+    // this app, uses no function memory and takes a second or two. So the
+    // 100 MB cap was never about size - it is that Google answers an anonymous
+    // download of a big file with its "cannot scan this file for viruses"
+    // interstitial, which Metricool stored as the video. That interstitial is a
+    // form, and it posts to drive.usercontent.google.com with confirm=t.
+    //
+    // NOTHING HERE TRUSTS IT. verifyPlayableMp4 below fetches the result as a
+    // stranger with no credentials - the same request Metricool makes - and
+    // reads the first sixteen bytes for an mp4 ftyp box, so a web page cannot
+    // pass. When it does not pass the copy is deleted and the refusal returned
+    // exactly as before, saying that this was tried.
+    //
+    // Worst case: one Drive copy made and removed. Best case: every reel
+    // refused since 15 September goes out with no plan change, no new host and
+    // no re-export.
+    const refusal = route.source === 'refuse' ? route.message : '';
     if (route.source === 'refuse') {
-      if (who?.userId) {
-        void recordVideoEvent({
-          userId: who.userId, videoKey: driveVideoKey(fileId), event: 'copy_failed', actor: who.actor ?? 'unknown',
-          title, link: videoLink, detail: { reason: 'no_servable_host', error: route.message },
-        });
-      }
-      return { ok: false, reason: 'failed', code: 'no_servable_host', message: route.message };
-    }
-    if (staged.ok) {
+      const name = String(title || 'video').replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 80) + '.mp4';
+      const copy = await publicVideoCopy(fileId, name, { confirm: true });
+      made = { fileId: copy.fileId, url: copy.url, sizeBytes: staged.sizeBytes ?? null, where: 'drive' };
+    } else if (staged.ok) {
       made = { fileId: staged.key, url: staged.url, sizeBytes: staged.sizeBytes, where: 'bucket' };
     } else if (route.source === 'drive') {
       // Under ~100 MB Google serves the file itself rather than its scan page,
@@ -259,6 +274,20 @@ export async function ensureShareableVideo(
       // and for a streamed video there is nothing to remove, which is the one
       // case a catch-all `else` here used to get catastrophically wrong.
       await removeMade(made);
+      // The last-chance Drive copy failing means the scan page is still there.
+      // Say the three ways out rather than "could not be verified": the reader
+      // needs the decision, not the symptom.
+      if (refusal) {
+        const failed = refusal + ' A Drive copy was tried first and what came back was not the video ('
+          + verdict.message + ').';
+        if (who?.userId) {
+          void recordVideoEvent({
+            userId: who.userId, videoKey: driveVideoKey(fileId), event: 'copy_failed', actor: who.actor ?? 'unknown',
+            title, link: videoLink, detail: { reason: 'no_servable_host', error: failed },
+          });
+        }
+        return { ok: false, reason: 'failed', code: 'no_servable_host', message: failed };
+      }
       const message = 'The video copy could not be verified: ' + verdict.message;
       if (who?.userId) {
         void recordVideoEvent({

@@ -20,6 +20,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { driveDownloadUrl, parseDriveFileId } from './drive-url.ts';
 import { DRIVE_DIRECT_MAX_BYTES, cachedCopyUsable, copyRouteFor, servesWholeVideos } from './copy-source.ts';
 
 const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
@@ -173,4 +174,55 @@ test('the big reels are told the truth about which route survives them', () => {
   const message = out.source === 'refuse' ? out.message : '';
   assert.match(message, /1 GB reels/, 'the durable answer must be marked as the durable one');
   assert.match(message, /no\s+serverless function will ever carry/);
+});
+
+// --- the attempt that happens before the refusal -----------------------------
+
+test('a file too big for the bucket is TRIED on Drive before it is refused', () => {
+  // The 100 MB cap was never about size. files.copy happens inside Drive, so a
+  // 283 MB reel never travels through this app at all — what stopped it was
+  // Google's virus-scan interstitial, which Metricool stored as the video.
+  // That interstitial is a form, and it posts to drive.usercontent.google.com
+  // with confirm=t.
+  //
+  // Source checks: lib/media-library.ts imports `server-only`.
+  const lib = readFileSync(new URL('../lib/media-library.ts', import.meta.url), 'utf8');
+  const at = lib.indexOf("const refusal = route.source === 'refuse'");
+  assert.ok(at > 0, 'the last-chance attempt is gone');
+  assert.match(lib.slice(at, at + 600), /publicVideoCopy\(fileId, name, \{ confirm: true \}\)/);
+
+  // AND IT IS NOT TRUSTED. The whole reason this is safe to try untested is
+  // that the copy is fetched back as a stranger before anything is recorded,
+  // and an HTML page cannot pass an mp4 magic-byte check.
+  const verify = lib.indexOf('let verdict = await verifyPlayableMp4(made.url');
+  assert.ok(verify > at, 'the attempt must be verified before it is recorded');
+  // The RECORDING of the new copy, not the cache refresh higher up the
+  // function — a bare indexOf('rememberPublicCopy(') finds that one instead and
+  // the assertion passes for the wrong reason.
+  const remember = lib.indexOf('await rememberPublicCopy(fileId, { id: made.fileId');
+  assert.ok(remember > verify, 'the new copy must not be recorded before it is verified');
+
+  // And when it fails, the reader gets the DECISION, not the symptom.
+  assert.match(lib, /if \(refusal\) \{/);
+  assert.match(lib, /A Drive copy was tried first and what came back was not the video/);
+});
+
+test('the confirm address is the one Google’s own warning page posts to', () => {
+  assert.equal(
+    driveDownloadUrl('1AbC_dEfGhIjKlMnOpQrStUvWxYz012345', { confirm: true }),
+    'https://drive.usercontent.google.com/download?id=1AbC_dEfGhIjKlMnOpQrStUvWxYz012345&export=download&confirm=t',
+  );
+  // The ordinary link is unchanged: the under-100 MB path works and is not
+  // being touched to fix a problem it does not have.
+  assert.equal(
+    driveDownloadUrl('1AbC_dEfGhIjKlMnOpQrStUvWxYz012345'),
+    'https://drive.google.com/uc?export=download&id=1AbC_dEfGhIjKlMnOpQrStUvWxYz012345',
+  );
+  // An id with no file is not a URL at all, rather than one pointing nowhere.
+  assert.equal(driveDownloadUrl(''), '');
+  // And the app can still read its own address back.
+  assert.equal(
+    parseDriveFileId(driveDownloadUrl('1AbC_dEfGhIjKlMnOpQrStUvWxYz012345', { confirm: true })),
+    '1AbC_dEfGhIjKlMnOpQrStUvWxYz012345',
+  );
 });
