@@ -18,11 +18,14 @@
 // the metricool-* S3 buckets, which Metricool's own clients never send through
 // normalise at all (their word for those hosts is "already normalized").
 //
-// The transaction's exact reply is not in the public documentation, so this
-// reads it the way lib/metricool-normalize-parse.ts reads the normalise answer:
-// find the pre-signed address and the resulting file address in any reasonable
-// shape, prefer the keys that say what they are, never invent one, and describe
-// in types what could not be read so the next round is a five-minute fix.
+// The transaction is not in the public documentation, so on 21 September it
+// was CAPTURED from Metricool's own web app while it uploaded a video — the
+// request, the reply, the S3 PUT and the completion, plus the uploader's
+// source (MediaService.uploadFileToS3 in app-*.js). The exact protocol is in
+// the section "the transaction, as Metricool's uploader speaks it" below, and
+// lib/metricool-upload.ts sends it word for word. The older, shape-guessing
+// reader (readUploadTransaction) stays as the fallback that describes an
+// unexpected reply in types.
 //
 // Pure: `./x.ts` imports only, so the test runner reads this file directly.
 import { describeShape } from './metricool-normalize-parse.ts';
@@ -362,4 +365,186 @@ export function refusedFields(refusal: string): string[] {
     return detail.map((e) => String((e as { field?: unknown })?.field || '').toLowerCase()).filter(Boolean);
   }
   return Object.keys(detail as Record<string, unknown>).map((k) => k.toLowerCase());
+}
+
+// --- the transaction, as Metricool's uploader speaks it ------------------------
+//
+// Captured 21 September 2026 from app.metricool.com saving a post with a video
+// (a 5 KB test clip, deleted afterwards), and read against the uploader's own
+// source. Four steps, every one of them below:
+//
+//   1. PUT  /v2/media/s3/upload-transactions
+//        {"resourceType":"planner","contentType":"video/mp4","size":N,
+//         "parts":[{"size":n,"startByte":0,"endByte":n,"hash":"<base64 sha256>"}, …]}
+//      The file is declared in 25 MB slices (CHUNK_MIN_PART_SIZE_BYTES in the
+//      web app), each with the base64 SHA-256 of its bytes. The bare-number
+//      part this app once sent is what Metricool's Jackson could not build an
+//      S3UploadPart from.
+//      → {"data":{"uploadType":"SIMPLE","presignedUrl":"…","key":"planner/<user>/<yyyymm>/<id>.mp4",
+//                 "bucket":"metricool-temp","fileUrl":"https://metricool-temp.s3.eu-west-1.amazonaws.com/<key>",
+//                 "uploadId":null,"parts":null,"totalSize":N,"expiresAt":…}}
+//      or, for a bigger file, "uploadType":"MULTIPART" with "uploadId" and
+//      "parts":[{"partNumber":1,"presignedUrl":"…", …}] — one signed address per
+//      declared slice.
+//   2. PUT <presignedUrl> with the bytes, headers Content-Type and
+//      x-amz-checksum-sha256: <that part's hash>. A multipart part's reply
+//      carries the ETag the completion needs.
+//   3. PATCH /v2/media/s3/upload-transactions
+//        {"simple":{"fileUrl":"<fileUrl>"}}
+//      or {"multipart":{"uploadId":"…","key":"…","parts":[{"partNumber":1,"etag":"…"}, …]}}
+//      → {"data":{"key":"…","bucket":"…","fileUrl":"…","etag":null,
+//                 "convertedFileUrl":"https://static.metricool.com/video/<user>/<yyyymm>/<id>.mp4"}}
+//   4. The post carries convertedFileUrl — static.metricool.com, the host
+//      Metricool's own clients send without a normalise.
+
+/** Metricool's uploader declares a file in slices of this size. */
+export const UPLOAD_PART_BYTES = 25 * 1024 * 1024;
+/** The resource type Metricool's planner uploads under. */
+export const UPLOAD_RESOURCE_TYPE = 'planner';
+
+/** One declared slice of the file: [startByte, endByte), with its checksum. */
+export type DeclaredPart = { size: number; startByte: number; endByte: number; hash: string };
+
+/** The slices a file of this size is declared in, in order, before hashing. */
+export function partRanges(size: number, partBytes = UPLOAD_PART_BYTES): { startByte: number; endByte: number; size: number }[] {
+  const total = Math.max(0, Math.floor(Number(size) || 0));
+  const step = Math.max(1, Math.floor(partBytes));
+  const out: { startByte: number; endByte: number; size: number }[] = [];
+  for (let start = 0; start < total; start += step) {
+    const end = Math.min(total, start + step);
+    out.push({ startByte: start, endByte: end, size: end - start });
+  }
+  return out;
+}
+
+/** The body that opens a transaction: exactly the fields the web app sends. */
+export function transactionBody(input: { contentType: string; size: number; parts: DeclaredPart[]; resourceType?: string }): {
+  resourceType: string; contentType: string; size: number; parts: DeclaredPart[];
+} {
+  return {
+    resourceType: input.resourceType || UPLOAD_RESOURCE_TYPE,
+    contentType: input.contentType,
+    size: input.size,
+    parts: input.parts.map((p) => ({ size: p.size, startByte: p.startByte, endByte: p.endByte, hash: p.hash })),
+  };
+}
+
+/** One signed part address of a MULTIPART reply. */
+export type SignedPart = { partNumber: number; presignedUrl: string; startByte: number | null; endByte: number | null };
+
+export type OpenedTransaction = {
+  uploadType: 'SIMPLE' | 'MULTIPART' | null;
+  /** SIMPLE: where the whole file goes. */
+  presignedUrl: string | null;
+  key: string | null;
+  bucket: string | null;
+  /** MULTIPART: S3's upload id, which the completion must carry. */
+  uploadId: string | null;
+  /** MULTIPART: one signed address per declared part, in part order. */
+  parts: SignedPart[];
+  /** The object's address once the bytes are there. */
+  fileUrl: string | null;
+  /** The reply's structure in types, for when a field above is null. */
+  shape: string;
+};
+
+/** The reply's payload: under `data`, as the API answers, or bare. */
+function payloadOf(raw: string): { node: Record<string, unknown> | null; data: unknown } {
+  let data: unknown;
+  try { data = JSON.parse(String(raw || '').trim() || 'null'); } catch { return { node: null, data: null }; }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return { node: null, data };
+  const d = data as Record<string, unknown>;
+  const inner = d.data;
+  if (inner && typeof inner === 'object' && !Array.isArray(inner)) return { node: inner as Record<string, unknown>, data };
+  return { node: d, data };
+}
+
+const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : typeof v === 'number' ? String(v) : null);
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : null);
+
+/** Read the reply to step 1. Nothing is invented: a missing field is null. */
+export function readOpenedTransaction(raw: string): OpenedTransaction {
+  const { node, data } = payloadOf(raw);
+  const shape = describeShape(data);
+  if (!node) return { uploadType: null, presignedUrl: null, key: null, bucket: null, uploadId: null, parts: [], fileUrl: null, shape };
+  const type = String(node.uploadType || '').trim().toUpperCase();
+  const parts: SignedPart[] = [];
+  if (Array.isArray(node.parts)) {
+    node.parts.forEach((p, i) => {
+      if (!p || typeof p !== 'object') return;
+      const part = p as Record<string, unknown>;
+      const url = str(part.presignedUrl) || str(part.url) || str(part.uploadUrl);
+      if (!url || !isHttpUrl(url)) return;
+      parts.push({
+        partNumber: num(part.partNumber) ?? num(part.number) ?? i + 1,
+        presignedUrl: url,
+        startByte: num(part.startByte),
+        endByte: num(part.endByte),
+      });
+    });
+    parts.sort((a, b) => a.partNumber - b.partNumber);
+  }
+  const presignedUrl = str(node.presignedUrl);
+  return {
+    uploadType: type === 'SIMPLE' || type === 'MULTIPART' ? type : null,
+    presignedUrl: presignedUrl && isHttpUrl(presignedUrl) ? presignedUrl : null,
+    key: str(node.key),
+    bucket: str(node.bucket),
+    uploadId: str(node.uploadId),
+    parts,
+    fileUrl: (() => { const f = str(node.fileUrl); return f && isHttpUrl(f) ? f : null; })(),
+    shape,
+  };
+}
+
+/** What a finished part is reported as: its number and the ETag S3 answered with. */
+export type UploadedPart = { partNumber: number; etag: string };
+
+/** The body that completes the transaction (step 3), one shape per upload type. */
+export function completionBody(
+  tx: Pick<OpenedTransaction, 'uploadType' | 'fileUrl' | 'presignedUrl' | 'uploadId' | 'key'>,
+  uploaded: UploadedPart[],
+): { simple: { fileUrl: string } } | { multipart: { uploadId: string; key: string; parts: UploadedPart[] } } {
+  if (tx.uploadType === 'MULTIPART') {
+    return {
+      multipart: {
+        uploadId: String(tx.uploadId || ''),
+        key: String(tx.key || ''),
+        parts: [...uploaded].sort((a, b) => a.partNumber - b.partNumber).map((p) => ({ partNumber: p.partNumber, etag: p.etag })),
+      },
+    };
+  }
+  // The web app sends fileUrl, and falls back to the signed address itself.
+  return { simple: { fileUrl: String(tx.fileUrl || tx.presignedUrl || '') } };
+}
+
+export type CompletedTransaction = {
+  /** Where the post should point: Metricool's converted copy on static.metricool.com. */
+  convertedFileUrl: string | null;
+  /** The raw object, on the temp bucket. */
+  fileUrl: string | null;
+  key: string | null;
+  etag: string | null;
+  shape: string;
+};
+
+/** Read the reply to step 3. */
+export function readCompletedTransaction(raw: string): CompletedTransaction {
+  const { node, data } = payloadOf(raw);
+  const shape = describeShape(data);
+  if (!node) return { convertedFileUrl: null, fileUrl: null, key: null, etag: null, shape };
+  const url = (v: unknown) => { const s = str(v); return s && isHttpUrl(s) ? s : null; };
+  return {
+    convertedFileUrl: url(node.convertedFileUrl) || url(node.converted_file_url),
+    fileUrl: url(node.fileUrl),
+    key: str(node.key),
+    etag: str(node.etag),
+    shape,
+  };
+}
+
+/** S3 quotes its ETags; the completion wants them bare, as the web app strips them. */
+export function bareEtag(header: string | null | undefined): string | null {
+  const v = String(header || '').trim().replace(/^W\//, '').replace(/"/g, '');
+  return v || null;
 }
