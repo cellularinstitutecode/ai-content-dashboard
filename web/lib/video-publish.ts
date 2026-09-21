@@ -63,6 +63,8 @@ export type PublishOutcome = {
   network: string;
   ok: boolean;
   metricoolPostId?: string | null;
+  /** False when Metricool took the post but the `posts` row could not be written — the guard cannot see it. */
+  recorded?: boolean;
   /** Why it was not sent — a compliance refusal reads differently from an outage. */
   reason?: 'not_configured' | 'compliance' | 'metricool_error' | 'too_long' | 'already_queued' | 'already_published' | 'media_unverified' | 'no_video' | 'needs_media' | 'wrong_aspect' | 'past';
   message?: string;
@@ -121,9 +123,19 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
     const metricoolPostId = readPostId(created);
 
     // Bookkeeping, so the dashboard's queue and calendar show this post like
-    // any other. Best-effort: the draft is already in Metricool either way.
-    try {
-      await supabaseAdmin().from('posts').insert({
+    // any other — and THE ONLY THING THE DUPLICATE GUARD CAN SEE. Metricool
+    // already holds the post; lib/awaiting-posts.ts decides "already sent" by
+    // reading THIS row. A row that failed to write leaves the video looking
+    // unsent, and the next pass — a revive, Attach videos, a person pressing
+    // Send — posts it again. Metricool has no idempotency key. So the insert is
+    // tried three times, and when it still fails the outcome says so
+    // (recorded: false) and the register names the network, instead of one
+    // reportError nobody reads until the video is on YouTube twice.
+    let recorded = false;
+    for (let attempt = 0; attempt < 3 && !recorded; attempt++) {
+      if (attempt) await new Promise((r) => setTimeout(r, 400 * attempt));
+      try {
+      const { error } = await supabaseAdmin().from('posts').insert({
         user_id: input.userId,
         draft_id: input.draftId || null,
         providers: [network],
@@ -139,9 +151,14 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
         // approved something nobody has looked at.
         status: 'pending_review',
       });
-    } catch (e) { reportError('video-publish:posts-insert', e); }
+      if (error) throw error;
+      recorded = true;
+      } catch (e) {
+        reportError('video-publish:posts-insert', e, { network, attempt: String(attempt + 1), metricoolPostId: String(metricoolPostId || '') });
+      }
+    }
 
-    return { network, ok: true, metricoolPostId };
+    return { network, ok: true, metricoolPostId, recorded };
   } catch (e) {
     if (e instanceof MediaNotNormalisedError) {
       // Not sent, on purpose: a draft that looks finished and goes out with no

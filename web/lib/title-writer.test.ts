@@ -107,5 +107,10 @@ test('a writer that does not answer never blocks anything', () => {
   const fn = ai.slice(ai.indexOf('export async function writeTitle'));
   assert.match(fn.slice(0, 4000), /catch[\s\S]*return ''/, 'a provider failure is an empty title, not an error');
   const prepare = src('lib/video-prepare.ts');
-  assert.match(prepare, /canCheckClaim\(remainingMs\(startedAt, budgetMs, Date\.now\(\)\)\)/, 'and it is skipped when the clock is short');
+  // Its OWN budget now, not the claim check's. The title used to borrow
+  // CLAIM_CHECK_MS and run last, which is how any slow row lost its drafted
+  // title to the keyword rung — see lib/prepare-budget.ts canWriteTitle. The
+  // property this test guards is unchanged: a short clock skips the call.
+  assert.match(prepare, /canWriteTitle\(remainingMs\(startedAt, budgetMs, Date\.now\(\)\)\)/, 'and it is skipped when the clock is short');
+  assert.match(prepare, /titleSkipped = 'budget';/, 'and says so');
 });

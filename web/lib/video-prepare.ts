@@ -21,7 +21,7 @@ import { resolveTranscript, type TranscriptOrigin } from '@/lib/video-transcript
 import { keywordLineFrom } from '@/lib/video-row';
 import { composeCaption, forbiddenNames, houseStyleHint, keywordGrounding, namesLeaked, topicFromTranscript, transcriptExcerpt, videoSubject, withCitation } from '@/lib/video-copy';
 import { draftDefect, type DraftDefect } from '@/lib/draft-defect';
-import { canCheckClaim, canResearchClaim, canWriteCopy, remainingMs } from '@/lib/prepare-budget';
+import { canCheckClaim, canResearchClaim, canWriteCopy, canWriteTitle, remainingMs } from '@/lib/prepare-budget';
 import { shouldReseed } from '@/lib/reseed';
 import { writerFailure } from '@/lib/writer-failure';
 import { findEvidence } from '@/lib/evidence';
@@ -644,6 +644,31 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     const haveDoi = (value: string) => Boolean(checkCompliance('REF: ' + value).doi);
     const doiOf = (value: string) => String(checkCompliance('REF: ' + value).doi || '').toLowerCase();
 
+    // THE TITLE, WRITTEN FROM WHAT WAS SAID — AND WRITTEN FIRST.
+    //
+    // Not the file name, which names whoever shot the video, and not the
+    // keyword alone, which is a guess about the video made from outside it.
+    // The words are already here: the transcript that produced this copy, and
+    // the copy itself.
+    //
+    // BEFORE the claim check, with a budget of its own (lib/prepare-budget.ts
+    // canWriteTitle). It used to run last and borrow CLAIM_CHECK_MS, so any
+    // row that came out of the claim ladder with under fifteen seconds left
+    // got no drafted title and fell through to the keyword rung — the same
+    // phrase for every video about the same therapy. The title is public; the
+    // claim verdict is internal and a missing one publishes flagged. When the
+    // two compete for the last seconds of a request, this is the one a reader
+    // sees. Still fail-open: an empty answer falls through exactly as before.
+    if (budgetMs <= 0 || canWriteTitle(remainingMs(startedAt, budgetMs, Date.now()))) {
+      draftedTitle = await writeTitle({
+        copy: tiktok,
+        transcript: transcriptExcerpt(transcript, 3000),
+        subject,
+      });
+    } else {
+      titleSkipped = 'budget';
+    }
+
     // DOES THE PAPER BACK WHAT THE COPY SAYS?
     //
     // Every check before this one asks whether the citation EXISTS: PubMed
@@ -869,23 +894,7 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
       title,
     };
   }
-  // THE TITLE, WRITTEN FROM WHAT WAS SAID.
-  //
-  // Not the file name, which names whoever shot the video, and not the keyword
-  // alone, which is a guess about the video made from outside it. The words are
-  // already here: the transcript that produced this copy, and the copy itself.
-  //
-  // Budget-guarded and fail-open — an empty answer falls through to the keyword,
-  // then the transcript's own subject, then the file, exactly as before.
-  if (budgetMs <= 0 || canCheckClaim(remainingMs(startedAt, budgetMs, Date.now()))) {
-    draftedTitle = await writeTitle({
-      copy: tiktok || linkedin,
-      transcript: transcriptExcerpt(transcript, 3000),
-      subject,
-    });
-  } else {
-    titleSkipped = 'budget';
-  }
+  // The title was written above, before the claim check — see there.
   const chosen = titleChoice();
   const publicTitle = chosen.title;
 
