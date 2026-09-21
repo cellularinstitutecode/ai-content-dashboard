@@ -68,11 +68,12 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 
 export async function metricoolFetch(
   path: string,
-  init: RequestInit & { timeoutMs?: number } = {},
+  /** `blogId` names the brand for this one call; unset, the configured brand. */
+  init: RequestInit & { timeoutMs?: number; blogId?: string | null } = {},
 ): Promise<Response> {
   const { token, blogId, userId } = env();
   const url = new URL(apiBase() + path);
-  url.searchParams.set('blogId', blogId);
+  url.searchParams.set('blogId', String(init.blogId || '').trim() || blogId);
   url.searchParams.set('userId', userId);
 
   const ctl = new AbortController();
