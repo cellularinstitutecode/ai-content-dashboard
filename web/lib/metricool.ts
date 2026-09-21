@@ -115,10 +115,10 @@ async function metricoolFetch(
  * losing the post is worse — the caller sends what it has and the draft still
  * lands for a person to look at.
  */
-/** Does the URL name a video file? Decides which normalise endpoint is tried first. */
-export function looksLikeVideoUrl(url: string): boolean {
-  return /\.(mp4|mov|m4v|webm)(\?|#|$)/i.test(String(url || ''));
-}
+// The sniffers live in the pure module so they can be tested; re-exported here
+// because callers have always imported them from this file.
+export { looksLikeVideoUrl, mayBeVideoUrl } from '@/lib/metricool-normalize-parse';
+import { mayBeVideoUrl } from '@/lib/metricool-normalize-parse';
 
 export type NormalizeOutcome = {
   /** What to put in the post: Metricool's own reference, or '' when it failed. */
@@ -194,7 +194,7 @@ export async function normalizeMediaDetailed(rawUrl: string): Promise<NormalizeO
     // yields no reference, or yields back the very URL it was given, is not an
     // answer: it is one more endpoint that did not work, and the next one is
     // still worth asking.
-    const isVideo = looksLikeVideoUrl(url);
+    const isVideo = mayBeVideoUrl(url);
     const paths = isVideo
       ? [
           // The one that worked before #249 leads, because "it worked" beats
