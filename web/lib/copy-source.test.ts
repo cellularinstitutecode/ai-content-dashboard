@@ -21,6 +21,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { driveDownloadUrl, parseDriveFileId } from './drive-url.ts';
+import { isDriveConfirmUrl } from './copy-source.ts';
 import { DRIVE_DIRECT_MAX_BYTES, cachedCopyUsable, copyRouteFor, servesWholeVideos } from './copy-source.ts';
 
 const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
@@ -178,33 +179,36 @@ test('the big reels are told the truth about which route survives them', () => {
 
 // --- the attempt that happens before the refusal -----------------------------
 
-test('a file too big for the bucket is TRIED on Drive before it is refused', () => {
-  // The 100 MB cap was never about size. files.copy happens inside Drive, so a
-  // 283 MB reel never travels through this app at all — what stopped it was
-  // Google's virus-scan interstitial, which Metricool stored as the video.
-  // That interstitial is a form, and it posts to drive.usercontent.google.com
-  // with confirm=t.
-  //
-  // Source checks: lib/media-library.ts imports `server-only`.
+test('a file too big for the bucket is REFUSED, not tried on Drive first', () => {
+  // The attempt was made, on 21 September, and it answered the question: the
+  // copy verified, the preview played, and Metricool stored the link with no
+  // video. Metricool copies media only from a plain .mp4 on a plain host. A
+  // verified copy that fails at the send is worse than a refusal that names
+  // the two ways out — so the attempt is gone, and a cached copy of that shape
+  // is never handed out again.
   const lib = readFileSync(new URL('../lib/media-library.ts', import.meta.url), 'utf8');
-  const at = lib.indexOf("const refusal = route.source === 'refuse'");
-  assert.ok(at > 0, 'the last-chance attempt is gone');
-  assert.match(lib.slice(at, at + 600), /publicVideoCopy\(fileId, name, \{ confirm: true \}\)/);
+  assert.doesNotMatch(lib, /publicVideoCopy\(fileId, name, \{ confirm: true \}\)/, 'the last-chance copy is gone');
+  assert.match(lib, /if \(route\.source === 'refuse'\) \{\s*\/\/ No attempt first\./, 'refused up front');
+  // And the cache check can now SEE which Drive copy it is holding.
+  assert.match(lib, /cachedCopyUsable\(known\.id, servingBase, undefined, known\.url\)/);
+});
 
-  // AND IT IS NOT TRUSTED. The whole reason this is safe to try untested is
-  // that the copy is fetched back as a stranger before anything is recorded,
-  // and an HTML page cannot pass an mp4 magic-byte check.
-  const verify = lib.indexOf('let verdict = await verifyPlayableMp4(made.url');
-  assert.ok(verify > at, 'the attempt must be verified before it is recorded');
-  // The RECORDING of the new copy, not the cache refresh higher up the
-  // function — a bare indexOf('rememberPublicCopy(') finds that one instead and
-  // the assertion passes for the wrong reason.
-  const remember = lib.indexOf('await rememberPublicCopy(fileId, { id: made.fileId');
-  assert.ok(remember > verify, 'the new copy must not be recorded before it is verified');
-
-  // And when it fails, the reader gets the DECISION, not the symptom.
-  assert.match(lib, /if \(refusal\) \{/);
-  assert.match(lib, /A Drive copy was tried first and what came back was not the video/);
+test('a cached large-file Drive copy is never usable, whatever the host', () => {
+  // This is the one that kept row 191 on the old copy after the streaming
+  // host was set: a Drive copy passed cachedCopyUsable unconditionally, so
+  // PUBLIC_MEDIA_BASE_URL was never consulted for a row that already held one.
+  const confirm = 'https://drive.usercontent.google.com/download?id=1AbC_dEfGhIjKlMnOpQrStUvWxYz012345&export=download&confirm=t';
+  const dokploy = { PUBLIC_MEDIA_BASE_URL: 'https://media.example.traefik.me' };
+  assert.equal(isDriveConfirmUrl(confirm), true);
+  assert.equal(cachedCopyUsable('1AbC_dEfGhIjKlMnOpQrStUvWxYz012345', 'https://media.example.traefik.me', dokploy, confirm), false, 'with a streaming host: stream instead');
+  assert.equal(cachedCopyUsable('1AbC_dEfGhIjKlMnOpQrStUvWxYz012345', 'https://x.vercel.app', {}, confirm), false, 'without one: fall to the refusal');
+  // The ordinary under-100 MB Drive copy is untouched: it works.
+  const uc = 'https://drive.google.com/uc?export=download&id=1AbC_dEfGhIjKlMnOpQrStUvWxYz012345';
+  assert.equal(isDriveConfirmUrl(uc), false);
+  assert.equal(cachedCopyUsable('1AbC_dEfGhIjKlMnOpQrStUvWxYz012345', 'https://x.vercel.app', {}, uc), true);
+  // And a streamed copy is still judged by its host, exactly as before.
+  assert.equal(cachedCopyUsable('stream:abc', 'https://media.example.traefik.me', dokploy, 'https://media.example.traefik.me/api/media/video/a/b/c/video.mp4'), true);
+  assert.equal(cachedCopyUsable('stream:abc', 'https://x.vercel.app', { VERCEL_PROJECT_PRODUCTION_URL: 'x.vercel.app' }, 'https://x.vercel.app/api/media/video/a/b/c/video.mp4'), false);
 });
 
 test('the confirm address is the one Google’s own warning page posts to', () => {

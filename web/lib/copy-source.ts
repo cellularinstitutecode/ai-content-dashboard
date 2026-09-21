@@ -137,7 +137,27 @@ export function copyRouteFor(input: {
  * between #253 and this change all hold one, so without this they would keep
  * failing forever — the cache would hand back the broken link every time.
  */
-export function cachedCopyUsable(copyId: string, base: string, env?: Record<string, string | undefined>): boolean {
+export function cachedCopyUsable(
+  copyId: string,
+  base: string,
+  env?: Record<string, string | undefined>,
+  /** The cached copy's URL, which is the only way to tell one Drive copy from another. */
+  url?: string | null,
+): boolean {
+  // A LARGE-FILE DRIVE COPY IS NOT USABLE, WHATEVER THE HOST. On 21 September a
+  // reel over 100 MB was copied inside Drive and handed over at Google's own
+  // confirm=t address; the bytes verified, the preview played, and Metricool
+  // stored the link as given with no thumbnail and no video. Metricool copies
+  // media only from a plain .mp4 on a plain host. So a cached copy of that
+  // shape is a link that will be refused exactly as it was — and, worse, it
+  // stood in front of the stream route: once a row held one, this function
+  // said "usable" and PUBLIC_MEDIA_BASE_URL was never consulted for it.
+  if (isDriveConfirmUrl(url)) return false;
   const streamed = String(copyId || '').startsWith('stream:');
   return streamed ? servesWholeVideos(base, env) : true;
+}
+
+/** The confirm=t download address: what the last-chance Drive copy was handed over as. */
+export function isDriveConfirmUrl(url: string | null | undefined): boolean {
+  return /^https:\/\/drive\.usercontent\.google\.com\/download\?[^#]*\bconfirm=t\b/i.test(String(url || ''));
 }
