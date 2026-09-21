@@ -187,6 +187,20 @@ test('when the upload was tried and failed, the refusal says what Metricool answ
   assert.match(message, /THREE WAYS OUT/, 'and the older ways out still follow');
 });
 
+test('a validation refusal reaches the screen with what Metricool said, after every spelling was tried', () => {
+  // The first real send answered 400: the endpoint exists and the BODY was
+  // refused. Metricool's validation errors name the fields, and the screen
+  // said "400" while the names went to a console nobody reads.
+  const lib = src('lib/metricool-upload.ts');
+  assert.match(lib, /It said: ' \+ lastDetail/, 'the refusal body is the diagnosis, so it is shown');
+  assert.match(lib, /redact\(txText\)/, 'redacted, because it is theirs');
+  assert.match(lib, /fileName: filename, name: filename/, 'every spelling of the name');
+  assert.match(lib, /mimeType: contentType, type: contentType/, 'every spelling of the type');
+  assert.match(lib, /fileSize: sizeBytes, contentLength: sizeBytes/, 'every spelling of the size');
+  assert.match(lib, /upload-transactions\?folder=PLANNER/, 'and the folder Metricool’s own client names');
+  assert.match(lib, /if \(res\.status !== 400 && res\.status !== 422\) break;/, 'only a validation refusal is re-asked');
+});
+
 test('the copy maker tries the upload only when the bucket would not take the file', () => {
   const lib = src('lib/media-library.ts');
   assert.match(lib, /available: !staged\.ok && directUploadPossible\(sizeBytes\)/);
