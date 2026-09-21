@@ -184,8 +184,13 @@ test('no degraded post can reach the screen without a diagnosis', () => {
   const list = src2.slice(src2.indexOf('export async function normalizeMediaList'));
   const degradeLines = list.split('\n').filter((l) => /degraded = true/.test(l)).length;
   assert.ok(degradeLines >= 2, 'expected the two degrade branches');
-  assert.match(list, /if \(!failure\) failure = \{ \.\.\.out, ok: false, echoed: true \}/,
+  // The echo branch records the failure it refuses on — and the ONLY way past
+  // it without one is the explicit switch, which marks the post instead.
+  assert.match(list, /else if \(!failure\) \{\s*\/\/[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*failure = \{ \.\.\.out, ok: false, echoed: true \};/,
     'the echo branch must record the failure it is refusing on');
+  assert.match(list, /if \(acceptEcho\(\)\) \{\s*accepted = true;\s*\}/, 'and the one exception is named');
+  // An empty answer records too — this branch used to `continue` with nothing.
+  assert.match(list, /if \(!n\) \{[\s\S]*?if \(!failure\) failure = out;[\s\S]*?continue;/);
 });
 
 test('the method is tried both ways, and the trace says which', () => {
@@ -294,12 +299,30 @@ test('an echoed link is refused unless somebody deliberately says otherwise', ()
   // test once, on a link that genuinely works.
   const src = readFileSync(new URL('../lib/metricool.ts', import.meta.url), 'utf8');
   assert.match(src, /import \{ acceptEcho \} from '@\/lib\/metricool-echo';/);
-  assert.match(src, /if \(acceptEcho\(\)\) continue;/, 'it must skip the failure, not the degraded flag');
+  // THE FIRST VERSION OF THIS SWITCH DID NOTHING. It `continue`d past the
+  // push, so the media list came out empty, and it left `failure` set, so
+  // every caller refused exactly as before and printed the identical sentence.
+  // The clinic turned it on, redeployed, sent, and saw no change at all.
+  assert.doesNotMatch(src, /if \(acceptEcho\(\)\) continue;/, 'the echoed url must be PUSHED, not skipped');
+  assert.match(src, /if \(acceptEcho\(\)\) \{\s*accepted = true;/, 'and marked as accepted');
+  assert.match(src, /failure: NormalizeOutcome \| null; accepted: boolean/, 'the contract carries the mark');
 
   // `degraded` stays set either way: a post that went out this way is still
   // marked, because the whole point is to look at it afterwards.
-  const order = src.indexOf('degraded = true;\n      // THE ONE QUESTION LEFT');
-  assert.ok(order > 0, 'degraded must be set BEFORE the opt-out is considered');
+  const block = src.slice(src.indexOf('if (n === trimmed) {'), src.indexOf('media.push(n);'));
+  assert.ok(block.indexOf('degraded = true;') < block.indexOf('if (acceptEcho())'), 'degraded before the opt-out');
+  assert.match(block, /failure = \{ \.\.\.out, ok: false, echoed: true \}/, 'and off, an echo is still a failure');
+
+  // And every caller refuses on FAILURE, not on degraded — otherwise the
+  // switch is dead at the door whatever this function returns.
+  for (const file of ['app/api/metricool/schedule/route.ts', 'lib/video-attach.ts']) {
+    const caller = readFileSync(new URL('../' + file, import.meta.url), 'utf8');
+    assert.match(caller, /if \(norm\.failure \|\| !norm\.media\.length\) \{/, file + ' must gate on failure');
+    assert.doesNotMatch(caller, /if \(norm\.degraded \|\| !norm\.media\.length\) \{/, file + ' still refuses every degraded post');
+  }
+  assert.match(readFileSync(new URL('../lib/batch-draft.ts', import.meta.url), 'utf8'), /if \(norm\.failure\) \{/);
+  // The one post sent this way is named at the send, never silent.
+  assert.match(readFileSync(new URL('../app/api/metricool/schedule/route.ts', import.meta.url), 'utf8'), /METRICOOL_ACCEPT_ECHO is on/);
 });
 
 test('nothing but an explicit yes turns it on', () => {

@@ -226,7 +226,10 @@ export async function POST(req: NextRequest) {
     // draft and read "Add at least 1 image or video." A URL Metricool did not
     // take is refused here rather than sent for it to drop.
     const norm = await normalizeMediaList([String(payload.mediaUrl)]);
-    if (norm.degraded || !norm.media.length) {
+    // `failure`, not `degraded`: an echo let through by METRICOOL_ACCEPT_ECHO
+    // is degraded AND accepted, and the whole point of the switch is that it
+    // reaches Metricool. It is still marked below.
+    if (norm.failure || !norm.media.length) {
       // WHICH of five problems this is. The status was known here all along and
       // discarded for one sentence that fits a 403, a 413, a 502, an expired
       // link and a transfer that ran out of time equally well — and four of
@@ -264,6 +267,11 @@ export async function POST(req: NextRequest) {
       );
     }
     body.media = norm.media;
+    if (norm.accepted) {
+      // On our own link, by explicit setting. Said out loud so the one post
+      // sent this way can be found and looked at in Metricool.
+      console.warn('metricool/schedule: METRICOOL_ACCEPT_ECHO is on — sending', provider, 'on the un-normalised link', String(payload.mediaUrl).slice(0, 120));
+    }
   }
 
   // The sheet's FORMATO / YOUTUBE cells: sent by the composer when the post
