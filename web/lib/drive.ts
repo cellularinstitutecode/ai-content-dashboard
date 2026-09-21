@@ -18,7 +18,7 @@
 import { drive } from 'googleapis/build/src/apis/drive';
 import { JWT } from 'google-auth-library';
 import { Readable } from 'stream';
-import { parseDriveFolderId } from './drive-url.ts';
+import { driveDownloadUrl, parseDriveFolderId } from './drive-url.ts';
 import { reportError } from './report.ts';
 
 /**
@@ -95,7 +95,18 @@ const url =
  * through this app: no download, no upload, no function memory, a second or
  * two of wall clock.
  */
-export async function publicVideoCopy(fileId: string, filename: string): Promise<{ fileId: string; url: string }> {
+export async function publicVideoCopy(
+  fileId: string,
+  filename: string,
+  /**
+   * `confirm` mints the address Google's own virus-scan interstitial posts to,
+   * for a file too big to be served by the ordinary download link. See
+   * driveDownloadUrl — and note that the caller VERIFIES the result as a
+   * stranger before it is recorded, because whether this still works could not
+   * be tested where it was written.
+   */
+  opts: { confirm?: boolean } = {},
+): Promise<{ fileId: string; url: string }> {
   const folderId = driveFolderId();
   if (!folderId) throw new Error('DRIVE_FOLDER_ID missing');
   const drive = driveClient();
@@ -117,7 +128,12 @@ export async function publicVideoCopy(fileId: string, filename: string): Promise
 
   return {
     fileId: copyId,
-    url: copied.data.webContentLink || 'https://drive.google.com/uc?export=download&id=' + copyId,
+    // The confirm address is used INSTEAD of webContentLink, not after it: for
+    // a file over ~100 MB webContentLink is precisely the link that answers
+    // with the scan page.
+    url: opts.confirm
+      ? driveDownloadUrl(copyId, { confirm: true })
+      : copied.data.webContentLink || driveDownloadUrl(copyId),
   };
 }
 

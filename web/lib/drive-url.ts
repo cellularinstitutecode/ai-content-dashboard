@@ -70,3 +70,34 @@ export function parseDriveFolderId(raw: string | null | undefined): string | nul
   if (q && /^[A-Za-z0-9_-]{15,80}$/.test(q)) return q;
   return null;
 }
+
+/**
+ * The address an anonymous fetcher — Metricool — should use to download a
+ * public Drive file.
+ *
+ * WHY THERE ARE TWO. `webContentLink` (drive.google.com/uc?export=download)
+ * serves the file itself only up to about 100 MB. Above that Google answers
+ * with its "cannot scan this file for viruses" interstitial, and Metricool
+ * stored that page AS THE VIDEO — the failure the Supabase bucket was
+ * introduced to end, and the reason lib/copy-source.ts caps the Drive route at
+ * DRIVE_DIRECT_MAX_BYTES.
+ *
+ * That interstitial is a FORM, and it posts to this host with `confirm=t`.
+ * Which means the cap was never about size — a Drive copy is made by
+ * `files.copy` INSIDE Drive, so a 283 MB reel never travels through this app
+ * at all — it was about one warning page standing in front of the file.
+ *
+ * NOTHING HERE TRUSTS THAT THIS WORKS. Whether Google still honours a bare
+ * `confirm=t` without a per-session token could not be checked from the
+ * sandbox this was written in, so the only caller fetches the result as a
+ * stranger through verifyPlayableMp4 first and throws the copy away if what
+ * comes back is a web page. A guess behind a check is worth making; a guess in
+ * front of Metricool is what caused all of this.
+ */
+export function driveDownloadUrl(fileId: string, opts: { confirm?: boolean } = {}): string {
+  const id = String(fileId || '').trim();
+  if (!id) return '';
+  return opts.confirm
+    ? 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(id) + '&export=download&confirm=t'
+    : 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(id);
+}

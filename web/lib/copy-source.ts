@@ -26,7 +26,17 @@
 //
 // So the source is chosen by SIZE, preferring the paths that are proven.
 //
-// Pure: no imports, so the test runner reads this file directly.
+// AND THE REFUSAL NAMES ALL THREE WAYS OUT, which it did not. It offered the
+// Dokploy host and a re-export, and never mentioned raising the Supabase cap —
+// the route rows 180 and 182 actually went out on, and the only one already
+// proven from this deployment. It also said "the 50 MB storage limit" as though
+// that number were a fact about the world; it is the FREE PLAN's fixed limit,
+// and lib/video-bucket-key.ts has carried SUPABASE_UPLOAD_MAX_BYTES for exactly
+// this since it was written. A diagnostic that omits the fix somebody can
+// actually apply sends them to buy a container they may not need.
+//
+// Pure: `./x.ts` imports only, so the test runner reads this file directly.
+import { bucketUploadMaxBytes } from './video-bucket-key.ts';
 
 /**
  * Above this, a Drive download link answers with Google's "cannot scan this
@@ -85,6 +95,12 @@ export function copyRouteFor(input: {
   /** The origin a streamed URL would be minted against. */
   base: string;
   env?: Record<string, string | undefined>;
+  /**
+   * The Supabase upload cap this project actually has, for the refusal to quote
+   * honestly. Defaults to the configured one; passed in only by tests, which
+   * must not depend on the ambient environment.
+   */
+  uploadMaxBytes?: number;
 }): CopyRoute {
   if (input.staged) return { source: 'bucket' };
   const size = Number(input.sizeBytes);
@@ -94,14 +110,22 @@ export function copyRouteFor(input: {
   // a problem that only exists ABOVE this size.
   if (known && size <= DRIVE_DIRECT_MAX_BYTES) return { source: 'drive' };
   if (servesWholeVideos(input.base, input.env)) return { source: 'stream' };
+  const cap = Number.isFinite(Number(input.uploadMaxBytes)) && Number(input.uploadMaxBytes) > 0
+    ? Number(input.uploadMaxBytes)
+    : bucketUploadMaxBytes();
   return {
     source: 'refuse',
     message:
-      'This video is ' + (known ? mb(size) : 'too large') + ' — past the 50 MB storage limit and past the size Google will ' +
-      'serve a link for, so it has to be streamed from this app. The address these links are built from is a Vercel ' +
-      'function, which cannot deliver a whole video to Metricool: it is why every video since 15 September has been ' +
-      'refused while rows 180 and 182 went out. Set PUBLIC_MEDIA_BASE_URL to a host that can stream it (the Dokploy ' +
-      'copy — see deploy/DOKPLOY.md), or export this reel under 100 MB.',
+      'This video is ' + (known ? mb(size) : 'too large') + ' — past the ' + mb(cap) + ' Supabase upload limit and past ' +
+      'the 100 MB above which Google answers a Drive link with its virus-scan page instead of the file. That leaves ' +
+      'streaming it from this app, and these links are built from a Vercel function, which cannot hand a whole video ' +
+      'to Metricool: it is why every video since 15 September has been refused while rows 180 and 182 went out. ' +
+      'THREE WAYS OUT, none of them done yet. (1) Raise the Supabase upload limit past ' +
+      (known ? mb(size) : 'this size') + ' under Storage → Settings and set SUPABASE_UPLOAD_MAX_BYTES to match — this ' +
+      'is the bucket route rows 180 and 182 used, the only one already proven here, and the limit is fixed at 50 MB ' +
+      'on the free plan so it needs a paid one. (2) Point PUBLIC_MEDIA_BASE_URL at a host that can stream a whole ' +
+      'file (the Dokploy copy — see deploy/DOKPLOY.md); this is the one that also survives the 1 GB reels, which no ' +
+      'serverless function will ever carry to Supabase and back. (3) Export this reel under 100 MB.',
   };
 }
 

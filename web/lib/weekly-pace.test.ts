@@ -36,6 +36,16 @@ const spread = (n: number, days = 6, from = base) =>
   Array.from({ length: n }, (_, i) => ({
     publication_date: iso(from + Math.round((i * days * DAY) / Math.max(1, n))),
     status: 'approved',
+    draft_id: 'draft-' + from + '-' + i,
+  }));
+
+/** One post fanned out to n networks: n rows, one draft — what the video sweep writes. */
+const fannedOut = (draft: string, networks: number, when: number) =>
+  Array.from({ length: networks }, (_, i) => ({
+    id: draft + '-row-' + i,
+    draft_id: draft,
+    publication_date: iso(when),
+    status: 'approved',
   }));
 
 test('an ordinary week is nowhere near the ceiling', () => {
@@ -173,6 +183,60 @@ test('a calendar too big to count holds, and says so', () => {
   assert.match(paceNote(v), /looking at the calendar/);
 });
 
+test('a post fanned out to three networks is ONE post', () => {
+  // THE DEFECT THE AUDIT FOUND, an hour after this shipped. lib/video-publish.ts
+  // writes a `posts` row PER NETWORK, and the default is three of them
+  // (youtube, linkedin, tiktok). Counting rows made a fourteen-reel week
+  // forty-two against a ceiling of twenty-nine — so with AUTOPILOT_AUTOSCHEDULE
+  // on, EVERY engine post would have been held on a perfectly ordinary week,
+  // with a message blaming a full calendar.
+  //
+  // lib/cadence.ts says in as many words that `posts` is the wrong unit because
+  // it "counts one draft once per network". I read that line and then used the
+  // number against `posts` anyway.
+  const reels = Array.from({ length: 14 }, (_, i) =>
+    fannedOut('reel-' + i, 3, base + Math.round((i * 6 * DAY) / 14)),
+  ).flat();
+  assert.equal(reels.length, 42, 'a worked week really is forty-two rows');
+
+  const v = weeklyPaceVerdict({ slot: iso(base + 3 * DAY), scheduled: reels });
+  assert.equal(v.ok, true, 'a normal week of reels must not hold anything');
+  assert.equal(v.count, 15, 'fourteen reels and the candidate, not forty-three');
+});
+
+test('rows with no draft still count one each, and are never merged', () => {
+  // Undercounting is the failure that matters here, so two unidentifiable rows
+  // are two posts rather than one.
+  const noDraft = [
+    { publication_date: iso(base), status: 'approved' },
+    { publication_date: iso(base + 60 * 1000), status: 'approved' },
+    { id: 'r1', publication_date: iso(base + 2 * 60 * 1000), status: 'approved' },
+    { id: 'r2', publication_date: iso(base + 3 * 60 * 1000), status: 'approved' },
+  ];
+  const v = weeklyPaceVerdict({ slot: iso(base + 4 * 60 * 1000), scheduled: noDraft });
+  assert.equal(v.count, 5, 'four distinct rows plus the candidate');
+});
+
+test('the candidate is never collapsed into an existing row for its own draft', () => {
+  // A posts row already existing for this run's draft means a double send,
+  // which rescueStrandedApprovals owns. Merging them here would hide it, and
+  // counting one extra errs toward holding.
+  const same = fannedOut('same-draft', 3, base);
+  const v = weeklyPaceVerdict({ slot: iso(base), scheduled: same });
+  assert.equal(v.count, 2, 'the draft once, plus the candidate');
+});
+
+test('a fanned-out week still trips the ceiling when it genuinely should', () => {
+  // The dedupe must not become a way to smuggle a doubled calendar past the
+  // guard: thirty DISTINCT drafts is still thirty posts.
+  const many = Array.from({ length: 30 }, (_, i) =>
+    fannedOut('d-' + i, 3, base + Math.round((i * 6 * DAY) / 30)),
+  ).flat();
+  const v = weeklyPaceVerdict({ slot: iso(base + 2 * DAY), scheduled: many });
+  assert.equal(v.ok, false);
+  assert.ok(v.count > WEEKLY_CEILING, v.count + ' of ' + v.ceiling);
+});
+
 test('the ceiling is derived from the cadence, not typed beside it', () => {
   // The drift lib/cadence.ts exists to prevent: add a slot to the strategy and
   // this must widen with it, or the guard starts refusing the calendar it was
@@ -216,8 +280,23 @@ test('the engine checks the week before it presses its own Approve', () => {
   assert.match(block, /\.eq\('user_id', run\.user_id\)/);
   assert.match(block, /\.gte\('publication_date'/);
   assert.match(block, /\.lte\('publication_date'/, 'a forward-only window misses a slot dropped into a full week');
-  // An unreadable calendar must not read as an empty one.
+  // An unreadable calendar must not read as an empty one...
   assert.match(autopilot, /autopilot:autoschedule-pace/);
+  // ...and must not read as SILENCE either. autoSchedule is reached only at the
+  // ready_for_review transition, and that state is not in ACTIVE_STATES, so no
+  // later tick revisits the run: returning without a note demoted the post to
+  // manual approval permanently, with a blank card.
+  const paceFail = autopilot.slice(autopilot.indexOf('if (paceError) {'));
+  const branch = paceFail.slice(0, paceFail.indexOf('const rows ='));
+  assert.match(branch, /await hold\(/, 'a calendar that could not be read must say so on the card');
+  assert.match(branch, /Nothing was sent/);
+
+  // The row it counts must carry what identifies the POST, not just the time.
+  assert.match(block, /\.select\('id, draft_id, publication_date, status'\)/);
+  // And the statuses the module discards are dropped before they can spend the
+  // scan budget — 500 pending_review rows would otherwise flip the guard into
+  // its permanent truncated hold with nothing actually going out.
+  assert.match(block, /\.not\('status', 'in',/);
 });
 
 test('only the engine is bound by it, never a person pressing Approve', () => {

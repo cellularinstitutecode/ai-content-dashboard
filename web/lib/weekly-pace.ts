@@ -41,6 +41,10 @@ const WINDOW_MS = ROLLING_WINDOW_DAYS * 24 * 60 * 60 * 1000;
  *
  * Add a slot to the strategy and this widens with it, which is the whole reason
  * lib/cadence.ts exists.
+ *
+ * IT IS COUNTED IN DRAFTS, and so is everything measured against it — see
+ * ScheduledPost.draft_id. Reading it as "rows in `posts`" made a fourteen-reel
+ * week forty-two, and held every engine post on a perfectly ordinary week.
  */
 export const WEEKLY_CEILING = DRAFTS_PER_WEEK;
 
@@ -72,6 +76,21 @@ export function counts(status?: string | null): boolean {
 export type ScheduledPost = {
   publication_date?: string | number | Date | null;
   status?: string | null;
+  /**
+   * THE UNIT. One draft going to three networks is ONE post by any human
+   * reading of the word, and it is one row in `drafts` — but the video sweep
+   * writes a `posts` row PER NETWORK (lib/video-publish.ts), so counting rows
+   * counts it three times.
+   *
+   * The first version of this file did exactly that, against a ceiling
+   * expressed in drafts, and lib/cadence.ts says in as many words that `posts`
+   * is the wrong unit because it "counts one draft once per network". A week of
+   * reels is 14 videos and 42 rows; the ceiling is 29. Every engine post would
+   * have been held, on an ordinary week, with a message blaming a full calendar.
+   */
+  draft_id?: string | null;
+  /** Falls back to this when a row has no draft, so such rows still count once each. */
+  id?: string | null;
 };
 
 export type PaceVerdict =
@@ -90,6 +109,23 @@ export function weeklyCeiling(raw?: string | null): number {
   const n = Number(String(raw ?? '').trim());
   if (!Number.isFinite(n) || n < 1) return WEEKLY_CEILING;
   return Math.floor(n);
+}
+
+/**
+ * What makes two `posts` rows the same post.
+ *
+ * The draft, when there is one: a reel fanned out to YouTube, LinkedIn and
+ * TikTok is three rows sharing one `draft_id`, and it is one post. Failing
+ * that the row's own id, so a row with no draft still counts once. Failing
+ * even that, its position, so two unidentifiable rows are never silently
+ * merged into one — this guard undercounting is the failure that matters.
+ */
+function keyOf(row: ScheduledPost, index: number): string {
+  const draft = typeof row.draft_id === 'string' ? row.draft_id.trim() : '';
+  if (draft) return 'draft:' + draft;
+  const id = typeof row.id === 'string' ? row.id.trim() : '';
+  if (id) return 'row:' + id;
+  return 'pos:' + index;
 }
 
 function at(value: string | number | Date | null | undefined): number | null {
@@ -148,25 +184,33 @@ export function weeklyPaceVerdict(input: {
     };
   }
 
-  const points: number[] = [slot];
+  // The candidate keeps a key of its own rather than borrowing its draft's.
+  // A `posts` row already existing for this run's draft would mean a double
+  // send, which rescueStrandedApprovals handles; collapsing them here would
+  // quietly hide it, and counting one extra errs toward holding.
+  const points: { at: number; key: string }[] = [{ at: slot, key: '\u0000candidate' }];
+  let index = 0;
   for (const row of input.scheduled || []) {
+    index++;
     if (!row) continue;
     if (!counts(row.status)) continue;
     const t = at(row.publication_date);
     if (t == null) continue;
     // Too far either side to share a seven-day window with the candidate.
     if (Math.abs(t - slot) >= WINDOW_MS) continue;
-    points.push(t);
+    points.push({ at: t, key: keyOf(row, index) });
   }
-  points.sort((a, b) => a - b);
+  points.sort((a, b) => a.at - b.at);
 
   let worst = 0;
   for (const start of points) {
-    if (start > slot) break; // a window opening after the candidate cannot hold it
-    if (slot - start >= WINDOW_MS) continue; // nor one that closes before it
-    let n = 0;
-    for (const p of points) if (p >= start && p - start < WINDOW_MS) n++;
-    if (n > worst) worst = n;
+    if (start.at > slot) break; // a window opening after the candidate cannot hold it
+    if (slot - start.at >= WINDOW_MS) continue; // nor one that closes before it
+    // DISTINCT drafts, not rows — see ScheduledPost.draft_id. A reel's three
+    // network rows are one post.
+    const seen = new Set<string>();
+    for (const p of points) if (p.at >= start.at && p.at - start.at < WINDOW_MS) seen.add(p.key);
+    if (seen.size > worst) worst = seen.size;
   }
 
   if (worst > ceiling) {

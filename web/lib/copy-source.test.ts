@@ -20,6 +20,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { driveDownloadUrl, parseDriveFileId } from './drive-url.ts';
 import { DRIVE_DIRECT_MAX_BYTES, cachedCopyUsable, copyRouteFor, servesWholeVideos } from './copy-source.ts';
 
 const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
@@ -70,6 +71,13 @@ test('and is REFUSED, by name, when the only address is a Vercel function', () =
   assert.match(message, /PUBLIC_MEDIA_BASE_URL/, 'the setting that fixes it is named');
   assert.match(message, /180 and 182/, 'and the fact that dates it');
   assert.match(message, /under 100 MB/, 'with the answer that needs nobody');
+  // ALL THREE ROUTES. The message used to offer two, and the one it left out is
+  // the bucket — the route rows 180 and 182 actually went out on, and the only
+  // one already proven from this deployment. Somebody reading the old text
+  // would have gone and bought a container they may not have needed.
+  assert.match(message, /SUPABASE_UPLOAD_MAX_BYTES/, 'the proven route must be offered');
+  assert.match(message, /Storage → Settings/, 'and where the limit actually lives');
+  assert.match(message, /THREE WAYS OUT/);
 });
 
 test('a broken copy already in the cache is not handed out again', () => {
@@ -126,5 +134,95 @@ test('the title is written on arrival, not on a button press', () => {
   assert.ok(
     /if \(!handedTitle \|\| looksInternal/.test(handoff),
     'only when there is nothing usable: a title somebody wrote is never overwritten',
+  );
+});
+
+
+test('the refusal quotes the cap this project HAS, not a number from memory', () => {
+  // "past the 50 MB storage limit" was written as though 50 MB were a fact
+  // about Supabase. It is the FREE PLAN's fixed limit, and
+  // lib/video-bucket-key.ts has carried SUPABASE_UPLOAD_MAX_BYTES since it was
+  // written — so on a project that had already raised it, the diagnostic named
+  // a limit the project did not have and sent the reader to the wrong fix.
+  const at = (uploadMaxBytes: number) => {
+    const out = copyRouteFor({
+      staged: false,
+      sizeBytes: 149 * 1024 * 1024,
+      base: 'https://ai-content-dashboard-pi.vercel.app',
+      env: { VERCEL_PROJECT_PRODUCTION_URL: 'ai-content-dashboard-pi.vercel.app' },
+      uploadMaxBytes,
+    });
+    return out.source === 'refuse' ? out.message : '';
+  };
+  assert.match(at(50 * 1024 * 1024), /past the 50 MB Supabase upload limit/);
+  assert.match(at(120 * 1024 * 1024), /past the 120 MB Supabase upload limit/);
+  assert.doesNotMatch(at(120 * 1024 * 1024), /past the 50 MB Supabase/, 'the old hardcoded number is gone');
+});
+
+test('the big reels are told the truth about which route survives them', () => {
+  // The clinic's reels run to well over a gigabyte (lib/video-bucket-key.ts).
+  // Raising the Supabase cap fixes a 149 MB file and cannot fix those: a
+  // serverless function will not carry 1.8 GB down from Drive and back up to
+  // Supabase. Offering route 1 without saying so would buy one reel and lose
+  // the next.
+  const out = copyRouteFor({
+    staged: false,
+    sizeBytes: 1800 * 1024 * 1024,
+    base: 'https://ai-content-dashboard-pi.vercel.app',
+    env: { VERCEL_PROJECT_PRODUCTION_URL: 'ai-content-dashboard-pi.vercel.app' },
+  });
+  const message = out.source === 'refuse' ? out.message : '';
+  assert.match(message, /1 GB reels/, 'the durable answer must be marked as the durable one');
+  assert.match(message, /no\s+serverless function will ever carry/);
+});
+
+// --- the attempt that happens before the refusal -----------------------------
+
+test('a file too big for the bucket is TRIED on Drive before it is refused', () => {
+  // The 100 MB cap was never about size. files.copy happens inside Drive, so a
+  // 283 MB reel never travels through this app at all — what stopped it was
+  // Google's virus-scan interstitial, which Metricool stored as the video.
+  // That interstitial is a form, and it posts to drive.usercontent.google.com
+  // with confirm=t.
+  //
+  // Source checks: lib/media-library.ts imports `server-only`.
+  const lib = readFileSync(new URL('../lib/media-library.ts', import.meta.url), 'utf8');
+  const at = lib.indexOf("const refusal = route.source === 'refuse'");
+  assert.ok(at > 0, 'the last-chance attempt is gone');
+  assert.match(lib.slice(at, at + 600), /publicVideoCopy\(fileId, name, \{ confirm: true \}\)/);
+
+  // AND IT IS NOT TRUSTED. The whole reason this is safe to try untested is
+  // that the copy is fetched back as a stranger before anything is recorded,
+  // and an HTML page cannot pass an mp4 magic-byte check.
+  const verify = lib.indexOf('let verdict = await verifyPlayableMp4(made.url');
+  assert.ok(verify > at, 'the attempt must be verified before it is recorded');
+  // The RECORDING of the new copy, not the cache refresh higher up the
+  // function — a bare indexOf('rememberPublicCopy(') finds that one instead and
+  // the assertion passes for the wrong reason.
+  const remember = lib.indexOf('await rememberPublicCopy(fileId, { id: made.fileId');
+  assert.ok(remember > verify, 'the new copy must not be recorded before it is verified');
+
+  // And when it fails, the reader gets the DECISION, not the symptom.
+  assert.match(lib, /if \(refusal\) \{/);
+  assert.match(lib, /A Drive copy was tried first and what came back was not the video/);
+});
+
+test('the confirm address is the one Google’s own warning page posts to', () => {
+  assert.equal(
+    driveDownloadUrl('1AbC_dEfGhIjKlMnOpQrStUvWxYz012345', { confirm: true }),
+    'https://drive.usercontent.google.com/download?id=1AbC_dEfGhIjKlMnOpQrStUvWxYz012345&export=download&confirm=t',
+  );
+  // The ordinary link is unchanged: the under-100 MB path works and is not
+  // being touched to fix a problem it does not have.
+  assert.equal(
+    driveDownloadUrl('1AbC_dEfGhIjKlMnOpQrStUvWxYz012345'),
+    'https://drive.google.com/uc?export=download&id=1AbC_dEfGhIjKlMnOpQrStUvWxYz012345',
+  );
+  // An id with no file is not a URL at all, rather than one pointing nowhere.
+  assert.equal(driveDownloadUrl(''), '');
+  // And the app can still read its own address back.
+  assert.equal(
+    parseDriveFileId(driveDownloadUrl('1AbC_dEfGhIjKlMnOpQrStUvWxYz012345', { confirm: true })),
+    '1AbC_dEfGhIjKlMnOpQrStUvWxYz012345',
   );
 });
