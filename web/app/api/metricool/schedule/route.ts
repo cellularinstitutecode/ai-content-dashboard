@@ -5,6 +5,9 @@ import { mediaHandoverMessage, normalizeFailure, ourLinkNote } from '@/lib/media
 import { verifyPlayableMp4 } from '@/lib/media-verify';
 import { bucketKeyFromUrl } from '@/lib/video-bucket';
 import { streamCopyIdFromUrl } from '@/lib/media-url';
+import { ensureShareableVideo } from '@/lib/media-library';
+import { sourceOfPublicCopy } from '@/lib/transcript-cache';
+import { metricoolCopyIdFromUrl } from '@/lib/metricool-upload-parse';
 import { metricoolRefusal } from '@/lib/metricool-refusal';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { tiktokDataFor } from '@/lib/tiktok-meta';
@@ -217,7 +220,45 @@ export async function POST(req: NextRequest) {
     // signed-in caller cannot turn a review queue into a megaphone.
     ...modeFlags(mode),
   };
-  if (payload.mediaUrl) {
+
+  // THE LINK IN THE COMPOSER IS NOT NECESSARILY THE LINK TO SEND.
+  //
+  // The composer holds whatever copy URL it was handed — from the picker, a
+  // sheet-row hand-off, or a draft loaded back — and that can be a Drive link
+  // made weeks ago. Metricool hands a Drive link straight back at any size
+  // (row 191, 21 September, and the screen that followed #297: the panel
+  // still showed Drive's player, and the send still said "handed the same
+  // link straight back"). The route that fixes this — uploading the bytes into
+  // Metricool — lives where copies are MADE, and nothing at the send door ever
+  // asked for a copy to be made. So this does: the video is found from the
+  // copy (the hand-off's source link, or the copy record, or the copied file
+  // itself), and ensureShareableVideo hands back the copy that reaches
+  // Metricool. When it cannot, the normalise below refuses with its own
+  // sentence, exactly as before.
+  let mediaUrl = typeof payload.mediaUrl === 'string' ? payload.mediaUrl.trim() : '';
+  let mediaRerouted = false;
+  if (mediaUrl && parseDriveFileId(mediaUrl)) {
+    const copyFileId = parseDriveFileId(mediaUrl);
+    const sourceFileId = (typeof payload.sourceUrl === 'string' ? parseDriveFileId(payload.sourceUrl) : null)
+      || (copyFileId ? await sourceOfPublicCopy(copyFileId) : null)
+      || copyFileId;
+    if (sourceFileId) {
+      const made = await ensureShareableVideo(
+        'https://drive.google.com/file/d/' + sourceFileId + '/view',
+        typeof payload.title === 'string' ? payload.title : '',
+        { userId: user.id, actor: 'button' },
+      );
+      if (made.ok && made.url !== mediaUrl) {
+        console.info('metricool/schedule: re-routed a Drive link to', new URL(made.url).host);
+        mediaUrl = made.url;
+        mediaRerouted = true;
+      } else if (!made.ok) {
+        reportError('metricool/schedule:reroute', new Error(made.message), { code: made.code || made.reason, network: provider });
+      }
+    }
+  }
+
+  if (mediaUrl) {
     // Normalised first, and sent as a URL STRING.
     //
     // Both halves of that were wrong, and the effect was the same either way:
@@ -225,7 +266,7 @@ export async function POST(req: NextRequest) {
     // "attached" here meant nothing at all by the time a person opened the
     // draft and read "Add at least 1 image or video." A URL Metricool did not
     // take is refused here rather than sent for it to drop.
-    const norm = await normalizeMediaList([String(payload.mediaUrl)]);
+    const norm = await normalizeMediaList([mediaUrl]);
     // `failure`, not `degraded`: an echo let through by METRICOOL_ACCEPT_ECHO
     // is degraded AND accepted, and the whole point of the switch is that it
     // reaches Metricool. It is still marked below.
@@ -239,7 +280,7 @@ export async function POST(req: NextRequest) {
       // Metricool was given, so the answer says whether the file is fine (and
       // how big it is) rather than sending somebody to inspect a video copy
       // that was never the problem. It runs only on the failure path.
-      const probe = await verifyPlayableMp4(String(payload.mediaUrl), null).then(
+      const probe = await verifyPlayableMp4(mediaUrl, null).then(
         (v) => ({ ok: v.ok, message: v.ok ? '' : v.message, bytes: v.ok ? v.length ?? null : null }),
         () => null,
       );
@@ -270,7 +311,7 @@ export async function POST(req: NextRequest) {
     if (norm.accepted) {
       // On our own link, by explicit setting. Said out loud so the one post
       // sent this way can be found and looked at in Metricool.
-      console.warn('metricool/schedule: METRICOOL_ACCEPT_ECHO is on — sending', provider, 'on the un-normalised link', String(payload.mediaUrl).slice(0, 120));
+      console.warn('metricool/schedule: METRICOOL_ACCEPT_ECHO is on — sending', provider, 'on the un-normalised link', mediaUrl.slice(0, 120));
     }
   }
 
@@ -312,7 +353,7 @@ export async function POST(req: NextRequest) {
       network,
       text,
       pack: draftPack,
-      hasMedia: Boolean(typeof payload.mediaUrl === 'string' && payload.mediaUrl.trim()),
+      hasMedia: Boolean(mediaUrl),
       format: sheetFormat || undefined,
     });
     if (!pre.ok) return NextResponse.json({ error: pre.reason, message: pre.message }, { status: 422 });
@@ -447,7 +488,12 @@ export async function POST(req: NextRequest) {
       // The copy that went out with the post, when there was one: the queue
       // reads media_drive_file_id to know the post carries its video, and
       // lib/post-source.ts follows it back to the sheet row.
-      const mediaCopyId = typeof payload.mediaUrl === 'string' ? (parseDriveFileId(payload.mediaUrl) || bucketKeyFromUrl(payload.mediaUrl) || streamCopyIdFromUrl(payload.mediaUrl)) : null;
+      // The copy that ACTUALLY went out — re-routed above when the composer
+      // held a Drive link — so the queue's chip and the duplicate guard both
+      // see the copy Metricool holds, not the one it refused.
+      const mediaCopyId = mediaUrl
+        ? (parseDriveFileId(mediaUrl) || bucketKeyFromUrl(mediaUrl) || streamCopyIdFromUrl(mediaUrl) || metricoolCopyIdFromUrl(mediaUrl))
+        : null;
       const row = {
         user_id: user.id,
         draft_id: ownedDraftId,
@@ -502,6 +548,10 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
+      // The copy that went out, when it is not the one the composer held, so
+      // the panel can show the video Metricool has rather than the Drive link
+      // it refused — and the next send starts from the right one.
+      ...(mediaRerouted ? { mediaUrl } : {}),
       // Which of the two happened. Without it the panel would say "saved" for
       // an update and leave a person wondering whether a second draft now
       // exists — the exact anxiety the old 409 was trying to prevent.

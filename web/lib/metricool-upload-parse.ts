@@ -95,6 +95,18 @@ export function isMetricoolCopyId(id: string | null | undefined): boolean {
   return String(id || '').startsWith(METRICOOL_PREFIX);
 }
 
+/**
+ * The marker for a Metricool-hosted URL, or null.
+ *
+ * Identification only, for the row that records what a post carries. The
+ * path is the key the upload was recorded under when the transaction named no
+ * id of its own (lib/metricool-upload.ts), so a URL and its record agree.
+ */
+export function metricoolCopyIdFromUrl(url: string | null | undefined): string | null {
+  if (!isMetricoolHostedUrl(url)) return null;
+  try { return metricoolCopyId(new URL(String(url)).pathname); } catch { return null; }
+}
+
 // --- reading the transaction ---------------------------------------------------
 
 export type UploadTransaction = {

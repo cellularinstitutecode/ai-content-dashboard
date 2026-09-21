@@ -1435,6 +1435,12 @@ return { network, ok: r.ok, status: r.status, data };
 })
 );
 const ok = results.filter((x) => x.ok).map((x) => x.network);
+// The copy that actually went out, when the route had to make a better one
+// than the link this panel held (a Drive link, which Metricool hands back).
+// Shown, so the player above is the video Metricool has, and kept, so the
+// next send starts from it.
+const rerouted = results.find((x: any) => x.ok && typeof x.data?.mediaUrl === 'string' && x.data.mediaUrl) as any;
+if (rerouted) setMMedia(String(rerouted.data.mediaUrl));
 // How many of those were drafts already WAITING, continued rather than
 // duplicated. Said out loud, because "saved on linkedin" would otherwise
 // leave a person wondering whether there are now two of them — which is the
