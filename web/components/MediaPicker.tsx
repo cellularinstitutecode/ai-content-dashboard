@@ -152,7 +152,8 @@ export default function MediaPicker({ value, label, onChange, hint }: {
   }
 
   if (value) {
-    const isImage = previewKindOf(value, label) === 'image';
+    const kind = previewKindOf(value, label);
+    const isImage = kind === 'image';
     return (
       <div className="mt-2 rounded-2xl bg-subtle p-2.5 ring-1 ring-line">
         <div className="mb-2 flex items-center justify-between gap-2">
@@ -172,7 +173,31 @@ export default function MediaPicker({ value, label, onChange, hint }: {
         {/* The proof. Everything above this line is a label; this is the file. */}
         <MediaPreview url={value} label={label} />
         <p className="mt-2 text-[11px] text-ink-faint">
-          This is exactly what goes out with the post. If it plays here, it is attached.
+          {kind === 'drive'
+            /*
+             * THE SENTENCE THAT WAS WRONG, and it cost an afternoon.
+             *
+             * For a Drive video the player above is NOT what goes out. It is
+             * drive.google.com/file/d/<id>/preview — Drive's own streaming
+             * player, which needs Drive to have transcoded the file. Metricool
+             * is handed the DOWNLOAD url, a different endpoint that serves the
+             * bytes whether or not that transcode has finished.
+             *
+             * So a freshly copied reel sits in "This video file is still being
+             * processed for playback" for a few minutes while being perfectly
+             * attached — and the old caption ("if it plays here, it is
+             * attached") read that as a failure. It is the opposite of the
+             * problem this preview was built for: it was built because a
+             * missing video looked fine, and it had started making a fine
+             * video look missing.
+             *
+             * The attachment is already proven by then: ensureShareableVideo
+             * fetches the copy back with no credentials, exactly as Metricool
+             * does, and reads the first sixteen bytes for an mp4 ftyp box
+             * before it will record it at all.
+             */
+            ? 'Attached and verified — the copy was fetched back with no credentials, the same request Metricool makes. The player above is Drive’s own, and a just-copied video can say “still being processed” there for a few minutes: that is Drive building its preview, not the attachment. What goes to Metricool is the download link, which does not wait for it.'
+            : 'This is exactly what goes out with the post. If it plays here, it is attached.'}
         </p>
       </div>
     );
