@@ -122,3 +122,45 @@ export function readNormalizedUrl(raw: string, sent = ''): NormalizeParse {
   const url = preferred || anyUrl || echoed || opaque || null;
   return { url, shape: url ? describeShape(data) : describeShape(data) };
 }
+
+
+// --- which endpoints to ask, which is a decision about the URL ---------------
+
+/** Does the URL name a video file? */
+export function looksLikeVideoUrl(url: string): boolean {
+  return /\.(mp4|mov|m4v|webm)(\?|#|$)/i.test(String(url || ''));
+}
+
+/** Does it name a still image? */
+export function looksLikeImageUrl(url: string): boolean {
+  return /\.(png|jpe?g|webp|gif|avif)(\?|#|$)/i.test(String(url || ''));
+}
+
+/**
+ * Should the VIDEO endpoints be tried, and the video budget used?
+ *
+ * WHY THIS IS NOT JUST looksLikeVideoUrl. That asks for an extension, and a
+ * Drive download link has none — not the old `uc?export=download&id=...` and
+ * not `drive.usercontent.google.com/download?id=...`. So every Drive video this
+ * app has ever handed over was treated as an IMAGE: two image endpoints, a
+ * sixty-second budget, and /normalize/video/url never asked at all.
+ *
+ * A 149 MB reel came back as "image 200 · v2/image 404 · image POST 500 ·
+ * v2/image POST 404" with Metricool echoing the link straight back — which
+ * reads as a problem with the file, while the same panel said the file was
+ * fine. It was right: the file was never the problem.
+ *
+ * An extensionless URL is UNKNOWN, not an image. Unknown is treated as a video
+ * candidate, which costs nothing when it is not one — the image endpoint still
+ * leads and the loop stops on the first usable answer — and is the difference
+ * between trying and not trying when it is.
+ *
+ * It lives here rather than in lib/metricool.ts because that module imports
+ * through `@/` aliases and the test runner cannot load it, which is exactly how
+ * a decision this consequential went eight months without a test.
+ */
+export function mayBeVideoUrl(url: string): boolean {
+  const u = String(url || '');
+  if (looksLikeVideoUrl(u)) return true;
+  return !looksLikeImageUrl(u);
+}

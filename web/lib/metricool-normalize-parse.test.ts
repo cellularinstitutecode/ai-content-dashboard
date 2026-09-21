@@ -23,6 +23,7 @@ import assert from 'node:assert/strict';
 import { describeShape, readNormalizedUrl } from './metricool-normalize-parse.ts';
 import { attemptTrace, normalizeFailure } from './media-normalize-reason.ts';
 import { readFileSync } from 'node:fs';
+import { looksLikeVideoUrl, mayBeVideoUrl } from './metricool-normalize-parse.ts';
 
 const SENT = 'https://studio.example.com/api/media/video/abc/1800000000/ff/video.mp4';
 const THEIRS = 'https://cdn.metricool.com/media/9f3a2b.mp4';
@@ -238,4 +239,40 @@ test('trying harder cannot run the request off its own clock', () => {
   assert.match(fn, /const deadline = Date\.now\(\) \+ budgetMs/, 'one clock across every attempt');
   assert.match(fn, /timeoutMs: left/, 'each attempt gets what is left, not a fresh four minutes');
   assert.match(fn, /if \(left < 10_000\) break/, 'and an attempt that cannot finish is not started');
+});
+
+test('a Drive download link is treated as a video, not an image', () => {
+  // THE ONE THAT KEPT ROW 191 OFF METRICOOL, and it had nothing to do with the
+  // file. looksLikeVideoUrl wants an extension; a Drive download link has none,
+  // in either spelling. So every Drive video this app has ever handed over took
+  // the IMAGE path: two image endpoints, a sixty-second budget, and the video
+  // endpoints never tried at all.
+  //
+  // The visible result was "image 200 · v2/image 404 · image POST 500 ·
+  // v2/image POST 404" with Metricool echoing the link back — which reads as a
+  // problem with the file, and the app even said the file was fine.
+  for (const url of [
+    'https://drive.usercontent.google.com/download?id=1AbC_dEfGhIjKlMnOpQrStUvWxYz012345&export=download&confirm=t',
+    'https://drive.google.com/uc?export=download&id=1AbC_dEfGhIjKlMnOpQrStUvWxYz012345',
+  ]) {
+    assert.equal(looksLikeVideoUrl(url), false, 'no extension to find — this is why it was missed');
+    assert.equal(mayBeVideoUrl(url), true, 'but unknown must be treated as a video candidate');
+  }
+
+  // A real extension still decides, in both directions.
+  assert.equal(mayBeVideoUrl('https://x.test/clip.mp4'), true);
+  assert.equal(mayBeVideoUrl('https://x.test/hero.jpg'), false, 'a picture must not spend the video budget');
+  assert.equal(mayBeVideoUrl('https://x.test/hero.PNG?v=2'), false);
+  assert.equal(mayBeVideoUrl('https://x.test/hero.webp'), false);
+});
+
+test('the video endpoints are only reachable when the URL is a video candidate', () => {
+  // Source check: the path list is chosen by that one boolean, so this is the
+  // line that decides whether /normalize/video/url is ever asked.
+  const src = readFileSync(new URL('../lib/metricool.ts', import.meta.url), 'utf8');
+  assert.match(src, /const isVideo = mayBeVideoUrl\(url\);/);
+  assert.doesNotMatch(src, /const isVideo = looksLikeVideoUrl\(url\);/, 'the old sniff is gone');
+  // And the budget follows the same boolean: a 149 MB pull cannot finish in the
+  // image budget of one minute.
+  assert.match(src, /const budgetMs = isVideo \? 240_000 : 60_000;/);
 });
