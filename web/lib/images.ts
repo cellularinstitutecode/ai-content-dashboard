@@ -660,7 +660,10 @@ export async function ensureDraftImage(draftId: string, ownerId: string): Promis
   // Same content-image rule as the route: an image flagged for text is never
   // reused — regenerate with the next composition variant instead.
   const existingHasText = existing?.verification?.textDetected === true;
-  if (existing?.url && !existingHasText) return existing;
+  // A planner draft still carrying a pre-cover picture gets the new cover once.
+  const plannerNeedsCover = Boolean(plannerImageFor(pack)) && !existing?.titled &&
+    !['library', 'upload'].includes(String(existing?.source || ''));
+  if (existing?.url && !existingHasText && !plannerNeedsCover) return existing;
 
   // Brand voice makes the image on-brand too (best-effort).
   let brand: BrandContext | null = null;
