@@ -56,7 +56,7 @@ function strings(v: unknown, cap = 8): string[] {
  * a picture that shows something else (the clinic reception, every time) is a
  * defect, not a matter of taste. Every other image keeps relevance advisory.
  */
-export function classifyVerdict(raw: unknown, opts: { requireOnTopic?: boolean } = {}): ImageVerdict {
+export function classifyVerdict(raw: unknown, opts: { requireOnTopic?: boolean; minHeadTopPct?: number } = {}): ImageVerdict {
   const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const score = typeof obj.score === 'number' && Number.isFinite(obj.score)
     ? Math.max(0, Math.min(100, Math.round(obj.score)))
@@ -83,6 +83,12 @@ export function classifyVerdict(raw: unknown, opts: { requireOnTopic?: boolean }
     advisory = advisory.filter((i) => !promoted.includes(i));
   }
 
+  // Weekly-planner covers carry a title in the top band: a head reaching up
+  // into it is a defect (the reviewer reports where the highest head starts).
+  const headTop = typeof obj.headTopPct === 'number' && Number.isFinite(obj.headTopPct) ? obj.headTopPct : null;
+  if (opts.minHeadTopPct != null && headTop != null && headTop < opts.minHeadTopPct) {
+    blocking = ['a head reaches into the title area (top of head at ' + Math.round(headTop) + '% from the top)', ...blocking].slice(0, 8);
+  }
   if (opts.requireOnTopic && obj.onTopic === false) {
     blocking = ['off-topic — the picture does not show what this post is about', ...blocking].slice(0, 8);
   }

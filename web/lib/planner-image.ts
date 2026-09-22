@@ -369,7 +369,7 @@ export function masterShot(opts: { tableObjects: string[]; foreground: string; a
     `THE TABLE: light honey-oak, running diagonally from the lower-left corner toward her. On it, in front of her and clearly visible: ${objects}. A closed silver laptop lies to one side.`,
     `LOWER-LEFT FOREGROUND, slightly soft: ${opts.foreground}.`,
     `BEHIND HER ON THE LEFT: a tall floor-to-ceiling window flooding the room with warm sunlight; through it, a soft-focus view of ${opts.windowView}; olive branches in a tall ceramic vase on the sill.`,
-    'THE BACK WALL: warm beige plaster with a slim vertical strip of warm recessed light on the right. The upper 30% of the frame is this plain wall and nothing else — a title will be set there — so her head sits just below that band, at about 40% from the top.',
+    'THE BACK WALL: warm beige plaster with a slim vertical strip of warm recessed light on the right. The upper third of the frame is this plain wall and nothing else — a title will be set there. HEADROOM IS CRITICAL: camera pulled back a little, so the top of every head is at least 35% of the way down from the top edge of the image.',
     'LIGHT AND COLOUR: golden late-afternoon sun from the left window, a warm glow and soft haze, creamy highlights; palette of cream, beige, sand, honey oak and soft orange accents.',
     'CAMERA: eye level, 50mm, f/2, shallow depth of field, photorealistic high-end editorial lifestyle photography; natural, unposed, warm and welcoming — a trusted private practice, never a hospital.',
   ].join(' ');

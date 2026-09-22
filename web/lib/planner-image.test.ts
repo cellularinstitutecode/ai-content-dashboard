@@ -34,7 +34,8 @@ test('a planner draft is pictured in the reference master shot, with its pillar 
   assert.match(lines, /white blazer over a beige silk blouse/);
   assert.match(lines, /floor-to-ceiling window/);
   assert.match(lines, /oranges/);
-  assert.match(lines, /upper 30% of the frame/);
+  assert.match(lines, /upper third of the frame/);
+  assert.match(lines, /at least 35% of the way down/);
   assert.doesNotMatch(lines, /black scrubs/);
   assert.match(onTopicCheck(p!), /onTopic/);
   const cancun = plannerPromptLines(plannerImageFor(pack('Cancun and health tourism', 'Recovering in a calm, warm environment'))!, 0).join(' ');
@@ -45,7 +46,7 @@ test('a team direction replaces the scene but keeps the title space and the look
   const p = plannerImageFor(pack('Sleep', 'Simple habits that may improve sleep quality'))!;
   const lines = plannerPromptLines(p, 0, 'a couple at the table').join(' ');
   assert.match(lines, /Direction from the team.*a couple at the table/);
-  assert.match(lines, /upper 30%/);
+  assert.match(lines, /upper third/);
 });
 
 test('the weekly article borrows the scenes of the pillar its angle came from', () => {

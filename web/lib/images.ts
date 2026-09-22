@@ -101,6 +101,13 @@ const MAX_GEN_ATTEMPTS = 3;
 // Keep retrying while there is real time left in the serverless budget
 // (route maxDuration is 60s; one generate+verify cycle is ~25s).
 const RETRY_TIME_BUDGET_MS = 34_000;
+// Planner covers: one generation takes ~40-60s, so the 34s budget above meant a
+// flagged cover (off topic, or a head in the title band) was never retried.
+// These routes run for up to 300s; allow a retry to START within 120s.
+const PLANNER_RETRY_BUDGET_MS = 120_000;
+// The title band covers roughly the top quarter of the cover; the photo is
+// cropped from the top (lib/title-cover.ts), so heads must start below this.
+const PLANNER_MIN_HEAD_TOP_PCT = 25;
 
 // Kill switch: set IMAGE_GEN=off to disable image generation everywhere
 // without redeploying callers. Default is ON whenever OPENAI_API_KEY exists.
@@ -365,7 +372,7 @@ async function generateImageBytes(prompt: string, size: '1536x1024' | '1024x1024
 const verifySystem = (rubric: string, planner?: PlannerImage | null) => planner
   ? verifySystemBase(rubric).replace(
       'Return STRICT JSON only: {"approved": boolean, "textDetected": boolean,',
-      '8. ' + onTopicCheck(planner) + '\nReturn STRICT JSON only: {"approved": boolean, "textDetected": boolean, "onTopic": boolean,'
+      '8. ' + onTopicCheck(planner) + '\n9. HEADROOM: measure how far down from the top edge the top of the highest person\'s head is, as a percentage of the image height (0 = top edge, 100 = bottom edge). Report it as "headTopPct".\nReturn STRICT JSON only: {"approved": boolean, "textDetected": boolean, "onTopic": boolean, "headTopPct": number,'
     )
   : verifySystemBase(rubric);
 
@@ -457,7 +464,7 @@ async function verifyGeneratedImage(img: GeneratedImage, topic: string, visual?:
     const raw = String(data?.choices?.[0]?.message?.content ?? '{}');
     // Defects flag; opinions are notes. The split (and the text hard rule)
     // lives in lib/image-verdict.ts where it is unit-tested.
-    const verdict = classifyVerdict(JSON.parse(raw), { requireOnTopic: Boolean(planner) });
+    const verdict = classifyVerdict(JSON.parse(raw), planner ? { requireOnTopic: true, minHeadTopPct: PLANNER_MIN_HEAD_TOP_PCT } : {});
     return {
       status: verdict.status,
       score: verdict.score,
@@ -645,7 +652,7 @@ async function generateBestPackImage(opts: {
     if (verification.status !== 'flagged') break; // clean (or uncheckable) — done
     // Flagged (text or other defects): retry with the next composition while
     // there is real time left in the serverless budget.
-    if (Date.now() - started > RETRY_TIME_BUDGET_MS) break;
+    if (Date.now() - started > (planner ? PLANNER_RETRY_BUDGET_MS : RETRY_TIME_BUDGET_MS)) break;
   }
   if (!best) {
     throw lastError instanceof Error
