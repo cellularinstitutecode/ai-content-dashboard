@@ -67,3 +67,15 @@ test('scenes rotate, the prefix is stripped, unknown angles fall back to the pil
   assert.equal(cleanTopic('[Autopilot] Sleep'), 'Sleep');
   assert.equal(titleFor('something new', 'Nutrition'), 'The Importance of Nutrition');
 });
+
+test('a brief written from the post replaces the fixed scene and the on-topic cue', () => {
+  const base = plannerImageFor(pack('Nutrition', 'Hydration and cellular health'))!;
+  const p = { ...base, dynamic: { scene: 'The physician pours a glass of water from a carafe with cucumber slices for the patient.', props: ['glass carafe of water', 'cucumber slices'], mustShow: 'water being poured' } };
+  const lines = plannerPromptLines(p, 0).join(' ');
+  assert.match(lines, /pours a glass of water/);
+  assert.match(lines, /In clear view: glass carafe of water, cucumber slices/);
+  assert.match(lines, /must clearly show water being poured/);
+  assert.match(lines, /post titled "Hydration and Cellular Health"/);
+  assert.doesNotMatch(lines, /oranges/);
+  assert.match(onTopicCheck(p), /water being poured/);
+});
