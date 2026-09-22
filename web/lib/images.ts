@@ -104,7 +104,12 @@ const RETRY_TIME_BUDGET_MS = 34_000;
 // Planner covers: one generation takes ~40-60s, so the 34s budget above meant a
 // flagged cover (off topic, or a head in the title band) was never retried.
 // These routes run for up to 300s; allow a retry to START within 120s.
-const PLANNER_RETRY_BUDGET_MS = 120_000;
+const PLANNER_RETRY_BUDGET_MS = 100_000;
+// A high-quality 1024x1536 planner photo with the long master-shot prompt can
+// take longer than the 50s allowed per Images call; cut off at 50s, the first
+// live attempt failed with "This operation was aborted". Planner calls get
+// 110s (the routes that run them allow 300s).
+const PLANNER_IMAGE_CALL_MS = 110_000;
 // The title band covers roughly the top quarter of the cover; the photo is
 // cropped from the top (lib/title-cover.ts), so heads must start below this.
 const PLANNER_MIN_HEAD_TOP_PCT = 25;
@@ -285,7 +290,7 @@ type GeneratedImage = { bytes: Buffer; contentType: string; ext: string; model: 
 // where a second slow call would bust the serverless budget). Every rung's
 // error is kept so a total failure surfaces the full story, not just the
 // last fallback's complaint.
-async function generateImageBytes(prompt: string, size: '1536x1024' | '1024x1024' | '1024x1536' = '1536x1024'): Promise<GeneratedImage> {
+async function generateImageBytes(prompt: string, size: '1536x1024' | '1024x1024' | '1024x1536' = '1536x1024', callMs = 50_000): Promise<GeneratedImage> {
   const attempts: { model: string; body: Record<string, unknown> }[] = [
     // HIGH, not medium.
     //
@@ -342,7 +347,7 @@ async function generateImageBytes(prompt: string, size: '1536x1024' | '1024x1024
   const errors: string[] = [];
   for (let i = 0; i < attempts.length; i++) {
     try {
-      const out = await callImagesApi(attempts[i].body, 50_000);
+      const out = await callImagesApi(attempts[i].body, callMs);
       const bytes = out.b64 ? Buffer.from(out.b64, 'base64') : await fetchImageBytes(out.url as string, 30_000);
       if (!bytes.length) throw new Error('empty image payload');
       return { bytes, ...sniffImage(bytes), model: attempts[i].model };
@@ -629,7 +634,7 @@ async function generateBestPackImage(opts: {
     // approveRun that surfaced as a post shipping with no image at all.
     let img: GeneratedImage;
     try {
-      img = await generateImageBytes(prompt, planner?.size);
+      img = await generateImageBytes(prompt, planner?.size, planner ? PLANNER_IMAGE_CALL_MS : 50_000);
     } catch (e) {
       lastError = e;
       // With a usable candidate in hand, stop and store it. With nothing in
