@@ -9,7 +9,7 @@
 // Nutrition") is recognisably about food. So before each planner image is
 // generated, a small text model reads the post and writes the scene: the
 // action, and 2-4 concrete objects that make this specific subject obvious.
-// The house style (bright consultation, blazer, clear top 40%) is fixed around
+// The master shot (lib/planner-image.ts masterShot) is fixed around
 // it, and the vision checker then verifies the picture shows the cue it named.
 //
 // This file is pure — the prompt, the source text and the parser — so the rules
@@ -43,24 +43,26 @@ export function briefSource(pack: unknown, max = 1600): string {
 
 /** Compositions to steer toward, so "New image" gives a genuinely different picture. */
 const COMPOSITIONS = [
-  'seated across a light oak table, both visible, seen from slightly above',
-  'a closer view over the table, the objects prominent in the foreground, the people softly behind them',
-  'standing together near a large window, one of them holding or showing the key object',
-  'side by side on a linen sofa or two armchairs, the objects on a low table in front',
+  'the physician points at the key object with a pen',
+  'the physician holds the key object up gently as she explains',
+  'the physician rests one hand beside the key object, the other open in a warm gesture',
+  'the physician slides the key object toward the patient',
 ];
 
 export function briefSystemPrompt(): string {
   return [
-    'You art-direct ONE editorial photograph for a clinic\'s educational social post. The house style is fixed:',
-    'a bright, airy daylight consultation between a physician (tailored white or cream blazer, never scrubs) and a patient,',
-    'warm beige walls, light oak, plants, a soft window view; the upper 40% of the frame is empty wall; people sit low in the frame.',
-    'Your job: choose what happens and what is in view so that a reader recognises THIS post\'s specific subject at a glance.',
-    'Rules: pick 2-4 concrete, everyday, photographable objects that belong to the subject (for protein: eggs, salmon, lentils;',
-    'for a nutrition label: a plain food package held so its blank side faces the camera; for sleep habits: a phone placed face-down, a dimmed lamp).',
+    'You choose the props for ONE photograph in a fixed series. The composition never changes: an over-the-shoulder consultation —',
+    'the patient seen from behind in the right foreground; across a light oak table, a smiling physician in a white blazer facing the camera;',
+    'a sunlit window on the left; a bowl or small object in the lower-left foreground.',
+    'Your job is only: what the physician is doing with her hands, and which objects are on the table and in the foreground,',
+    'so that a reader recognises THIS post\'s specific subject at a glance.',
+    'Pick 2-4 concrete, everyday, photographable objects that belong to the subject (for protein: boiled eggs, grilled salmon, lentils;',
+    'for a nutrition label: a plain food package held with its blank side to the camera; for sleep habits: a phone placed face-down, a cup of chamomile tea).',
+    'The FIRST prop is the lower-left foreground object (a bowl, plate or small item); the others go on the table in front of the physician.',
     'Never: any text, writing, labels, logos or brands; screens showing content; needles, syringes, IV lines, blood; exposed bodies;',
-    'before/after; specific medicines or supplement bottles with markings; devices named as products; anything alarming.',
-    'Keep it calm, warm and credible. Answer with STRICT JSON only:',
-    '{"scene": "one or two sentences in plain English", "props": ["object", "object"], "mustShow": "the single clearest visual cue, a short phrase"}',
+    'before/after; medicine or supplement bottles with markings; named devices; anything alarming.',
+    'Answer with STRICT JSON only:',
+    '{"scene": "what the physician is doing, one short clause, e.g. pointing with a pen at the plate of salmon", "props": ["foreground object", "table object", "table object"], "mustShow": "the single clearest visual cue, a short phrase"}',
   ].join(' ');
 }
 
@@ -70,7 +72,7 @@ export function briefUserPrompt(opts: { title: string; angle: string; pillarName
     `Post title: ${opts.title}`,
     `Weekly theme: ${opts.pillarName}`,
     `Angle: ${opts.angle}`,
-    `Composition to use: ${comp}.`,
+    `Hands: ${comp}.`,
     opts.text ? `The post says: ${opts.text}` : '',
   ].filter(Boolean).join('\n');
 }

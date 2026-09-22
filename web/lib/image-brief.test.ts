@@ -14,7 +14,7 @@ test('the brief reads the article first, without hashtags, REF or AVISO', () => 
 });
 
 test('the prompts carry the house style, the rules and a composition that varies', () => {
-  assert.match(briefSystemPrompt(), /upper 40%/);
+  assert.match(briefSystemPrompt(), /over-the-shoulder consultation/);
   assert.match(briefSystemPrompt(), /Never: any text/);
   const a = briefUserPrompt({ title: 'Protein and Recovery', angle: 'The role of protein in recovery', pillarName: 'Nutrition', text: 'x', variant: 0 });
   const b = briefUserPrompt({ title: 'Protein and Recovery', angle: 'The role of protein in recovery', pillarName: 'Nutrition', text: 'x', variant: 1 });

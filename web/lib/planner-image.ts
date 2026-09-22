@@ -69,10 +69,10 @@ export const PLANNER_PHOTOGRAPHY = [
 
 /** The instruction that leaves room for the title the renderer sets later. */
 export const TITLE_SPACE =
-  'Composition rule (important): the upper 40% of the frame is EMPTY — a plain, softly lit warm-beige wall with nothing on it ' +
+  'Composition rule (important): the upper 30% of the frame is EMPTY — a plain, softly lit warm-beige wall with nothing on it ' +
   '(no art, no shelves, no lamps, no signs, no objects) — because a title will be placed there afterwards. ' +
-  'Everyone\'s head must sit BELOW the middle of the frame: shoot from slightly further back and slightly above, so the people ' +
-  'are seated low in the frame with generous wall above them. Vertical framing.';
+  'Everyone\'s head sits below that band. The table top and the key objects are in the lower third, LARGE, sharp and ' +
+  'fully visible, well above the bottom edge — they tell the story, so they must never be small, blurred or cut off. Vertical framing.';
 
 type SceneSet = { mustShow: string; scenes: string[] };
 
@@ -344,18 +344,71 @@ export function plannerImageFor(pack: unknown): PlannerImage | null {
 }
 
 /** The lines the image prompt carries for a planner draft (the photograph only — the title is set later). */
+/**
+ * THE MASTER SHOT — the team's reference photograph, described closely enough
+ * that every planner image reads as part of the same series. Only three things
+ * change from post to post: what is on the table, what the physician is doing
+ * with her hands, and (for the Cancun themes) the view through the window.
+ * Composition, people, wardrobe, light and palette stay fixed.
+ */
+export function masterShot(opts: { tableObjects: string[]; foreground: string; action: string; windowView: string; variant: number }): string {
+  const patients = [
+    'long wavy dark-brown hair and an oatmeal knit sweater',
+    'shoulder-length light-brown hair and a soft beige cardigan',
+    'short silver hair and a cream linen shirt',
+    'long auburn hair and a camel knit sweater',
+  ];
+  const patient = patients[Math.abs(Math.round(opts.variant)) % patients.length];
+  const objects = opts.tableObjects.length ? opts.tableObjects.join(', ') : 'a glass of water and a small plant';
+  return [
+    'COMPOSITION — match this exactly: an over-the-shoulder consultation photograph, vertical.',
+    `RIGHT FOREGROUND: the patient seen from behind at three-quarter, large and partly out of frame, softly out of focus — ${patient}.`,
+    'CENTRE-LEFT, across the table, facing the camera: the physician, a woman in her early 40s with shoulder-length wavy brown hair, a warm genuine smile,',
+    'a tailored white blazer over a beige silk blouse and a delicate gold necklace — never scrubs, never a lab coat.',
+    `What she is doing: ${opts.action}.`,
+    `THE TABLE: light honey-oak, running diagonally from the lower-left corner toward her. On it, in front of her and clearly visible: ${objects}. A closed silver laptop lies to one side.`,
+    `LOWER-LEFT FOREGROUND, slightly soft: ${opts.foreground}.`,
+    `BEHIND HER ON THE LEFT: a tall floor-to-ceiling window flooding the room with warm sunlight; through it, a soft-focus view of ${opts.windowView}; olive branches in a tall ceramic vase on the sill.`,
+    'THE BACK WALL: warm beige plaster with a slim vertical strip of warm recessed light on the right. The upper 30% of the frame is this plain wall and nothing else — a title will be set there — so her head sits just below that band, at about 40% from the top.',
+    'LIGHT AND COLOUR: golden late-afternoon sun from the left window, a warm glow and soft haze, creamy highlights; palette of cream, beige, sand, honey oak and soft orange accents.',
+    'CAMERA: eye level, 50mm, f/2, shallow depth of field, photorealistic high-end editorial lifestyle photography; natural, unposed, warm and welcoming — a trusted private practice, never a hospital.',
+  ].join(' ');
+}
+
+const CANCUN = new Set(['cancun', 'recovery-cancun']);
+
+/** When no brief could be written: the pillar's cue, as table objects. */
+const FALLBACK_OBJECTS: Record<string, { table: string[]; foreground: string; action: string }> = {
+  diagnosis: { table: ['a stethoscope', 'a closed blank folder', 'a glass of water'], foreground: 'a ceramic bowl of lemons with leaves', action: 'listening closely, a pen in her hand resting on the blank folder' },
+  protocols: { table: ['a notepad with blank pages', 'two cups of tea'], foreground: 'a small vase of eucalyptus', action: 'sketching on the blank notepad and turning it toward the patient' },
+  nutrition: { table: ['a book open to full-page photographs of avocado, greens, grains and salmon'], foreground: 'a ceramic bowl of oranges with leaves', action: 'pointing with a pen at the food photographs in the book' },
+  supplementation: { table: ['a small ceramic dish with a few plain unlabeled capsules', 'a glass of water'], foreground: 'a bowl of fresh fruit', action: 'gesturing gently toward the dish of capsules' },
+  movement: { table: ['a light resistance band', 'a water bottle', 'a small folded towel'], foreground: 'a rolled yoga mat leaning against the table', action: 'holding up the resistance band as she explains' },
+  sleep: { table: ['a cup of chamomile tea', 'a small bunch of lavender'], foreground: 'a folded linen throw', action: 'speaking gently, hands relaxed around her own cup of tea' },
+  prevention: { table: ['a blood-pressure cuff', 'a stethoscope', 'a notebook with blank pages'], foreground: 'a bowl of green apples', action: 'resting a hand beside the blood-pressure cuff as she explains' },
+  cancun: { table: ['a bowl of tropical fruit', 'two glasses of water with lime'], foreground: 'a small potted palm', action: 'gesturing toward the window and the sea beyond' },
+  'follow-up': { table: ['a tablet with a blank screen', 'a notebook with blank pages'], foreground: 'a small plant', action: 'reviewing the blank tablet with the patient, smiling' },
+  recovery: { table: ['a glass of water', 'a folded light linen blanket'], foreground: 'a bowl of cucumbers and mint', action: 'offering the glass of water to the patient' },
+  'active-living': { table: ['a water bottle', 'a pair of sneakers', 'a small towel'], foreground: 'a rolled yoga mat', action: 'smiling and gesturing toward the window as if describing a walk' },
+  'practical-nutrition': { table: ['a protein-rich breakfast: Greek yogurt with berries, boiled eggs and whole-grain toast'], foreground: 'a ceramic bowl of oranges with leaves', action: 'pointing with a pen at the breakfast plate' },
+  stress: { table: ['a cup of herbal tea', 'a small dish of dried lavender'], foreground: 'a folded linen throw', action: 'showing a slow breath with one hand resting on her chest' },
+  'recovery-cancun': { table: ['a bowl of tropical fruit', 'a glass of water with lime', 'a sun hat'], foreground: 'a small potted palm', action: 'smiling and pointing out toward the sea' },
+};
+
 export function plannerPromptLines(p: PlannerImage, sceneIndex: number, direction?: string | null): string[] {
   const dir = String(direction || '').trim();
   const d = p.dynamic;
-  const scene = d
-    ? `${d.scene} In clear view: ${d.props.join(', ')}.`
-    : p.scenes[Math.abs(Math.round(sceneIndex)) % p.scenes.length];
+  const pid = p.pillarId === 'article' ? (Object.keys(PILLAR_SCENES).find((k) => PILLAR_SCENES[k].scenes === p.scenes) || 'diagnosis') : p.pillarId;
+  const fb = FALLBACK_OBJECTS[pid] || FALLBACK_OBJECTS.diagnosis;
+  const tableObjects = d ? d.props.slice(1).length ? d.props.slice(1) : d.props : fb.table;
+  const foreground = d && d.props.length > 1 ? d.props[0] : fb.foreground;
+  const action = d ? d.scene.replace(/^(the )?physician (is )?/i, '').replace(/\.$/, '') : fb.action;
+  const windowView = CANCUN.has(pid) ? 'a turquoise Caribbean sea, white sand and palm trees' : 'green trees and soft hills';
   return [
-    `Subject: a medical consultation that illustrates "${p.subject}" (the weekly "${p.pillarName}" theme, post titled "${p.title}"). The picture must clearly show ${d ? d.mustShow : p.mustShow}.`,
-    dir ? `Direction from the team (follow this closely): ${dir}` : `Scene: ${scene}`,
-    TITLE_SPACE,
-    PLANNER_PHOTOGRAPHY,
-  ];
+    `Subject: a consultation that illustrates "${p.subject}" (the weekly "${p.pillarName}" theme, post titled "${p.title}"). The picture must clearly show ${d ? d.mustShow : p.mustShow}.`,
+    dir ? `Direction from the team (follow this closely, within the composition below): ${dir}` : '',
+    masterShot({ tableObjects, foreground, action, windowView, variant: sceneIndex }),
+  ].filter(Boolean);
 }
 
 /** The extra check the vision reviewer runs on a planner image. */

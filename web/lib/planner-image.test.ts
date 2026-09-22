@@ -23,28 +23,29 @@ test('every angle the strategy lists has a short, hand-written cover title', () 
   }
 });
 
-test('a planner draft is pictured as a consultation on its pillar, portrait, with its title', () => {
+test('a planner draft is pictured in the reference master shot, with its pillar objects and title', () => {
   const p = plannerImageFor(pack('Nutrition', 'The role of protein in recovery'));
   assert.ok(p);
   assert.equal(p!.pillarId, 'nutrition');
   assert.equal(p!.size, '1024x1536');
   assert.equal(p!.title, 'Protein and Recovery');
   const lines = plannerPromptLines(p!, 0).join(' ');
-  assert.match(lines, /medical consultation/);
+  assert.match(lines, /over-the-shoulder consultation/);
+  assert.match(lines, /white blazer over a beige silk blouse/);
+  assert.match(lines, /floor-to-ceiling window/);
   assert.match(lines, /oranges/);
-  assert.match(lines, /upper 40% of the frame is EMPTY/);
-  assert.match(lines, /head must sit BELOW the middle/);
-  assert.match(lines, /white or cream blazer/);
+  assert.match(lines, /upper 30% of the frame/);
   assert.doesNotMatch(lines, /black scrubs/);
   assert.match(onTopicCheck(p!), /onTopic/);
+  const cancun = plannerPromptLines(plannerImageFor(pack('Cancun and health tourism', 'Recovering in a calm, warm environment'))!, 0).join(' ');
+  assert.match(cancun, /turquoise Caribbean sea/);
 });
 
 test('a team direction replaces the scene but keeps the title space and the look', () => {
   const p = plannerImageFor(pack('Sleep', 'Simple habits that may improve sleep quality'))!;
   const lines = plannerPromptLines(p, 0, 'a couple at the table').join(' ');
   assert.match(lines, /Direction from the team.*a couple at the table/);
-  assert.doesNotMatch(lines, /Scene:/);
-  assert.match(lines, /upper 40%/);
+  assert.match(lines, /upper 30%/);
 });
 
 test('the weekly article borrows the scenes of the pillar its angle came from', () => {
@@ -72,8 +73,9 @@ test('a brief written from the post replaces the fixed scene and the on-topic cu
   const base = plannerImageFor(pack('Nutrition', 'Hydration and cellular health'))!;
   const p = { ...base, dynamic: { scene: 'The physician pours a glass of water from a carafe with cucumber slices for the patient.', props: ['glass carafe of water', 'cucumber slices'], mustShow: 'water being poured' } };
   const lines = plannerPromptLines(p, 0).join(' ');
-  assert.match(lines, /pours a glass of water/);
-  assert.match(lines, /In clear view: glass carafe of water, cucumber slices/);
+  assert.match(lines, /What she is doing: pours a glass of water/);
+  assert.match(lines, /LOWER-LEFT FOREGROUND, slightly soft: glass carafe of water/);
+  assert.match(lines, /clearly visible: cucumber slices/);
   assert.match(lines, /must clearly show water being poured/);
   assert.match(lines, /post titled "Hydration and Cellular Health"/);
   assert.doesNotMatch(lines, /oranges/);
