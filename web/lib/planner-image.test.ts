@@ -32,7 +32,8 @@ test('a planner draft is pictured as a consultation on its pillar, portrait, wit
   const lines = plannerPromptLines(p!, 0).join(' ');
   assert.match(lines, /medical consultation/);
   assert.match(lines, /oranges/);
-  assert.match(lines, /upper third of the frame clean/);
+  assert.match(lines, /upper 40% of the frame is EMPTY/);
+  assert.match(lines, /head must sit BELOW the middle/);
   assert.match(lines, /white or cream blazer/);
   assert.doesNotMatch(lines, /black scrubs/);
   assert.match(onTopicCheck(p!), /onTopic/);
@@ -43,7 +44,7 @@ test('a team direction replaces the scene but keeps the title space and the look
   const lines = plannerPromptLines(p, 0, 'a couple at the table').join(' ');
   assert.match(lines, /Direction from the team.*a couple at the table/);
   assert.doesNotMatch(lines, /Scene:/);
-  assert.match(lines, /upper third/);
+  assert.match(lines, /upper 40%/);
 });
 
 test('the weekly article borrows the scenes of the pillar its angle came from', () => {

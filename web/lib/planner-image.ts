@@ -56,15 +56,16 @@ export const PLANNER_PHOTOGRAPHY = [
   'through the window, a soft-focus view of greenery or hills.',
   'The physician wears a tailored white or cream blazer over a neutral top — never scrubs, never a lab coat with logos — with a warm, attentive, approachable expression.',
   'The patient is seen three-quarter from behind or in soft profile, relaxed and engaged.',
-  '35-50mm lens at eye level, shallow depth of field, realistic skin and hands, natural unposed moment.',
+  '35-50mm lens from slightly above eye level, shallow depth of field, realistic skin and hands, natural unposed moment.',
   'The mood of a trusted private practice — calm, premium, welcoming — never a hospital, never a waiting room or reception desk.',
 ].join(' ');
 
 /** The instruction that leaves room for the title the renderer sets later. */
 export const TITLE_SPACE =
-  'Composition rule: keep the upper third of the frame clean and calm — a plain, softly lit warm-beige wall with nothing on it ' +
+  'Composition rule (important): the upper 40% of the frame is EMPTY — a plain, softly lit warm-beige wall with nothing on it ' +
   '(no art, no shelves, no lamps, no signs, no objects) — because a title will be placed there afterwards. ' +
-  'Place the people and the table in the lower two-thirds of the frame. Vertical framing.';
+  'Everyone\'s head must sit BELOW the middle of the frame: shoot from slightly further back and slightly above, so the people ' +
+  'are seated low in the frame with generous wall above them. Vertical framing.';
 
 type SceneSet = { mustShow: string; scenes: string[] };
 
@@ -351,6 +352,6 @@ export function plannerPromptLines(p: PlannerImage, sceneIndex: number, directio
 export function onTopicCheck(p: PlannerImage): string {
   return `ON-TOPIC (this one is a DEFECT, not an opinion): the image must clearly show ${p.mustShow}. ` +
     'A generic reception desk, front desk or waiting room does NOT count. ' +
-    'Also a DEFECT: clutter in the top third, where a title will sit (art, shelves, lamps, busy objects). ' +
+    'Also a DEFECT: anything in the top third, where a title will sit — a person\'s head or face, art, shelves, lamps or busy objects. ' +
     'Set "onTopic": false when either fails.';
 }
