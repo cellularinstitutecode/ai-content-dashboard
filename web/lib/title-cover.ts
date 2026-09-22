@@ -17,7 +17,7 @@ import { ImageResponse } from 'next/og.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { loadFonts, type FontSet } from './brand-card.ts';
-import { COVER, TITLE_INK, TITLE_WASH, isConnector, splitTitleLines, titleFontSize } from './title-cover-layout.ts';
+import { COVER, TITLE_INK, TITLE_WASH, fitTitle, isConnector, splitTitleLines } from './title-cover-layout.ts';
 
 type Font = FontSet['fonts'][number];
 
@@ -34,9 +34,9 @@ function standInItalic(): Promise<Font | null> {
 }
 
 /** The React tree for one cover — exported so its words can be asserted without rendering. */
-export function coverElement(input: { title: string; photoDataUrl: string; family: string; italic: boolean }): ReactElement {
+export function coverElement(input: { title: string; photoDataUrl: string; family: string; italic: boolean; headTopPct?: number | null }): ReactElement {
   const lines = splitTitleLines(input.title);
-  const size = titleFontSize(lines);
+  const { size, top, rule } = fitTitle(lines, input.headTopPct);
   let wordIndex = 0;
   const lineEls = lines.map((line, li) =>
     h(
@@ -67,15 +67,15 @@ export function coverElement(input: { title: string; photoDataUrl: string; famil
     h('div', { key: 'wash', style: { position: 'absolute', top: 0, left: 0, width: COVER.width, height: Math.round(COVER.height * 0.5), backgroundImage: TITLE_WASH, display: 'flex' } }),
     h(
       'div',
-      { key: 'title', style: { position: 'absolute', top: 96, left: 80, right: 80, display: 'flex', flexDirection: 'column', alignItems: 'center' } },
+      { key: 'title', style: { position: 'absolute', top, left: 80, right: 80, display: 'flex', flexDirection: 'column', alignItems: 'center' } },
       ...lineEls,
-      h('div', { key: 'rule', style: { display: 'flex', width: 120, height: 2, marginTop: 34, background: TITLE_INK, opacity: 0.4 } }),
+      h('div', { key: 'rule', style: { display: 'flex', width: 120, height: 2, marginTop: rule, background: TITLE_INK, opacity: 0.4 } }),
     ),
   );
 }
 
 /** Paint the title on the photograph. Returns a 1080×1350 PNG (Instagram's 4:5). */
-export async function renderTitleCover(input: { title: string; photo: { bytes: Buffer; contentType: string } }): Promise<{ png: Buffer; width: number; height: number; family: string }> {
+export async function renderTitleCover(input: { title: string; photo: { bytes: Buffer; contentType: string }; headTopPct?: number | null }): Promise<{ png: Buffer; width: number; height: number; family: string }> {
   const fontSet = await loadFonts();
   const fonts: Font[] = [...fontSet.fonts];
   const family = fontSet.headlineFamily;
@@ -85,7 +85,7 @@ export async function renderTitleCover(input: { title: string; photo: { bytes: B
     if (it) { fonts.push(it); italic = true; }
   }
   const photoDataUrl = `data:${input.photo.contentType};base64,${input.photo.bytes.toString('base64')}`;
-  const res = new ImageResponse(coverElement({ title: input.title, photoDataUrl, family, italic }), { width: COVER.width, height: COVER.height, fonts });
+  const res = new ImageResponse(coverElement({ title: input.title, photoDataUrl, family, italic, headTopPct: input.headTopPct }), { width: COVER.width, height: COVER.height, fonts });
   const png = Buffer.from(await res.arrayBuffer());
   return { png, width: COVER.width, height: COVER.height, family };
 }

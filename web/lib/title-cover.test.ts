@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement as h } from 'react';
 import { ImageResponse } from 'next/og.js';
-import { splitTitleLines, titleFontSize, isConnector } from './title-cover-layout.ts';
+import { splitTitleLines, titleFontSize, isConnector, fitTitle } from './title-cover-layout.ts';
 import { renderTitleCover, coverElement } from './title-cover.ts';
 import { pngSize } from './brand-card.ts';
 
@@ -42,4 +42,15 @@ test('a cover renders to a 1080×1350 PNG over a photograph', async () => {
   const out = await renderTitleCover({ title: 'The Importance of Nutrition', photo: { bytes, contentType: 'image/png' } });
   assert.deepEqual(pngSize(out.png), { width: 1080, height: 1350 });
   assert.equal(out.family, 'Instrument Serif');
+});
+
+test('the title fits itself above the heads the photograph gave us', () => {
+  const lines = splitTitleLines('Protein and Recovery');
+  const free = fitTitle(lines, null);
+  const tight = fitTitle(lines, 26);   // heads high in the frame
+  const roomy = fitTitle(lines, 45);   // heads low, as asked for
+  assert.equal(roomy.size, free.size, 'plenty of wall: the classic setting');
+  assert.ok(tight.size < free.size || tight.top < free.top, 'crowded: smaller and/or higher');
+  const blockBottom = (f: { size: number; top: number }) => f.top + lines.length * f.size * 1.08 + 36;
+  assert.ok(blockBottom(tight) <= (26 / 83.3) * 1350 - 60, 'and it clears the heads');
 });
