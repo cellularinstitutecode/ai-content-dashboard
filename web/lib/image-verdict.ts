@@ -25,6 +25,8 @@ export type ImageVerdict = {
   textDetected: boolean;
   /** Advisory 0-100: how much the picture lives in the brand's own world. Never affects status. */
   brandFit: number | null;
+  /** Planner covers: how far down the frame the highest head starts, as a percentage. Null when not measured. */
+  headTopPct?: number | null;
 };
 
 const TEXT_RE = /\btext\b|letter|typograph|caption|\bword|writing|lettering|number|digit|signage|\bsign\b/i;
@@ -107,6 +109,7 @@ export function classifyVerdict(raw: unknown, opts: { requireOnTopic?: boolean; 
 
   const flagged = textDetected || blocking.length > 0 || vetoWithoutReason;
   return {
+    headTopPct: headTop,
     status: flagged ? 'flagged' : 'approved',
     score,
     issues: flagged && vetoWithoutReason && !blocking.length ? ['reviewer declined the image without naming a defect'] : blocking,

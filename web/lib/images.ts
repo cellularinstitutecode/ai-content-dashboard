@@ -55,6 +55,8 @@ export type ImageVerification = {
   // and the pipeline treats it as the worst possible outcome (always
   // regenerates; a text-bearing candidate can never beat a text-free one).
   textDetected?: boolean;
+  /** Planner covers: where the highest head starts, as a percentage of the photo's height. */
+  headTopPct?: number | null;
   // Advisory 0-100 from the same reviewer: does the picture live in the
   // brand's palette, materials and camera (lib/brand-visual.ts)? Shown to the
   // human; breaks ties between two clean candidates; never flags anything.
@@ -112,7 +114,7 @@ const PLANNER_RETRY_BUDGET_MS = 100_000;
 const PLANNER_IMAGE_CALL_MS = 110_000;
 // The title band covers roughly the top quarter of the cover; the photo is
 // cropped from the top (lib/title-cover.ts), so heads must start below this.
-const PLANNER_MIN_HEAD_TOP_PCT = 25;
+const PLANNER_MIN_HEAD_TOP_PCT = 30;
 
 // Kill switch: set IMAGE_GEN=off to disable image generation everywhere
 // without redeploying callers. Default is ON whenever OPENAI_API_KEY exists.
@@ -473,6 +475,7 @@ async function verifyGeneratedImage(img: GeneratedImage, topic: string, visual?:
     return {
       status: verdict.status,
       score: verdict.score,
+      headTopPct: verdict.headTopPct ?? null,
       issues: verdict.issues,
       advisory: verdict.advisory,
       textDetected: verdict.textDetected,
@@ -674,7 +677,7 @@ async function generateBestPackImage(opts: {
   // nothing, and the failure is reported.
   if (planner) {
     try {
-      const cover = await renderTitleCover({ title: planner.title, photo: { bytes: best.img.bytes, contentType: best.img.contentType } });
+      const cover = await renderTitleCover({ title: planner.title, photo: { bytes: best.img.bytes, contentType: best.img.contentType }, headTopPct: best.verification.headTopPct });
       url = await storeBytes(cover.png, 'image/png', 'png', nameHint + '-cover');
       titled = { title: planner.title, photoUrl, family: cover.family };
     } catch (err) {

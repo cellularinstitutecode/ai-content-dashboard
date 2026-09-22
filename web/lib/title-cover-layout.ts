@@ -58,6 +58,34 @@ export function titleFontSize(lines: string[]): number {
   return n <= 12 ? 104 : n <= 16 ? 94 : n <= 20 ? 84 : n <= 24 ? 74 : 64;
 }
 
+/**
+ * Where the title goes, given how much clear wall the photograph left.
+ *
+ * The image model does not always honour "keep the top third empty", and a
+ * title over somebody's hair looks like a mistake. So the vision check reports
+ * where the highest head starts, and the title is set to FIT above it: the
+ * type steps down, and then the block moves up, until it clears the heads.
+ *
+ * `headTopPct` is measured on the photograph; the cover shows its top 83.3%
+ * (a 2:3 photo cropped to 4:5 from the top), so it is converted here.
+ */
+export function fitTitle(lines: string[], headTopPct?: number | null): { size: number; top: number; rule: number } {
+  const TOP = 96;
+  const RULE_GAP = 34;
+  const RULE_H = 2;
+  const block = (size: number) => Math.round(lines.length * size * 1.08) + RULE_GAP + RULE_H;
+  let size = titleFontSize(lines);
+  const head = typeof headTopPct === 'number' && Number.isFinite(headTopPct) ? headTopPct : null;
+  // No measurement: keep the classic placement.
+  if (head == null) return { size, top: TOP, rule: RULE_GAP };
+  // The heads, in cover pixels, minus a margin of breathing room.
+  const headPx = Math.max(0, Math.min(COVER.height, (head / 83.3) * COVER.height)) - 90;
+  let top = TOP;
+  while (size > 52 && top + block(size) > headPx) size -= 4;
+  if (top + block(size) > headPx) top = Math.max(44, Math.round(headPx - block(size)));
+  return { size, top, rule: RULE_GAP };
+}
+
 /** The ink: the brand's darkest warm brown, softened a touch for a light wall. */
 export const TITLE_INK = '#2E2620';
 /** The light wash behind the title, so it reads on any wall the photograph gives us. */
