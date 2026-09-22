@@ -45,7 +45,13 @@ test('the route outlives the attempts it is allowed to make', () => {
   // slower, which would have made that the ordinary case rather than the rare one.
   const route = src('app/api/drafts/image/route.ts');
   const declared = Number(/export const maxDuration = (\d+)/.exec(route)?.[1] || 0);
-  const perAttempt = Number(/callImagesApi\(attempts\[i\]\.body, (\d+)_000\)/.exec(src('lib/images.ts'))?.[1] || 0);
+  // The default per-call timeout, and the longer one weekly-planner covers get
+  // (portrait, high quality, a long prompt). The route must outlive two of the longest.
+  const images = src('lib/images.ts');
+  const byDefault = Number(/callMs = (\d+)_000\)/.exec(images)?.[1] || 0);
+  const planner = Number(/PLANNER_IMAGE_CALL_MS = (\d+)_000;/.exec(images)?.[1] || 0);
+  const perAttempt = Math.max(byDefault, planner);
+  assert.match(images, /callImagesApi\(attempts\[i\]\.body, callMs\)/, 'every rung uses the per-call timeout');
   assert.ok(perAttempt > 0, 'the per-attempt timeout must be readable');
   assert.ok(
     declared >= perAttempt * 2,
