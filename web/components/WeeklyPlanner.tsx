@@ -45,7 +45,7 @@ type Draft = { day: number; topic: string; format: string; time: string; provide
    * angle bank, so for these it edits the day, time, format, goal and channels
    * and leaves the rotation exactly as it found it.
    */
-  rotating?: { name: string; angles: number } };
+  rotating?: { name: string; angles: number } & { list?: string[] } };
 
 const inputStyle: React.CSSProperties = { width: '100%', padding: 8, borderRadius: 6, background: '#f5f5f7', border: '1px solid rgba(0,0,0,0.1)', color: '#1d1d1f', marginTop: 4, boxSizing: 'border-box', fontSize: 13 };
 const btn: React.CSSProperties = { background: '#0071e3', color: '#fff', border: 'none', borderRadius: 999, padding: '7px 13px', cursor: 'pointer', fontSize: 12, fontWeight: 600 };
@@ -97,7 +97,7 @@ export default function WeeklyPlanner({
       time: t.time_of_day || '09:00',
       providers: t.providers || [],
       goal: t.strategy?.goal || 'rank',
-      rotating: angles ? { name: t.name || 'This slot', angles } : undefined,
+      rotating: angles ? { name: t.name || 'This slot', angles, list: (t.strategy?.pillars || []).slice() } : undefined,
     });
   }
 
@@ -214,6 +214,16 @@ export default function WeeklyPlanner({
               <div style={{ fontWeight: 600 }}>{draft.rotating.name}</div>
               <div style={{ opacity: .65, marginTop: 3 }}>
                 From the weekly strategy: {draft.rotating.angles} angles, one a week, so this slot does not repeat itself for {draft.rotating.angles} weeks. The rotation is kept as it is — change the day, time, format, goal or channels below.
+              </div>
+              {/* The angles themselves. Until now the panel said "5 angles" and
+                  showed none, so nobody could check what a slot would write. */}
+              {draft.rotating.list && draft.rotating.list.length > 0 && (
+                <ol style={{ margin: '8px 0 0', paddingLeft: 18, lineHeight: 1.5 }}>
+                  {draft.rotating.list.map((a, i) => <li key={i}>{a}</li>)}
+                </ol>
+              )}
+              <div style={{ opacity: .65, marginTop: 6 }}>
+                {'Each post is written as education on that week\'s angle — no treatment pitch, no "free consultation" — and gets a picture of the topic itself.'}
               </div>
             </div>
           ) : (

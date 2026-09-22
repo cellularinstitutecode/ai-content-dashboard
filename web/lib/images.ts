@@ -16,6 +16,7 @@
 // - Idempotent: ensureDraftImage() skips drafts that already carry an
 //   image, so retries and concurrent callers don't double-spend.
 // - No new secrets: reuses OPENAI_API_KEY + the Supabase service role.
+import { cleanTopic, onTopicCheck, plannerImageFor, plannerPromptLines, type PlannerImage } from '@/lib/planner-image';
 import { reportError } from '@/lib/report';
 import { randomUUID } from 'crypto';
 import 'server-only';
@@ -138,6 +139,8 @@ export function buildImagePrompt(opts: {
    * somebody else's clinic.
    */
   direction?: string | null;
+  /** Weekly-planner drafts only: pictured from their pillar and angle (lib/planner-image.ts). */
+  planner?: PlannerImage | null;
 }): string {
   const brandName = opts.brand?.name || 'a premium regenerative medicine and longevity clinic';
   const excerpt = excerptOf(opts.pack);
@@ -145,7 +148,15 @@ export function buildImagePrompt(opts: {
   // The brand's own palette, materials and camera — from Brand Brain, or the
   // guide's defaults. Without this the model paints "a clinic": cool light,
   // white and steel, someone else's brand.
-  const visual = visualPromptBlock(normalizeVisual(opts.brand?.visual));
+  const brandVisual = normalizeVisual(opts.brand?.visual);
+  // Outside the clinic (a meal, a bedroom, the beach) the brand's MATERIALS line
+  // — travertine, walnut panelling, staff in black scrubs — describes the wrong
+  // place and drags every picture back into reception. Keep palette and camera.
+  const visual = visualPromptBlock(
+    opts.planner && !opts.planner.clinic
+      ? { ...brandVisual, materials: 'natural, real-world materials with terracotta and rust accents, warm natural light, matte finishes' }
+      : brandVisual
+  );
   return [
     // The no-text mandate leads the prompt (image models weight the opening
     // heavily) and is repeated at the end. Every visual must be a pure
@@ -154,12 +165,16 @@ export function buildImagePrompt(opts: {
     'no words, no letters, no numbers, no typography, no captions, no subtitles,',
     'no signage, no labels, no logos, no watermarks, no charts, no UI elements.',
     `Editorial hero photograph for ${brandName}.`,
-    `Subject: ${opts.topic}.`,
+    // A planner draft names its real subject, its pillar's scene and whether the
+    // clinic may appear; everything else is pictured exactly as before.
+    ...(opts.planner
+      ? plannerPromptLines(opts.planner, opts.variant ?? 0).filter((l, i) => i !== 1 || !String(opts.direction || '').trim())
+      : [`Subject: ${opts.topic}.`]),
     excerpt ? `Context from the article: ${excerpt}` : '',
     // The team's own direction outranks the rotating style variant: when
     // somebody has said what they want, a composition picked by a counter is
     // noise. Both are kept when there is no direction.
-    String(opts.direction || '').trim() ? `Direction from the team (follow this closely): ${String(opts.direction).trim()}` : variant,
+    String(opts.direction || '').trim() ? `Direction from the team (follow this closely): ${String(opts.direction).trim()}` : opts.planner ? '' : variant,
     visual,
     'Style: warm, quiet, premium editorial photograph; soft directional light; calm, confident, trustworthy mood; photorealistic; shallow depth of field.',
     'Strict rules (must all hold): the image contains ZERO written characters in any language or script;',
@@ -235,7 +250,7 @@ type GeneratedImage = { bytes: Buffer; contentType: string; ext: string; model: 
 // where a second slow call would bust the serverless budget). Every rung's
 // error is kept so a total failure surfaces the full story, not just the
 // last fallback's complaint.
-async function generateImageBytes(prompt: string): Promise<GeneratedImage> {
+async function generateImageBytes(prompt: string, size: '1536x1024' | '1024x1024' = '1536x1024'): Promise<GeneratedImage> {
   const attempts: { model: string; body: Record<string, unknown> }[] = [
     // HIGH, not medium.
     //
@@ -254,7 +269,7 @@ async function generateImageBytes(prompt: string): Promise<GeneratedImage> {
         model: PRIMARY_MODEL,
         prompt,
         n: 1,
-        size: '1536x1024',
+        size,
         quality: 'high',
         output_format: 'jpeg',
         output_compression: 80,
@@ -268,7 +283,7 @@ async function generateImageBytes(prompt: string): Promise<GeneratedImage> {
         model: PRIMARY_MODEL,
         prompt,
         n: 1,
-        size: '1536x1024',
+        size,
         quality: 'medium',
         output_format: 'jpeg',
         output_compression: 80,
@@ -280,13 +295,13 @@ async function generateImageBytes(prompt: string): Promise<GeneratedImage> {
     // back, and a 1536x1024 PNG is 2-5 MB where the JPEG is 250-500 KB — ten
     // times the storage for every image made on a day the first rung was
     // refused, kept for as long as the draft lives.
-    { model: PRIMARY_MODEL, body: { model: PRIMARY_MODEL, prompt, n: 1, size: '1536x1024', output_format: 'jpeg', output_compression: 80 } },
+    { model: PRIMARY_MODEL, body: { model: PRIMARY_MODEL, prompt, n: 1, size, output_format: 'jpeg', output_compression: 80 } },
     // Different model, minimal parameter set — survives model-access issues AND
     // any output_* deprecation, which is why this last rung stays bare even
     // though it can come back as PNG. (1536x1024 is the valid landscape size
     // for the gpt-image family; the old 1792x1024 was a DALL·E-3-only size and
     // got this rung rejected.)
-    { model: FALLBACK_MODEL, body: { model: FALLBACK_MODEL, prompt: prompt.slice(0, 3900), n: 1, size: '1536x1024' } },
+    { model: FALLBACK_MODEL, body: { model: FALLBACK_MODEL, prompt: prompt.slice(0, 3900), n: 1, size } },
   ];
 
   const errors: string[] = [];
@@ -319,7 +334,14 @@ async function generateImageBytes(prompt: string): Promise<GeneratedImage> {
 // verification must never take down image generation entirely.
 // ---------------------------------------------------------------------------
 
-const verifySystem = (rubric: string) => `You are a strict visual QA reviewer for a premium regenerative medicine clinic's marketing images. Every image MUST be a pure CONTENT image — a photographic scene with ZERO written characters. You will be shown ONE AI-generated image plus its intended topic. Inspect it for generation defects and brand-safety problems:
+const verifySystem = (rubric: string, planner?: PlannerImage | null) => planner
+  ? verifySystemBase(rubric).replace(
+      'Return STRICT JSON only: {"approved": boolean, "textDetected": boolean,',
+      '8. ' + onTopicCheck(planner) + '\nReturn STRICT JSON only: {"approved": boolean, "textDetected": boolean, "onTopic": boolean,'
+    )
+  : verifySystemBase(rubric);
+
+const verifySystemBase = (rubric: string) => `You are a strict visual QA reviewer for a premium regenerative medicine clinic's marketing images. Every image MUST be a pure CONTENT image — a photographic scene with ZERO written characters. You will be shown ONE AI-generated image plus its intended topic. Inspect it for generation defects and brand-safety problems:
 1. TEXT CHECK (the hard rule): scan the ENTIRE image, including backgrounds, signs, screens, labels, packaging, clothing and edges, for ANY visible text, words, letters, numbers, or garbled pseudo-typography (AI text artifacts) in ANY language or script — even partial, blurry, or decorative lettering counts. Any hit is an automatic fail.
 2. Anatomical errors: wrong number of fingers, warped hands/faces/limbs, merged bodies, impossible poses.
 3. Logos, watermarks, brand marks, or recognizable trademarks (even without readable letters).
@@ -329,7 +351,7 @@ const verifySystem = (rubric: string) => `You are a strict visual QA reviewer fo
 7. ${rubric}
 Return STRICT JSON only: {"approved": boolean, "textDetected": boolean, "score": number 0-100, "brandFit": number 0-100, "blocking": string[], "advisory": string[]}. textDetected=true whenever check 1 finds ANYTHING (when unsure, say true). "blocking" lists each DEFECT from checks 1-4 as a short phrase — these fail the image. "advisory" lists observations from checks 5-7 (rendering quality, relevance, composition, brand fit) as short phrases — these are notes for a human and do NOT fail the image. "brandFit" is check 7 alone and never changes "approved". approved=false only when "blocking" is non-empty. Both lists empty when the image is clean.`;
 
-async function verifyGeneratedImage(img: GeneratedImage, topic: string, visual?: BrandVisual | null): Promise<ImageVerification> {
+async function verifyGeneratedImage(img: GeneratedImage, topic: string, visual?: BrandVisual | null, planner?: PlannerImage | null): Promise<ImageVerification> {
   const base: ImageVerification = {
     status: 'unchecked',
     score: null,
@@ -353,7 +375,7 @@ async function verifyGeneratedImage(img: GeneratedImage, topic: string, visual?:
         max_tokens: 300,
         response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: verifySystem(brandFitRubric(visual || normalizeVisual(null))) },
+          { role: 'system', content: verifySystem(brandFitRubric(visual || normalizeVisual(null)), planner) },
           {
             role: 'user',
             content: [
@@ -370,7 +392,7 @@ async function verifyGeneratedImage(img: GeneratedImage, topic: string, visual?:
     const raw = String(data?.choices?.[0]?.message?.content ?? '{}');
     // Defects flag; opinions are notes. The split (and the text hard rule)
     // lives in lib/image-verdict.ts where it is unit-tested.
-    const verdict = classifyVerdict(JSON.parse(raw));
+    const verdict = classifyVerdict(JSON.parse(raw), { requireOnTopic: Boolean(planner) });
     return {
       status: verdict.status,
       score: verdict.score,
@@ -510,14 +532,19 @@ async function generateBestPackImage(opts: {
   variant?: number;
   direction?: string | null;
 }): Promise<PackImage> {
-  const baseVariant = Math.abs(Math.round(opts.variant ?? 0)) % STYLE_VARIANTS.length;
+  // Weekly-planner drafts rotate through their pillar's own scenes and are
+  // checked for being on topic; every other draft is unchanged.
+  const planner = plannerImageFor(opts.pack);
+  const sceneCount = planner ? planner.scenes.length : STYLE_VARIANTS.length;
+  const baseVariant = Math.abs(Math.round(opts.variant ?? 0)) % sceneCount;
+  const subject = planner ? planner.subject : opts.topic;
   const started = Date.now();
 
   let best: { img: GeneratedImage; prompt: string; variant: number; verification: ImageVerification } | null = null;
   let lastError: unknown = null;
   for (let attempt = 0; attempt < MAX_GEN_ATTEMPTS; attempt++) {
-    const variant = (baseVariant + attempt) % STYLE_VARIANTS.length;
-    const prompt = buildImagePrompt({ ...opts, variant });
+    const variant = (baseVariant + attempt) % sceneCount;
+    const prompt = buildImagePrompt({ ...opts, variant, planner });
     // A retry that fails must not destroy an already-paid-for candidate. This
     // call sat outside any try/catch, so an OpenAI 5xx or a timeout on the
     // SECOND attempt threw straight out of this function and discarded a
@@ -526,7 +553,7 @@ async function generateBestPackImage(opts: {
     // approveRun that surfaced as a post shipping with no image at all.
     let img: GeneratedImage;
     try {
-      img = await generateImageBytes(prompt);
+      img = await generateImageBytes(prompt, planner?.size);
     } catch (e) {
       lastError = e;
       // With a usable candidate in hand, stop and store it. With nothing in
@@ -538,7 +565,7 @@ async function generateBestPackImage(opts: {
       if (best) break;
       throw e;
     }
-    const verification = await verifyGeneratedImage(img, opts.topic, normalizeVisual(opts.brand?.visual));
+    const verification = await verifyGeneratedImage(img, subject, normalizeVisual(opts.brand?.visual), planner);
     const candidate = { img, prompt, variant, verification };
     // Keep the better candidate. Ranking encodes the content-image rule:
     // approved > unchecked > flagged-without-text > ANY candidate with text.
@@ -557,11 +584,11 @@ async function generateBestPackImage(opts: {
       : new Error('image generation produced no candidate');
   }
 
-  const url = await storeImage(best.img, opts.topic);
+  const url = await storeImage(best.img, cleanTopic(opts.topic) || opts.topic);
   return {
     url,
     prompt: best.prompt,
-    alt: `${opts.topic} — illustrative image for ${opts.brand?.name || 'Cellular Institute'}`,
+    alt: `${planner ? subject : opts.topic} — illustrative image for ${opts.brand?.name || 'Cellular Institute'}`,
     model: best.img.model,
     createdAt: new Date().toISOString(),
     variant: best.variant,

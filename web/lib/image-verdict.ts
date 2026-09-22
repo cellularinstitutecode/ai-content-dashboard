@@ -50,7 +50,13 @@ function strings(v: unknown, cap = 8): string[] {
   return Array.isArray(v) ? v.map((i) => String(i).slice(0, 160)).filter(Boolean).slice(0, cap) : [];
 }
 
-export function classifyVerdict(raw: unknown): ImageVerdict {
+/**
+ * `requireOnTopic` is set only for weekly-planner images (lib/planner-image.ts),
+ * whose subject is concrete — food for nutrition, a bedroom for sleep. For those,
+ * a picture that shows something else (the clinic reception, every time) is a
+ * defect, not a matter of taste. Every other image keeps relevance advisory.
+ */
+export function classifyVerdict(raw: unknown, opts: { requireOnTopic?: boolean } = {}): ImageVerdict {
   const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const score = typeof obj.score === 'number' && Number.isFinite(obj.score)
     ? Math.max(0, Math.min(100, Math.round(obj.score)))
@@ -75,6 +81,10 @@ export function classifyVerdict(raw: unknown): ImageVerdict {
   if (promoted.length) {
     blocking = [...blocking, ...promoted].slice(0, 8);
     advisory = advisory.filter((i) => !promoted.includes(i));
+  }
+
+  if (opts.requireOnTopic && obj.onTopic === false) {
+    blocking = ['off-topic — the picture does not show what this post is about', ...blocking].slice(0, 8);
   }
 
   // Text can never pass, whatever any other field says. Belt and braces: catch

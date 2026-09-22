@@ -10,6 +10,7 @@ import { PanelLoader } from '@/components/LoadingScreen';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 // The Approve button must agree with the API about what may go out.
 import { isAwaitingApproval, postStatusMeta } from '@/lib/post-mode';
+import { overduePosts, weeklyPlanByDay, type PlanTemplate } from '@/lib/calendar-plan';
 import { sheetRowUrl, sheetRowLabel, sheetRowTitle, type PostSource } from '@/lib/sheet-link';
 import { fmtScheduleTime, scheduleDateKey, scheduleWallClock, isoAtScheduleWallClock, scheduleTzLabel } from '@/lib/schedule-clock';
 
@@ -72,6 +73,9 @@ function buildGrid(year: number, month: number): Date[] {
 
 export default function CalendarPage() {
   const [posts, setPosts] = useState<Post[]>([]);
+  // The weekly planner's slots, shown under each weekday so the calendar reads
+  // against the plan. Read-only here; they are edited on Templates.
+  const [planTemplates, setPlanTemplates] = useState<PlanTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
@@ -154,6 +158,15 @@ export default function CalendarPage() {
   }
 
   useEffect(() => { refresh(); }, []);
+
+  useEffect(() => {
+    // Best-effort: a failed read just hides the plan row, never the calendar.
+    fetch('/api/templates')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => setPlanTemplates(Array.isArray(j?.templates) ? j.templates : []))
+      .catch(() => setPlanTemplates([]));
+  }, []);
+  const planByDay = useMemo(() => weeklyPlanByDay(planTemplates), [planTemplates]);
 
   // The calendar grid is the same `posts` table the dashboard's queue and stat
   // cards read, so anything that schedules, approves or reschedules a post
@@ -389,6 +402,10 @@ export default function CalendarPage() {
       .sort((a, b) => new Date(a.publication_date || 0).getTime() - new Date(b.publication_date || 0).getTime());
   }, [posts]);
 
+  // Still waiting for a decision after their time. The list above starts at
+  // today, so without this these posts disappeared from the page entirely.
+  const overdueList = useMemo(() => (mounted ? overduePosts(posts, isAwaitingApproval, today.getTime()) : []), [posts, mounted, today]);
+
   function jumpTo(p: Post) {
     if (!p.publication_date) return;
     const d = new Date(p.publication_date);
@@ -440,8 +457,19 @@ export default function CalendarPage() {
         )}
 
         <div className="grid grid-cols-7 gap-2">
-          {DOW.map((d) => (
-            <div key={d} className="py-1 text-center text-xs font-medium text-ink/40">{d}</div>
+          {DOW.map((d, i) => (
+            <div key={d} className="py-1 text-center text-xs font-medium text-ink/40">
+              {d}
+              {planByDay[i]?.length > 0 && (
+                <div className="mt-0.5 space-y-[1px] text-left font-normal" title={'Weekly plan (edit on Templates):\n' + planByDay[i].map((e) => (e.time ? e.time + ' ' : '') + e.name).join('\n')}>
+                  {planByDay[i].map((e) => (
+                    <div key={e.name + e.time} className={'truncate rounded px-1 text-[9px] leading-[14px] ' + (e.fromStrategy ? 'bg-accent/10 text-accent' : 'bg-black/5 text-ink/50')}>
+                      {e.time && <span className="tabular-nums">{e.time} </span>}{e.name}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           ))}
           {grid.map((day) => {
             const k = dateKey(day);
@@ -533,6 +561,30 @@ export default function CalendarPage() {
             <h2 className="text-[13px] font-semibold uppercase tracking-wide text-ink/60">Publishing list</h2>
             <span className="text-xs text-ink/40">{upcomingList.length} coming up</span>
           </div>
+          {overdueList.length > 0 && (
+            <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50/70 p-3 text-[12px]">
+              <div className="mb-1 font-semibold text-rose-800">{overdueList.length} past {overdueList.length === 1 ? 'its' : 'their'} time, still waiting</div>
+              <p className="mb-2 text-[11px] text-rose-800/80">These were never approved, so they did not go out. Move each to tomorrow at the same time, or delete it.</p>
+              <ul className="space-y-1.5">
+                {overdueList.map((p) => {
+                  const d = p.publication_date ? new Date(p.publication_date) : null;
+                  return (
+                    <li key={p.id} className="rounded-lg bg-surface/80 p-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-ink">{d ? d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : '—'} · {timeLabel(p.publication_date)}</span>
+                        <span className="text-[10px] text-ink/50">{(p.providers || []).map((n) => networkLabel(n)).join(', ')}</span>
+                      </div>
+                      <div className="mt-0.5 line-clamp-1 text-ink/70" title={p.text || ''}>{p.text || 'Untitled post'}</div>
+                      <div className="mt-1 flex gap-1.5">
+                        <button type="button" disabled={saving === p.id} onClick={() => { const t = new Date(today.getTime() + 86400000); void reschedule(String(p.id), t); }} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Move to tomorrow</button>
+                        <button type="button" disabled={saving === p.id} onClick={() => void removePost(p)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-red-600 hover:bg-red-50">Delete</button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
           {loading && posts.length === 0 ? (
             <p className="text-sm text-ink/50">Loading…</p>
           ) : upcomingList.length === 0 ? (

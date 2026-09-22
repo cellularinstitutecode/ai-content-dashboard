@@ -70,3 +70,12 @@ test('brand fit rides along as a number and never changes the status', () => {
   const flagged = classifyVerdict({ approved: false, textDetected: true, score: 10, brandFit: 99, blocking: ['visible text'], advisory: [] });
   assert.equal(flagged.status, 'flagged', 'a perfect brand fit cannot rescue text');
 });
+
+test('weekly-planner images: off-topic is a defect; everywhere else it stays advisory', () => {
+  const raw = { approved: true, textDetected: false, onTopic: false, blocking: [], advisory: ['unclear relevance'] };
+  assert.equal(classifyVerdict(raw).status, 'approved');
+  const v = classifyVerdict(raw, { requireOnTopic: true });
+  assert.equal(v.status, 'flagged');
+  assert.match(v.issues[0], /off-topic/);
+  assert.equal(classifyVerdict({ ...raw, onTopic: true }, { requireOnTopic: true }).status, 'approved');
+});
