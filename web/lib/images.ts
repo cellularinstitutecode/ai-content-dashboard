@@ -17,6 +17,13 @@
 //   image, so retries and concurrent callers don't double-spend.
 // - No new secrets: reuses OPENAI_API_KEY + the Supabase service role.
 import { cleanTopic, onTopicCheck, plannerImageFor, plannerPromptLines, type PlannerImage } from '@/lib/planner-image';
+import { renderTitleCover } from '@/lib/title-cover';
+import { setStoredFontReader } from '@/lib/brand-card';
+import { readStoredFonts } from '@/lib/brand-fonts';
+
+// Canela, once uploaded in Brand Brain, lives in private storage; the cover
+// renderer reads it through the same loader the brand-card route uses.
+setStoredFontReader(readStoredFonts);
 import { reportError } from '@/lib/report';
 import { randomUUID } from 'crypto';
 import 'server-only';
@@ -69,6 +76,13 @@ export type PackImage = {
   // 'brand-card' marks a typographic card painted by lib/brand-card.ts from
   // approved text: its words are deliberate, so the text rule does not apply.
   source?: 'generated' | 'brand-card' | 'library' | 'upload';
+  /**
+   * Weekly-planner covers only: `url` is the photograph WITH its title set by
+   * lib/title-cover.ts; `photoUrl` is the clean, verified photograph under it.
+   * `verification` describes the photograph — the title's words are ours and
+   * deliberate, so the text rule does not apply to them.
+   */
+  titled?: { title: string; photoUrl: string; family: string };
 };
 
 const BUCKET = process.env.IMAGE_BUCKET || 'content-images';
@@ -148,38 +162,51 @@ export function buildImagePrompt(opts: {
   // The brand's own palette, materials and camera — from Brand Brain, or the
   // guide's defaults. Without this the model paints "a clinic": cool light,
   // white and steel, someone else's brand.
-  const brandVisual = normalizeVisual(opts.brand?.visual);
-  // Outside the clinic (a meal, a bedroom, the beach) the brand's MATERIALS line
-  // — travertine, walnut panelling, staff in black scrubs — describes the wrong
-  // place and drags every picture back into reception. Keep palette and camera.
-  const visual = visualPromptBlock(
-    opts.planner && !opts.planner.clinic
-      ? { ...brandVisual, materials: 'natural, real-world materials with terracotta and rust accents, warm natural light, matte finishes' }
-      : brandVisual
-  );
-  return [
+  const visual = visualPromptBlock(normalizeVisual(opts.brand?.visual));
+  const direction = String(opts.direction || '').trim();
+  const noText = [
     // The no-text mandate leads the prompt (image models weight the opening
     // heavily) and is repeated at the end. Every visual must be a pure
     // CONTENT image — the message is carried by the scene, never by writing.
     'A purely visual, text-free photograph. Absolutely NO text of any kind:',
     'no words, no letters, no numbers, no typography, no captions, no subtitles,',
     'no signage, no labels, no logos, no watermarks, no charts, no UI elements.',
+  ];
+  const strict = [
+    'Strict rules (must all hold): the image contains ZERO written characters in any language or script;',
+    'all packaging, screens, documents and signs in the scene are blank, turned off, or absent;',
+    'no needles piercing skin, no blood, no graphic medical procedures, nothing that implies a medical claim.',
+  ];
+  // WEEKLY-PLANNER DRAFTS: the look the clinic chose (lib/planner-image.ts) —
+  // a bright daylight consultation with the topic on the table, and the top
+  // third left clear for the title lib/title-cover.ts sets afterwards. The
+  // Brand Brain's materials line (dark walnut, black scrubs) is deliberately
+  // not used here; its palette survives as small accents.
+  if (opts.planner) {
+    const palette = normalizeVisual(opts.brand?.visual).palette.filter((c) => c.role !== 'dark').map((c) => c.name.toLowerCase()).join(', ');
+    return [
+      ...noText,
+      `Editorial photograph for ${brandName}.`,
+      ...plannerPromptLines(opts.planner, opts.variant ?? 0, direction),
+      excerpt ? `Context from the post: ${excerpt}` : '',
+      `Brand colour accents in small touches only (a vase, a cushion, the fruit, a throw): ${palette}. The overall frame stays bright, light and warm-neutral.`,
+      'Never: stock-photo poses or forced smiles at the camera; cool blue clinical light; chrome and glass laboratory clichés; dark or moody lighting; clutter.',
+      'Style: photorealistic, high-end lifestyle editorial, soft window light, gentle shadows, natural colour.',
+      ...strict,
+    ].filter(Boolean).join(' ');
+  }
+  return [
+    ...noText,
     `Editorial hero photograph for ${brandName}.`,
-    // A planner draft names its real subject, its pillar's scene and whether the
-    // clinic may appear; everything else is pictured exactly as before.
-    ...(opts.planner
-      ? plannerPromptLines(opts.planner, opts.variant ?? 0).filter((l, i) => i !== 1 || !String(opts.direction || '').trim())
-      : [`Subject: ${opts.topic}.`]),
+    `Subject: ${opts.topic}.`,
     excerpt ? `Context from the article: ${excerpt}` : '',
     // The team's own direction outranks the rotating style variant: when
     // somebody has said what they want, a composition picked by a counter is
     // noise. Both are kept when there is no direction.
-    String(opts.direction || '').trim() ? `Direction from the team (follow this closely): ${String(opts.direction).trim()}` : opts.planner ? '' : variant,
+    direction ? `Direction from the team (follow this closely): ${direction}` : variant,
     visual,
     'Style: warm, quiet, premium editorial photograph; soft directional light; calm, confident, trustworthy mood; photorealistic; shallow depth of field.',
-    'Strict rules (must all hold): the image contains ZERO written characters in any language or script;',
-    'all packaging, screens, documents and signs in the scene are blank, turned off, or absent;',
-    'no needles piercing skin, no blood, no graphic medical procedures, nothing that implies a medical claim.',
+    ...strict,
   ].filter(Boolean).join(' ');
 }
 
@@ -250,7 +277,7 @@ type GeneratedImage = { bytes: Buffer; contentType: string; ext: string; model: 
 // where a second slow call would bust the serverless budget). Every rung's
 // error is kept so a total failure surfaces the full story, not just the
 // last fallback's complaint.
-async function generateImageBytes(prompt: string, size: '1536x1024' | '1024x1024' = '1536x1024'): Promise<GeneratedImage> {
+async function generateImageBytes(prompt: string, size: '1536x1024' | '1024x1024' | '1024x1536' = '1536x1024'): Promise<GeneratedImage> {
   const attempts: { model: string; body: Record<string, unknown> }[] = [
     // HIGH, not medium.
     //
@@ -584,11 +611,27 @@ async function generateBestPackImage(opts: {
       : new Error('image generation produced no candidate');
   }
 
-  const url = await storeImage(best.img, cleanTopic(opts.topic) || opts.topic);
+  const nameHint = cleanTopic(opts.topic) || opts.topic;
+  const photoUrl = await storeImage(best.img, nameHint);
+  let url = photoUrl;
+  let titled: PackImage['titled'];
+  // Planner drafts: set the title on the verified photograph. Best-effort — if
+  // the renderer fails, the clean photograph ships on its own rather than
+  // nothing, and the failure is reported.
+  if (planner) {
+    try {
+      const cover = await renderTitleCover({ title: planner.title, photo: { bytes: best.img.bytes, contentType: best.img.contentType } });
+      url = await storeBytes(cover.png, 'image/png', 'png', nameHint + '-cover');
+      titled = { title: planner.title, photoUrl, family: cover.family };
+    } catch (err) {
+      reportError('images:title-cover', err, { title: planner.title });
+    }
+  }
   return {
     url,
+    ...(titled ? { titled } : {}),
     prompt: best.prompt,
-    alt: `${planner ? subject : opts.topic} — illustrative image for ${opts.brand?.name || 'Cellular Institute'}`,
+    alt: `${planner ? (titled ? planner.title + ' — ' : '') + subject : opts.topic} — illustrative image for ${opts.brand?.name || 'Cellular Institute'}`,
     model: best.img.model,
     createdAt: new Date().toISOString(),
     variant: best.variant,

@@ -1,18 +1,26 @@
 // web/lib/planner-image.ts
-// What a weekly-planner post's picture should show.
+// What a weekly-planner post's picture should show, and the title it carries.
 //
-// WHY. Every image came out as the same clinic reception room — for protein,
-// for personalization, for sleep, and again on "New image". Three things did it:
-// the first composition in STYLE_VARIANTS IS the reception, every Autopilot
-// draft starts at variant 0, and the Brand Brain's materials line describes the
-// clinic interior (travertine, walnut, staff in black scrubs). The pillar and
-// the angle never reached the image at all.
+// THE LOOK THE CLINIC ASKED FOR. The reference the team chose is a bright,
+// airy consultation: a physician in a cream blazer talking with a patient
+// across a light oak table in window daylight, the topic told by what is on the
+// table (a book of food photographs and a bowl of oranges for nutrition), warm
+// beige walls, a plant, a soft view outside — and ONE elegant serif title at
+// the top, "The Importance of Nutrition", with a thin rule under it. Nothing
+// else written on it.
 //
-// So a draft that came from a weekly-strategy slot is pictured from its PILLAR:
-// food for nutrition, a bedroom at dusk for sleep, walking or swimming for
-// movement, Cancun for the Cancun slots. The clinic appears only where the
-// subject is the clinic's own work — assessment, personalization, follow-up.
-// The brand's palette and warm light still grade every picture.
+// HOW WE GET THERE WITHOUT GARBLED LETTERS. Image models misspell. So the
+// photograph is generated text-free and verified exactly as before, with the
+// top third deliberately left as a calm wall; the title is then SET by our own
+// renderer (lib/title-cover.ts) in the brand's serif. The words are exact,
+// always, and the clean photograph is kept alongside for a re-title.
+//
+// WHY THE EARLIER PICTURES MISSED. Every image came out as the same dark
+// reception room: the first composition in STYLE_VARIANTS is the reception,
+// every Autopilot draft starts at variant 0, and the Brand Brain's materials
+// line (travertine, walnut, staff in black scrubs) pulled everything indoors
+// and dark. The pillar and angle never reached the image. All three are fixed
+// here — for planner drafts only.
 //
 // A draft with no weekly-strategy provenance (the Draft page, the Video
 // Library, hand-written templates) returns null here and is pictured exactly as
@@ -27,151 +35,261 @@ export type PlannerImage = {
   pillarName: string;
   /** The week's angle — the picture's real subject. */
   subject: string;
+  /** The words set on the cover. Short, exact, written by a person (TITLES below). */
+  title: string;
   /** Compositions to rotate through, one per attempt / "New image". */
   scenes: string[];
-  /** True when the scene may be inside the clinic. False = the clinic interior must not appear. */
-  clinic: boolean;
-  /** Square for social posts (sits well on Instagram, Facebook and LinkedIn); landscape for the article hero. */
-  size: '1024x1024' | '1536x1024';
+  /** Portrait: cropped to Instagram's 4:5 when the title is set. */
+  size: '1024x1536';
   /** One line the vision checker uses to decide whether the picture is on topic. */
   mustShow: string;
 };
 
-const CLINIC_NOTE = 'Setting: a calm, warm consultation space in cream and walnut — not a reception desk or waiting room.';
+/**
+ * The photographic language of the reference, in words an image model follows.
+ * Replaces the Brand Brain's materials line for planner images (that line
+ * describes the clinic's dark interior); the palette still grades the frame.
+ */
+export const PLANNER_PHOTOGRAPHY = [
+  'Photographic style: a bright, airy editorial lifestyle photograph in soft natural daylight from a large window.',
+  'Warm beige, cream, sand and soft terracotta tones; a light oak table, pale stone and linen; one or two green plants or an olive branch in a ceramic vase;',
+  'through the window, a soft-focus view of greenery or hills.',
+  'The physician wears a tailored white or cream blazer over a neutral top — never scrubs, never a lab coat with logos — with a warm, attentive, approachable expression.',
+  'The patient is seen three-quarter from behind or in soft profile, relaxed and engaged.',
+  '35-50mm lens at eye level, shallow depth of field, realistic skin and hands, natural unposed moment.',
+  'The mood of a trusted private practice — calm, premium, welcoming — never a hospital, never a waiting room or reception desk.',
+].join(' ');
 
-export const PILLAR_SCENES: Record<string, { clinic: boolean; mustShow: string; scenes: string[] }> = {
+/** The instruction that leaves room for the title the renderer sets later. */
+export const TITLE_SPACE =
+  'Composition rule: keep the upper third of the frame clean and calm — a plain, softly lit warm-beige wall with nothing on it ' +
+  '(no art, no shelves, no lamps, no signs, no objects) — because a title will be placed there afterwards. ' +
+  'Place the people and the table in the lower two-thirds of the frame. Vertical framing.';
+
+type SceneSet = { mustShow: string; scenes: string[] };
+
+const TABLE = 'on the light oak table between them';
+
+export const PILLAR_SCENES: Record<string, SceneSet> = {
   diagnosis: {
-    clinic: true,
-    mustShow: 'a physician carefully reviewing information with an adult patient (an assessment or evaluation moment)',
+    mustShow: 'a physician carefully reviewing information with a patient — a stethoscope, a blank folder or a blank tablet on the table',
     scenes: [
-      'A physician in black scrubs and an adult patient (45-70) seated side by side, both looking at a blank tablet the physician holds, attentive and unhurried. ' + CLINIC_NOTE,
-      'Close, warm detail of a physician\'s hands resting on a closed blank folder beside a stethoscope on a walnut desk, the patient softly out of focus across the desk.',
-      'A physician listening closely to an adult patient who is explaining something with open hands; eye-level, natural light. ' + CLINIC_NOTE,
+      `A physician and an adult patient (45-65) seated across a table in a consultation; the physician holds a closed blank folder and listens closely; a stethoscope rests ${TABLE}, beside a glass of water and a small plant.`,
+      `A physician leaning in, pointing with a pen at a blank tablet screen that faces the patient; the patient nods; a stethoscope and a ceramic cup ${TABLE}.`,
+      'A physician listening attentively as the patient explains something with open hands; a notebook with blank pages and a pen lie on the table; a bowl of lemons adds warmth.',
     ],
   },
   protocols: {
-    clinic: true,
-    mustShow: 'an individual, one-to-one planning conversation between a clinician and one patient',
+    mustShow: 'a one-to-one planning conversation — the physician sketching or explaining an individual plan to one patient',
     scenes: [
-      'A clinician and one adult patient sketching a plan together over blank paper on a walnut table, the patient engaged and nodding. ' + CLINIC_NOTE,
-      'Three different adults of different ages photographed as a quiet triptych-like group portrait against a warm terracotta backdrop, each distinct — the idea that no two people are the same.',
-      'A clinician in black scrubs explaining something to a patient with a gentle hand gesture, the patient\'s face thoughtful. ' + CLINIC_NOTE,
+      `A physician sketching a plan on a blank notepad and turning it toward the patient, both smiling slightly; ${TABLE}, a small vase of eucalyptus and two cups of tea.`,
+      'A physician explaining with a gentle hand gesture while the patient, a man in his 50s, listens thoughtfully; a blank tablet and reading glasses on the table.',
+      'Close, warm moment: the physician places a hand near the patient\'s hand on the table in reassurance while talking through options; a notebook with blank pages between them.',
     ],
   },
   nutrition: {
-    clinic: false,
-    mustShow: 'healthy whole food (protein, vegetables, fruit, water) as the clear subject',
+    mustShow: 'healthy food on the table during the consultation — a bowl of fresh fruit, vegetables, or a book open to full-page food photographs',
     scenes: [
-      'Overhead of a balanced plate on a pale stone table: grilled fish, eggs, legumes, leafy greens and citrus, a glass of water beside it, soft window light.',
-      'Adult hands preparing a colourful, protein-rich meal on a warm wooden kitchen counter, fresh vegetables and herbs around.',
-      'A simple still life of whole foods — eggs, salmon, lentils, avocado, berries — arranged on linen with generous negative space.',
+      `A physician pointing with a pen at a book open to full-page photographs of avocado, greens, grains and salmon ${TABLE}; a ceramic bowl of oranges with leaves in the foreground; the patient leans in, interested.`,
+      `A physician and patient in conversation over a small spread of whole foods ${TABLE} — a bowl of berries, sliced avocado, eggs and a carafe of water.`,
+      'A physician holding an orange and smiling as she explains; a bowl of citrus and a plate of leafy greens and nuts on the table; the patient seen from behind.',
     ],
   },
   supplementation: {
-    clinic: false,
-    mustShow: 'a few plain, unlabeled supplement capsules or a pill organiser next to whole food and water',
+    mustShow: 'a small dish of a few plain, unlabeled capsules next to a glass of water and fresh fruit on the consultation table',
     scenes: [
-      'A small number of plain unlabeled capsules in a ceramic dish beside a glass of water and a bowl of fresh fruit on pale stone — restraint, not abundance.',
-      'An adult at a kitchen table thoughtfully looking at a plain unlabeled pill organiser next to a healthy breakfast, morning light.',
-      'Minimal still life: one plain glass jar of unlabeled capsules, a lemon and a sprig of herbs on linen, wide negative space.',
+      `A physician gesturing toward a small ceramic dish holding a few plain unlabeled capsules ${TABLE}, next to a glass of water and a bowl of fruit; the patient listens with a thoughtful expression.`,
+      'A physician reviewing a blank tablet with the patient; in the foreground a single plain glass jar of unlabeled capsules, a lemon and a sprig of herbs.',
+      'A physician holding up one plain capsule between two fingers while explaining; a glass of water and a bowl of greens on the table.',
     ],
   },
   movement: {
-    clinic: false,
-    mustShow: 'an adult being physically active (walking, stretching, strength or mobility exercise)',
+    mustShow: 'movement or exercise in the consultation — a resistance band, a gentle range-of-motion check, or the patient in light activewear',
     scenes: [
-      'An adult (50-65) doing a gentle bodyweight squat or lunge in a sunlit room with a yoga mat, relaxed and focused.',
-      'A mature adult walking briskly along a tree-lined path in morning light, mid-stride, natural and unposed.',
-      'An adult using a light resistance band for a shoulder exercise in a bright, minimal home space.',
+      'A physician gently guiding a seated patient\'s knee through a slow range-of-motion check; the patient wears light activewear; a rolled yoga mat leans against the wall; plants and daylight.',
+      `A physician handing a light resistance band to a patient in their 60s wearing activewear; a water bottle and a small towel ${TABLE}.`,
+      'Physician and patient standing near the window; the physician demonstrates a simple shoulder stretch and the patient mirrors it, both relaxed and smiling.',
     ],
   },
   sleep: {
-    clinic: false,
-    mustShow: 'a bedroom or a person resting or sleeping peacefully',
+    mustShow: 'sleep and rest cues in the consultation — a cup of herbal tea, a lavender sprig, soft evening light, a relaxed patient',
     scenes: [
-      'A calm bedroom at dusk: linen bedding, warm low lamp light, a book closed on the nightstand, no screens.',
-      'An adult sleeping peacefully on their side under soft linen, warm early-morning light through sheer curtains.',
-      'Close detail of a made bed with rumpled linen and a glass of water on the nightstand, quiet evening mood.',
+      `A calm consultation in soft late-afternoon golden light; a cup of chamomile tea and a small bunch of lavender ${TABLE}; the patient relaxed with shoulders down as the physician speaks gently.`,
+      'A physician listening as the patient, holding a warm mug with both hands, describes their evenings; a linen throw on the chair and a lavender sprig on the table.',
+      'A physician and patient sitting side by side on a linen sofa in a quiet corner of the practice, a cup of herbal tea on a side table, warm dusk light through sheer curtains.',
     ],
   },
   prevention: {
-    clinic: true,
-    mustShow: 'a routine, reassuring health check (e.g. blood-pressure cuff, check-up conversation) or a healthy adult looking ahead',
+    mustShow: 'a routine, reassuring check-up — a blood-pressure cuff on the patient\'s arm or a stethoscope in use',
     scenes: [
-      'A clinician gently fitting a blood-pressure cuff on a relaxed adult\'s arm, both calm. ' + CLINIC_NOTE,
-      'A healthy adult (45-60) looking out of a sunlit window with a calm, forward-looking expression, cup of tea in hand.',
-      'A stethoscope, a blank notepad and a pen on a walnut desk in soft light — the quiet start of a check-up.',
+      'A physician fitting a blood-pressure cuff on the relaxed patient\'s upper arm at the table, both calm and smiling; a plant and daylight behind.',
+      'A physician listening with a stethoscope to the back of a seated patient in their 50s, natural light, reassuring atmosphere.',
+      `A physician and a healthy adult patient in a relaxed conversation; a stethoscope and a blank notebook ${TABLE}, a bowl of green apples beside them.`,
     ],
   },
   cancun: {
-    clinic: false,
-    mustShow: 'Cancun or the Caribbean coast: turquoise sea, white sand, palms or a calm resort setting',
+    mustShow: 'Cancun: the window or terrace behind the consultation shows the turquoise Caribbean sea, white sand or palm trees',
     scenes: [
-      'Wide view of a calm turquoise Caribbean shoreline with white sand and palms in soft morning light, a couple walking far in the distance.',
-      'A shaded resort terrace overlooking a turquoise sea, two lounge chairs and a glass of water, relaxed and uncrowded.',
-      'An adult with a small travel bag arriving at a bright, airy hotel lobby open to palm trees and the sea.',
+      'A bright consultation beside a large window that opens onto the turquoise Caribbean sea and palm trees; physician and patient talk across a light oak table; a bowl of tropical fruit on the table.',
+      'Physician and patient seated on a shaded terrace of the practice overlooking a calm turquoise sea, two glasses of water with lime on a small table.',
+      'A patient with a small travel bag beside the chair, smiling as the physician welcomes them; through the window, palms and a turquoise sea in soft focus.',
     ],
   },
   'follow-up': {
-    clinic: false,
-    mustShow: 'a patient continuing care from home, such as a video call with a clinician or a check-in at home',
+    mustShow: 'follow-up care — the patient reviewing progress with the physician, or a video call from home with the physician',
     scenes: [
-      'An adult at home at a wooden table on a video call with a clinician (screen shows only a blurred face, no interface), notebook beside them, warm light.',
-      'A mature adult on their porch reading a blank letter with a gentle smile, morning coffee — care that continues after the trip.',
-      'A clinician in black scrubs on a phone call, smiling and attentive, in a calm consultation room. ' + CLINIC_NOTE,
+      'A physician and a returning patient smiling as they review progress together on a blank tablet; a notebook with blank pages and a plant on the table.',
+      'An adult at a light oak table at home, on a video call with a physician (the laptop screen shows only a softly blurred face, no interface), a cup of coffee and a notebook beside them, warm daylight.',
+      'A physician shaking hands warmly with a patient at the end of a consultation, both smiling; daylight and plants behind.',
     ],
   },
   recovery: {
-    clinic: false,
-    mustShow: 'rest and recovery: an adult resting calmly, hydrating, or in a quiet recovery lounge',
+    mustShow: 'rest and recovery — the patient resting comfortably with a glass of water while the physician checks in',
     scenes: [
-      'An adult resting in a reclined lounge chair with eyes closed in a softly lit, quiet recovery space, a glass of water beside them.',
-      'An adult on a sofa at home wrapped in a light blanket, sipping water, calm afternoon light.',
-      'A serene recovery lounge with soft warm light, plants and comfortable reclining chairs, nobody rushing.',
+      'A patient resting in a reclined cream lounge chair with a light linen blanket and a glass of water, the physician crouching beside them kindly checking in; plants and soft daylight.',
+      'A physician handing a glass of water to a relaxed patient sitting on a linen sofa, a folded blanket nearby, calm afternoon light.',
+      'A quiet recovery corner of the practice with reclining chairs and plants; the physician and patient talking softly, the patient comfortable with feet up.',
     ],
   },
   'active-living': {
-    clinic: false,
-    mustShow: 'an adult enjoying everyday activity outdoors or in water (walking, swimming, cycling, gardening)',
+    mustShow: 'an active patient — light activewear, sneakers or a water bottle — chatting with the physician, with an outdoor path or pool visible',
     scenes: [
-      'A mature adult swimming slow laps in a clear outdoor pool, morning sun, calm water.',
-      'Two adults in their 60s walking on a beach path in sneakers, laughing, mid-stride.',
-      'An adult gardening or cycling on a quiet street, relaxed and active, warm daylight.',
+      'A physician chatting with a fit patient in their 60s dressed in light activewear and sneakers, a water bottle on the table; through the window, a tree-lined walking path.',
+      'Physician and patient standing by an open door to a garden path, the patient holding a water bottle and a small towel, both laughing easily.',
+      'A physician and a mature couple in activewear talking at the table, a rolled yoga mat and a water bottle beside them, bright daylight.',
     ],
   },
   'practical-nutrition': {
-    clinic: false,
-    mustShow: 'practical everyday food choices: a breakfast, a snack or a restaurant meal',
+    mustShow: 'an everyday healthy meal or snack on the table — a protein-rich breakfast, a snack box, or a balanced plate',
     scenes: [
-      'A protein-rich breakfast on a sunny table: Greek yogurt with berries, eggs, whole-grain toast and coffee.',
-      'A healthy restaurant meal on a terrace table — grilled fish, salad, water — seen from the diner\'s seat.',
-      'A small container of nuts, fruit and cheese packed for travel beside a small travel pouch on a hotel desk.',
+      `A physician gesturing at a protein-rich breakfast ${TABLE} — Greek yogurt with berries, eggs, whole-grain toast — while the patient smiles; a bowl of oranges in the foreground.`,
+      'A physician and patient looking at a small reusable box of nuts, fruit and cheese — a travel snack — set between them, relaxed conversation.',
+      'A balanced plate of grilled fish, salad and quinoa on the table as the physician explains portions with open hands; a carafe of water with lemon.',
     ],
   },
   stress: {
-    clinic: false,
-    mustShow: 'calm and stress relief: breathing, relaxation, a quiet ritual or peaceful nature',
+    mustShow: 'calm and stress relief — the patient breathing slowly with eyes softly closed, or holding a warm cup of tea',
     scenes: [
-      'An adult sitting cross-legged on a terrace at sunrise, eyes closed, breathing slowly, soft golden light.',
-      'Hands wrapped around a warm cup of herbal tea by a window on a quiet evening.',
-      'An adult reading in a hammock in dappled shade, fully relaxed.',
+      'A physician guiding the patient through a slow breath, both with a hand resting on the chest, eyes softly closed, serene expressions; plants and soft light.',
+      `The patient holding a warm cup of herbal tea with both hands, shoulders relaxed, as the physician speaks gently; a small ceramic dish of dried lavender ${TABLE}.`,
+      'Physician and patient seated in two armchairs angled toward a window full of greenery, a peaceful pause in the conversation.',
     ],
   },
   'recovery-cancun': {
-    clinic: false,
-    mustShow: 'a calm recovery day in Cancun: beach, sea, shade, a gentle walk or rest by the water',
+    mustShow: 'a calm recovery day in Cancun — a shaded terrace or window with the turquoise sea, the patient resting',
     scenes: [
-      'An adult resting under a beach umbrella facing a calm turquoise sea, a companion reading nearby.',
-      'A couple taking a slow walk along the waterline on white sand at golden hour.',
-      'A quiet hotel balcony with a lounge chair, a book and a view over palms to the Caribbean.',
+      'A patient resting on a shaded terrace lounge chair overlooking a turquoise Caribbean sea, the physician seated beside them in a light blazer checking in; a glass of water with lime.',
+      'A physician and patient walking slowly along a palm-lined path by the sea, both relaxed, the patient in light clothing and a hat.',
+      'A companion and the patient sitting together by a large window with a sea view while the physician talks with them, a bowl of tropical fruit on the table.',
     ],
   },
 };
 
-const ARTICLE = {
-  clinic: true,
-  mustShow: 'a thoughtful physician-patient conversation or careful medical assessment',
-  scenes: PILLAR_SCENES.diagnosis.scenes,
+/**
+ * The cover titles: one short headline per angle the strategy lists.
+ *
+ * Written, not generated — they appear in large type on the picture, so each
+ * one was chosen to read like the reference ("The Importance of Nutrition"):
+ * a few words, title case, no claim. An angle that is not listed falls back to
+ * "The Importance of <pillar>".
+ */
+export const TITLES: Record<string, string> = {
+  // Diagnosis and assessment
+  'Why effective care begins with a thorough evaluation': 'Care Begins with Evaluation',
+  'Why similar symptoms may have different causes': 'Same Symptoms, Different Causes',
+  'What information a physician needs before recommending a protocol': 'What Your Physician Needs to Know',
+  'The importance of reviewing laboratory results, imaging, and medical history': 'Why Your Medical History Matters',
+  'Why comparing treatments without comparing evaluations can be misleading': 'Compare Evaluations, Not Just Treatments',
+  // Personalization
+  'Why one protocol does not work the same way for every person': 'No Two Patients Are Alike',
+  'How age, diagnosis, medications, and lifestyle influence planning': 'What Shapes Your Care Plan',
+  'The difference between a standard package and a personalized medical plan': 'A Plan, Not a Package',
+  'How therapies, number of sessions, and routes of administration are selected': 'How a Protocol Is Designed',
+  'Why the right protocol depends on the patient, not only the condition': 'The Patient, Not Just the Condition',
+  // Nutrition
+  'The role of protein in recovery': 'Protein and Recovery',
+  'Nutrition and inflammation': 'Nutrition and Inflammation',
+  'Hydration and cellular health': 'Hydration and Cellular Health',
+  'Nutrients that help support muscle mass': 'Nutrients for Muscle Health',
+  'How to prepare the body nutritionally before treatment': 'Eating Well Before Treatment',
+  'Nutrition during the recovery process': 'Nutrition During Recovery',
+  // Supplementation
+  'Why supplementation should also be personalized': 'Personalized Supplementation',
+  'Why more supplements do not necessarily mean better results': 'More Is Not Always Better',
+  'Possible interactions between supplements and medications': 'Supplements and Medications',
+  'The importance of identifying actual deficiencies': 'Know Your Real Deficiencies',
+  'What to review before beginning a supplement routine': 'Before You Start Supplements',
+  'Supplements as support, not a substitute for healthy habits': 'Support, Not a Substitute',
+  // Movement
+  'Why staying active matters at every age': 'Active at Every Age',
+  'Muscle strength and longevity': 'Strength and Longevity',
+  'Movement as a way to support joint health': 'Movement for Healthy Joints',
+  'The difference between physical activity and structured training': 'Activity vs. Training',
+  'How to begin moving when pain or limited mobility is present': 'Moving with Limited Mobility',
+  'Why exercise should be adapted to the individual': 'Exercise Made for You',
+  // Sleep
+  'What happens in the body while we sleep': 'What Happens While We Sleep',
+  'The relationship between sleep and recovery': 'Sleep and Recovery',
+  'How poor sleep can affect inflammation': 'Sleep and Inflammation',
+  'The connection between sleep, appetite, and metabolism': 'Sleep, Appetite and Metabolism',
+  'Simple habits that may improve sleep quality': 'Habits for Better Sleep',
+  'Why sleeping longer does not always mean resting better': 'Longer Sleep, Better Rest?',
+  // Prevention
+  'Why you should not wait until you feel unwell to assess your health': "Don't Wait to Feel Unwell",
+  'The value of periodic health evaluations': 'The Value of Regular Check-Ups',
+  'Biomarkers that help build a broader picture of health': 'What Your Biomarkers Tell',
+  'Identifying changes before they affect quality of life': 'Catching Changes Early',
+  'Establishing a baseline to help measure progress': 'Know Your Baseline',
+  'The difference between addressing symptoms and exploring possible causes': 'Symptoms and Their Causes',
+  // Cancun and health tourism
+  'Why Cancun is well suited for combining medical care and rest': 'Care and Rest in Cancun',
+  'Air connectivity from the United States and Canada': 'An Easy Flight to Cancun',
+  'Recovering in a calm, warm environment': 'Recovering in the Warmth',
+  'Hotel, dining, and low-impact activity options': 'Staying Well in Cancun',
+  'What patients can do during open days in their protocol': 'Your Open Days in Cancun',
+  'How to organize a medical trip that feels supported and comfortable': 'Planning a Supported Medical Trip',
+  // Personalization and follow-up
+  'Why a protocol may be adjusted as the patient progresses': 'A Plan That Evolves with You',
+  'The importance of monitoring changes over time': 'Tracking Progress Over Time',
+  'What happens after a patient returns home': 'After You Return Home',
+  'How follow-ups at 1, 3, 6, and 12 months support continuity of care': 'Follow-Up at 1, 3, 6 and 12 Months',
+  'Why care does not end when the patient leaves the clinic': 'Care Beyond the Clinic',
+  'How progress can be evaluated while maintaining realistic expectations': 'Progress and Realistic Expectations',
+  // Recovery
+  'Recovery as part of the overall care plan': 'Recovery Is Part of Care',
+  'Why the body needs time to respond': 'Giving Your Body Time',
+  'Hydration, rest, and movement after treatment': 'Rest, Hydration and Movement',
+  'Technologies that may support the recovery experience': 'Supporting Your Recovery',
+  'What it means to build a personalized recovery plan': 'Your Personal Recovery Plan',
+  'Why patients should avoid overloading the body immediately afterward': 'Ease Back Gently',
+  // Active living
+  'Simple activities that help people stay active': 'Simple Ways to Stay Active',
+  'Walking, swimming, and mobility exercises': 'Walk, Swim, Move',
+  'Maintaining muscle mass after 40, 50, or 60': 'Muscle After 40, 50 and 60',
+  'Ways to incorporate movement while traveling': 'Moving While You Travel',
+  'Options when intense exercise is not appropriate': 'Gentler Ways to Move',
+  'Why consistency often matters more than intensity': 'Consistency Over Intensity',
+  // Practical nutrition
+  'Protein-rich breakfast ideas': 'Protein-Rich Breakfasts',
+  'How to make balanced choices while traveling': 'Eating Well While Traveling',
+  'Snacks that support steady energy': 'Snacks for Steady Energy',
+  'How to read a nutrition label': 'Reading a Nutrition Label',
+  'Common mistakes when trying to eat healthier': 'Common Healthy-Eating Mistakes',
+  'What to consider when ordering at a restaurant during recovery': 'Dining Out During Recovery',
+  // Sleep, stress, and rest
+  'How stress can influence recovery': 'Stress and Recovery',
+  'Why the body needs intentional rest': 'The Need for Intentional Rest',
+  'Simple rituals to close the week': 'Rituals to Close the Week',
+  'Breathing, relaxation, and the nervous system': 'Breathing and the Nervous System',
+  'Mental and physical recovery': 'Mind and Body Recovery',
+  'Why rest is a meaningful part of well-being': 'Rest Is Part of Well-Being',
+  // Recovery in Cancun
+  'What a recovery day in Cancun may look like': 'A Recovery Day in Cancun',
+  'Low-intensity activities for patients': 'Gentle Activities for Patients',
+  'Nature, the beach, and a calmer pace': 'Nature and a Calmer Pace',
+  'How treatment can be combined with time to rest': 'Treatment and Time to Rest',
+  'What a companion can do during the trip': 'Traveling with a Companion',
+  'The patient experience before, during, and after the clinic visit': 'Before, During and After Your Visit',
 };
 
 function key(s: unknown): string {
@@ -181,6 +299,13 @@ function key(s: unknown): string {
 /** Strip the "[Autopilot] " prefix the draft's topic column carries. */
 export function cleanTopic(topic: unknown): string {
   return String(topic ?? '').replace(/^\s*\[autopilot\]\s*/i, '').trim();
+}
+
+const TITLE_BY_KEY = new Map(Object.entries(TITLES).map(([a, t]) => [key(a), t]));
+
+/** The cover title for an angle; "The Importance of <pillar>" when the angle is not one the strategy lists. */
+export function titleFor(angle: unknown, pillarName: string): string {
+  return TITLE_BY_KEY.get(key(cleanTopic(angle))) || `The Importance of ${pillarName}`;
 }
 
 /**
@@ -197,31 +322,35 @@ export function plannerImageFor(pack: unknown): PlannerImage | null {
   const subject = cleanTopic(auto.angle?.query || auto.angle?.seedTopic);
   if (!name || !subject) return null;
   if (name === key(BLOG_SLOT.name)) {
-    return { pillarId: 'article', pillarName: BLOG_SLOT.name, subject, ...ARTICLE, size: '1536x1024' };
+    // The article's angles are borrowed from the medical pillars; picture it as
+    // the pillar it came from.
+    const pillar = PILLARS.find((p) => p.angles.some((a) => key(a) === key(subject)));
+    const set = (pillar && PILLAR_SCENES[pillar.id]) || PILLAR_SCENES.diagnosis;
+    return { pillarId: 'article', pillarName: BLOG_SLOT.name, subject, title: titleFor(subject, pillar?.name || 'Evaluation'), ...set, size: '1024x1536' };
   }
   const pillar = PILLARS.find((p) => key(p.name) === name);
   if (!pillar) return null;
-  const scene = PILLAR_SCENES[pillar.id];
-  if (!scene) return null;
-  return { pillarId: pillar.id, pillarName: pillar.name, subject, ...scene, size: '1024x1024' };
+  const set = PILLAR_SCENES[pillar.id];
+  if (!set) return null;
+  return { pillarId: pillar.id, pillarName: pillar.name, subject, title: titleFor(subject, pillar.name), ...set, size: '1024x1536' };
 }
 
-/** The lines added to the image prompt for a planner draft. */
-export function plannerPromptLines(p: PlannerImage, sceneIndex: number): string[] {
+/** The lines the image prompt carries for a planner draft (the photograph only — the title is set later). */
+export function plannerPromptLines(p: PlannerImage, sceneIndex: number, direction?: string | null): string[] {
   const scene = p.scenes[Math.abs(Math.round(sceneIndex)) % p.scenes.length];
+  const dir = String(direction || '').trim();
   return [
-    `Subject: ${p.subject} (the weekly "${p.pillarName}" theme). The picture must clearly show ${p.mustShow}.`,
-    `Composition: ${scene}`,
-    p.clinic
-      ? 'If a clinic space appears it is a warm consultation room — never a reception desk, front desk or waiting room.'
-      : 'This scene is NOT inside the clinic: no reception desk, no waiting room, no clinic interior, no staff in scrubs. Use the brand palette and warm light only as colour grading.',
+    `Subject: a medical consultation that illustrates "${p.subject}" (the weekly "${p.pillarName}" theme). The picture must clearly show ${p.mustShow}.`,
+    dir ? `Direction from the team (follow this closely): ${dir}` : `Scene: ${scene}`,
+    TITLE_SPACE,
+    PLANNER_PHOTOGRAPHY,
   ];
 }
 
 /** The extra check the vision reviewer runs on a planner image. */
 export function onTopicCheck(p: PlannerImage): string {
   return `ON-TOPIC (this one is a DEFECT, not an opinion): the image must clearly show ${p.mustShow}. ` +
-    'A generic clinic reception, front desk or waiting room does NOT count' +
-    (p.clinic ? '' : ', and neither does any clinic interior') +
-    '. Set "onTopic": false when it fails.';
+    'A generic reception desk, front desk or waiting room does NOT count. ' +
+    'Also a DEFECT: clutter in the top third, where a title will sit (art, shelves, lamps, busy objects). ' +
+    'Set "onTopic": false when either fails.';
 }

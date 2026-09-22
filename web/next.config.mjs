@@ -100,6 +100,12 @@ const nextConfig = {
   // the deployed function would have no type to set cards in.
   outputFileTracingIncludes: {
     '/api/drafts/card': ['./public/fonts/**/*'],
+    // Weekly-planner covers: the title is set on the photograph wherever an
+    // image can be generated — the reroll route and the Autopilot routes that
+    // draft and approve (lib/title-cover.ts reads the same font files).
+    '/api/drafts/image': ['./public/fonts/**/*'],
+    '/api/autopilot/tick': ['./public/fonts/**/*'],
+    '/api/autopilot/runs': ['./public/fonts/**/*'],
   },
   // What the functions must NOT carry. Vercel stores every function of every
   // deployment it keeps, and the free plan's Function Storage allowance is

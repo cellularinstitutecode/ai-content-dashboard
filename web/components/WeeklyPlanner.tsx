@@ -223,7 +223,7 @@ export default function WeeklyPlanner({
                 </ol>
               )}
               <div style={{ opacity: .65, marginTop: 6 }}>
-                {'Each post is written as education on that week\'s angle — no treatment pitch, no "free consultation" — and gets a picture of the topic itself.'}
+                {'Each post is written as education on that week\'s angle — no treatment pitch, no "free consultation" — and gets a bright consultation photo of the topic with its title set on top.'}
               </div>
             </div>
           ) : (
