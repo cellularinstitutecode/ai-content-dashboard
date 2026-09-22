@@ -63,11 +63,11 @@ export function coverElement(input: { title: string; photoDataUrl: string; famil
   return h(
     'div',
     { style: { width: COVER.width, height: COVER.height, position: 'relative', display: 'flex', background: '#F4EEE6', overflow: 'hidden' } },
-    h('img', { key: 'photo', src: input.photoDataUrl, width: COVER.width, height: COVER.height, style: { position: 'absolute', top: 0, left: 0, width: COVER.width, height: COVER.height, objectFit: 'cover' } }),
+    h('img', { key: 'photo', src: input.photoDataUrl, width: COVER.width, height: COVER.height, style: { position: 'absolute', top: 0, left: 0, width: COVER.width, height: COVER.height, objectFit: 'cover', objectPosition: 'center top' } }),
     h('div', { key: 'wash', style: { position: 'absolute', top: 0, left: 0, width: COVER.width, height: Math.round(COVER.height * 0.5), backgroundImage: TITLE_WASH, display: 'flex' } }),
     h(
       'div',
-      { key: 'title', style: { position: 'absolute', top: 118, left: 80, right: 80, display: 'flex', flexDirection: 'column', alignItems: 'center' } },
+      { key: 'title', style: { position: 'absolute', top: 96, left: 80, right: 80, display: 'flex', flexDirection: 'column', alignItems: 'center' } },
       ...lineEls,
       h('div', { key: 'rule', style: { display: 'flex', width: 120, height: 2, marginTop: 34, background: TITLE_INK, opacity: 0.4 } }),
     ),

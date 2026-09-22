@@ -29,6 +29,7 @@
 // Pure: `./x.ts` imports only, so the test runner reads this file directly.
 import { PILLARS } from './content-strategy.ts';
 import { BLOG_SLOT } from './strategy-seed.ts';
+import type { SceneBrief } from './image-brief.ts';
 
 export type PlannerImage = {
   pillarId: string;
@@ -43,6 +44,12 @@ export type PlannerImage = {
   size: '1024x1536';
   /** One line the vision checker uses to decide whether the picture is on topic. */
   mustShow: string;
+  /**
+   * Written from THIS post's text just before generation (lib/image-brief.ts).
+   * When present it replaces the pillar's fixed scene and cue, so the picture
+   * shows what the post is actually about.
+   */
+  dynamic?: SceneBrief;
 };
 
 /**
@@ -56,15 +63,16 @@ export const PLANNER_PHOTOGRAPHY = [
   'through the window, a soft-focus view of greenery or hills.',
   'The physician wears a tailored white or cream blazer over a neutral top — never scrubs, never a lab coat with logos — with a warm, attentive, approachable expression.',
   'The patient is seen three-quarter from behind or in soft profile, relaxed and engaged.',
-  '35-50mm lens at eye level, shallow depth of field, realistic skin and hands, natural unposed moment.',
+  '35-50mm lens from slightly above eye level, shallow depth of field, realistic skin and hands, natural unposed moment.',
   'The mood of a trusted private practice — calm, premium, welcoming — never a hospital, never a waiting room or reception desk.',
 ].join(' ');
 
 /** The instruction that leaves room for the title the renderer sets later. */
 export const TITLE_SPACE =
-  'Composition rule: keep the upper third of the frame clean and calm — a plain, softly lit warm-beige wall with nothing on it ' +
+  'Composition rule (important): the upper 40% of the frame is EMPTY — a plain, softly lit warm-beige wall with nothing on it ' +
   '(no art, no shelves, no lamps, no signs, no objects) — because a title will be placed there afterwards. ' +
-  'Place the people and the table in the lower two-thirds of the frame. Vertical framing.';
+  'Everyone\'s head must sit BELOW the middle of the frame: shoot from slightly further back and slightly above, so the people ' +
+  'are seated low in the frame with generous wall above them. Vertical framing.';
 
 type SceneSet = { mustShow: string; scenes: string[] };
 
@@ -337,10 +345,13 @@ export function plannerImageFor(pack: unknown): PlannerImage | null {
 
 /** The lines the image prompt carries for a planner draft (the photograph only — the title is set later). */
 export function plannerPromptLines(p: PlannerImage, sceneIndex: number, direction?: string | null): string[] {
-  const scene = p.scenes[Math.abs(Math.round(sceneIndex)) % p.scenes.length];
   const dir = String(direction || '').trim();
+  const d = p.dynamic;
+  const scene = d
+    ? `${d.scene} In clear view: ${d.props.join(', ')}.`
+    : p.scenes[Math.abs(Math.round(sceneIndex)) % p.scenes.length];
   return [
-    `Subject: a medical consultation that illustrates "${p.subject}" (the weekly "${p.pillarName}" theme). The picture must clearly show ${p.mustShow}.`,
+    `Subject: a medical consultation that illustrates "${p.subject}" (the weekly "${p.pillarName}" theme, post titled "${p.title}"). The picture must clearly show ${d ? d.mustShow : p.mustShow}.`,
     dir ? `Direction from the team (follow this closely): ${dir}` : `Scene: ${scene}`,
     TITLE_SPACE,
     PLANNER_PHOTOGRAPHY,
@@ -349,8 +360,8 @@ export function plannerPromptLines(p: PlannerImage, sceneIndex: number, directio
 
 /** The extra check the vision reviewer runs on a planner image. */
 export function onTopicCheck(p: PlannerImage): string {
-  return `ON-TOPIC (this one is a DEFECT, not an opinion): the image must clearly show ${p.mustShow}. ` +
+  return `ON-TOPIC (this one is a DEFECT, not an opinion): the image must clearly show ${p.dynamic ? p.dynamic.mustShow : p.mustShow}. ` +
     'A generic reception desk, front desk or waiting room does NOT count. ' +
-    'Also a DEFECT: clutter in the top third, where a title will sit (art, shelves, lamps, busy objects). ' +
+    'Also a DEFECT: anything in the top third, where a title will sit — a person\'s head or face, art, shelves, lamps or busy objects. ' +
     'Set "onTopic": false when either fails.';
 }

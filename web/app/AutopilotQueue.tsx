@@ -13,6 +13,7 @@ import { friendlyError, friendlyErrorFromResponse, friendlyImageError } from '@/
 import { fmtScheduleSlot } from '@/lib/schedule-clock';
 import { describeFailure, historyForDisplay, type RunLogEntry } from '@/lib/run-failure';
 import { MAX_ATTEMPTS } from '@/lib/planner-constants';
+import { plannerImageFor } from '@/lib/planner-image';
 
 // The visible pipeline an engine run walks through. The tick call does all of
 // this server-side in one request; the tracker paces the display so the viewer
@@ -62,7 +63,17 @@ type PackImage = {
   model?: string;
   variant?: number;
   verification?: { status?: 'approved' | 'flagged' | 'unchecked'; score?: number | null; issues?: string[]; textDetected?: boolean };
+  /** Weekly-planner covers: the photo with its title set on top (lib/title-cover.ts). */
+  titled?: { title: string; photoUrl: string };
+  source?: string;
 };
+
+/** A weekly-planner draft whose picture predates the title cover — it is refreshed once. */
+function needsPlannerCover(pack: Run['pack']): boolean {
+  if (!pack || !pack._image?.url || pack._image.titled) return false;
+  if (['library', 'upload'].includes(String(pack._image.source || ''))) return false;
+  return Boolean(plannerImageFor(pack));
+}
 
 type Run = {
   id: string;
@@ -236,7 +247,7 @@ export default function AutopilotQueue() {
   // exactly what will attach to the Metricool draft on approve.
   useEffect(() => {
     const needing = runs.filter(
-      (r) => r.state === 'ready_for_review' && r.draft_id && r.pack && !r.pack._image?.url && !imageAsked.current.has(r.draft_id)
+      (r) => r.state === 'ready_for_review' && r.draft_id && r.pack && (!r.pack._image?.url || needsPlannerCover(r.pack)) && !imageAsked.current.has(r.draft_id)
     );
     if (!needing.length) return;
     let cancelled = false;
@@ -495,7 +506,10 @@ export default function AutopilotQueue() {
                         <img
                           src={r.pack._image.url}
                           alt={r.pack._image.alt || 'AI hero image'}
-                          className="max-h-[480px] w-full object-cover transition group-hover/img:scale-[1.01]"
+                          // A titled cover is shown whole (4:5) — cropping it to the card cut the title off.
+                          className={r.pack._image.titled
+                            ? 'mx-auto max-h-[560px] w-auto object-contain transition group-hover/img:scale-[1.01]'
+                            : 'max-h-[480px] w-full object-cover transition group-hover/img:scale-[1.01]'}
                         />
                         <span className="absolute bottom-2 right-2 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-medium text-white opacity-0 transition group-hover/img:opacity-100">
                           ⤢ View full size

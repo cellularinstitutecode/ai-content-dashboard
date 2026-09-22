@@ -18,6 +18,7 @@
 // - No new secrets: reuses OPENAI_API_KEY + the Supabase service role.
 import { cleanTopic, onTopicCheck, plannerImageFor, plannerPromptLines, type PlannerImage } from '@/lib/planner-image';
 import { renderTitleCover } from '@/lib/title-cover';
+import { briefSource, briefSystemPrompt, briefUserPrompt, parseSceneBrief, type SceneBrief } from '@/lib/image-brief';
 import { setStoredFontReader } from '@/lib/brand-card';
 import { readStoredFonts } from '@/lib/brand-fonts';
 
@@ -378,6 +379,43 @@ const verifySystemBase = (rubric: string) => `You are a strict visual QA reviewe
 7. ${rubric}
 Return STRICT JSON only: {"approved": boolean, "textDetected": boolean, "score": number 0-100, "brandFit": number 0-100, "blocking": string[], "advisory": string[]}. textDetected=true whenever check 1 finds ANYTHING (when unsure, say true). "blocking" lists each DEFECT from checks 1-4 as a short phrase — these fail the image. "advisory" lists observations from checks 5-7 (rendering quality, relevance, composition, brand fit) as short phrases — these are notes for a human and do NOT fail the image. "brandFit" is check 7 alone and never changes "approved". approved=false only when "blocking" is non-empty. Both lists empty when the image is clean.`;
 
+/**
+ * Dynamic art direction for a planner image: a small text model reads the post
+ * and names the scene and the objects that make its subject obvious
+ * (lib/image-brief.ts). Fail-soft — null means "use the pillar's fixed scenes".
+ */
+async function sceneBriefFor(planner: PlannerImage, pack: Record<string, unknown> | null | undefined, variant: number): Promise<SceneBrief | null> {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key || String(process.env.IMAGE_BRIEF || '').toLowerCase() === 'off') return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: process.env.OPENAI_BRIEF_MODEL || VISION_MODEL,
+        max_tokens: 300,
+        temperature: 0.7,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: briefSystemPrompt() },
+          { role: 'user', content: briefUserPrompt({ title: planner.title, angle: planner.subject, pillarName: planner.pillarName, text: briefSource(pack), variant }) },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`brief ${res.status}`);
+    const data = await res.json();
+    return parseSceneBrief(String(data?.choices?.[0]?.message?.content ?? ''));
+  } catch (err) {
+    reportError('images:scene-brief', err, { title: planner.title });
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function verifyGeneratedImage(img: GeneratedImage, topic: string, visual?: BrandVisual | null, planner?: PlannerImage | null): Promise<ImageVerification> {
   const base: ImageVerification = {
     status: 'unchecked',
@@ -571,7 +609,11 @@ async function generateBestPackImage(opts: {
   let lastError: unknown = null;
   for (let attempt = 0; attempt < MAX_GEN_ATTEMPTS; attempt++) {
     const variant = (baseVariant + attempt) % sceneCount;
-    const prompt = buildImagePrompt({ ...opts, variant, planner });
+    // Planner drafts: brief the scene from THIS post's text (no brief when the
+    // team typed a direction — theirs wins). Falls back to the pillar's scenes.
+    const brief = planner && !String(opts.direction || '').trim() ? await sceneBriefFor(planner, opts.pack, variant) : null;
+    const plannerNow = planner ? { ...planner, ...(brief ? { dynamic: brief } : {}) } : null;
+    const prompt = buildImagePrompt({ ...opts, variant, planner: plannerNow });
     // A retry that fails must not destroy an already-paid-for candidate. This
     // call sat outside any try/catch, so an OpenAI 5xx or a timeout on the
     // SECOND attempt threw straight out of this function and discarded a
@@ -592,7 +634,7 @@ async function generateBestPackImage(opts: {
       if (best) break;
       throw e;
     }
-    const verification = await verifyGeneratedImage(img, subject, normalizeVisual(opts.brand?.visual), planner);
+    const verification = await verifyGeneratedImage(img, subject, normalizeVisual(opts.brand?.visual), plannerNow);
     const candidate = { img, prompt, variant, verification };
     // Keep the better candidate. Ranking encodes the content-image rule:
     // approved > unchecked > flagged-without-text > ANY candidate with text.
@@ -660,7 +702,10 @@ export async function ensureDraftImage(draftId: string, ownerId: string): Promis
   // Same content-image rule as the route: an image flagged for text is never
   // reused — regenerate with the next composition variant instead.
   const existingHasText = existing?.verification?.textDetected === true;
-  if (existing?.url && !existingHasText) return existing;
+  // A planner draft still carrying a pre-cover picture gets the new cover once.
+  const plannerNeedsCover = Boolean(plannerImageFor(pack)) && !existing?.titled &&
+    !['library', 'upload'].includes(String(existing?.source || ''));
+  if (existing?.url && !existingHasText && !plannerNeedsCover) return existing;
 
   // Brand voice makes the image on-brand too (best-effort).
   let brand: BrandContext | null = null;

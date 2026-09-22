@@ -32,7 +32,8 @@ test('a planner draft is pictured as a consultation on its pillar, portrait, wit
   const lines = plannerPromptLines(p!, 0).join(' ');
   assert.match(lines, /medical consultation/);
   assert.match(lines, /oranges/);
-  assert.match(lines, /upper third of the frame clean/);
+  assert.match(lines, /upper 40% of the frame is EMPTY/);
+  assert.match(lines, /head must sit BELOW the middle/);
   assert.match(lines, /white or cream blazer/);
   assert.doesNotMatch(lines, /black scrubs/);
   assert.match(onTopicCheck(p!), /onTopic/);
@@ -43,7 +44,7 @@ test('a team direction replaces the scene but keeps the title space and the look
   const lines = plannerPromptLines(p, 0, 'a couple at the table').join(' ');
   assert.match(lines, /Direction from the team.*a couple at the table/);
   assert.doesNotMatch(lines, /Scene:/);
-  assert.match(lines, /upper third/);
+  assert.match(lines, /upper 40%/);
 });
 
 test('the weekly article borrows the scenes of the pillar its angle came from', () => {
@@ -65,4 +66,16 @@ test('scenes rotate, the prefix is stripped, unknown angles fall back to the pil
   assert.notEqual(plannerPromptLines(p, 0)[1], plannerPromptLines(p, 1)[1]);
   assert.equal(cleanTopic('[Autopilot] Sleep'), 'Sleep');
   assert.equal(titleFor('something new', 'Nutrition'), 'The Importance of Nutrition');
+});
+
+test('a brief written from the post replaces the fixed scene and the on-topic cue', () => {
+  const base = plannerImageFor(pack('Nutrition', 'Hydration and cellular health'))!;
+  const p = { ...base, dynamic: { scene: 'The physician pours a glass of water from a carafe with cucumber slices for the patient.', props: ['glass carafe of water', 'cucumber slices'], mustShow: 'water being poured' } };
+  const lines = plannerPromptLines(p, 0).join(' ');
+  assert.match(lines, /pours a glass of water/);
+  assert.match(lines, /In clear view: glass carafe of water, cucumber slices/);
+  assert.match(lines, /must clearly show water being poured/);
+  assert.match(lines, /post titled "Hydration and Cellular Health"/);
+  assert.doesNotMatch(lines, /oranges/);
+  assert.match(onTopicCheck(p), /water being poured/);
 });

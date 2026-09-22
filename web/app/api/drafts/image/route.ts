@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { generatePackImage, imagesEnabled, removeSuperseded, storeBytes, type PackImage } from '@/lib/images';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { plannerImageFor } from '@/lib/planner-image';
 import type { BrandContext } from '@/lib/ai';
 
 export const runtime = 'nodejs';
@@ -112,9 +113,15 @@ export async function POST(req: NextRequest) {
     }
 
     const existingHasText = existing?.verification?.textDetected === true;
+    // A weekly-planner draft whose picture predates the title cover (the old
+    // dark reception photos) is replaced once with the new consultation cover.
+    // Chosen photos (library / upload) are the team's own choice and are kept.
+    const plannerNeedsCover = Boolean(plannerImageFor(pack)) && Boolean(existing?.url) &&
+      !(existing as { titled?: unknown } | undefined)?.titled &&
+      !['library', 'upload'].includes(String(existing?.source || ''));
     // A direction is itself a request for a new image: somebody typed what they
     // want, and returning the cached one would answer a different question.
-    if (existing?.url && !regenerate && !existingHasText && !direction) {
+    if (existing?.url && !regenerate && !existingHasText && !direction && !plannerNeedsCover) {
       return NextResponse.json({ image: existing, cached: true });
     }
     const advanceVariant = regenerate || existingHasText;
