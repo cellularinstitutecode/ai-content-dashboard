@@ -61,7 +61,7 @@ import { metricoolNetworks, wantsBlog } from '@/lib/metricool-networks';
 import { professionalTitle } from '@/lib/post-title';
 import { publishArticle, wordpressConfigured } from '@/lib/wordpress';
 import { ensureDraftImage, type PackImage } from '@/lib/images';
-import { NETWORKS_NEEDING_MEDIA } from '@/lib/composer';
+import { NETWORKS_NEEDING_MEDIA, mediaProblem } from '@/lib/composer';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
 import { ANGLE_HISTORY, chooseAngle, type AngleType, type PastAngle } from '@/lib/angle-rotation';
@@ -80,6 +80,7 @@ import { videoVerdict, pendingRefusal, type PackLike } from '@/lib/video-require
 // into that column depends on can actually be run by a test. Re-exported here
 // because this is where callers have always looked for them.
 import { normalizeStrategy, type StrategyMode, type TemplateStrategy } from '@/lib/template-strategy';
+import { isStrategySlot, pillarForName, promotionFlags, SOFT_CTA_RE, strategyBrand, strategyTopicPrompt } from '@/lib/strategy-voice';
 export { normalizeStrategy };
 export type { StrategyFormat, StrategyMode, TemplateStrategy } from '@/lib/template-strategy';
 
@@ -99,6 +100,7 @@ export type Angle = {
   strategistNote?: string; // AI strategist's 2-3 sentence guidance for the writer
   reviewerNote?: string; // human feedback carried into a regeneration
   provenPerformer?: boolean; // boosted by the measured-engagement learning loop
+  supportingPhrase?: string; // weekly-strategy slots: an optional search phrase found by research
   media?: { url: string; title: string } | null; // matching clip to attach on approve
 };
 
@@ -522,7 +524,30 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
   // so passing the brief's own slice meant the SAME array joined to itself: the
   // six question keywords fetched and paid for were narrowed back to three, and
   // the wider `related` set never reached the angle picker at all.
-  const angle = decideAngle(occurrenceIndex, seedTopic, bundle.brief, bundle.questions, movers, recent, learned, angleHistory);
+  let angle = decideAngle(occurrenceIndex, seedTopic, bundle.brief, bundle.questions, movers, recent, learned, angleHistory);
+
+  // Weekly-strategy slots write the angle the clinic's document lists for this
+  // week — never a Semrush keyword in its place. Left to decideAngle, a slot
+  // could swap "The role of protein in recovery" for a commercial-intent
+  // keyword, which is the opposite of what the strategy asks for. The keyword
+  // research still counts: a non-commercial phrase it found rides along as an
+  // optional supporting phrase.
+  if (isStrategySlot(strategy)) {
+    const pool = seedPool.length || 1;
+    const supporting = angle.query !== seedTopic && angle.type !== 'commercial' ? angle.query : undefined;
+    angle = {
+      type: 'answer',
+      query: seedTopic,
+      seedTopic,
+      rationale:
+        'From the weekly strategy — "' + template.name + '", angle ' + ((occurrenceIndex % pool) + 1) + ' of ' + pool + '.' +
+        (supporting ? ' Supporting search phrase: "' + supporting + '".' : ''),
+      volume: supporting ? angle.volume : null,
+      difficulty: supporting ? angle.difficulty : null,
+      intent: supporting ? angle.intent : null,
+      supportingPhrase: supporting,
+    };
+  }
 
   // AI strategist note: 2-3 sentences of editorial direction for the writer,
   // grounded in the chosen angle. Purely additive — skipped without API keys.
@@ -530,11 +555,15 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
     const note = await chatAssistant([
       {
         role: 'user',
-        content:
-          'In 2-3 short sentences, give editorial direction for a ' +
-          (strategy.format || 'social') + ' post targeting the search "' + angle.query +
-          '" (angle: ' + angle.type + '; rationale: ' + angle.rationale +
-          '). What should the writer emphasize and avoid? Be specific and compliant — no medical claims. Plain text only.',
+        content: isStrategySlot(strategy)
+          ? 'In 2-3 short sentences, give editorial direction for an EDUCATIONAL ' + (strategy.format || 'social') +
+            ' post for a clinic\'s weekly "' + template.name + '" theme, on the angle "' + angle.query +
+            '". It must teach something practical and must not promote any treatment or ask readers to book. ' +
+            'What should the writer emphasize and avoid? Plain text only.'
+          : 'In 2-3 short sentences, give editorial direction for a ' +
+            (strategy.format || 'social') + ' post targeting the search "' + angle.query +
+            '" (angle: ' + angle.type + '; rationale: ' + angle.rationale +
+            '). What should the writer emphasize and avoid? Be specific and compliant — no medical claims. Plain text only.',
       },
     ]);
     if (note && note.trim()) angle.strategistNote = note.trim().slice(0, 500);
@@ -562,7 +591,19 @@ const GOAL_INSTRUCTION: Record<NonNullable<TemplateStrategy['goal']>, string> = 
   authority: 'Optimize for authority: cite the clinical perspective, measured tone.',
 };
 
-function topicPromptFor(angle: Angle, strategy: TemplateStrategy): string {
+function topicPromptFor(angle: Angle, strategy: TemplateStrategy, templateName = ''): string {
+  // A weekly-strategy slot gets the strategy's own brief: pillar, angle,
+  // editorial direction and the no-promotion rules (lib/strategy-voice.ts).
+  if (isStrategySlot(strategy)) {
+    const brief = strategyTopicPrompt({
+      angle: angle.query,
+      pillarName: pillarForName(templateName)?.name || templateName || angle.seedTopic,
+      rule: strategy.rule,
+      reviewerNote: angle.reviewerNote,
+      supportingPhrase: angle.supportingPhrase,
+    });
+    return angle.strategistNote ? brief + ' Strategist direction: ' + angle.strategistNote : brief;
+  }
   const parts = [
     'Write about: ' + angle.query + '.',
     'Content pillar: ' + angle.seedTopic + '.',
@@ -676,11 +717,14 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   } catch (err) { /* optional */ reportError('autopilot:clip-lookup', err); }
 
   const { provider, pack } = await generateContentPack({
-    topic: topicPromptFor(angle, strategy),
+    topic: topicPromptFor(angle, strategy, template.name),
     contentType: strategy.format || 'social',
     channels: template.providers,
-    brand,
-    performanceHint,
+    // Strategy slots swap the Brand Brain's promotional guidelines for the
+    // strategy's editorial direction, and skip the top-performer hint — the
+    // top performers are procedure posts, and imitating them is the problem.
+    brand: isStrategySlot(strategy) ? strategyBrand(brand) : brand,
+    performanceHint: isStrategySlot(strategy) ? undefined : performanceHint,
     // Pass the prepared hint ('' = researched, nothing found) so the
     // generator does not run a second, redundant Semrush lookup.
     keywordHint: hint,
@@ -829,7 +873,7 @@ function channelText(pack: ContentPack, provider: string): string {
   return String(p[key] || p.instagram || p.blog || '');
 }
 
-export function scorePack(pack: ContentPack, providers: string[], angle: Angle): RunScore {
+export function scorePack(pack: ContentPack, providers: string[], angle: Angle, opts: { strategySlot?: boolean } = {}): RunScore {
   const texts = (providers.length ? providers : ['instagram']).map((p) => channelText(pack, p));
   const joined = texts.join('\n').toLowerCase();
   const critique: string[] = [];
@@ -855,15 +899,29 @@ export function scorePack(pack: ContentPack, providers: string[], angle: Angle):
   if (breakdown.hook < 20) critique.push('Open with a one-line scroll-stopping hook under 140 characters.');
 
   // CTA (0-15).
-  breakdown.cta = CTA_RE.test(joined) ? 15 : 0;
-  if (!breakdown.cta) critique.push('Close with a clear, compliant call to action.');
+  // A weekly-strategy post closes with a gentle next step (save, share, ask
+  // your physician), not a sales call to action — both count.
+  breakdown.cta = CTA_RE.test(joined) || (opts.strategySlot && SOFT_CTA_RE.test(joined)) ? 15 : 0;
+  if (!breakdown.cta) {
+    critique.push(opts.strategySlot
+      ? 'Close with a gentle, useful next step (save this, share it, talk it through with your physician) — not a sales pitch.'
+      : 'Close with a clear, compliant call to action.');
+  }
 
   // Safety (0-10): advisory flags cost points and surface to the reviewer.
   const safetyFlags = reviewPack(pack as unknown as Record<string, unknown>);
   breakdown.safety = Math.max(0, 10 - safetyFlags.length * 5);
   if (safetyFlags.length) critique.push('Rephrase flagged passages: ' + safetyFlags.map((f) => f.code).join(', ') + '.');
 
-  const total = Object.values(breakdown).reduce((s, v) => s + v, 0);
+  // Strategy posts are educational: every promotional habit costs 10 points
+  // (so one is enough to trigger the self-critique rewrite) and is named.
+  if (opts.strategySlot) {
+    const promo = promotionFlags(texts.join('\n'), angle.query);
+    breakdown.promotion = -Math.min(40, promo.length * 10);
+    if (promo.length) critique.push('This is an educational post, not an advert — remove: ' + promo.join(', ') + '.');
+  }
+
+  const total = Math.max(0, Object.values(breakdown).reduce((s, v) => s + v, 0));
   return { total, breakdown, safetyFlags, critique };
 }
 
@@ -878,7 +936,8 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
     .from('drafts').select('id, pack, provider').eq('id', run.draft_id).eq('user_id', run.user_id).single();
   if (error || !draftRow) throw new Error('draft not found for scoring');
   let pack = (draftRow as { pack: ContentPack }).pack;
-  let score = scorePack(pack, template.providers || [], angle);
+  const strategySlot = isStrategySlot(strategy);
+  let score = scorePack(pack, template.providers || [], angle, { strategySlot });
   let regens = run.regens;
 
   // Self-critique: one bounded regeneration when below threshold.
@@ -886,7 +945,7 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
     regens++;
     try {
       const critiqueNote =
-        topicPromptFor(angle, strategy) +
+        topicPromptFor(angle, strategy, template.name) +
         ' Previous attempt scored ' + score.total + '/100. Fix exactly these issues: ' +
         score.critique.join(' ');
       // WITH the brand voice, and without suppressing the keyword brief.
@@ -900,14 +959,15 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
       // keywordHint is left UNDEFINED rather than '': generateContentPack runs
       // its own auto-brief when the field is absent and skips it when the field
       // is an empty string, so '' was explicitly turning the research off.
-      const brand = await loadBrandContext(db, run.user_id);
+      const loaded = await loadBrandContext(db, run.user_id);
+      const brand = strategySlot ? strategyBrand(loaded) : loaded;
       const { pack: retry } = await generateContentPack({
         topic: critiqueNote,
         contentType: strategy.format || 'social',
         channels: template.providers,
         brand,
       });
-      const retryScore = scorePack(retry, template.providers || [], angle);
+      const retryScore = scorePack(retry, template.providers || [], angle, { strategySlot });
       if (retryScore.total > score.total) {
         (retry as ContentPack & { _autopilot?: unknown })._autopilot =
           (pack as ContentPack & { _autopilot?: unknown })._autopilot;
@@ -1668,6 +1728,20 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   );
   if (!packImage) {
     try { packImage = shippable(await ensureDraftImage(run.draft_id, run.user_id)); } catch { packImage = null; }
+  }
+
+  // NOTHING GOES TO INSTAGRAM WITHOUT A PICTURE. The image step above is
+  // best-effort by design, so on a day the generator failed this used to send
+  // `media: []` — and Instagram refuses a text-only post at Metricool, long
+  // after the reviewer pressed Approve and moved on. Refuse here instead, where
+  // the reviewer is standing: the run goes back to the queue with "New image"
+  // one click away. (A matched clip counts as the attachment, as it always has.)
+  const noMedia = mediaProblem(mcProviders, run.angle?.media?.url || packImage?.url || '');
+  if (noMedia) {
+    const why = 'Not sent: ' + noMedia.replace(/ Attach one below, or unselect (it|them)\./, '') +
+      ' The picture for this post could not be made — press "New image" on the card, then approve again. Nothing was sent anywhere.';
+    await releaseClaim(db, run, 'approve-refused', why);
+    return { ok: false, note: why };
   }
 
   // THE ARTICLE IS DECIDED BEFORE ANYTHING IS SENT.
