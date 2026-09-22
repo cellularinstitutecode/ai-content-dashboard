@@ -79,3 +79,10 @@ test('weekly-planner images: off-topic is a defect; everywhere else it stays adv
   assert.match(v.issues[0], /off-topic/);
   assert.equal(classifyVerdict({ ...raw, onTopic: true }, { requireOnTopic: true }).status, 'approved');
 });
+
+test('planner covers: a head in the title band is a defect', () => {
+  const clean = { approved: true, textDetected: false, onTopic: true, blocking: [], advisory: [] };
+  assert.equal(classifyVerdict({ ...clean, headTopPct: 18 }, { requireOnTopic: true, minHeadTopPct: 25 }).status, 'flagged');
+  assert.equal(classifyVerdict({ ...clean, headTopPct: 38 }, { requireOnTopic: true, minHeadTopPct: 25 }).status, 'approved');
+  assert.equal(classifyVerdict({ ...clean, headTopPct: 18 }).status, 'approved');
+});
