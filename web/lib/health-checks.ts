@@ -477,7 +477,7 @@ export async function runHealthChecks(): Promise<HealthReport> {
       severity: 'required',
       code: mediaCode,
       detail: !mediaBase.ok
-        ? 'This deployment does not know its own public address, so Metricool cannot be given a link to any video. Videos the bucket will not take are uploaded straight into Metricool instead (METRICOOL_DIRECT_UPLOAD, up to 360 MB); for the streamed route set PUBLIC_MEDIA_BASE_URL to the https origin that serves the media — the Dokploy copy, see deploy/DOKPLOY.md.'
+        ? 'This deployment does not know its own public address, so Metricool cannot be given a link to any video. Videos the bucket will not take are uploaded straight into Metricool instead (METRICOOL_DIRECT_UPLOAD, up to 2 GB); for the streamed route set PUBLIC_MEDIA_BASE_URL to the https origin that serves the media — the Dokploy copy, see deploy/DOKPLOY.md.'
         : !mediaKey
           ? 'No media signing key. Set MEDIA_URL_SECRET (openssl rand -hex 32); CRON_SECRET is used as a fallback. Without one every video link is refused, including ours.'
           : !mediaSigns

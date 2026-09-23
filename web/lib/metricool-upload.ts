@@ -44,6 +44,7 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream, openAsBlob } from 'node:fs';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { request as httpsRequest } from 'node:https';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -71,14 +72,28 @@ import { redact, reportError } from '@/lib/report';
 export { directUploadEnabled, isMetricoolHostedUrl, isMetricoolCopyId, metricoolCopyId } from '@/lib/metricool-upload-parse';
 
 /**
- * The largest video this route carries.
+ * The largest video that is STAGED on the scratch disk first.
  *
- * The file is staged on the function's scratch disk so it can be hashed and
- * the upload can name its length — S3 refuses a pre-signed PUT of unknown
- * length — and that disk is 512 MB shared with everything else the function
- * does. Same ceiling as the audio pipeline, for the same reason.
+ * Up to here the file is written to the function's /tmp so it can be hashed
+ * and sliced from one place — the proven path, the one the 149 MB reels went
+ * out on. That disk is 512 MB shared with everything else the function does,
+ * so this is the audio pipeline's ceiling, for the same reason.
  */
-export const DIRECT_UPLOAD_MAX_BYTES = DISK_SAFE_BYTES;
+export const DIRECT_UPLOAD_STAGE_BYTES = DISK_SAFE_BYTES;
+
+/**
+ * The largest video this route carries at all.
+ *
+ * Above the staging ceiling the disk is never used: the file is read out of
+ * Drive once to hash its slices, the transaction is opened, and then each
+ * 25 MB slice is fetched again by Range request and put to its signed address
+ * — two passes over the network, a slice or three in memory, nothing on disk.
+ * The 477 MB reel that was refused as "more than this function can stage" is
+ * exactly the file this exists for. What bounds it is TIME: the function has
+ * 300 seconds, and two passes over two gigabytes is where that stops being
+ * plausible on any connection.
+ */
+export const DIRECT_UPLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 
 const TRANSACTIONS_PATH = '/v2/media/s3/upload-transactions';
 /** One small JSON call; it should not take long. */
@@ -87,6 +102,8 @@ const CALL_MS = 30_000;
 const DEFAULT_BUDGET_MS = 270_000;
 /** Multipart parts in flight at once. File-backed blobs, so memory is not the limit; the pipe is. */
 const PART_CONCURRENCY = 4;
+/** The same, when each part is a 25 MB buffer fetched from Drive: three is 75 MB in flight. */
+const STREAMED_PART_CONCURRENCY = 3;
 
 export type DirectUpload =
   | { ok: true; url: string; copyId: string; bytes: number; sizeBytes: number | null }
@@ -131,6 +148,98 @@ async function declareParts(path: string, bytes: number): Promise<DeclaredPart[]
     out.push({ ...r, hash: await sha256Base64(path, r.startByte, r.endByte) });
   }
   return out;
+}
+
+/**
+ * The file declared from ONE pass over the Drive stream, with nothing kept.
+ *
+ * The transaction wants every slice's checksum before it opens, and a
+ * checksum needs the bytes — but not the disk. Each chunk is fed to the
+ * running slice hash (split where a chunk straddles a 25 MB boundary) and to
+ * the whole-file hash, then dropped. The byte count is checked against what
+ * Drive reported, exactly as the disk path checks it.
+ */
+async function declarePartsFromDrive(
+  fileId: string, size: number, transferMs: number,
+): Promise<{ declared: DeclaredPart[]; wholeHash: string; bytes: number }> {
+  const res = await driveMediaStream(fileId, transferMs);
+  if (!res.ok || !res.body) throw new Error('Drive answered HTTP ' + res.status + ' to the download.');
+  const ranges = partRanges(size);
+  const declared: DeclaredPart[] = [];
+  const whole = createHash('sha256');
+  let part = createHash('sha256');
+  let idx = 0;
+  let inPart = 0;
+  let total = 0;
+  for await (const chunk of Readable.fromWeb(res.body as unknown as import('node:stream/web').ReadableStream)) {
+    let buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+    whole.update(buf);
+    total += buf.length;
+    while (buf.length) {
+      const r = ranges[idx];
+      if (!r) throw new Error('Drive handed over more bytes than it reported (' + total.toLocaleString() + ' of ' + size.toLocaleString() + ').');
+      const take = buf.subarray(0, Math.min(r.size - inPart, buf.length));
+      part.update(take);
+      inPart += take.length;
+      buf = buf.subarray(take.length);
+      if (inPart === r.size) {
+        declared.push({ ...r, hash: part.digest('base64') });
+        part = createHash('sha256');
+        inPart = 0;
+        idx++;
+      }
+    }
+  }
+  if (total !== size) throw new Error('The download stopped at ' + total.toLocaleString() + ' of ' + size.toLocaleString() + ' bytes.');
+  return { declared, wholeHash: whole.digest('base64'), bytes: total };
+}
+
+/** One slice of the file, fetched from Drive by Range request, as a body of known length. */
+async function partFromDrive(fileId: string, startByte: number, endByte: number, contentType: string, transferMs: number): Promise<Blob> {
+  const res = await driveMediaStream(fileId, transferMs, { range: 'bytes=' + startByte + '-' + (endByte - 1) });
+  if (!res.ok || !res.body) throw new Error('Drive answered HTTP ' + res.status + ' to a range request.');
+  const all = Buffer.from(await res.arrayBuffer());
+  // A 206 is the slice; a 200 is a server that ignored the Range and sent the
+  // whole file, which is still the right bytes at the right offset.
+  const bytes = res.status === 206 ? all : all.subarray(startByte, endByte);
+  const want = endByte - startByte;
+  if (bytes.length !== want) throw new Error('Drive handed over ' + bytes.length.toLocaleString() + ' bytes for a ' + want.toLocaleString() + '-byte slice.');
+  return new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], { type: contentType });
+}
+
+/**
+ * The whole file, piped from Drive to a signed address with its length named.
+ *
+ * Only for a SIMPLE transaction on a file too large to stage — which Metricool
+ * is not expected to open for a file declared in twenty slices, but a reply is
+ * read, not assumed. node:https rather than fetch, because a pre-signed PUT
+ * must carry Content-Length and fetch sends a stream body chunked.
+ */
+async function putWholeFromDrive(
+  input: { url: string; fileId: string; bytes: number; contentType: string; hash: string; transferMs: number },
+): Promise<{ ok: true; etag: string | null } | { ok: false; status: number; detail: string }> {
+  const src = await driveMediaStream(input.fileId, input.transferMs);
+  if (!src.ok || !src.body) return { ok: false, status: 0, detail: 'Drive answered HTTP ' + src.status + ' to the download.' };
+  const body = Readable.fromWeb(src.body as unknown as import('node:stream/web').ReadableStream);
+  return new Promise((resolve, reject) => {
+    const req = httpsRequest(input.url, {
+      method: 'PUT',
+      headers: { 'content-type': input.contentType, 'content-length': String(input.bytes), 'x-amz-checksum-sha256': input.hash },
+      timeout: input.transferMs,
+    }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (c: string) => { if (text.length < 2_000) text += c; });
+      res.on('end', () => {
+        const status = res.statusCode || 0;
+        if (status >= 200 && status < 300) resolve({ ok: true, etag: bareEtag(res.headers.etag as string | undefined) });
+        else resolve({ ok: false, status, detail: said(text) });
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('Moving the video into Metricool ran out of time.')));
+    req.on('error', reject);
+    pipeline(body, req).catch(reject);
+  });
 }
 
 type Opened = { tx: OpenedTransaction; status: number };
@@ -226,35 +335,56 @@ export async function uploadVideoToMetricool(
       ok: false,
       reason: 'too_large',
       sizeBytes,
-      message: mb(sizeBytes) + ' is more than the ' + mb(DIRECT_UPLOAD_MAX_BYTES) + ' this function can stage for an upload.',
+      message: mb(sizeBytes) + ' is more than the ' + mb(DIRECT_UPLOAD_MAX_BYTES) + ' this route carries inside one request.',
     };
   }
   const contentType = 'video/mp4';
+  // STAGED OR STREAMED. Up to the scratch disk's ceiling the file is written
+  // to /tmp once and sliced from there — the proven path. Above it, the disk
+  // is never touched: one pass to hash, then each slice by Range request. A
+  // file whose size Drive did not report is staged, because the streamed
+  // path declares slices from the size before it reads a byte.
+  const streamed = sizeBytes != null && sizeBytes > DIRECT_UPLOAD_STAGE_BYTES;
 
   let dir: string | null = null;
   try {
-    // 1. THE BYTES, out of Drive and onto the scratch disk. First, because the
-    // transaction declares each slice's checksum, and a checksum needs the bytes.
     if (left() < 20_000) return { ok: false, reason: 'failed', sizeBytes, message: 'There was no time left to move the video.' };
-    dir = await mkdtemp(join(tmpdir(), 'chi-upload-'));
-    const tmp = join(dir, id + '.mp4');
-    const res = await driveMediaStream(id, Math.min(240_000, left() - 15_000));
-    if (!res.ok || !res.body) {
-      return { ok: false, reason: 'unreachable', sizeBytes, message: 'Drive answered HTTP ' + res.status + ' to the download.' };
+    let tmp: string | null = null;
+    let bytes: number;
+    let declared: DeclaredPart[];
+    let wholeHash: string | null = null;
+    if (streamed) {
+      // 1 (streamed). ONE PASS over the file, hashing as it goes. Nothing kept.
+      const pass = await declarePartsFromDrive(id, sizeBytes, Math.min(200_000, left() - 60_000));
+      bytes = pass.bytes;
+      declared = pass.declared;
+      wholeHash = pass.wholeHash;
+      console.info('metricool:upload streamed', bytes, 'bytes hashed in', declared.length, 'parts');
+    } else {
+      // 1 (staged). THE BYTES, out of Drive and onto the scratch disk. First,
+      // because the transaction declares each slice's checksum, and a checksum
+      // needs the bytes.
+      dir = await mkdtemp(join(tmpdir(), 'chi-upload-'));
+      tmp = join(dir, id + '.mp4');
+      const res = await driveMediaStream(id, Math.min(240_000, left() - 15_000));
+      if (!res.ok || !res.body) {
+        return { ok: false, reason: 'unreachable', sizeBytes, message: 'Drive answered HTTP ' + res.status + ' to the download.' };
+      }
+      await pipeline(Readable.fromWeb(res.body as unknown as import('node:stream/web').ReadableStream), createWriteStream(tmp));
+      bytes = (await stat(tmp)).size;
+      if (sizeBytes != null && bytes !== sizeBytes) {
+        return { ok: false, reason: 'failed', sizeBytes, message: 'The download stopped at ' + bytes.toLocaleString() + ' of ' + sizeBytes.toLocaleString() + ' bytes.' };
+      }
+      if (bytes <= 0) return { ok: false, reason: 'failed', sizeBytes, message: 'Drive handed over an empty file.' };
+      if (bytes > DIRECT_UPLOAD_STAGE_BYTES) {
+        // Only reachable when Drive reported no size: the streamed path could
+        // not be chosen, and the disk cannot hold what arrived.
+        return { ok: false, reason: 'too_large', sizeBytes: bytes, message: mb(bytes) + ' is more than the ' + mb(DIRECT_UPLOAD_STAGE_BYTES) + ' this function can stage for an upload.' };
+      }
+      // 2. THE TRANSACTION. The file declared in slices, each with its hash;
+      // Metricool names where each slice goes.
+      declared = await declareParts(tmp, bytes);
     }
-    await pipeline(Readable.fromWeb(res.body as unknown as import('node:stream/web').ReadableStream), createWriteStream(tmp));
-    const bytes = (await stat(tmp)).size;
-    if (sizeBytes != null && bytes !== sizeBytes) {
-      return { ok: false, reason: 'failed', sizeBytes, message: 'The download stopped at ' + bytes.toLocaleString() + ' of ' + sizeBytes.toLocaleString() + ' bytes.' };
-    }
-    if (bytes <= 0) return { ok: false, reason: 'failed', sizeBytes, message: 'Drive handed over an empty file.' };
-    if (bytes > DIRECT_UPLOAD_MAX_BYTES) {
-      return { ok: false, reason: 'too_large', sizeBytes: bytes, message: mb(bytes) + ' is more than the ' + mb(DIRECT_UPLOAD_MAX_BYTES) + ' this function can stage for an upload.' };
-    }
-
-    // 2. THE TRANSACTION. The file declared in slices, each with its hash;
-    // Metricool names where each slice goes.
-    const declared = await declareParts(tmp, bytes);
     if (left() < 20_000) return { ok: false, reason: 'failed', sizeBytes, message: 'There was no time left to open the upload.' };
     let opened: Opened | NotOpened;
     try {
@@ -287,11 +417,12 @@ export async function uploadVideoToMetricool(
       };
     };
 
-    // 3. THE UPLOAD, to the address(es) Metricool named. openAsBlob hands fetch
-    // a body with a known length without reading the file into memory, and a
-    // slice of it is still file-backed.
+    // 3. THE UPLOAD, to the address(es) Metricool named. Staged: openAsBlob
+    // hands fetch a body with a known length without reading the file into
+    // memory, and a slice of it is still file-backed. Streamed: each slice is
+    // fetched from Drive by Range request as its turn comes.
     if (left() < 10_000) return { ok: false, reason: 'failed', sizeBytes, message: 'There was no time left to upload the video.' };
-    const whole = await openAsBlob(tmp, { type: contentType });
+    const whole = tmp ? await openAsBlob(tmp, { type: contentType }) : null;
     const uploaded: UploadedPart[] = [];
     if (tx.uploadType === 'MULTIPART') {
       if (!tx.uploadId || !tx.key) return unreadable('the multipart upload id and key');
@@ -299,7 +430,7 @@ export async function uploadVideoToMetricool(
       if (tx.parts.length !== declared.length) {
         console.warn('metricool:upload-transaction signed', tx.parts.length, 'parts for', declared.length, 'declared');
       }
-      const results = await inBatches(tx.parts, PART_CONCURRENCY, async (part) => {
+      const results = await inBatches(tx.parts, whole ? PART_CONCURRENCY : STREAMED_PART_CONCURRENCY, async (part) => {
         // The range and the checksum are the declared part's, by number — the
         // web app pairs them by position, and a reply that renumbers them would
         // fail S3's checksum rather than send the wrong bytes quietly.
@@ -307,7 +438,10 @@ export async function uploadVideoToMetricool(
         if (!mine) return { ok: false as const, status: 0, detail: 'part ' + part.partNumber + ' was signed but never declared', partNumber: part.partNumber };
         const start = part.startByte ?? mine.startByte;
         const end = part.endByte ?? mine.endByte;
-        const r = await putPart({ url: part.presignedUrl, blob: whole.slice(start, end, contentType), contentType, hash: mine.hash, left });
+        const blob = whole
+          ? whole.slice(start, end, contentType)
+          : await partFromDrive(id, start, end, contentType, Math.max(10_000, left() - 10_000));
+        const r = await putPart({ url: part.presignedUrl, blob, contentType, hash: mine.hash, left });
         return { ...r, partNumber: part.partNumber };
       });
       for (const r of results) {
@@ -331,8 +465,10 @@ export async function uploadVideoToMetricool(
       // S3 PUT of the whole object actually checks.
       if (!tx.presignedUrl) return unreadable('a signed upload address');
       if (tx.uploadType !== 'SIMPLE') console.warn('metricool:upload-transaction unknown type, sent as SIMPLE', tx.uploadType);
-      const hash = declared.length === 1 ? declared[0].hash : await sha256Base64(tmp, 0, bytes);
-      const r = await putPart({ url: tx.presignedUrl, blob: whole, contentType, hash, left });
+      const hash = declared.length === 1 ? declared[0].hash : (wholeHash ?? await sha256Base64(tmp as string, 0, bytes));
+      const r = whole
+        ? await putPart({ url: tx.presignedUrl, blob: whole, contentType, hash, left })
+        : await putWholeFromDrive({ url: tx.presignedUrl, fileId: id, bytes, contentType, hash, transferMs: Math.max(10_000, left() - 10_000) });
       if (!r.ok) {
         console.warn('metricool:upload non-ok', r.status, r.detail);
         return {
