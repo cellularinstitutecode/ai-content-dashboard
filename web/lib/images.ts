@@ -16,7 +16,7 @@
 // - Idempotent: ensureDraftImage() skips drafts that already carry an
 //   image, so retries and concurrent callers don't double-spend.
 // - No new secrets: reuses OPENAI_API_KEY + the Supabase service role.
-import { cleanTopic, onTopicCheck, plannerImageFor, plannerPromptLines, SHOT_COUNT, type PlannerImage } from '@/lib/planner-image';
+import { cleanTopic, familyAt, onTopicCheck, plannerImageFor, plannerPromptLines, scienceAllowed, SHOT_COUNT, type PlannerImage } from '@/lib/planner-image';
 import { renderTitleCover } from '@/lib/title-cover';
 import { briefSource, briefSystemPrompt, briefUserPrompt, parseSceneBrief, type SceneBrief } from '@/lib/image-brief';
 import { setStoredFontReader } from '@/lib/brand-card';
@@ -615,7 +615,12 @@ async function generateBestPackImage(opts: {
 }): Promise<PackImage> {
   // Weekly-planner drafts rotate through their pillar's own scenes and are
   // checked for being on topic; every other draft is unchanged.
-  const planner = plannerImageFor(opts.pack);
+  const plannerBase = plannerImageFor(opts.pack);
+  // Read the post once: does its own body talk about biology? Only then may a
+  // microscopy or lab frame be offered for it.
+  const planner = plannerBase
+    ? { ...plannerBase, science: scienceAllowed(briefSource(opts.pack, 6000) || opts.topic) }
+    : null;
   const sceneCount = planner ? SHOT_COUNT : STYLE_VARIANTS.length;
   const baseVariant = Math.abs(Math.round(opts.variant ?? 0)) % sceneCount;
   const subject = planner ? planner.subject : opts.topic;
@@ -627,8 +632,13 @@ async function generateBestPackImage(opts: {
     const variant = (baseVariant + attempt) % sceneCount;
     // Planner drafts: brief the scene from THIS post's text (no brief when the
     // team typed a direction — theirs wins). Falls back to the pillar's scenes.
-    const brief = planner && !String(opts.direction || '').trim() ? await sceneBriefFor(planner, opts.pack, variant) : null;
-    const plannerNow = planner ? { ...planner, ...(brief ? { dynamic: brief } : {}) } : null;
+    // The post's own body decides whether a science picture may be offered at
+    // all, and the family this take belongs to travels with the planner so the
+    // vision checker asks the right question of it.
+    const family = planner ? familyAt(planner, variant) : null;
+    const objectLed = family === 'consult' || family === 'still';
+    const brief = planner && objectLed && !String(opts.direction || '').trim() ? await sceneBriefFor(planner, opts.pack, variant) : null;
+    const plannerNow = planner ? { ...planner, ...(family ? { shotFamily: family } : {}), ...(brief ? { dynamic: brief } : {}) } : null;
     const prompt = buildImagePrompt({ ...opts, variant, planner: plannerNow });
     // A retry that fails must not destroy an already-paid-for candidate. This
     // call sat outside any try/catch, so an OpenAI 5xx or a timeout on the
