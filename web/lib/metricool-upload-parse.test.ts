@@ -341,6 +341,23 @@ test('the uploader sends the captured protocol word for word', () => {
   assert.match(lib, /to completing the upload, so it has no file yet/);
 });
 
+test('above the scratch disk the file is streamed, not refused', () => {
+  // The 477 MB reel: "more than the 360 MB this function can stage for an
+  // upload", while the 149 MB ones went out. The disk was the ceiling, and
+  // the disk is not needed: one pass to hash, then each slice by Range.
+  const lib = src('lib/metricool-upload.ts');
+  assert.match(lib, /export const DIRECT_UPLOAD_STAGE_BYTES = DISK_SAFE_BYTES/, 'the disk path keeps its ceiling');
+  assert.match(lib, /export const DIRECT_UPLOAD_MAX_BYTES = 2 \* 1024 \* 1024 \* 1024/, 'the route’s ceiling is time, not storage');
+  assert.match(lib, /const streamed = sizeBytes != null && sizeBytes > DIRECT_UPLOAD_STAGE_BYTES/, 'streamed only above the disk, and only with a known size');
+  assert.match(lib, /await declarePartsFromDrive\(id, sizeBytes/, 'one pass to hash');
+  assert.match(lib, /await partFromDrive\(id, start, end, contentType/, 'then each slice by Range request');
+  assert.match(lib, /range: 'bytes=' \+ startByte \+ '-' \+ \(endByte - 1\)/, 'an inclusive HTTP range');
+  assert.match(lib, /if \(total !== size\) throw new Error\('The download stopped at/, 'the byte count is checked, as on disk');
+  assert.match(lib, /'content-length': String\(input\.bytes\)/, 'a whole-file PUT names its length');
+  // The staged path is untouched: same download, same hashing, same order.
+  assert.match(lib, /await declareParts\(tmp, bytes\)/);
+});
+
 test('the copy maker tries the upload only when the bucket would not take the file', () => {
   const lib = src('lib/media-library.ts');
   assert.match(lib, /available: !staged\.ok && directUploadPossible\(sizeBytes\)/);

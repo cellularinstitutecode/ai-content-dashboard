@@ -155,7 +155,8 @@ export function copyRouteFor(input: {
       'THREE WAYS OUT, none of them done yet. (1) Raise the Supabase upload limit past ' +
       (known ? mb(size) : 'this size') + ' under Storage → Settings and set SUPABASE_UPLOAD_MAX_BYTES to match — this ' +
       'is the bucket route rows 180 and 182 used, the only one already proven here, and the limit is fixed at 50 MB ' +
-      'on the free plan so it needs a paid one. (2) Point PUBLIC_MEDIA_BASE_URL at a host that can stream a whole ' +
+      'on the free plan so it needs a paid one; note that this route stages the file on this function’s disk first, ' +
+      'so it stops at 360 MB whatever the plan. (2) Point PUBLIC_MEDIA_BASE_URL at a host that can stream a whole ' +
       'file (the Dokploy copy — see deploy/DOKPLOY.md); this is the one that also survives the 1 GB reels, which no ' +
       'serverless function will ever carry to Supabase and back. (3) Export this reel under 100 MB.',
   };
