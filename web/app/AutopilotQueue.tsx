@@ -325,7 +325,11 @@ export default function AutopilotQueue() {
         const res = await fetch('/api/drafts/image', {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'autopilot' },
-          body: JSON.stringify({ id: r.draft_id, option: true }),
+          // Slots 1, 2 and 3 of the post's picture plan: the pillar's own shot,
+          // the science slot when the post has earned it, and the second
+          // consultation. Naming them keeps the set honest on a draft that has
+          // already been rerolled many times.
+          body: JSON.stringify({ id: r.draft_id, option: true, slot: i + 1 }),
         });
         const j = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(j?.error || 'Image generation failed');

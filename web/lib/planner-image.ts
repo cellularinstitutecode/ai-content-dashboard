@@ -623,8 +623,13 @@ export function scienceAllowed(text: unknown): boolean {
  * later slots follow the pillar's order, and a science slot falls back to the
  * still life whenever the post never mentions biology.
  */
+export const PLAN_LENGTH = 4;
+
 export function familyAt(p: Pick<PlannerImage, 'pillarId' | 'science'>, sceneIndex: number): ShotFamily {
-  const step = Math.abs(Math.round(sceneIndex));
+  // The plan repeats every four takes. Without the wrap, a draft that had been
+  // rerolled a dozen times walked off the end of its own plan and never reached
+  // the outcome shot or the science slot again.
+  const step = Math.abs(Math.round(sceneIndex)) % PLAN_LENGTH;
   if (step === 0) return 'consult';
   const order = PILLAR_FAMILIES[p.pillarId] || DEFAULT_FAMILIES;
   // The third take is the science slot whenever the post's body has earned it —
@@ -679,7 +684,7 @@ const FALLBACK_OBJECTS: Record<string, { table: string[]; foreground: string; ac
   'recovery-cancun': { table: ['a bowl of tropical fruit', 'a glass of water with lime', 'a straw sun hat'], foreground: 'a small potted palm', action: 'pointing out toward the sea' },
 };
 
-export function plannerPromptLines(p: PlannerImage, sceneIndex: number, direction?: string | null): string[] {
+export function plannerPromptLines(p: PlannerImage, sceneIndex: number, direction?: string | null, family?: ShotFamily | null): string[] {
   const dir = String(direction || '').trim();
   const d = p.dynamic;
   const pid = p.pillarId === 'article' ? (Object.keys(PILLAR_SCENES).find((k) => PILLAR_SCENES[k].scenes === p.scenes) || 'diagnosis') : p.pillarId;
@@ -691,7 +696,7 @@ export function plannerPromptLines(p: PlannerImage, sceneIndex: number, directio
   // The shot rotates with the post itself, not only with rerolls — one fixed
   // composition made every week's picture look like the last one.
   const seed = seedOf(p.title + p.pillarName) + Math.abs(Math.round(sceneIndex));
-  const shot = shotFor(seedOf(p.title + p.pillarName), sceneIndex, familyAt(p, sceneIndex));
+  const shot = shotFor(seedOf(p.title + p.pillarName), sceneIndex, family || familyAt(p, sceneIndex));
   const cast: Cast = {
     clinician: CLINICIANS[seed % CLINICIANS.length],
     patient: PATIENTS[(seed + 2) % PATIENTS.length],

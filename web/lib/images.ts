@@ -170,6 +170,8 @@ export function buildImagePrompt(opts: {
   direction?: string | null;
   /** Weekly-planner drafts only: pictured from their pillar and angle (lib/planner-image.ts). */
   planner?: PlannerImage | null;
+  /** The plan slot this take belongs to, when the caller is asking for a specific one. */
+  slot?: number | null;
 }): string {
   const brandName = opts.brand?.name || 'a premium regenerative medicine and longevity clinic';
   const excerpt = excerptOf(opts.pack);
@@ -202,7 +204,7 @@ export function buildImagePrompt(opts: {
     return [
       ...noText,
       `Editorial photograph for ${brandName}.`,
-      ...plannerPromptLines(opts.planner, opts.variant ?? 0, direction),
+      ...plannerPromptLines(opts.planner, opts.variant ?? 0, direction, opts.planner.shotFamily || null),
       excerpt ? `Context from the post: ${excerpt}` : '',
       `The brand's colours may appear only as the faintest accents (${palette}); the frame itself stays light, neutral and clean — never orange-tinted.`,
       'Never: stock-photo poses or forced smiles at the camera; cool blue clinical light; chrome and glass laboratory clichés; dark or moody lighting; clutter;',
@@ -590,6 +592,8 @@ export async function generatePackImage(opts: {
   variant?: number;
   /** What the team asked for, passed through to buildImagePrompt. */
   direction?: string | null;
+  /** Weekly-planner drafts only: which slot of the post's picture plan to make. */
+  slot?: number | null;
 }): Promise<PackImage> {
   // Record how this went before handing the result (or the failure) on, so
   // /api/health can say whether images WORK rather than whether a key is set.
@@ -612,6 +616,13 @@ async function generateBestPackImage(opts: {
   brand?: BrandContext | null;
   variant?: number;
   direction?: string | null;
+  /**
+   * Which slot of the post's plan this take is for. "Show me 3 options" asks
+   * for slots 1, 2 and 3 explicitly; without it the slot would be read off the
+   * draft's running variant, which on a much-rerolled draft has long since
+   * walked past the outcome and science slots.
+   */
+  slot?: number | null;
 }): Promise<PackImage> {
   // Weekly-planner drafts rotate through their pillar's own scenes and are
   // checked for being on topic; every other draft is unchanged.
@@ -635,7 +646,7 @@ async function generateBestPackImage(opts: {
     // The post's own body decides whether a science picture may be offered at
     // all, and the family this take belongs to travels with the planner so the
     // vision checker asks the right question of it.
-    const family = planner ? familyAt(planner, variant) : null;
+    const family = planner ? familyAt(planner, opts.slot ?? variant) : null;
     const objectLed = family === 'consult' || family === 'still';
     const brief = planner && objectLed && !String(opts.direction || '').trim() ? await sceneBriefFor(planner, opts.pack, variant) : null;
     const plannerNow = planner ? { ...planner, ...(family ? { shotFamily: family } : {}), ...(brief ? { dynamic: brief } : {}) } : null;
