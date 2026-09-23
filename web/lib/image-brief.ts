@@ -51,18 +51,16 @@ const COMPOSITIONS = [
 
 export function briefSystemPrompt(): string {
   return [
-    'You choose the props for ONE photograph in a fixed series. The composition never changes: an over-the-shoulder consultation —',
-    'the patient seen from behind in the right foreground; across a light oak table, a smiling physician in a white blazer facing the camera;',
-    'a sunlit window on the left; a bowl or small object in the lower-left foreground.',
-    'Your job is only: what the physician is doing with her hands, and which objects are on the table and in the foreground,',
-    'so that a reader recognises THIS post\'s specific subject at a glance.',
+    'You choose what is IN a photograph for a clinic\'s educational post. The framing is decided elsewhere (it may be a consultation,',
+    'a still life with no people, a close-up of hands, or a candid moment at home), so describe only the action and the objects.',
+    'Your job: what a person in the picture is doing with their hands, and which objects make THIS post\'s specific subject obvious at a glance.',
     'Pick 2-4 concrete, everyday, photographable objects that belong to the subject (for protein: boiled eggs, grilled salmon, lentils;',
     'for a nutrition label: a plain food package held with its blank side to the camera; for sleep habits: a phone placed face-down, a cup of chamomile tea).',
-    'The FIRST prop is the lower-left foreground object (a bowl, plate or small item); the others go on the table in front of the physician.',
-    'Never: any text, writing, labels, logos or brands; screens showing content; needles, syringes, IV lines, blood; exposed bodies;',
-    'before/after; medicine or supplement bottles with markings; named devices; anything alarming.',
+    'The FIRST prop is the secondary object that sits just behind or beside; the others are the ones in sharp focus.',
+    'Never: any text, writing, labels, logos or brands; screens showing content; needles, syringes, vials, ampoules, IV lines, blood; pill or supplement bottles;',
+    'exposed bodies; before/after; named devices or medicines; anything alarming or clinical-looking.',
     'Answer with STRICT JSON only:',
-    '{"scene": "what the physician is doing, one short clause, e.g. pointing with a pen at the plate of salmon", "props": ["foreground object", "table object", "table object"], "mustShow": "the single clearest visual cue, a short phrase"}',
+    '{"scene": "what the hands are doing, one short clause, e.g. spooning yogurt into a bowl of berries", "props": ["secondary object", "main object", "main object"], "mustShow": "the single clearest visual cue, a short phrase"}',
   ].join(' ');
 }
 
@@ -77,7 +75,7 @@ export function briefUserPrompt(opts: { title: string; angle: string; pillarName
   ].filter(Boolean).join('\n');
 }
 
-const BANNED = /\b(text|label(?:led|ed)?s?|logo|brand|needle|syringe|iv\b|drip|blood|scalpel|injection|before\/after|screen showing|monitor showing|pill bottle)\b/i;
+const BANNED = /\b(text|label(?:led|ed)?s?|logo|brand|needle|syringe|vial|ampoule|iv\b|drip|blood|scalpel|injection|before\/after|screen showing|monitor showing|(pill|supplement|medicine) bottle)\b/i;
 
 /** Parse and sanitise the model's answer. Null when it is unusable — the caller then uses the pillar's fixed scenes. */
 export function parseSceneBrief(raw: unknown): SceneBrief | null {

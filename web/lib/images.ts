@@ -16,7 +16,7 @@
 // - Idempotent: ensureDraftImage() skips drafts that already carry an
 //   image, so retries and concurrent callers don't double-spend.
 // - No new secrets: reuses OPENAI_API_KEY + the Supabase service role.
-import { cleanTopic, onTopicCheck, plannerImageFor, plannerPromptLines, type PlannerImage } from '@/lib/planner-image';
+import { cleanTopic, onTopicCheck, plannerImageFor, plannerPromptLines, SHOT_COUNT, type PlannerImage } from '@/lib/planner-image';
 import { renderTitleCover } from '@/lib/title-cover';
 import { briefSource, briefSystemPrompt, briefUserPrompt, parseSceneBrief, type SceneBrief } from '@/lib/image-brief';
 import { setStoredFontReader } from '@/lib/brand-card';
@@ -205,7 +205,8 @@ export function buildImagePrompt(opts: {
       ...plannerPromptLines(opts.planner, opts.variant ?? 0, direction),
       excerpt ? `Context from the post: ${excerpt}` : '',
       `Brand colour accents in small touches only (a vase, a cushion, the fruit, a throw): ${palette}. The overall frame stays bright, light and warm-neutral.`,
-      'Never: stock-photo poses or forced smiles at the camera; cool blue clinical light; chrome and glass laboratory clichés; dark or moody lighting; clutter.',
+      'Never: stock-photo poses or forced smiles at the camera; cool blue clinical light; chrome and glass laboratory clichés; dark or moody lighting; clutter;',
+      'no supplement, medicine or pill bottles, no vials, ampoules or syringes, no branded packaging, no uniforms with logos.',
       'Style: photorealistic, high-end lifestyle editorial, soft window light, gentle shadows, natural colour.',
       ...strict,
     ].filter(Boolean).join(' ');
@@ -615,7 +616,7 @@ async function generateBestPackImage(opts: {
   // Weekly-planner drafts rotate through their pillar's own scenes and are
   // checked for being on topic; every other draft is unchanged.
   const planner = plannerImageFor(opts.pack);
-  const sceneCount = planner ? planner.scenes.length : STYLE_VARIANTS.length;
+  const sceneCount = planner ? SHOT_COUNT : STYLE_VARIANTS.length;
   const baseVariant = Math.abs(Math.round(opts.variant ?? 0)) % sceneCount;
   const subject = planner ? planner.subject : opts.topic;
   const started = Date.now();
