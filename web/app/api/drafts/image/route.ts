@@ -49,6 +49,7 @@ export async function POST(req: NextRequest) {
     //                 (the reviewer picks from several rather than rerolling blind).
     // choose: <url> → promote one of those propositions to the hero image.
     const asOption = body?.option === true;
+    const askedSlot = Number.isFinite(Number(body?.slot)) ? Math.abs(Math.round(Number(body.slot))) : null;
     const choose = typeof body?.choose === 'string' ? body.choose.trim() : '';
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
 
@@ -194,6 +195,12 @@ export async function POST(req: NextRequest) {
       // Each proposition starts one composition further along, so a set of
       // three is three different shots rather than three near-duplicates.
       variant: advanceVariant ? (existing?.variant ?? 0) + 1 + options.length : 0,
+      // Which slot of the planner's picture plan this take is for. The caller
+      // asking for three propositions asks for slots 1, 2 and 3 by name, so the
+      // set always covers the pillar's own shot and the science slot. Read off
+      // the variant instead, a draft rerolled a dozen times would never reach
+      // them again.
+      slot: askedSlot ?? (asOption ? 1 + (options.length % 3) : (advanceVariant ? null : 0)),
     });
 
     // Re-read the pack immediately before writing, and merge `_image` into the

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PILLARS } from './content-strategy.ts';
 import { BLOG_ANGLES } from './strategy-seed.ts';
-import { PILLAR_SCENES, SHOTS, SHOT_COUNT, TITLES, cleanTopic, familyAt, plannerImageFor, plannerPromptLines, onTopicCheck, scienceAllowed, shotFor, titleFor } from './planner-image.ts';
+import { PILLAR_SCENES, PLAN_LENGTH, SHOTS, SHOT_COUNT, TITLES, cleanTopic, familyAt, plannerImageFor, plannerPromptLines, onTopicCheck, scienceAllowed, shotFor, titleFor } from './planner-image.ts';
 
 const pack = (template_name: string, query: string) => ({ _autopilot: { template_name, angle: { query, seedTopic: query } } });
 
@@ -190,5 +190,28 @@ test('two of every four takes are the consultation', () => {
     const four = [0, 1, 2, 3].map((i) => familyAt({ pillarId: id, science: true }, i));
     assert.equal(four.filter((f) => f === 'consult').length, 2, `${id}: ${four.join(',')}`);
     assert.equal(four.filter((f) => f === 'science').length, 1, `${id}: ${four.join(',')}`);
+  }
+});
+
+test('the plan wraps, so a much-rerolled draft still reaches every slot', () => {
+  // The bug this guards: options advance the draft's running variant, and a
+  // draft rerolled a dozen times walked off the end of its own plan — no
+  // outcome shot, no science slot, just consultations and still lifes.
+  const p = { pillarId: 'movement', science: true };
+  for (let step = 0; step < 24; step += 1) {
+    assert.equal(familyAt(p, step), familyAt(p, step % PLAN_LENGTH), `step ${step}`);
+  }
+  assert.equal(familyAt(p, 4), 'consult');
+  assert.equal(familyAt(p, 5), 'active');
+  assert.equal(familyAt(p, 6), 'science');
+  assert.equal(familyAt(p, 13), familyAt(p, 1));
+});
+
+test('slots 1 to 3 always cover the pillar shot, the science slot and the room', () => {
+  for (const id of ['movement', 'sleep', 'nutrition', 'recovery', 'diagnosis']) {
+    const three = [1, 2, 3].map((i) => familyAt({ pillarId: id, science: true }, i));
+    assert.equal(three[1], 'science', id);
+    assert.equal(three[2], 'consult', id);
+    assert.notEqual(three[0], 'consult', id);
   }
 });
