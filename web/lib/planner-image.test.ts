@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PILLARS } from './content-strategy.ts';
 import { BLOG_ANGLES } from './strategy-seed.ts';
-import { PILLAR_SCENES, TITLES, cleanTopic, plannerImageFor, plannerPromptLines, onTopicCheck, titleFor } from './planner-image.ts';
+import { PILLAR_SCENES, SHOTS, SHOT_COUNT, TITLES, cleanTopic, plannerImageFor, plannerPromptLines, onTopicCheck, titleFor } from './planner-image.ts';
 
 const pack = (template_name: string, query: string) => ({ _autopilot: { template_name, angle: { query, seedTopic: query } } });
 
@@ -23,30 +23,39 @@ test('every angle the strategy lists has a short, hand-written cover title', () 
   }
 });
 
-test('a planner draft is pictured in the reference master shot, with its pillar objects and title', () => {
+test('a planner draft is pictured in one of the shots, with its objects, craft and title', () => {
   const p = plannerImageFor(pack('Nutrition', 'The role of protein in recovery'));
   assert.ok(p);
   assert.equal(p!.pillarId, 'nutrition');
   assert.equal(p!.size, '1024x1536');
   assert.equal(p!.title, 'Protein and Recovery');
   const lines = plannerPromptLines(p!, 0).join(' ');
-  assert.match(lines, /over-the-shoulder consultation/);
-  assert.match(lines, /white blazer over a beige silk blouse/);
-  assert.match(lines, /floor-to-ceiling window/);
+  assert.match(lines, /^Subject: a photograph for an educational post titled "Protein and Recovery"/);
+  assert.match(lines, /SHOT: /);
   assert.match(lines, /oranges/);
-  assert.match(lines, /upper third of the frame/);
-  assert.match(lines, /at least 35% of the way down/);
+  assert.match(lines, /TITLE SPACE: the upper third/);
+  assert.match(lines, /CRAFT: /);
   assert.doesNotMatch(lines, /black scrubs/);
   assert.match(onTopicCheck(p!), /onTopic/);
   const cancun = plannerPromptLines(plannerImageFor(pack('Cancun and health tourism', 'Recovering in a calm, warm environment'))!, 0).join(' ');
-  assert.match(cancun, /turquoise Caribbean sea/);
+  assert.match(cancun, /turquoise Caribbean sea|Cancún/);
+});
+
+test('different posts get different shots, and a reroll moves to the next one', () => {
+  const a = plannerImageFor(pack('Nutrition', 'The role of protein in recovery'))!;
+  const b = plannerImageFor(pack('Sleep', 'What happens in the body while we sleep'))!;
+  const shotOf = (lines: string[]) => lines.find((l) => l.startsWith('SHOT:'));
+  assert.notEqual(shotOf(plannerPromptLines(a, 0)), shotOf(plannerPromptLines(b, 0)));
+  assert.notEqual(shotOf(plannerPromptLines(a, 0)), shotOf(plannerPromptLines(a, 1)));
+  assert.equal(SHOT_COUNT, SHOTS.length);
+  assert.ok(SHOTS.some((s) => !s.people), 'at least one shot has no people in it at all');
 });
 
 test('a team direction replaces the scene but keeps the title space and the look', () => {
   const p = plannerImageFor(pack('Sleep', 'Simple habits that may improve sleep quality'))!;
   const lines = plannerPromptLines(p, 0, 'a couple at the table').join(' ');
   assert.match(lines, /Direction from the team.*a couple at the table/);
-  assert.match(lines, /upper third/);
+  assert.match(lines, /TITLE SPACE/);
 });
 
 test('the weekly article borrows the scenes of the pillar its angle came from', () => {
@@ -74,9 +83,8 @@ test('a brief written from the post replaces the fixed scene and the on-topic cu
   const base = plannerImageFor(pack('Nutrition', 'Hydration and cellular health'))!;
   const p = { ...base, dynamic: { scene: 'The physician pours a glass of water from a carafe with cucumber slices for the patient.', props: ['glass carafe of water', 'cucumber slices'], mustShow: 'water being poured' } };
   const lines = plannerPromptLines(p, 0).join(' ');
-  assert.match(lines, /What she is doing: pours a glass of water/);
-  assert.match(lines, /LOWER-LEFT FOREGROUND, slightly soft: glass carafe of water/);
-  assert.match(lines, /clearly visible: cucumber slices/);
+  assert.match(lines, /pours a glass of water|glass carafe of water/);
+  assert.match(lines, /cucumber slices/);
   assert.match(lines, /must clearly show water being poured/);
   assert.match(lines, /post titled "Hydration and Cellular Health"/);
   assert.doesNotMatch(lines, /oranges/);

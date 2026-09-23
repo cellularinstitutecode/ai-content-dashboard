@@ -83,7 +83,7 @@ type Run = {
   state: string;
   angle: Angle | null;
   score: RunScore | null;
-  pack: (Record<string, string> & { _image?: PackImage }) | null;
+  pack: (Record<string, string> & { _image?: PackImage; _imageOptions?: PackImage[] }) | null;
   recent_angles?: { query: string; type: string }[];
   // The engine's own record of what happened to this run, and how many tries it
   // has spent. Both were already fetched by /api/autopilot/runs (log) or
@@ -201,6 +201,8 @@ export default function AutopilotQueue() {
   const [openChannel, setOpenChannel] = useState<Record<string, string>>({});
   const [imagingIds, setImagingIds] = useState<Set<string>>(new Set());
   const [regenId, setRegenId] = useState<string | null>(null);
+  // "Show me a few": how many propositions are still being made for this run.
+  const [optionsLeft, setOptionsLeft] = useState<{ id: string; left: number } | null>(null);
   const [lightbox, setLightbox] = useState<{ url: string; alt: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Draft ids we already asked an image for this session — avoids re-requesting
@@ -307,6 +309,56 @@ export default function AutopilotQueue() {
   // Reject a hallucinated/off-brand image and get a fresh proposition: the
   // server advances the composition variant so every regenerate is a visibly
   // different take (hero shot → macro lab → lifestyle → still-life → …).
+  /**
+   * Three propositions, one after another, kept side by side.
+   *
+   * A blind reroll replaced the picture and the previous one was gone. These
+   * are generated in sequence (each takes a couple of minutes) and stay on the
+   * card until somebody picks one.
+   */
+  async function proposeImages(r: Run, count = 3) {
+    if (!r.draft_id || regenId || optionsLeft) return;
+    setErr(null);
+    for (let i = 0; i < count; i++) {
+      setOptionsLeft({ id: r.id, left: count - i });
+      try {
+        const res = await fetch('/api/drafts/image', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'autopilot' },
+          body: JSON.stringify({ id: r.draft_id, option: true }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(j?.error || 'Image generation failed');
+        await load({ quiet: true });
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : 'Image generation failed');
+        break;
+      }
+    }
+    setOptionsLeft(null);
+    await load();
+    announce('images', 'drafts', 'autopilot');
+  }
+
+  /** Promote one proposition to the picture that ships. */
+  async function chooseImage(r: Run, url: string) {
+    if (!r.draft_id) return;
+    setErr(null);
+    try {
+      const res = await fetch('/api/drafts/image', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: r.draft_id, choose: url }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || 'Could not choose that image');
+      await load();
+      announce('images', 'drafts', 'autopilot');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not choose that image');
+    }
+  }
+
   async function regenImage(r: Run) {
     if (!r.draft_id || regenId) return;
     setRegenId(r.id);
@@ -536,7 +588,35 @@ export default function AutopilotQueue() {
                         >
                           {regenId === r.id ? 'Regenerating…' : '↻ New image'}
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => proposeImages(r)}
+                          disabled={Boolean(regenId) || Boolean(optionsLeft) || busyId === r.id}
+                          title="Generates three more propositions and keeps them side by side so you can choose"
+                          className="rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
+                        >
+                          {optionsLeft?.id === r.id ? 'Making ' + optionsLeft.left + ' more…' : '⁝⁝ Show me 3 options'}
+                        </button>
                       </div>
+                      {(r.pack?._imageOptions?.length || 0) > 0 && (
+                        <div className="mt-3">
+                          <p className="mb-1.5 text-[11px] text-ink-faint">Other propositions — click one to use it instead:</p>
+                          <div className="flex flex-wrap gap-2">
+                            {(r.pack?._imageOptions || []).map((o) => (
+                              <button
+                                key={o.url}
+                                type="button"
+                                onClick={() => chooseImage(r, o.url)}
+                                title="Use this one"
+                                className="overflow-hidden rounded-lg ring-1 ring-line transition hover:ring-accent"
+                              >
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img src={o.url} alt={o.alt || 'Another proposition'} className="h-28 w-auto object-contain" />
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : imagingIds.has(r.id) || regenId === r.id ? (
                     <div className="flex items-center gap-2 border-b border-line px-5 py-3 text-[12px] text-ink-muted">

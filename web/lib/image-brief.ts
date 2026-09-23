@@ -17,6 +17,8 @@
 // fixed scenes whenever the brief cannot be had.
 
 export type SceneBrief = {
+  /** The line from the post the picture illustrates — quoted back, so the objects are never arbitrary. */
+  quote?: string;
   /** One or two sentences: who, doing what, where — in the house style. */
   scene: string;
   /** 2-4 concrete, photographable objects that make this post's subject obvious. */
@@ -26,7 +28,7 @@ export type SceneBrief = {
 };
 
 /** The post text the brief is written from: the article when there is one, else the caption; no hashtags, REF or AVISO. */
-export function briefSource(pack: unknown, max = 1600): string {
+export function briefSource(pack: unknown, max = 2600): string {
   const p = (pack && typeof pack === 'object' ? pack : {}) as Record<string, unknown>;
   const raw = [p.blog, p.instagram, p.linkedin, p.facebook].find((v) => typeof v === 'string' && v.trim()) as string | undefined;
   if (!raw) return '';
@@ -51,18 +53,19 @@ const COMPOSITIONS = [
 
 export function briefSystemPrompt(): string {
   return [
-    'You choose the props for ONE photograph in a fixed series. The composition never changes: an over-the-shoulder consultation —',
-    'the patient seen from behind in the right foreground; across a light oak table, a smiling physician in a white blazer facing the camera;',
-    'a sunlit window on the left; a bowl or small object in the lower-left foreground.',
-    'Your job is only: what the physician is doing with her hands, and which objects are on the table and in the foreground,',
-    'so that a reader recognises THIS post\'s specific subject at a glance.',
-    'Pick 2-4 concrete, everyday, photographable objects that belong to the subject (for protein: boiled eggs, grilled salmon, lentils;',
-    'for a nutrition label: a plain food package held with its blank side to the camera; for sleep habits: a phone placed face-down, a cup of chamomile tea).',
-    'The FIRST prop is the lower-left foreground object (a bowl, plate or small item); the others go on the table in front of the physician.',
-    'Never: any text, writing, labels, logos or brands; screens showing content; needles, syringes, IV lines, blood; exposed bodies;',
-    'before/after; medicine or supplement bottles with markings; named devices; anything alarming.',
+    'You choose what is IN a photograph that illustrates a specific post. The framing is decided elsewhere (it may be a consultation,',
+    'a still life with no people, a close-up of hands, or a candid moment at home), so describe only the action and the objects.',
+    'READ THE POST FIRST. Every object you choose must come from what the post actually says — something it names, describes or plainly implies.',
+    'Quote the line you are illustrating back to me. If the post never mentions fruit, there is no fruit in the picture.',
+    'No decorative filler: no bowls of fruit, flowers or props to fill a corner unless the post is about them.',
+    'Pick 2-4 concrete, everyday, photographable objects (for protein: boiled eggs, grilled salmon, lentils; for a nutrition label:',
+    'a plain food package held with its blank side to the camera; for sleep habits: a phone placed face-down, a cup of chamomile tea).',
+    'The FIRST prop is the secondary object just behind or beside; the others are the ones in sharp focus.',
+    'Never: any text, writing, labels, logos or brands; screens showing content; needles, syringes, vials, ampoules, IV lines, blood;',
+    'pill or supplement bottles; exposed bodies; before/after; named devices or medicines; anything alarming or clinical-looking.',
     'Answer with STRICT JSON only:',
-    '{"scene": "what the physician is doing, one short clause, e.g. pointing with a pen at the plate of salmon", "props": ["foreground object", "table object", "table object"], "mustShow": "the single clearest visual cue, a short phrase"}',
+    '{"quote": "the sentence from the post this picture illustrates", "scene": "what the hands are doing, one short clause",',
+    '"props": ["secondary object", "main object", "main object"], "mustShow": "the single clearest visual cue, a short phrase"}',
   ].join(' ');
 }
 
@@ -77,7 +80,7 @@ export function briefUserPrompt(opts: { title: string; angle: string; pillarName
   ].filter(Boolean).join('\n');
 }
 
-const BANNED = /\b(text|label(?:led|ed)?s?|logo|brand|needle|syringe|iv\b|drip|blood|scalpel|injection|before\/after|screen showing|monitor showing|pill bottle)\b/i;
+const BANNED = /\b(text|label(?:led|ed)?s?|logo|brand|needle|syringe|vial|ampoule|iv\b|drip|blood|scalpel|injection|before\/after|screen showing|monitor showing|(pill|supplement|medicine) bottle)\b/i;
 
 /** Parse and sanitise the model's answer. Null when it is unusable — the caller then uses the pillar's fixed scenes. */
 export function parseSceneBrief(raw: unknown): SceneBrief | null {
@@ -92,11 +95,12 @@ export function parseSceneBrief(raw: unknown): SceneBrief | null {
   const clean = (s: unknown, max: number) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
   const scene = clean(o.scene, 400);
   const mustShow = clean(o.mustShow, 160);
+  const quote = clean(o.quote, 240);
   const props = (Array.isArray(o.props) ? o.props : [])
     .map((p) => clean(p, 60))
     .filter((p) => p && !BANNED.test(p))
     .slice(0, 4);
   if (scene.length < 20 || !mustShow || props.length < 1) return null;
   if (BANNED.test(scene) || BANNED.test(mustShow)) return null;
-  return { scene, props, mustShow };
+  return { scene, props, mustShow, ...(quote ? { quote } : {}) };
 }

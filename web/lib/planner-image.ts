@@ -351,48 +351,156 @@ export function plannerImageFor(pack: unknown): PlannerImage | null {
  * with her hands, and (for the Cancun themes) the view through the window.
  * Composition, people, wardrobe, light and palette stay fixed.
  */
-export function masterShot(opts: { tableObjects: string[]; foreground: string; action: string; windowView: string; variant: number }): string {
-  const patients = [
-    'long wavy dark-brown hair and an oatmeal knit sweater',
-    'shoulder-length light-brown hair and a soft beige cardigan',
-    'short silver hair and a cream linen shirt',
-    'long auburn hair and a camel knit sweater',
-  ];
-  const patient = patients[Math.abs(Math.round(opts.variant)) % patients.length];
-  const objects = opts.tableObjects.length ? opts.tableObjects.join(', ') : 'a glass of water and a small plant';
-  return [
-    'COMPOSITION — match this exactly: an over-the-shoulder consultation photograph, vertical.',
-    `RIGHT FOREGROUND: the patient seen from behind at three-quarter, large and partly out of frame, softly out of focus — ${patient}.`,
-    'CENTRE-LEFT, across the table, facing the camera: the physician, a woman in her early 40s with shoulder-length wavy brown hair, a warm genuine smile,',
-    'a tailored white blazer over a beige silk blouse and a delicate gold necklace — never scrubs, never a lab coat.',
-    `What she is doing: ${opts.action}.`,
-    `THE TABLE: light honey-oak, running diagonally from the lower-left corner toward her. On it, in front of her and clearly visible: ${objects}. A closed silver laptop lies to one side.`,
-    `LOWER-LEFT FOREGROUND, slightly soft: ${opts.foreground}.`,
-    `BEHIND HER ON THE LEFT: a tall floor-to-ceiling window flooding the room with warm sunlight; through it, a soft-focus view of ${opts.windowView}; olive branches in a tall ceramic vase on the sill.`,
-    'THE BACK WALL: warm beige plaster with a slim vertical strip of warm recessed light on the right. The upper third of the frame is this plain wall and nothing else — a title will be set there. HEADROOM IS CRITICAL: camera pulled back a little, so the top of every head is at least 35% of the way down from the top edge of the image.',
-    'LIGHT AND COLOUR: golden late-afternoon sun from the left window, a warm glow and soft haze, creamy highlights; palette of cream, beige, sand, honey oak and soft orange accents.',
-    'CAMERA: eye level, 50mm, f/2, shallow depth of field, photorealistic high-end editorial lifestyle photography; natural, unposed, warm and welcoming — a trusted private practice, never a hospital.',
-  ].join(' ');
+/**
+ * THE SHOT LIBRARY.
+ *
+ * One fixed composition made every post look like the last one: the same woman
+ * at the same desk, every week. A real editorial feed varies the shot — a
+ * still life, a detail of hands, a candid moment, a wide room — while the
+ * light, palette and craft hold it together. Each post picks its shot from its
+ * own title (so two posts rarely share one) and "New image" moves to the next.
+ */
+export type Shot = {
+  id: string;
+  /** True when people appear — the headroom rule and casting only matter then. */
+  people: boolean;
+  lines: (ctx: ShotContext) => string[];
+};
+
+type ShotContext = { objects: string; foreground: string; action: string; windowView: string; cast: Cast; subject: string };
+
+type Cast = { clinician: string; patient: string };
+
+/** Casting varies with the post, so the feed is not one actress over and over. */
+const CLINICIANS = [
+  'a woman in her early 40s, Latina, dark wavy shoulder-length hair, tailored ivory blazer over a soft beige blouse, fine gold necklace',
+  'a man in his late 40s, salt-and-pepper close-cropped hair, light grey knit polo under an unstructured cream jacket, no tie',
+  'a woman in her mid 50s, Black, short natural hair, camel silk shirt and slim tortoiseshell glasses',
+  'a man in his mid 30s, Asian, neat dark hair, pale blue oxford shirt with the sleeves rolled, no jacket',
+  'a woman in her late 30s, fair-skinned with light-brown hair in a low twist, stone-coloured linen blazer',
+];
+const PATIENTS = [
+  'a woman in her 60s with short silver hair and a cream linen shirt',
+  'a man in his 50s, broad-shouldered, in a soft olive sweater',
+  'a woman in her 40s, Latina, long dark hair, in an oatmeal knit',
+  'a man in his 70s, thin silver hair, pale blue shirt, relaxed and curious',
+  'a woman in her 30s, athletic, hair tied back, in a sand-coloured sweatshirt',
+];
+
+/** The craft: what separates an editorial photograph from an obvious AI render. */
+export const CRAFT = [
+  'CRAFT: shot for a premium health magazine — Leica 50mm at f/2 on medium-format digital, natural window light through a large diffusion scrim,',
+  'gentle falloff into soft shadow, true-to-life colour with a warm neutral grade, fine natural grain, a touch of optical halation in the highlights.',
+  'Real skin with visible texture, pores and fine lines; no beauty retouching, no plastic sheen, no over-sharpening, no HDR.',
+  'Nobody grins at the camera: expressions are quiet, warm and mid-moment, eyes usually off-camera. No stock-photo posing, no thumbs-up, no crossed arms.',
+  'Clean, uncluttered set dressing: EVERY object in frame comes from what the post itself talks about. No decorative filler —',
+  'no bowl of fruit, no flowers, no props added merely to fill the corner, unless the post is about them.',
+  'COLOUR: neutral white balance, daylight-accurate skin tones, a calm cream-and-oat palette with pale sage and soft grey-green;',
+  'terracotta appears only as the smallest accent, if at all. No orange cast, no amber filter, no heavy golden-hour wash, no sepia.',
+].join(' ');
+
+/** The world every shot lives in. */
+const WORLD = 'THE PLACE: a calm, light-filled private practice in Cancún — soft off-white and oat plaster walls, pale oak furniture, linen and ' +
+  'light stone, a few living green plants, tall windows with sheer curtains and clear daylight. Palette: white, cream, oat, pale sage and light ' +
+  'grey-green, with wood as the only warm tone.';
+
+/** The band the title needs, worded for the shot at hand. */
+const titleBand = (people: boolean) =>
+  'TITLE SPACE: the upper third of the frame is quiet, softly lit wall or empty background with nothing in it — a title is set there afterwards.' +
+  (people ? ' The top of every head sits at least 35% of the way down the frame; pull the camera back rather than crop.' : '');
+
+export const SHOTS: Shot[] = [
+  {
+    id: 'consultation',
+    people: true,
+    lines: (c) => [
+      'SHOT: an over-the-shoulder consultation, vertical.',
+      `FOREGROUND RIGHT, large and softly out of focus, seen from behind: the patient — ${c.cast.patient}.`,
+      `ACROSS THE HONEY-OAK TABLE, centre-left: the clinician — ${c.cast.clinician} — mid-sentence, ${c.action}.`,
+      `ON THE TABLE, clearly visible and sharp: ${c.objects}. In the lower-left foreground, slightly soft: ${c.foreground}.`,
+      `BEHIND, LEFT: a tall window with warm afternoon light and a soft-focus view of ${c.windowView}.`,
+    ],
+  },
+  {
+    id: 'still-life',
+    people: false,
+    lines: (c) => [
+      'SHOT: an editorial still life, no people at all, vertical.',
+      `THE SUBJECT, arranged with restraint on pale stone or linen in low raking window light: ${c.objects}, with ${c.foreground} just behind.`,
+      'Shallow depth of field, long soft shadows falling to the right, a few crumbs, drops or fallen leaves left where they fell — real, not styled to death.',
+      'The background is a plain warm wall falling into shadow toward the top of the frame.',
+    ],
+  },
+  {
+    id: 'hands',
+    people: true,
+    lines: (c) => [
+      'SHOT: a close detail of hands, vertical. No faces in frame, or only a jaw and shoulder at the very edge.',
+      `THE ACTION, filling the lower two-thirds: adult hands ${c.action}, with ${c.objects} under them and ${c.foreground} nearby.`,
+      'Skin is real — knuckles, veins, a wedding ring; the movement is caught mid-gesture, slightly soft at the edges.',
+      'Above the hands, the frame opens into plain sunlit tabletop and wall.',
+    ],
+  },
+  {
+    id: 'candid',
+    people: true,
+    lines: (c) => [
+      'SHOT: a candid lifestyle moment away from the clinic, vertical — this is the patient\'s own life, not a medical setting.',
+      `THE PERSON: ${c.cast.patient}, absorbed in what they are doing, unaware of the camera, in a home, kitchen, garden or seafront that suits "${c.subject}".`,
+      `IN FRAME WITH THEM, unmistakable: ${c.objects}; ${c.foreground} nearby.`,
+      'Natural daylight, honest everyday setting, nothing staged.',
+    ],
+  },
+  {
+    id: 'environment',
+    people: true,
+    lines: (c) => [
+      'SHOT: a wide environmental frame of the practice, vertical, people small within it.',
+      `IN THE LOWER HALF: the clinician — ${c.cast.clinician} — and the patient — ${c.cast.patient} — seated at a table, talking, ${c.action}.`,
+      `On the table, catching the light: ${c.objects}; ${c.foreground} in the near foreground, out of focus.`,
+      `The room breathes around them: tall windows onto ${c.windowView}, sheer curtains moving, plants, warm shadow across the upper wall.`,
+    ],
+  },
+  {
+    id: 'portrait',
+    people: true,
+    lines: (c) => [
+      'SHOT: a three-quarter editorial portrait, vertical, the subject turned slightly away and looking out of frame.',
+      `THE SUBJECT: ${c.cast.clinician}, caught in a quiet moment of thought, one hand resting near ${c.objects} on the table.`,
+      `Just behind, softly out of focus: ${c.foreground} and a window with a view of ${c.windowView}.`,
+      'A single soft key light from the window, shadow falling gently across the wall above.',
+    ],
+  },
+];
+
+/** How many distinct shots a reroll can walk through. */
+export const SHOT_COUNT = SHOTS.length;
+
+/** A stable number from the post's own title, so different posts get different shots. */
+export function seedOf(text: string): number {
+  let h = 0;
+  for (const ch of String(text || '')) h = (h * 31 + ch.charCodeAt(0)) % 100000;
+  return h;
 }
 
 const CANCUN = new Set(['cancun', 'recovery-cancun']);
 
-/** When no brief could be written: the pillar's cue, as table objects. */
+/** When no brief could be written: the pillar's own objects and gesture. */
 const FALLBACK_OBJECTS: Record<string, { table: string[]; foreground: string; action: string }> = {
-  diagnosis: { table: ['a stethoscope', 'a closed blank folder', 'a glass of water'], foreground: 'a ceramic bowl of lemons with leaves', action: 'listening closely, a pen in her hand resting on the blank folder' },
+  diagnosis: { table: ['a stethoscope', 'a closed blank folder', 'a glass of water'], foreground: 'a ceramic bowl of lemons with leaves', action: 'listening closely, a pen resting on the blank folder' },
   protocols: { table: ['a notepad with blank pages', 'two cups of tea'], foreground: 'a small vase of eucalyptus', action: 'sketching on the blank notepad and turning it toward the patient' },
-  nutrition: { table: ['a book open to full-page photographs of avocado, greens, grains and salmon'], foreground: 'a ceramic bowl of oranges with leaves', action: 'pointing with a pen at the food photographs in the book' },
+  nutrition: { table: ['a book open to full-page photographs of avocado, greens, grains and salmon'], foreground: 'a ceramic bowl of oranges with leaves', action: 'pointing at the food photographs in the book' },
   supplementation: { table: ['a small ceramic dish with a few plain unlabeled capsules', 'a glass of water'], foreground: 'a bowl of fresh fruit', action: 'gesturing gently toward the dish of capsules' },
-  movement: { table: ['a light resistance band', 'a water bottle', 'a small folded towel'], foreground: 'a rolled yoga mat leaning against the table', action: 'holding up the resistance band as she explains' },
-  sleep: { table: ['a cup of chamomile tea', 'a small bunch of lavender'], foreground: 'a folded linen throw', action: 'speaking gently, hands relaxed around her own cup of tea' },
-  prevention: { table: ['a blood-pressure cuff', 'a stethoscope', 'a notebook with blank pages'], foreground: 'a bowl of green apples', action: 'resting a hand beside the blood-pressure cuff as she explains' },
-  cancun: { table: ['a bowl of tropical fruit', 'two glasses of water with lime'], foreground: 'a small potted palm', action: 'gesturing toward the window and the sea beyond' },
-  'follow-up': { table: ['a tablet with a blank screen', 'a notebook with blank pages'], foreground: 'a small plant', action: 'reviewing the blank tablet with the patient, smiling' },
-  recovery: { table: ['a glass of water', 'a folded light linen blanket'], foreground: 'a bowl of cucumbers and mint', action: 'offering the glass of water to the patient' },
-  'active-living': { table: ['a water bottle', 'a pair of sneakers', 'a small towel'], foreground: 'a rolled yoga mat', action: 'smiling and gesturing toward the window as if describing a walk' },
-  'practical-nutrition': { table: ['a protein-rich breakfast: Greek yogurt with berries, boiled eggs and whole-grain toast'], foreground: 'a ceramic bowl of oranges with leaves', action: 'pointing with a pen at the breakfast plate' },
-  stress: { table: ['a cup of herbal tea', 'a small dish of dried lavender'], foreground: 'a folded linen throw', action: 'showing a slow breath with one hand resting on her chest' },
-  'recovery-cancun': { table: ['a bowl of tropical fruit', 'a glass of water with lime', 'a sun hat'], foreground: 'a small potted palm', action: 'smiling and pointing out toward the sea' },
+  movement: { table: ['a light resistance band', 'a water bottle', 'a folded towel'], foreground: 'a rolled yoga mat', action: 'demonstrating a slow shoulder stretch' },
+  sleep: { table: ['a cup of chamomile tea', 'a small bunch of lavender'], foreground: 'a folded linen throw', action: 'speaking gently, hands around a warm cup' },
+  prevention: { table: ['a blood-pressure cuff', 'a stethoscope', 'a notebook with blank pages'], foreground: 'a bowl of green apples', action: 'resting a hand beside the blood-pressure cuff while explaining' },
+  cancun: { table: ['a bowl of tropical fruit', 'two glasses of water with lime'], foreground: 'a small potted palm', action: 'gesturing toward the sea beyond the window' },
+  'follow-up': { table: ['a tablet with a blank screen', 'a notebook with blank pages'], foreground: 'a small plant', action: 'reviewing the blank tablet together' },
+  recovery: { table: ['a glass of water', 'a folded light linen blanket'], foreground: 'a bowl of cucumber and mint', action: 'offering a glass of water' },
+  'active-living': { table: ['a water bottle', 'a pair of walking shoes', 'a folded towel'], foreground: 'a rolled yoga mat', action: 'describing a morning walk with an open hand' },
+  'practical-nutrition': { table: ['Greek yogurt with berries, boiled eggs and whole-grain toast'], foreground: 'a ceramic bowl of oranges with leaves', action: 'pointing at the breakfast plate' },
+  stress: { table: ['a cup of herbal tea', 'a small dish of dried lavender'], foreground: 'a folded linen throw', action: 'showing a slow breath, one hand on the chest' },
+  'recovery-cancun': { table: ['a bowl of tropical fruit', 'a glass of water with lime', 'a straw sun hat'], foreground: 'a small potted palm', action: 'pointing out toward the sea' },
 };
 
 export function plannerPromptLines(p: PlannerImage, sceneIndex: number, direction?: string | null): string[] {
@@ -400,14 +508,27 @@ export function plannerPromptLines(p: PlannerImage, sceneIndex: number, directio
   const d = p.dynamic;
   const pid = p.pillarId === 'article' ? (Object.keys(PILLAR_SCENES).find((k) => PILLAR_SCENES[k].scenes === p.scenes) || 'diagnosis') : p.pillarId;
   const fb = FALLBACK_OBJECTS[pid] || FALLBACK_OBJECTS.diagnosis;
-  const tableObjects = d ? d.props.slice(1).length ? d.props.slice(1) : d.props : fb.table;
+  const objects = (d ? (d.props.length > 1 ? d.props.slice(1) : d.props) : fb.table).join(', ');
   const foreground = d && d.props.length > 1 ? d.props[0] : fb.foreground;
-  const action = d ? d.scene.replace(/^(the )?physician (is )?/i, '').replace(/\.$/, '') : fb.action;
+  const action = d ? d.scene.replace(/^(the )?(physician|clinician) (is )?/i, '').replace(/\.$/, '') : fb.action;
   const windowView = CANCUN.has(pid) ? 'a turquoise Caribbean sea, white sand and palm trees' : 'green trees and soft hills';
+  // The shot rotates with the post itself, not only with rerolls — one fixed
+  // composition made every week's picture look like the last one.
+  const seed = seedOf(p.title + p.pillarName) + Math.abs(Math.round(sceneIndex));
+  const shot = SHOTS[seed % SHOTS.length];
+  const cast: Cast = {
+    clinician: CLINICIANS[seed % CLINICIANS.length],
+    patient: PATIENTS[(seed + 2) % PATIENTS.length],
+  };
+  const ctx: ShotContext = { objects, foreground, action, windowView, cast, subject: p.subject };
   return [
-    `Subject: a consultation that illustrates "${p.subject}" (the weekly "${p.pillarName}" theme, post titled "${p.title}"). The picture must clearly show ${d ? d.mustShow : p.mustShow}.`,
-    dir ? `Direction from the team (follow this closely, within the composition below): ${dir}` : '',
-    masterShot({ tableObjects, foreground, action, windowView, variant: sceneIndex }),
+    `Subject: a photograph for an educational post titled "${p.title}" (the weekly "${p.pillarName}" theme, on "${p.subject}"). It must clearly show ${d ? d.mustShow : p.mustShow}.`,
+    d?.quote ? `It illustrates this line from the post: "${d.quote}" — everything in frame comes from that.` : '',
+    dir ? `Direction from the team (follow this closely, within the frame below): ${dir}` : '',
+    ...shot.lines(ctx),
+    titleBand(shot.people),
+    WORLD,
+    CRAFT,
   ].filter(Boolean);
 }
 
