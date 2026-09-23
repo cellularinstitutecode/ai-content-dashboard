@@ -50,6 +50,18 @@ export type PlannerImage = {
    * shows what the post is actually about.
    */
   dynamic?: SceneBrief;
+  /**
+   * True when the post's own body talks about biology — cells, tissue,
+   * mitochondria, inflammation, immune response. Only then is the Cell science
+   * family offered, so a walking post never comes back as a microscope field.
+   */
+  science?: boolean;
+  /**
+   * The family the take being verified came from, stamped by lib/images.ts per
+   * variant. The on-topic check reads it, because "show the objects the post
+   * names" is the wrong question to ask of a microscopy frame.
+   */
+  shotFamily?: ShotFamily;
 };
 
 /**
@@ -360,7 +372,22 @@ export function plannerImageFor(pack: unknown): PlannerImage | null {
  * light, palette and craft hold it together. Each post picks its shot from its
  * own title (so two posts rarely share one) and "New image" moves to the next.
  */
-export type ShotFamily = 'people' | 'object' | 'detail';
+/**
+ * THE FOUR FAMILIES.
+ *
+ * Research into the pages outranking us (September 2026) settled these weights.
+ * The clinics at the top of the SERP lead with cells on science posts and with
+ * life-after-treatment on commercial pages; none of them leads with a
+ * consultation, which is precisely why the consultation is ours to own. It is
+ * the spine — but on its own it reads softer than the competition, so the other
+ * three carry the rest.
+ *
+ *   consult  ~50%   the room, the conversation, the clinician
+ *   science  ~25%   real microscopy and real lab work (topic-gated)
+ *   active   ~15%   the outcome: a person living well
+ *   still    ~10%   the objects the post itself names
+ */
+export type ShotFamily = 'consult' | 'science' | 'active' | 'still';
 
 export type Shot = {
   id: string;
@@ -403,6 +430,8 @@ export const CRAFT = [
   'Nobody grins at the camera: expressions are quiet, warm and mid-moment, eyes usually off-camera. No stock-photo posing, no thumbs-up, no crossed arms.',
   'Clean, uncluttered set dressing: EVERY object in frame comes from what the post itself talks about. No decorative filler —',
   'no bowl of fruit, no flowers, no props added merely to fill the corner, unless the post is about them.',
+  'NO RENDERS: every frame is a photograph taken with a camera. No 3D renders, no illustrations, no glowing or neon cells, no bloom, ',
+  'no lens flare, no floating particles, no DNA helices, no digital overlays — the look every competing clinic already has.',
   'REAL THINGS ONLY: this is clinic photography, not a classroom. Everything in frame is an ordinary real object — real food, real cups,',
   'real paper, real linen. Absolutely no anatomical models, plastic organs, model brains, hearts or spines, skeletons, skulls, mannequins,',
   'torso models or other medical teaching props; no anatomical charts, posters, diagrams, illustrations or infographics of any kind.',
@@ -423,7 +452,7 @@ const titleBand = (people: boolean) =>
 export const SHOTS: Shot[] = [
   {
     id: 'consultation',
-    family: 'people',
+    family: 'consult',
     people: true,
     lines: (c) => [
       'SHOT: an over-the-shoulder consultation, vertical.',
@@ -435,7 +464,7 @@ export const SHOTS: Shot[] = [
   },
   {
     id: 'still-life',
-    family: 'object',
+    family: 'still',
     people: false,
     lines: (c) => [
       'SHOT: an editorial still life, no people at all, vertical.',
@@ -446,18 +475,18 @@ export const SHOTS: Shot[] = [
   },
   {
     id: 'hands',
-    family: 'detail',
+    family: 'consult',
     people: true,
     lines: (c) => [
-      'SHOT: a close detail of hands, vertical. No faces in frame, or only a jaw and shoulder at the very edge.',
-      `THE ACTION, filling the lower two-thirds: adult hands ${c.action}, with ${c.objects} under them and ${c.foreground} nearby.`,
-      'Skin is real — knuckles, veins, a wedding ring; the movement is caught mid-gesture, slightly soft at the edges.',
-      'Above the hands, the frame opens into plain sunlit tabletop and wall.',
+      'SHOT: a close detail across the consultation table, vertical. Two pairs of adult hands — the clinician\'s and the patient\'s — no faces in frame, or only a jaw and a shoulder at the very edge.',
+      `THE ACTION, filling the lower two-thirds: the clinician's hands ${c.action}, with ${c.objects} on the honey-oak table between them and ${c.foreground} nearby; the patient's hands rest at the edge of frame, listening.`,
+      'Skin is real — knuckles, veins, a wedding ring; a cuff of an ivory blazer at one wrist. The movement is caught mid-gesture, slightly soft at the edges.',
+      'Above the hands, the frame opens into plain sunlit tabletop and consulting-room wall.',
     ],
   },
   {
     id: 'candid',
-    family: 'detail',
+    family: 'active',
     people: true,
     lines: (c) => [
       'SHOT: a candid lifestyle moment away from the clinic, vertical — this is the patient\'s own life, not a medical setting.',
@@ -468,7 +497,7 @@ export const SHOTS: Shot[] = [
   },
   {
     id: 'environment',
-    family: 'people',
+    family: 'consult',
     people: true,
     lines: (c) => [
       'SHOT: a wide environmental frame of the practice, vertical, people small within it.',
@@ -479,7 +508,7 @@ export const SHOTS: Shot[] = [
   },
   {
     id: 'portrait',
-    family: 'people',
+    family: 'consult',
     people: true,
     lines: (c) => [
       'SHOT: a three-quarter editorial portrait, vertical, the subject turned slightly away and looking out of frame.',
@@ -490,7 +519,7 @@ export const SHOTS: Shot[] = [
   },
   {
     id: 'flat-lay',
-    family: 'object',
+    family: 'still',
     people: false,
     lines: (c) => [
       'SHOT: an overhead flat lay on a pale linen or light oak surface, no people at all, vertical.',
@@ -499,30 +528,128 @@ export const SHOTS: Shot[] = [
       'The upper third is bare surface — no object crosses into it.',
     ],
   },
+  {
+    id: 'microscopy',
+    family: 'science',
+    people: false,
+    lines: (c) => [
+      'SHOT: a real photomicrograph, vertical — the view down a laboratory microscope, phase-contrast or bright-field.',
+      `THE FIELD, filling the lower two-thirds: living cells in culture, honest morphology — spindle-shaped adherent cells fanning across the frame, `
+        + `varied in size and orientation, some in contact, a few rounded and refractile; fine granular texture inside each cell, clean medium between them.`,
+      'Cool neutral grey-blue and pale amber, shallow focal plane so cells at the edges soften, the faint vignette of a real objective lens.',
+      'It is a PHOTOGRAPH of a real microscope field, not an illustration: no glow, no bloom, no lens flare, no floating spheres, no rendered 3D cells, '
+        + 'no scale bar, no annotation, no colour overlay.',
+      'The upper third falls to plain, even, out-of-focus medium — empty and quiet.',
+    ],
+  },
+  {
+    id: 'lab-bench',
+    family: 'science',
+    people: true,
+    lines: (c) => [
+      'SHOT: a working laboratory, vertical, documentary rather than staged.',
+      `IN THE LOWER HALF: a researcher — ${c.cast.clinician} — in a white coat, hair covered, blue nitrile gloves, `
+        + 'holding a clear culture plate or a flask up to the light of an open laminar-flow hood, reading it, absorbed.',
+      'Around them: brushed stainless, white bench, a closed incubator, a rack of clean unlabelled glassware, a microscope at the edge of frame.',
+      'Cool even laboratory light, clean whites, no colour cast. No needles, no syringes, no blood, no ampoules, nothing labelled, no packaging, no branding.',
+      'The upper third is plain clean wall or the flat face of a cabinet — nothing in it.',
+    ],
+  },
+  {
+    id: 'active-life',
+    family: 'active',
+    people: true,
+    lines: (c) => [
+      'SHOT: life after care, vertical, outdoors in daylight — the outcome, never the treatment.',
+      `THE PERSON, in the lower two-thirds: ${c.cast.patient}, moving easily and unaware of the camera — walking a seafront path, `
+        + `swimming steadily, stretching after a walk, or carrying something up a few steps — whichever best suits "${c.subject}".`,
+      'Real clothes, real weather, mid-stride, caught rather than posed. They look capable, not triumphant; no arms raised, no leaping, no fists in the air.',
+      'Natural light, open air, a soft-focus background of sea, palms, park or quiet street.',
+      'The upper third opens into plain sky or distant water — uncluttered.',
+    ],
+  },
 ];
 
 /** How many distinct shots a reroll can walk through. */
 export const SHOT_COUNT = SHOTS.length;
 
 /**
- * The order the families are offered in. Asking for three options walks this
- * list once, so the three pictures are never three versions of the same frame:
- * one with faces, one of the objects alone, one close detail.
+ * WHICH FAMILY EACH SLOT GETS.
+ *
+ * Slot 0 is always a consultation, so the safe pick is always on the table.
+ * Each list below is the order for the slots AFTER that one, and running the
+ * four slots of a typical post through it is what produces the ~50/25/15/10
+ * weighting the research called for.
  */
-export const FAMILY_ORDER: ShotFamily[] = ['people', 'object', 'detail'];
+const PILLAR_FAMILIES: Record<string, ShotFamily[]> = {
+  // The consultation pillars: the room is the subject.
+  diagnosis: ['still', 'consult', 'active'],
+  protocols: ['still', 'consult', 'active'],
+  'follow-up': ['still', 'consult', 'active'],
+  prevention: ['still', 'active', 'consult'],
+  // The biology pillars lean back on the room and the outcome; their science
+  // slot comes from the post's own body, like every other pillar's.
+  recovery: ['active', 'still', 'consult'],
+  'recovery-cancun': ['active', 'consult', 'still'],
+  // The living pillars: the outcome, not the procedure.
+  movement: ['active', 'consult', 'still'],
+  'active-living': ['active', 'consult', 'still'],
+  cancun: ['active', 'consult', 'still'],
+  // The everyday pillars: the objects the post names.
+  nutrition: ['still', 'consult', 'active'],
+  'practical-nutrition': ['still', 'consult', 'active'],
+  supplementation: ['still', 'consult', 'active'],
+  sleep: ['still', 'active', 'consult'],
+  stress: ['still', 'active', 'consult'],
+};
+
+const DEFAULT_FAMILIES: ShotFamily[] = ['still', 'consult', 'active'];
 
 /**
- * The shot for one step of the rotation. Step 0, 1 and 2 are guaranteed to come
- * from three different families; after that it wraps and picks the next shot
- * within each family, so a fourth or fifth take is still a new picture.
+ * The post's own body has to earn a science picture. Without this gate a post
+ * about a daily walk comes back as a microscope field, which is both wrong and
+ * the kind of overclaim a clinic cannot publish.
  */
-export function shotFor(seedBase: number, sceneIndex: number): Shot {
+const SCIENCE_TEXT =
+  /\b(cell|cells|cellular|stem[- ]cell|msc|exosome|vesicle|tissue|mitochondri|collagen|inflammat|immune|immunit|regenerat|senescen|cytokine|growth factor|biomarker|culture|laborator|lab\b|microscop|protein synthesis|repair at the cellular)/i;
+
+/** Does this post's text talk about biology? */
+export function scienceAllowed(text: unknown): boolean {
+  return SCIENCE_TEXT.test(String(text ?? ''));
+}
+
+/**
+ * The family for one step of the rotation. Slot 0 is always a consultation;
+ * later slots follow the pillar's order, and a science slot falls back to the
+ * still life whenever the post never mentions biology.
+ */
+export function familyAt(p: Pick<PlannerImage, 'pillarId' | 'science'>, sceneIndex: number): ShotFamily {
   const step = Math.abs(Math.round(sceneIndex));
-  const family = FAMILY_ORDER[step % FAMILY_ORDER.length];
-  const pool = SHOTS.filter((s) => s.family === family);
+  if (step === 0) return 'consult';
+  const order = PILLAR_FAMILIES[p.pillarId] || DEFAULT_FAMILIES;
+  // The third take is the science slot whenever the post's body has earned it —
+  // in ANY pillar, because a sleep post about tissue repair and a nutrition post
+  // about protein synthesis are both biology. The pillar table fills the rest.
+  if (step === 2) return p.science ? 'science' : order[1 % order.length];
+  // The fourth take comes back to the room. Two consultations in every four is
+  // the ~50% the research asked for, and it means a reroll past the science or
+  // the still life always has somewhere safe to land.
+  if (step === 3) return 'consult';
+  const want = order[(step - 1) % order.length];
+  return want === 'science' && !p.science ? 'still' : want;
+}
+
+/**
+ * The shot itself. Within a family the choice walks forward with each lap, so a
+ * fourth or fifth take is a different picture rather than the one just
+ * rejected.
+ */
+export function shotFor(seedBase: number, sceneIndex: number, family: ShotFamily): Shot {
+  const pool = SHOTS.filter((sh) => sh.family === family);
+  const step = Math.abs(Math.round(sceneIndex));
   if (!pool.length) return SHOTS[Math.abs(seedBase + step) % SHOTS.length];
-  const lap = Math.floor(step / FAMILY_ORDER.length);
-  return pool[Math.abs(seedBase + lap) % pool.length];
+  const lap = Math.floor(step / 3);
+  return pool[Math.abs(seedBase + step + lap) % pool.length];
 }
 
 /** A stable number from the post's own title, so different posts get different shots. */
@@ -564,15 +691,18 @@ export function plannerPromptLines(p: PlannerImage, sceneIndex: number, directio
   // The shot rotates with the post itself, not only with rerolls — one fixed
   // composition made every week's picture look like the last one.
   const seed = seedOf(p.title + p.pillarName) + Math.abs(Math.round(sceneIndex));
-  const shot = shotFor(seedOf(p.title + p.pillarName), sceneIndex);
+  const shot = shotFor(seedOf(p.title + p.pillarName), sceneIndex, familyAt(p, sceneIndex));
   const cast: Cast = {
     clinician: CLINICIANS[seed % CLINICIANS.length],
     patient: PATIENTS[(seed + 2) % PATIENTS.length],
   };
   const ctx: ShotContext = { objects, foreground, action, windowView, cast, subject: p.subject };
+  const objectLed = shot.family === 'consult' || shot.family === 'still';
   return [
-    `Subject: a photograph for an educational post titled "${p.title}" (the weekly "${p.pillarName}" theme, on "${p.subject}"). It must clearly show ${d ? d.mustShow : p.mustShow}.`,
-    d?.quote ? `It illustrates this line from the post: "${d.quote}" — everything in frame comes from that.` : '',
+    objectLed
+      ? `Subject: a photograph for an educational post titled "${p.title}" (the weekly "${p.pillarName}" theme, on "${p.subject}"). It must clearly show ${d ? d.mustShow : p.mustShow}.`
+      : `Subject: a photograph for an educational post titled "${p.title}" (the weekly "${p.pillarName}" theme, on "${p.subject}"). The frame below is the subject — do not add the objects the post names to it.`,
+    objectLed && d?.quote ? `It illustrates this line from the post: "${d.quote}" — everything in frame comes from that.` : '',
     dir ? `Direction from the team (follow this closely, within the frame below): ${dir}` : '',
     ...shot.lines(ctx),
     titleBand(shot.people),
@@ -583,9 +713,21 @@ export function plannerPromptLines(p: PlannerImage, sceneIndex: number, directio
 
 /** The extra check the vision reviewer runs on a planner image. */
 export function onTopicCheck(p: PlannerImage): string {
-  return `ON-TOPIC (this one is a DEFECT, not an opinion): the image must clearly show ${p.dynamic ? p.dynamic.mustShow : p.mustShow}. ` +
-    'A generic reception desk, front desk or waiting room does NOT count. ' +
+  const tail =
     'Also a DEFECT: anything in the top third, where a title will sit — a person\'s head or face, art, shelves, lamps or busy objects. ' +
     'Also a DEFECT: an anatomical model or medical teaching prop — a plastic brain, heart, spine, skeleton, skull, torso or mannequin — ' +
     'or an anatomical chart, poster, diagram or illustration. Set "onTopic": false when any of these fails.';
+  if (p.shotFamily === 'science') {
+    return 'ON-TOPIC (this one is a DEFECT, not an opinion): the image must be a believable REAL laboratory photograph — either a genuine ' +
+      'microscope field of cells in culture, or a researcher working at a lab bench. A DEFECT: rendered or illustrated cells, glowing or ' +
+      'neon spheres, bloom, lens flare, floating particles, a DNA helix, or any 3D-looking graphic in place of a photograph. ' +
+      'Also a DEFECT: needles, syringes, ampoules, blood, or anything that reads as a treatment being given. ' + tail;
+  }
+  if (p.shotFamily === 'active') {
+    return 'ON-TOPIC (this one is a DEFECT, not an opinion): the image must show a real person outdoors in daylight, moving easily and ' +
+      'living normally — not a clinic, not a treatment, not a medical setting. A DEFECT: any clinical room, equipment, uniform or ' +
+      'procedure in frame, and any triumphant pose — raised arms, leaping, fists in the air. ' + tail;
+  }
+  return `ON-TOPIC (this one is a DEFECT, not an opinion): the image must clearly show ${p.dynamic ? p.dynamic.mustShow : p.mustShow}. ` +
+    'A generic reception desk, front desk or waiting room does NOT count. ' + tail;
 }
