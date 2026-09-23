@@ -45,6 +45,11 @@ export async function POST(req: NextRequest) {
     // with the NEXT composition variant, so the reviewer always gets a
     // visibly different proposition (never a re-roll of the same prompt).
     const regenerate = body?.regenerate === true;
+    // option: true  → make ONE MORE proposition and keep it alongside the others
+    //                 (the reviewer picks from several rather than rerolling blind).
+    // choose: <url> → promote one of those propositions to the hero image.
+    const asOption = body?.option === true;
+    const choose = typeof body?.choose === 'string' ? body.choose.trim() : '';
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
 
     // A PHOTO, OR A DIRECTION — because "press New image and hope" was the only
@@ -77,6 +82,27 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'clip drafts already have video stills' }, { status: 400 });
     }
     const existing = (pack as { _image?: PackImage })._image;
+    const options = Array.isArray((pack as { _imageOptions?: PackImage[] })._imageOptions)
+      ? ((pack as { _imageOptions?: PackImage[] })._imageOptions as PackImage[])
+      : [];
+
+    // PICK ONE. No generation: the chosen proposition simply becomes the hero.
+    if (choose) {
+      const picked = [...options, ...(existing ? [existing] : [])].find((o) => o?.url === choose);
+      if (!picked) return NextResponse.json({ error: 'not_an_option', message: 'That image is not one of this draft\'s propositions.' }, { status: 400 });
+      const { data: freshRow } = await sb.from('drafts').select('pack').eq('id', id).eq('user_id', user.id).maybeSingle();
+      const currentPack = (freshRow as { pack?: Record<string, unknown> } | null)?.pack ?? pack;
+      const prior = (currentPack as { _image?: PackImage })._image;
+      // The one being replaced joins the propositions, so nothing is lost.
+      const keep = [...options, ...(prior && prior.url !== choose ? [prior] : [])]
+        .filter((o, i, all) => o?.url && o.url !== choose && all.findIndex((x) => x.url === o.url) === i)
+        .slice(-5);
+      const { error: setErr } = await sb.from('drafts')
+        .update({ pack: { ...currentPack, _image: picked, _imageOptions: keep } })
+        .eq('id', id).eq('user_id', user.id);
+      if (setErr) return NextResponse.json({ error: setErr.message }, { status: 500 });
+      return NextResponse.json({ image: picked, options: keep });
+    }
     // A stored image the checker marked as containing text is never good
     // enough to serve as "done": content images must be text-free, so treat
     // it like a regenerate request (next composition variant) instead.
@@ -121,10 +147,10 @@ export async function POST(req: NextRequest) {
       !['library', 'upload'].includes(String(existing?.source || ''));
     // A direction is itself a request for a new image: somebody typed what they
     // want, and returning the cached one would answer a different question.
-    if (existing?.url && !regenerate && !existingHasText && !direction && !plannerNeedsCover) {
+    if (existing?.url && !regenerate && !asOption && !existingHasText && !direction && !plannerNeedsCover) {
       return NextResponse.json({ image: existing, cached: true });
     }
-    const advanceVariant = regenerate || existingHasText;
+    const advanceVariant = regenerate || existingHasText || asOption;
 
     // Only NOW check whether generation is available: a draft that already
     // carries a clean verified image must return it even when the OpenAI key
@@ -165,7 +191,9 @@ export async function POST(req: NextRequest) {
       // Fresh generations start at variant 0; each regenerate (explicit, or
       // forced by a text-flagged stored image) advances to the next
       // composition (hero shot → macro lab → lifestyle → still-life → …).
-      variant: advanceVariant ? (existing?.variant ?? 0) + 1 : 0,
+      // Each proposition starts one composition further along, so a set of
+      // three is three different shots rather than three near-duplicates.
+      variant: advanceVariant ? (existing?.variant ?? 0) + 1 + options.length : 0,
     });
 
     // Re-read the pack immediately before writing, and merge `_image` into the
@@ -184,8 +212,16 @@ export async function POST(req: NextRequest) {
       .maybeSingle();
     const currentPack = (fresh as { pack?: Record<string, unknown> } | null)?.pack ?? pack;
 
+    // A proposition is kept ALONGSIDE the current hero (up to five), so the
+    // reviewer can compare and choose; a plain reroll replaces as before.
+    const priorImage = (currentPack as { _image?: PackImage })._image;
+    const nextOptions = asOption
+      ? [...options, ...(priorImage && priorImage.url !== image.url ? [priorImage] : [])]
+          .filter((o, i, all) => o?.url && all.findIndex((x) => x.url === o.url) === i)
+          .slice(-5)
+      : [];
     // Owner update passes RLS via the session client.
-    const nextPack = { ...currentPack, _image: image };
+    const nextPack = { ...currentPack, _image: image, ...(nextOptions.length ? { _imageOptions: nextOptions } : { _imageOptions: [] }) };
     const { error } = await sb
       .from('drafts')
       .update({ pack: nextPack })
@@ -197,7 +233,7 @@ export async function POST(req: NextRequest) {
     // — after the write, so a failed write never orphans the image on screen.
     await removeSuperseded(currentPack, nextPack);
 
-    return NextResponse.json({ image });
+    return NextResponse.json({ image, options: nextOptions });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : 'image generation failed' },

@@ -204,7 +204,7 @@ export function buildImagePrompt(opts: {
       `Editorial photograph for ${brandName}.`,
       ...plannerPromptLines(opts.planner, opts.variant ?? 0, direction),
       excerpt ? `Context from the post: ${excerpt}` : '',
-      `Brand colour accents in small touches only (a vase, a cushion, the fruit, a throw): ${palette}. The overall frame stays bright, light and warm-neutral.`,
+      `The brand's colours may appear only as the faintest accents (${palette}); the frame itself stays light, neutral and clean — never orange-tinted.`,
       'Never: stock-photo poses or forced smiles at the camera; cool blue clinical light; chrome and glass laboratory clichés; dark or moody lighting; clutter;',
       'no supplement, medicine or pill bottles, no vials, ampoules or syringes, no branded packaging, no uniforms with logos.',
       'Style: photorealistic, high-end lifestyle editorial, soft window light, gentle shadows, natural colour.',

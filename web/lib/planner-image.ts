@@ -393,12 +393,16 @@ export const CRAFT = [
   'gentle falloff into soft shadow, true-to-life colour with a warm neutral grade, fine natural grain, a touch of optical halation in the highlights.',
   'Real skin with visible texture, pores and fine lines; no beauty retouching, no plastic sheen, no over-sharpening, no HDR.',
   'Nobody grins at the camera: expressions are quiet, warm and mid-moment, eyes usually off-camera. No stock-photo posing, no thumbs-up, no crossed arms.',
-  'Clean, uncluttered set dressing; every object has a reason to be there.',
+  'Clean, uncluttered set dressing: EVERY object in frame comes from what the post itself talks about. No decorative filler —',
+  'no bowl of fruit, no flowers, no props added merely to fill the corner, unless the post is about them.',
+  'COLOUR: neutral white balance, daylight-accurate skin tones, a calm cream-and-oat palette with pale sage and soft grey-green;',
+  'terracotta appears only as the smallest accent, if at all. No orange cast, no amber filter, no heavy golden-hour wash, no sepia.',
 ].join(' ');
 
 /** The world every shot lives in. */
-const WORLD = 'THE PLACE: a calm, light-filled private practice in Cancún — warm beige plaster walls, honey-oak furniture, linen and pale stone, ' +
-  'terracotta and rust accents, a few living plants, tall windows with sheer curtains. Palette: cream, sand, honey, soft terracotta, muted sage.';
+const WORLD = 'THE PLACE: a calm, light-filled private practice in Cancún — soft off-white and oat plaster walls, pale oak furniture, linen and ' +
+  'light stone, a few living green plants, tall windows with sheer curtains and clear daylight. Palette: white, cream, oat, pale sage and light ' +
+  'grey-green, with wood as the only warm tone.';
 
 /** The band the title needs, worded for the shot at hand. */
 const titleBand = (people: boolean) =>
@@ -519,6 +523,7 @@ export function plannerPromptLines(p: PlannerImage, sceneIndex: number, directio
   const ctx: ShotContext = { objects, foreground, action, windowView, cast, subject: p.subject };
   return [
     `Subject: a photograph for an educational post titled "${p.title}" (the weekly "${p.pillarName}" theme, on "${p.subject}"). It must clearly show ${d ? d.mustShow : p.mustShow}.`,
+    d?.quote ? `It illustrates this line from the post: "${d.quote}" — everything in frame comes from that.` : '',
     dir ? `Direction from the team (follow this closely, within the frame below): ${dir}` : '',
     ...shot.lines(ctx),
     titleBand(shot.people),
