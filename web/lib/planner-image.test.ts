@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PILLARS } from './content-strategy.ts';
 import { BLOG_ANGLES } from './strategy-seed.ts';
-import { PILLAR_SCENES, SHOTS, SHOT_COUNT, TITLES, cleanTopic, plannerImageFor, plannerPromptLines, onTopicCheck, titleFor } from './planner-image.ts';
+import { FAMILY_ORDER, PILLAR_SCENES, SHOTS, SHOT_COUNT, TITLES, cleanTopic, plannerImageFor, plannerPromptLines, onTopicCheck, shotFor, titleFor } from './planner-image.ts';
 
 const pack = (template_name: string, query: string) => ({ _autopilot: { template_name, angle: { query, seedTopic: query } } });
 
@@ -89,4 +89,38 @@ test('a brief written from the post replaces the fixed scene and the on-topic cu
   assert.match(lines, /post titled "Hydration and Cellular Health"/);
   assert.doesNotMatch(lines, /oranges/);
   assert.match(onTopicCheck(p), /water being poured/);
+});
+
+test('the first three takes come from three different shot families', () => {
+  // Three options that all read as "two people at a table" are not three
+  // options. Step 0, 1 and 2 must be a people shot, an objects-only shot and a
+  // close detail — whatever the post is.
+  for (const seed of [0, 7, 31, 4096, 99999]) {
+    const three = [0, 1, 2].map((i) => shotFor(seed, i));
+    assert.deepEqual(three.map((s) => s.family), FAMILY_ORDER, `seed ${seed}`);
+    assert.equal(new Set(three.map((s) => s.id)).size, 3, `seed ${seed}`);
+  }
+});
+
+test('a fourth take repeats the family but never the same shot', () => {
+  for (const seed of [0, 5, 77, 1234]) {
+    for (let i = 0; i < FAMILY_ORDER.length; i += 1) {
+      assert.notEqual(shotFor(seed, i).id, shotFor(seed, i + FAMILY_ORDER.length).id, `seed ${seed} step ${i}`);
+    }
+  }
+});
+
+test('every family has at least two shots, so a repeat is always a new picture', () => {
+  for (const family of FAMILY_ORDER) {
+    assert.ok(SHOTS.filter((s) => s.family === family).length >= 2, family);
+  }
+  assert.equal(SHOT_COUNT, SHOTS.length);
+});
+
+test('teaching props are a blocking defect and are banned from the craft notes', () => {
+  const p = plannerImageFor(pack('Sleep', 'What happens in the body while we sleep'))!;
+  const lines = plannerPromptLines(p, 0).join(' ');
+  assert.match(lines, /no anatomical models/i);
+  assert.match(lines, /skeletons|mannequins/i);
+  assert.match(onTopicCheck(p), /anatomical model|teaching prop/i);
 });

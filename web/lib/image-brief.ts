@@ -63,6 +63,8 @@ export function briefSystemPrompt(): string {
     'The FIRST prop is the secondary object just behind or beside; the others are the ones in sharp focus.',
     'Never: any text, writing, labels, logos or brands; screens showing content; needles, syringes, vials, ampoules, IV lines, blood;',
     'pill or supplement bottles; exposed bodies; before/after; named devices or medicines; anything alarming or clinical-looking.',
+    'Never a teaching prop: no anatomical model, plastic brain, heart, spine, skeleton, skull, torso or mannequin, and no anatomical chart,',
+    'poster, diagram, illustration or infographic. Choose ordinary real objects a photographer could put on a table.',
     'Answer with STRICT JSON only:',
     '{"quote": "the sentence from the post this picture illustrates", "scene": "what the hands are doing, one short clause",',
     '"props": ["secondary object", "main object", "main object"], "mustShow": "the single clearest visual cue, a short phrase"}',
@@ -80,7 +82,8 @@ export function briefUserPrompt(opts: { title: string; angle: string; pillarName
   ].filter(Boolean).join('\n');
 }
 
-const BANNED = /\b(text|label(?:led|ed)?s?|logo|brand|needle|syringe|vial|ampoule|iv\b|drip|blood|scalpel|injection|before\/after|screen showing|monitor showing|(pill|supplement|medicine) bottle)\b/i;
+const BANNED =
+  /\b(text|label(?:led|ed)?s?|logo|brand|needle|syringe|vial|ampoule|iv\b|drip|blood|scalpel|injection|before\/after|screen showing|monitor showing|(pill|supplement|medicine) bottle|anatomical|anatomy|skeleton|skull|mannequin|torso|teaching (?:model|prop|aid)|(?:plastic|model|replica) (?:brain|heart|spine|lung|kidney|organ|bone)|(?:brain|heart|spine|organ|body) model|model of (?:a|an|the)|diagram|infographic|(?:anatomical|wall|medical|eye) chart|poster|illustration)\b/i;
 
 /** Parse and sanitise the model's answer. Null when it is unusable — the caller then uses the pillar's fixed scenes. */
 export function parseSceneBrief(raw: unknown): SceneBrief | null {
