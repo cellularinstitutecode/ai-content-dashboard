@@ -32,3 +32,20 @@ test('a good answer parses; unsafe or empty answers fall back', () => {
   const filtered = parseSceneBrief({ scene: 'The physician shows the patient a bowl of berries and a glass of water.', props: ['bowl of berries', 'labelled bottle'], mustShow: 'fresh berries' });
   assert.deepEqual(filtered?.props, ['bowl of berries']);
 });
+
+test('anatomical models and teaching props are stripped from the brief', () => {
+  assert.equal(parseSceneBrief({ scene: 'The physician turns a plastic model brain toward the patient as she explains.', props: ['a model brain'], mustShow: 'a model of the brain' }), null);
+  const partial = parseSceneBrief({
+    quote: 'Deep sleep is when the body does most of its repair.',
+    scene: 'The physician sets a cup of chamomile tea beside a folded sleep diary as she explains the night.',
+    props: ['an anatomical model of the brain', 'a cup of chamomile tea', 'a folded linen throw'],
+    mustShow: 'a cup of chamomile tea beside a sleep diary',
+  });
+  assert.ok(partial);
+  assert.deepEqual(partial!.props, ['a cup of chamomile tea', 'a folded linen throw']);
+});
+
+test('the brief prompt forbids teaching props outright', () => {
+  assert.match(briefSystemPrompt(), /anatomical model/i);
+  assert.match(briefSystemPrompt(), /skeleton|mannequin/i);
+});

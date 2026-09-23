@@ -360,8 +360,16 @@ export function plannerImageFor(pack: unknown): PlannerImage | null {
  * light, palette and craft hold it together. Each post picks its shot from its
  * own title (so two posts rarely share one) and "New image" moves to the next.
  */
+export type ShotFamily = 'people' | 'object' | 'detail';
+
 export type Shot = {
   id: string;
+  /**
+   * What the picture reads as at a glance. Three shots can all be "two people
+   * at a table" and still look like one photograph repeated, so the rotation
+   * below steps through FAMILIES before it steps within one.
+   */
+  family: ShotFamily;
   /** True when people appear — the headroom rule and casting only matter then. */
   people: boolean;
   lines: (ctx: ShotContext) => string[];
@@ -395,6 +403,9 @@ export const CRAFT = [
   'Nobody grins at the camera: expressions are quiet, warm and mid-moment, eyes usually off-camera. No stock-photo posing, no thumbs-up, no crossed arms.',
   'Clean, uncluttered set dressing: EVERY object in frame comes from what the post itself talks about. No decorative filler —',
   'no bowl of fruit, no flowers, no props added merely to fill the corner, unless the post is about them.',
+  'REAL THINGS ONLY: this is clinic photography, not a classroom. Everything in frame is an ordinary real object — real food, real cups,',
+  'real paper, real linen. Absolutely no anatomical models, plastic organs, model brains, hearts or spines, skeletons, skulls, mannequins,',
+  'torso models or other medical teaching props; no anatomical charts, posters, diagrams, illustrations or infographics of any kind.',
   'COLOUR: neutral white balance, daylight-accurate skin tones, a calm cream-and-oat palette with pale sage and soft grey-green;',
   'terracotta appears only as the smallest accent, if at all. No orange cast, no amber filter, no heavy golden-hour wash, no sepia.',
 ].join(' ');
@@ -412,6 +423,7 @@ const titleBand = (people: boolean) =>
 export const SHOTS: Shot[] = [
   {
     id: 'consultation',
+    family: 'people',
     people: true,
     lines: (c) => [
       'SHOT: an over-the-shoulder consultation, vertical.',
@@ -423,6 +435,7 @@ export const SHOTS: Shot[] = [
   },
   {
     id: 'still-life',
+    family: 'object',
     people: false,
     lines: (c) => [
       'SHOT: an editorial still life, no people at all, vertical.',
@@ -433,6 +446,7 @@ export const SHOTS: Shot[] = [
   },
   {
     id: 'hands',
+    family: 'detail',
     people: true,
     lines: (c) => [
       'SHOT: a close detail of hands, vertical. No faces in frame, or only a jaw and shoulder at the very edge.',
@@ -443,6 +457,7 @@ export const SHOTS: Shot[] = [
   },
   {
     id: 'candid',
+    family: 'detail',
     people: true,
     lines: (c) => [
       'SHOT: a candid lifestyle moment away from the clinic, vertical — this is the patient\'s own life, not a medical setting.',
@@ -453,6 +468,7 @@ export const SHOTS: Shot[] = [
   },
   {
     id: 'environment',
+    family: 'people',
     people: true,
     lines: (c) => [
       'SHOT: a wide environmental frame of the practice, vertical, people small within it.',
@@ -463,6 +479,7 @@ export const SHOTS: Shot[] = [
   },
   {
     id: 'portrait',
+    family: 'people',
     people: true,
     lines: (c) => [
       'SHOT: a three-quarter editorial portrait, vertical, the subject turned slightly away and looking out of frame.',
@@ -471,10 +488,42 @@ export const SHOTS: Shot[] = [
       'A single soft key light from the window, shadow falling gently across the wall above.',
     ],
   },
+  {
+    id: 'flat-lay',
+    family: 'object',
+    people: false,
+    lines: (c) => [
+      'SHOT: an overhead flat lay on a pale linen or light oak surface, no people at all, vertical.',
+      `LAID OUT IN THE LOWER TWO-THIRDS, shot straight down, evenly spaced with generous space between them: ${c.objects}, with ${c.foreground} at one edge.`,
+      'Soft diffused daylight from one side, gentle shadows, nothing stacked or crowded, the arrangement calm rather than decorative.',
+      'The upper third is bare surface — no object crosses into it.',
+    ],
+  },
 ];
 
 /** How many distinct shots a reroll can walk through. */
 export const SHOT_COUNT = SHOTS.length;
+
+/**
+ * The order the families are offered in. Asking for three options walks this
+ * list once, so the three pictures are never three versions of the same frame:
+ * one with faces, one of the objects alone, one close detail.
+ */
+export const FAMILY_ORDER: ShotFamily[] = ['people', 'object', 'detail'];
+
+/**
+ * The shot for one step of the rotation. Step 0, 1 and 2 are guaranteed to come
+ * from three different families; after that it wraps and picks the next shot
+ * within each family, so a fourth or fifth take is still a new picture.
+ */
+export function shotFor(seedBase: number, sceneIndex: number): Shot {
+  const step = Math.abs(Math.round(sceneIndex));
+  const family = FAMILY_ORDER[step % FAMILY_ORDER.length];
+  const pool = SHOTS.filter((s) => s.family === family);
+  if (!pool.length) return SHOTS[Math.abs(seedBase + step) % SHOTS.length];
+  const lap = Math.floor(step / FAMILY_ORDER.length);
+  return pool[Math.abs(seedBase + lap) % pool.length];
+}
 
 /** A stable number from the post's own title, so different posts get different shots. */
 export function seedOf(text: string): number {
@@ -515,7 +564,7 @@ export function plannerPromptLines(p: PlannerImage, sceneIndex: number, directio
   // The shot rotates with the post itself, not only with rerolls — one fixed
   // composition made every week's picture look like the last one.
   const seed = seedOf(p.title + p.pillarName) + Math.abs(Math.round(sceneIndex));
-  const shot = SHOTS[seed % SHOTS.length];
+  const shot = shotFor(seedOf(p.title + p.pillarName), sceneIndex);
   const cast: Cast = {
     clinician: CLINICIANS[seed % CLINICIANS.length],
     patient: PATIENTS[(seed + 2) % PATIENTS.length],
@@ -537,5 +586,6 @@ export function onTopicCheck(p: PlannerImage): string {
   return `ON-TOPIC (this one is a DEFECT, not an opinion): the image must clearly show ${p.dynamic ? p.dynamic.mustShow : p.mustShow}. ` +
     'A generic reception desk, front desk or waiting room does NOT count. ' +
     'Also a DEFECT: anything in the top third, where a title will sit — a person\'s head or face, art, shelves, lamps or busy objects. ' +
-    'Set "onTopic": false when either fails.';
+    'Also a DEFECT: an anatomical model or medical teaching prop — a plastic brain, heart, spine, skeleton, skull, torso or mannequin — ' +
+    'or an anatomical chart, poster, diagram or illustration. Set "onTopic": false when any of these fails.';
 }
