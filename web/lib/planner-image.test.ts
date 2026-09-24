@@ -237,3 +237,13 @@ test('the microscopy frame is briefed as a photograph, never a render', () => {
     assert.match(lines, /laminar-flow|culture plate/i);
   }
 });
+
+test('nothing is worn by or connected to anyone in the frame', () => {
+  const p = plannerImageFor(pack('Prevention', 'Why you should not wait until you feel unwell'))!;
+  const lines = plannerPromptLines(p, 0).join(' ');
+  assert.match(lines, /NOTHING ATTACHED TO ANYONE/);
+  assert.match(lines, /blood-pressure cuff on an arm/i);
+  assert.match(lines, /never a procedure/i);
+  // A device may still sit on the table — the pillars' own objects include one.
+  assert.match(lines, /rest ON THE TABLE, unused/i);
+});

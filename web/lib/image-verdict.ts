@@ -46,6 +46,9 @@ const BLOCKING_RE = new RegExp(
     'model (brain|heart|spine|lung|kidney|organ|skull|torso)', '(brain|heart|spine|organ|torso) model',
     'skeleton', 'skull', 'mannequin', 'teaching (model|prop|aid)', 'anatomical (chart|poster|model)',
     '(pill|supplement|vitamin|medicine|medication|tablet|capsule) bottle', 'blister pack', 'loose (pills|tablets|capsules)',
+    // devices worn by or given to a person — a conversation, never a procedure
+    'blood.?pressure cuff', 'bp cuff', 'ecg', 'ekg', 'electrode', 'pulse oximeter', 'iv (line|drip|bag)', 'cannula', 'catheter',
+    'glucose monitor', 'oxygen mask', 'injector pen', 'infusion',
     // outright broken renders
     'uncanny', 'artifact', 'glitch', 'corrupt',
   ].join('|'),

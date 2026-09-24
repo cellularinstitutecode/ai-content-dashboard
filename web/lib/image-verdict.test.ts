@@ -107,3 +107,23 @@ test('an ordinary clinic still life is untouched by the prop rule', () => {
   const v = classifyVerdict({ approved: true, textDetected: false, bannedProp: false, onTopic: true, score: 92, blocking: [], advisory: ['the linen could be smoother'] }, { requireOnTopic: true });
   assert.equal(v.status, 'approved');
 });
+
+test('a device worn by or given to a person is blocking, wherever it is named', () => {
+  for (const note of [
+    'a blood pressure cuff is on the patient\'s upper arm',
+    'ECG electrodes are visible on the chest',
+    'a pulse oximeter is clipped to a finger',
+    'an IV line runs to the arm',
+    'an injector pen is held toward the patient',
+  ]) {
+    const v = classifyVerdict({ approved: true, textDetected: false, score: 90, blocking: [], advisory: [note] }, { requireOnTopic: true });
+    assert.equal(v.status, 'flagged', note);
+  }
+});
+
+test('the same device resting unused on a table is not blocked by wording alone', () => {
+  // The rule is about what is attached to a person. A stethoscope lying on the
+  // desk is in the pillar's own object list and must keep passing.
+  const v = classifyVerdict({ approved: true, textDetected: false, bannedProp: false, onTopic: true, score: 91, blocking: [], advisory: ['a stethoscope rests on the notebook'] }, { requireOnTopic: true });
+  assert.equal(v.status, 'approved');
+});
