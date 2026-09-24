@@ -49,3 +49,15 @@ test('the brief prompt forbids teaching props outright', () => {
   assert.match(briefSystemPrompt(), /anatomical model/i);
   assert.match(briefSystemPrompt(), /skeleton|mannequin/i);
 });
+
+test('a device described on a person is stripped from the brief', () => {
+  assert.equal(parseSceneBrief({ scene: 'The physician fastens a blood-pressure cuff around the patient\'s arm as she explains.', props: ['a blood-pressure cuff'], mustShow: 'a blood pressure cuff on the arm' }), null);
+  const kept = parseSceneBrief({
+    quote: 'A yearly check catches what you cannot feel.',
+    scene: 'The physician turns a blank notebook toward the patient as she explains what a check covers.',
+    props: ['an IV cannula', 'a blank notebook', 'a glass of water'],
+    mustShow: 'a blank notebook turned toward the patient',
+  });
+  assert.ok(kept);
+  assert.deepEqual(kept!.props, ['a blank notebook', 'a glass of water']);
+});
