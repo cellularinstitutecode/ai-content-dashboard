@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PILLARS } from './content-strategy.ts';
 import { BLOG_ANGLES } from './strategy-seed.ts';
-import { PILLAR_SCENES, PLAN_LENGTH, SHOTS, SHOT_COUNT, TITLES, cleanTopic, familyAt, plannerImageFor, plannerPromptLines, onTopicCheck, scienceAllowed, shotFor, titleFor } from './planner-image.ts';
+import { PILLAR_SCENES, PLAN_LENGTH, SHOTS, SHOT_COUNT, TITLES, cleanTopic, familyAt, plannerImageFor, plannerPromptLines, onTopicCheck, scienceAllowed, scienceScore, shotFor, titleFor } from './planner-image.ts';
 
 const pack = (template_name: string, query: string) => ({ _autopilot: { template_name, angle: { query, seedTopic: query } } });
 
@@ -213,5 +213,27 @@ test('slots 1 to 3 always cover the pillar shot, the science slot and the room',
     assert.equal(three[1], 'science', id);
     assert.equal(three[2], 'consult', id);
     assert.notEqual(three[0], 'consult', id);
+  }
+});
+
+test('the science slot needs the post to be about the biology, not to mention it once', () => {
+  // The bug this guards: a post about a daily walk that happened to say
+  // "muscle" came back as a microscope field.
+  assert.equal(scienceAllowed('A ten-minute walk after dinner is enough to start with.'), false);
+  assert.equal(scienceAllowed('Gentle movement supports muscle repair as you age.'), false);
+  assert.equal(scienceAllowed('Deep sleep is when tissue repair happens and inflammation settles.'), true);
+  assert.equal(scienceAllowed('Mesenchymal stem cells release exosomes that signal to neighbouring cells.'), true);
+  assert.ok(scienceScore('cells, tissue, mitochondria and collagen') >= 4);
+});
+
+test('the microscopy frame is briefed as a photograph, never a render', () => {
+  const p = plannerImageFor(pack('Recovery', 'How tissue repairs itself after training'))!;
+  const lines = plannerPromptLines({ ...p, science: true }, 2, null, 'science').join(' ');
+  if (/photomicrograph/i.test(lines)) {
+    assert.match(lines, /phase-contrast/i);
+    assert.match(lines, /NOT A PICTURE OF CELLS/i);
+    assert.match(lines, /no embossed|no 3D rendering/i);
+  } else {
+    assert.match(lines, /laminar-flow|culture plate/i);
   }
 });

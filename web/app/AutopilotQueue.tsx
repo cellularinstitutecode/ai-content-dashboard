@@ -319,25 +319,25 @@ export default function AutopilotQueue() {
   async function proposeImages(r: Run, count = 3) {
     if (!r.draft_id || regenId || optionsLeft) return;
     setErr(null);
-    for (let i = 0; i < count; i++) {
-      setOptionsLeft({ id: r.id, left: count - i });
-      try {
-        const res = await fetch('/api/drafts/image', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'autopilot' },
-          // Slots 1, 2 and 3 of the post's picture plan: the pillar's own shot,
-          // the science slot when the post has earned it, and the second
-          // consultation. Naming them keeps the set honest on a draft that has
-          // already been rerolled many times.
-          body: JSON.stringify({ id: r.draft_id, option: true, slot: i + 1 }),
-        });
-        const j = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(j?.error || 'Image generation failed');
-        await load({ quiet: true });
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : 'Image generation failed');
-        break;
-      }
+    // ONE request for the whole set: the three pictures are generated in
+    // parallel on the server and written once. Three separate requests took
+    // five minutes end to end and wrote the draft back three times, so a set
+    // could half-apply; this takes about as long as the slowest single take.
+    setOptionsLeft({ id: r.id, left: count });
+    try {
+      const res = await fetch('/api/drafts/image', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'autopilot' },
+        body: JSON.stringify({ id: r.draft_id, options: count }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || 'Image generation failed');
+      // Part of a set can fail while the rest succeed — say so, rather than
+      // quietly handing back two pictures when three were asked for.
+      const made = Number(j?.made ?? 0);
+      if (made && made < count) setErr('Made ' + made + ' of ' + count + ' — ' + String(j?.failed?.[0] || 'one take failed'));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Image generation failed');
     }
     setOptionsLeft(null);
     await load();
@@ -596,10 +596,10 @@ export default function AutopilotQueue() {
                           type="button"
                           onClick={() => proposeImages(r)}
                           disabled={Boolean(regenId) || Boolean(optionsLeft) || busyId === r.id}
-                          title="Generates three more propositions and keeps them side by side so you can choose"
+                          title="Generates three propositions side by side. Your current picture stays as it is until you pick one."
                           className="rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
                         >
-                          {optionsLeft?.id === r.id ? 'Making ' + optionsLeft.left + ' more…' : '⁝⁝ Show me 3 options'}
+                          {optionsLeft?.id === r.id ? 'Making ' + optionsLeft.left + ' options…' : '⁝⁝ Show me 3 options'}
                         </button>
                       </div>
                       {(r.pack?._imageOptions?.length || 0) > 0 && (
