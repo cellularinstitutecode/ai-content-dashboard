@@ -34,3 +34,16 @@ test('the triage route is behind the same gate as the rest of sources', () => {
 test('one bad photograph does not fail the whole pass', () => {
   assert.match(route, /verdict: 'unreadable'/);
 });
+
+const caption = readFileSync(new URL('../app/api/sources/caption/route.ts', import.meta.url), 'utf8');
+
+test('the caption route is read-only too', () => {
+  assert.doesNotMatch(caption, /storeBytes|uploadFolderImage|appendRow|updateRowCells/);
+  assert.doesNotMatch(caption, /export async function POST/);
+  assert.match(caption, /requireAllowlistedUser/);
+});
+
+test('captioning asks for the small image, not the 30 MB original', () => {
+  assert.match(caption, /detail: 'low'/);
+  assert.match(caption, /skipped: 'too_large'/, 'an oversized file is reported, not silently dropped');
+});
