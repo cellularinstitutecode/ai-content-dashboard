@@ -153,10 +153,13 @@ export async function POST(req: NextRequest) {
       !['library', 'upload'].includes(String(existing?.source || ''));
     // A direction is itself a request for a new image: somebody typed what they
     // want, and returning the cached one would answer a different question.
-    if (existing?.url && !regenerate && !asOption && !existingHasText && !direction && !plannerNeedsCover) {
+    // A SET is always a request for new pictures — the draft having a hero
+    // already is the normal case, and returning it unchanged made the whole
+    // feature a no-op.
+    if (existing?.url && !regenerate && !asOption && !wantSet && !existingHasText && !direction && !plannerNeedsCover) {
       return NextResponse.json({ image: existing, cached: true });
     }
-    const advanceVariant = regenerate || existingHasText || asOption;
+    const advanceVariant = regenerate || existingHasText || asOption || wantSet > 0;
 
     // Only NOW check whether generation is available: a draft that already
     // carries a clean verified image must return it even when the OpenAI key
