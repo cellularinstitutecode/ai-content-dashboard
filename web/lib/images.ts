@@ -382,7 +382,7 @@ async function generateImageBytes(prompt: string, size: '1536x1024' | '1024x1024
 const verifySystem = (rubric: string, planner?: PlannerImage | null) => planner
   ? verifySystemBase(rubric).replace(
       'Return STRICT JSON only: {"approved": boolean, "textDetected": boolean,',
-      '8. ' + onTopicCheck(planner) + '\n9. HEADROOM: measure how far down from the top edge the top of the highest person\'s head is, as a percentage of the image height (0 = top edge, 100 = bottom edge). Report it as "headTopPct".\nReturn STRICT JSON only: {"approved": boolean, "textDetected": boolean, "onTopic": boolean, "headTopPct": number,'
+      '8. ' + onTopicCheck(planner) + '\n9. HEADROOM: measure how far down from the top edge the top of the highest person\'s head is, as a percentage of the image height (0 = top edge, 100 = bottom edge). Report it as "headTopPct".\nReturn STRICT JSON only: {"approved": boolean, "textDetected": boolean, "bannedProp": boolean, "onTopic": boolean, "headTopPct": number,'
     )
   : verifySystemBase(rubric);
 
@@ -391,10 +391,11 @@ const verifySystemBase = (rubric: string) => `You are a strict visual QA reviewe
 2. Anatomical errors: wrong number of fingers, warped hands/faces/limbs, merged bodies, impossible poses.
 3. Logos, watermarks, brand marks, or recognizable trademarks (even without readable letters).
 4. Graphic or inappropriate medical content: needles piercing skin, blood, wounds, distressing imagery.
+4b. BANNED PROPS (answer this one separately and carefully, like check 1): is there an anatomical model or medical teaching prop in frame — a model or replica brain, heart, spine, lung, kidney, skeleton, skull, torso or mannequin? Or an anatomical chart, poster or diagram? Or a pill, supplement, vitamin or medicine bottle, a blister pack, loose tablets or capsules? Or a syringe, vial or ampoule? Any one of these is an automatic fail. Report it as "bannedProp": true. When unsure, say true.
 5. Uncanny, distorted, or low-quality rendering unfit for a premium medical brand.
 6. Relevance: the scene should plausibly illustrate the given topic for a clinic audience.
 7. ${rubric}
-Return STRICT JSON only: {"approved": boolean, "textDetected": boolean, "score": number 0-100, "brandFit": number 0-100, "blocking": string[], "advisory": string[]}. textDetected=true whenever check 1 finds ANYTHING (when unsure, say true). "blocking" lists each DEFECT from checks 1-4 as a short phrase — these fail the image. "advisory" lists observations from checks 5-7 (rendering quality, relevance, composition, brand fit) as short phrases — these are notes for a human and do NOT fail the image. "brandFit" is check 7 alone and never changes "approved". approved=false only when "blocking" is non-empty. Both lists empty when the image is clean.`;
+Return STRICT JSON only: {"approved": boolean, "textDetected": boolean, "bannedProp": boolean, "score": number 0-100, "brandFit": number 0-100, "blocking": string[], "advisory": string[]}. textDetected=true whenever check 1 finds ANYTHING (when unsure, say true). bannedProp=true whenever check 4b finds ANYTHING (when unsure, say true); it fails the image on its own. "blocking" lists each DEFECT from checks 1-4 as a short phrase — these fail the image. "advisory" lists observations from checks 5-7 (rendering quality, relevance, composition, brand fit) as short phrases — these are notes for a human and do NOT fail the image. "brandFit" is check 7 alone and never changes "approved". approved=false only when "blocking" is non-empty. Both lists empty when the image is clean.`;
 
 /**
  * Dynamic art direction for a planner image: a small text model reads the post

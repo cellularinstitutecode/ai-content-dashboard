@@ -86,3 +86,24 @@ test('planner covers: a head in the title band is a defect', () => {
   assert.equal(classifyVerdict({ ...clean, headTopPct: 38 }, { requireOnTopic: true, minHeadTopPct: 25 }).status, 'approved');
   assert.equal(classifyVerdict({ ...clean, headTopPct: 18 }).status, 'approved');
 });
+
+test('a banned prop fails the image on its own, whatever else the reviewer said', () => {
+  // A flat lay came back with a model brain in one hand and an amber pill
+  // bottle beside it. The reviewer approved it: the prop rule was a clause at
+  // the end of a long on-topic paragraph, and it sailed past.
+  const v = classifyVerdict({ approved: true, textDetected: false, bannedProp: true, onTopic: true, score: 88, blocking: [], advisory: [] }, { requireOnTopic: true });
+  assert.equal(v.status, 'flagged');
+  assert.match(v.issues.join(' '), /banned prop/i);
+});
+
+test('a prop named only in advisory is promoted to blocking', () => {
+  for (const note of ['a model brain is held in the hand', 'an amber pill bottle sits on the table', 'a plastic skeleton in the background']) {
+    const v = classifyVerdict({ approved: true, textDetected: false, score: 90, blocking: [], advisory: [note] }, { requireOnTopic: true });
+    assert.equal(v.status, 'flagged', note);
+  }
+});
+
+test('an ordinary clinic still life is untouched by the prop rule', () => {
+  const v = classifyVerdict({ approved: true, textDetected: false, bannedProp: false, onTopic: true, score: 92, blocking: [], advisory: ['the linen could be smoother'] }, { requireOnTopic: true });
+  assert.equal(v.status, 'approved');
+});

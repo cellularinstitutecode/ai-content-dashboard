@@ -750,7 +750,8 @@ export function onTopicCheck(p: PlannerImage): string {
   const tail =
     'Also a DEFECT: anything in the top third, where a title will sit — a person\'s head or face, art, shelves, lamps or busy objects. ' +
     'Also a DEFECT: an anatomical model or medical teaching prop — a plastic brain, heart, spine, skeleton, skull, torso or mannequin — ' +
-    'or an anatomical chart, poster, diagram or illustration. Set "onTopic": false when any of these fails.';
+    'an anatomical chart, poster, diagram or illustration, or a pill, supplement, vitamin or medicine bottle, a blister pack or loose ' +
+    'tablets. Set "onTopic": false when any of these fails.';
   if (p.shotFamily === 'science') {
     return 'ON-TOPIC (this one is a DEFECT, not an opinion): the image must be a believable REAL laboratory photograph — either a genuine ' +
       'microscope field of cells in culture, or a researcher working at a lab bench. A DEFECT: rendered or illustrated cells, glowing or ' +
