@@ -532,14 +532,17 @@ export const SHOTS: Shot[] = [
     id: 'microscopy',
     family: 'science',
     people: false,
-    lines: (c) => [
-      'SHOT: a real photomicrograph, vertical — the view down a laboratory microscope, phase-contrast or bright-field.',
-      `THE FIELD, filling the lower two-thirds: living cells in culture, honest morphology — spindle-shaped adherent cells fanning across the frame, `
-        + `varied in size and orientation, some in contact, a few rounded and refractile; fine granular texture inside each cell, clean medium between them.`,
-      'Cool neutral grey-blue and pale amber, shallow focal plane so cells at the edges soften, the faint vignette of a real objective lens.',
-      'It is a PHOTOGRAPH of a real microscope field, not an illustration: no glow, no bloom, no lens flare, no floating spheres, no rendered 3D cells, '
-        + 'no scale bar, no annotation, no colour overlay.',
-      'The upper third falls to plain, even, out-of-focus medium — empty and quiet.',
+    lines: () => [
+      'SHOT: a PHOTOGRAPH taken down a laboratory microscope — a phase-contrast photomicrograph, captured with a camera on the eyepiece, vertical.',
+      'THE FIELD, filling the lower two-thirds: living adherent cells in culture at about 100x. Slender spindle and stellate shapes lying flat in the plane '
+        + 'of the dish, each with a darker nucleus and fine cytoplasmic texture, processes reaching out and touching neighbours; a few rounded, bright, '
+        + 'refractile cells among them. Density uneven, orientation random, a little debris — a real dish, not a pattern.',
+      'The optics are honest: a shallow plane of focus so cells drift soft toward the edges, faint halo fringing around each cell the way phase contrast '
+        + 'actually renders it, slight chromatic softness at the corners, the gentle circular vignette of the objective.',
+      'Colour: near-monochrome cool grey with the faintest warm cast from the medium. Nothing saturated, nothing glowing.',
+      'IT IS NOT A PICTURE OF CELLS — it is a photograph of a microscope field. No 3D rendering, no illustration, no embossed or raised relief, no smooth '
+        + 'plastic shapes, no glow, no bloom, no lens flare, no floating spheres in empty space, no scale bar, no labels, no arrows, no colour overlay.',
+      'The upper third is plain, even, out-of-focus medium — empty and quiet.',
     ],
   },
   {
@@ -610,12 +613,38 @@ const DEFAULT_FAMILIES: ShotFamily[] = ['still', 'consult', 'active'];
  * about a daily walk comes back as a microscope field, which is both wrong and
  * the kind of overclaim a clinic cannot publish.
  */
-const SCIENCE_TEXT =
-  /\b(cell|cells|cellular|stem[- ]cell|msc|exosome|vesicle|tissue|mitochondri|collagen|inflammat|immune|immunit|regenerat|senescen|cytokine|growth factor|biomarker|culture|laborator|lab\b|microscop|protein synthesis|repair at the cellular)/i;
+const SCIENCE_TERMS: RegExp[] = [
+  /\bcellular\b|\bcells?\b/i,
+  /\bstem[- ]cells?\b|\bmscs?\b/i,
+  /\bexosomes?\b|\bvesicles?\b/i,
+  /\btissues?\b/i,
+  /\bmitochondri/i,
+  /\bcollagen\b/i,
+  /\binflammat/i,
+  /\bimmune\b|\bimmunity\b/i,
+  /\bregenerat/i,
+  /\bsenescen/i,
+  /\bcytokines?\b|\bgrowth factors?\b/i,
+  /\bbiomarkers?\b/i,
+  /\bprotein synthesis\b|\bmuscle repair\b|\bcell repair\b/i,
+];
 
-/** Does this post's text talk about biology? */
+/** How many distinct biology ideas the post actually raises. */
+export function scienceScore(text: unknown): number {
+  const t = String(text ?? '');
+  return SCIENCE_TERMS.reduce((n, re) => n + (re.test(t) ? 1 : 0), 0);
+}
+
+/**
+ * Is this post ABOUT the biology, rather than merely mentioning it?
+ *
+ * One passing word is not enough. A post about a daily walk that happens to
+ * say "muscle" came back as a microscope field, which illustrates nothing the
+ * reader is there for — so the science slot now needs at least two distinct
+ * biological ideas in the post's own text before it is offered at all.
+ */
 export function scienceAllowed(text: unknown): boolean {
-  return SCIENCE_TEXT.test(String(text ?? ''));
+  return scienceScore(text) >= 2;
 }
 
 /**

@@ -50,6 +50,11 @@ export async function POST(req: NextRequest) {
     // choose: <url> → promote one of those propositions to the hero image.
     const asOption = body?.option === true;
     const askedSlot = Number.isFinite(Number(body?.slot)) ? Math.abs(Math.round(Number(body.slot))) : null;
+    // options: 3 → make a whole SET of propositions in ONE request, generated
+    // in parallel and written once. Three sequential requests took five minutes
+    // end to end and wrote the draft back three separate times, so a set could
+    // half-apply; this takes about as long as the slowest single picture.
+    const wantSet = Math.min(3, Math.max(0, Math.round(Number(body?.options) || 0)));
     const choose = typeof body?.choose === 'string' ? body.choose.trim() : '';
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
 
@@ -184,7 +189,8 @@ export async function POST(req: NextRequest) {
       if (bp) brand = bp as BrandContext;
     } catch (err) { /* optional */ reportError('drafts-image:brand-load', err); }
 
-    const image = await generatePackImage({
+    const baseVariant = advanceVariant ? (existing?.variant ?? 0) + 1 + options.length : 0;
+    const makeOne = (slot: number | null, variantOffset: number) => generatePackImage({
       topic: String((d as { topic?: string }).topic || 'regenerative medicine'),
       pack,
       brand,
@@ -194,14 +200,29 @@ export async function POST(req: NextRequest) {
       // composition (hero shot → macro lab → lifestyle → still-life → …).
       // Each proposition starts one composition further along, so a set of
       // three is three different shots rather than three near-duplicates.
-      variant: advanceVariant ? (existing?.variant ?? 0) + 1 + options.length : 0,
-      // Which slot of the planner's picture plan this take is for. The caller
-      // asking for three propositions asks for slots 1, 2 and 3 by name, so the
-      // set always covers the pillar's own shot and the science slot. Read off
-      // the variant instead, a draft rerolled a dozen times would never reach
-      // them again.
-      slot: askedSlot ?? (asOption ? 1 + (options.length % 3) : (advanceVariant ? null : 0)),
+      variant: baseVariant + variantOffset,
+      // Which slot of the planner's picture plan this take is for.
+      slot,
     });
+
+    // A SET is generated in PARALLEL; one take failing does not take the
+    // others down with it.
+    const setResults = wantSet > 0
+      ? await Promise.allSettled(Array.from({ length: wantSet }, (_, i) => makeOne(i + 1, i)))
+      : [];
+    const madeSet = setResults
+      .filter((r): r is PromiseFulfilledResult<PackImage> => r.status === 'fulfilled')
+      .map((r) => r.value);
+    const setErrors = setResults
+      .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+      .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)));
+    if (wantSet > 0 && !madeSet.length) {
+      return NextResponse.json({ error: setErrors[0] || 'image generation failed' }, { status: 500 });
+    }
+
+    const image = wantSet > 0
+      ? madeSet[0]
+      : await makeOne(askedSlot ?? (asOption ? 1 + (options.length % 3) : (advanceVariant ? null : 0)), 0);
 
     // Re-read the pack immediately before writing, and merge `_image` into the
     // FRESH copy. Generation + vision verification takes 30-60s, and the pack
@@ -222,13 +243,20 @@ export async function POST(req: NextRequest) {
     // A proposition is kept ALONGSIDE the current hero (up to five), so the
     // reviewer can compare and choose; a plain reroll replaces as before.
     const priorImage = (currentPack as { _image?: PackImage })._image;
-    const nextOptions = asOption
-      ? [...options, ...(priorImage && priorImage.url !== image.url ? [priorImage] : [])]
+    // Propositions sit BESIDE the post's picture and never replace it. Asking
+    // to see options used to swap the hero for the last take generated, which
+    // is the opposite of what "click one to use it instead" promises — the
+    // reviewer lost the very image they were comparing against.
+    const proposing = wantSet > 0 || asOption;
+    const madeNow = wantSet > 0 ? madeSet : [image];
+    const nextOptions = proposing
+      ? [...options, ...madeNow]
           .filter((o, i, all) => o?.url && all.findIndex((x) => x.url === o.url) === i)
           .slice(-5)
       : [];
+    const nextHero = proposing ? (priorImage ?? image) : image;
     // Owner update passes RLS via the session client.
-    const nextPack = { ...currentPack, _image: image, ...(nextOptions.length ? { _imageOptions: nextOptions } : { _imageOptions: [] }) };
+    const nextPack = { ...currentPack, _image: nextHero, ...(nextOptions.length ? { _imageOptions: nextOptions } : { _imageOptions: [] }) };
     const { error } = await sb
       .from('drafts')
       .update({ pack: nextPack })
@@ -240,7 +268,7 @@ export async function POST(req: NextRequest) {
     // — after the write, so a failed write never orphans the image on screen.
     await removeSuperseded(currentPack, nextPack);
 
-    return NextResponse.json({ image, options: nextOptions });
+    return NextResponse.json({ image: nextHero, options: nextOptions, made: proposing ? madeNow.length : 1, failed: setErrors });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : 'image generation failed' },
