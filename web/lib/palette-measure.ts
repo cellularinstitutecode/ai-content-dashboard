@@ -30,7 +30,9 @@ export async function measureImage(bytes: Buffer, ext = 'png'): Promise<PaletteS
     const { stdout } = await run(
       bin.path,
       ['-v', 'error', '-i', src, '-vf', 'scale=64:-1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
-      { encoding: 'buffer', maxBuffer: 8 * 1024 * 1024, timeout: 20_000 },
+      // 90 seconds, not 20: a 34 MB PNG decodes slowly, and the short timeout
+      // was why a third of the folder came back unreadable.
+      { encoding: 'buffer', maxBuffer: 8 * 1024 * 1024, timeout: 90_000 },
     );
     const buf = stdout as unknown as Buffer;
     return buf?.length ? statsFromRgb(new Uint8Array(buf)) : null;

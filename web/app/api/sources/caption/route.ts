@@ -13,6 +13,7 @@ import { requireAllowlistedUser } from '@/lib/auth';
 import { downloadDriveFile, listFolderImages, sourcesConfigured } from '@/lib/google-sources';
 import { PILLARS } from '@/lib/content-strategy';
 import { captionSystemPrompt, coverSafe, inventory, parseCaption, pillarsFor, type Caption } from '@/lib/library-caption';
+import { smallJpeg } from '@/lib/image-small';
 import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
@@ -76,13 +77,16 @@ export async function GET(req: NextRequest) {
     for (const f of slice) {
       try {
         const file = await downloadDriveFile(f.id);
-        // A 30 MB PNG is far more than the model needs, and more than the
-        // request will carry; those are reported rather than silently skipped.
-        if (file.bytes.length > 12 * 1024 * 1024) {
+        const ext = /png$/i.test(file.contentType) ? 'png' : /webp$/i.test(file.contentType) ? 'webp' : 'jpg';
+        // A 30 MB camera export is far more than the model needs and more than
+        // the request will carry, so it is scaled first rather than skipped —
+        // those files are the best photography in the folder.
+        const small = file.bytes.length > 2 * 1024 * 1024 ? await smallJpeg(file.bytes, ext) : null;
+        if (!small && file.bytes.length > 12 * 1024 * 1024) {
           rows.push({ id: f.id, name: f.name, skipped: 'too_large', mb: Math.round(file.bytes.length / 1048576) });
           continue;
         }
-        const c = await captionOne(file.bytes, file.contentType, key);
+        const c = await captionOne(small ?? file.bytes, small ? 'image/jpeg' : file.contentType, key);
         if (!c) { rows.push({ id: f.id, name: f.name, skipped: 'unreadable' }); continue; }
         caps.push(c);
         const safe = coverSafe(c);
