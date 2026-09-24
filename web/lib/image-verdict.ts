@@ -41,7 +41,11 @@ const BLOCKING_RE = new RegExp(
     // marks
     'logo', 'watermark', 'trademark', 'brand mark', 'brandmark',
     // graphic medical content
-    'needle', 'blood', 'wound', 'gore', 'graphic', 'distressing', 'injur',
+    'needle', 'blood', 'wound', 'gore', 'graphic', 'distressing', 'injur', 'syringe', 'vial', 'ampoule',
+    // teaching props and medicines — a clinic photograph contains neither
+    'model (brain|heart|spine|lung|kidney|organ|skull|torso)', '(brain|heart|spine|organ|torso) model',
+    'skeleton', 'skull', 'mannequin', 'teaching (model|prop|aid)', 'anatomical (chart|poster|model)',
+    '(pill|supplement|vitamin|medicine|medication|tablet|capsule) bottle', 'blister pack', 'loose (pills|tablets|capsules)',
     // outright broken renders
     'uncanny', 'artifact', 'glitch', 'corrupt',
   ].join('|'),
@@ -90,6 +94,12 @@ export function classifyVerdict(raw: unknown, opts: { requireOnTopic?: boolean; 
   const headTop = typeof obj.headTopPct === 'number' && Number.isFinite(obj.headTopPct) ? obj.headTopPct : null;
   if (opts.minHeadTopPct != null && headTop != null && headTop < opts.minHeadTopPct) {
     blocking = ['a head reaches into the title area (top of head at ' + Math.round(headTop) + '% from the top)', ...blocking].slice(0, 8);
+  }
+  // A banned prop fails the image on its own, on EVERY path — the rule used to
+  // ride at the end of the on-topic paragraph, where a reviewer looking at a
+  // flat lay of a model brain and a pill bottle simply sailed past it.
+  if (obj.bannedProp === true) {
+    blocking = ['a banned prop is in frame — an anatomical model, teaching prop, or a pill or medicine bottle', ...blocking].slice(0, 8);
   }
   if (opts.requireOnTopic && obj.onTopic === false) {
     blocking = ['off-topic — the picture does not show what this post is about', ...blocking].slice(0, 8);

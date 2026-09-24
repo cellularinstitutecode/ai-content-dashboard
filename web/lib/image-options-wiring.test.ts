@@ -40,3 +40,14 @@ test('the queue asks for the whole set in one request', () => {
   assert.match(fn, /options: count/);
   assert.doesNotMatch(fn, /for \(let i = 0; i < count; i\+\+\)/, 'the sequential loop should be gone');
 });
+
+test('the banned-prop check is its own numbered rubric item with its own flag', () => {
+  const images = readFileSync(new URL('./images.ts', import.meta.url), 'utf8');
+  assert.match(images, /4b\. BANNED PROPS/);
+  assert.match(images, /"bannedProp": boolean/);
+  // It must be asked on BOTH shapes of the rubric — the planner covers replace
+  // the tail of the JSON contract, and the prop flag has to survive that.
+  const contracts = images.match(/Return STRICT JSON only: \{[^}]*/g) ?? [];
+  assert.ok(contracts.length >= 2, 'both JSON contracts should be present');
+  for (const c of contracts) assert.match(c, /bannedProp/);
+});
