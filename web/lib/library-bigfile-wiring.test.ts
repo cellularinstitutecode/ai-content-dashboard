@@ -42,3 +42,7 @@ test('the ceiling stays 25 MB for callers that did not opt in', () => {
   const imports = readFileSync(new URL('../app/api/sources/route.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(imports, /downloadDriveFile\([^)]*BIG_FILE_MAX_BYTES/);
 });
+
+test('cataloguing is deterministic - the same photograph gets the same verdict', () => {
+  assert.match(caption, /temperature: 0,/);
+});

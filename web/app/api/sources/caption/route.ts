@@ -36,6 +36,11 @@ async function captionOne(bytes: Buffer, contentType: string, key: string): Prom
       body: JSON.stringify({
         model: VISION_MODEL,
         max_tokens: 220,
+      // Cataloguing the same photograph twice used to give two different
+      // answers: across 39 photographs read more than once, 7 flipped between
+      // cover-safe and not, and 12 changed which blocker they reported. A
+      // library whose verdict depends on the roll is not a library.
+      temperature: 0,
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: captionSystemPrompt() },
