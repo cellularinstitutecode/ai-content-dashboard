@@ -32,6 +32,7 @@ import {
   metricoolCopyId,
   partRanges,
   readCompletedTransaction,
+  derivedConvertedUrl,
   earliestExpiry,
   readOpenedTransaction,
   signedUrlExpiry,
@@ -453,6 +454,30 @@ test('the audit after #322: one request at a time, hashing that resumes, the swe
   const state = src('lib/metricool-upload-state.ts');
   assert.match(state, /or\('claimed_until\.is\.null,claimed_until\.lt\.' \+ now\.toISOString\(\)\)/, 'a claim is taken only when free or stale');
   assert.match(state, /made\.error\.code !== '23505'/, 'a duplicate insert is the other request winning, not an error');
+});
+
+test('the converted copy’s address follows from the key, and nowhere else', () => {
+  // Captured: key planner/<user>/<yyyymm>/<id>.mp4 → static.metricool.com/video/<user>/<yyyymm>/<id>.mp4.
+  assert.equal(derivedConvertedUrl('planner/4308292/202609/abc123.mp4'), 'https://static.metricool.com/video/4308292/202609/abc123.mp4');
+  assert.equal(derivedConvertedUrl('/planner/4308292/202609/abc123.MOV'), 'https://static.metricool.com/video/4308292/202609/abc123.MOV');
+  for (const k of ['uploads/x.mp4', 'planner/x.png', 'planner/', '', null, undefined]) assert.equal(derivedConvertedUrl(k), null, String(k));
+});
+
+test('row 200: the completion converts the video, so it is waited for, and a timeout there is not a failure', () => {
+  // "Metricool timed out after 30s" was the last word after the whole 2785 MB
+  // had gone up: the completion was given a small call's timeout while
+  // Metricool converted the file, and the next pass would have asked it to
+  // complete an upload it had already completed.
+  const lib = src('lib/metricool-upload.ts');
+  assert.match(lib, /timeoutMs: Math\.max\(CALL_MS, left\(\) - 5_000\),\s*blogId: opts\.blogId,/, 'the completion gets the whole of what is left');
+  assert.match(lib, /and Metricool was still converting it when this request ran out of time/, 'a timeout is "still converting"');
+  assert.match(lib, /reason: 'pending', sizeBytes, progress: \{ done: tx\.parts\.length \|\| 1, total: tx\.parts\.length \|\| 1 \}/, 'reported as progress, with the state kept');
+  assert.match(lib, /const alreadyThere = derivedConvertedUrl\(tx\.key\)/, 'the converted copy is looked for');
+  assert.match(lib, /const probe = await verifyPlayableMp4\(alreadyThere, null, 15_000\)/, 'read back as an mp4, never assumed');
+  assert.ok(lib.indexOf('if (alreadyThere && uploadedNothingHere) {') < lib.indexOf('const completion = completionBody(tx, uploaded);'), 'looked for BEFORE asking again');
+  // The state is not reset on a timeout: only an explicit refusal resets it.
+  const block = lib.slice(lib.indexOf('// 4. COMPLETION.'), lib.indexOf('const finished = readCompletedTransaction(doneText);'));
+  assert.equal((block.match(/resetUploadState/g) || []).length, 1, 'one reset, on a refusal, none on a timeout');
 });
 
 test('the copy maker tries the upload only when the bucket would not take the file', () => {
