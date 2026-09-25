@@ -264,7 +264,10 @@ export async function POST(req: NextRequest) {
           {
             error: 'media_unverified',
             reason: 'reroute',
-            message: 'The video in this post is a Drive link, which Metricool hands straight back, and a copy it would take could not be made: ' + made.message,
+            // An upload still in progress is its own sentence: nothing failed.
+            message: made.code === 'upload_pending'
+              ? made.message
+              : 'The video in this post is a Drive link, which Metricool hands straight back, and a copy it would take could not be made: ' + made.message,
           },
           { status: 422 },
         );

@@ -68,6 +68,7 @@ import {
   type UploadedPart,
 } from '@/lib/metricool-upload-parse';
 import { redact, reportError } from '@/lib/report';
+import { finishUploadState, loadUploadState, resetUploadState, saveUploadEtags, saveUploadState } from '@/lib/metricool-upload-state';
 
 export { directUploadEnabled, isMetricoolHostedUrl, isMetricoolCopyId, metricoolCopyId } from '@/lib/metricool-upload-parse';
 
@@ -87,13 +88,25 @@ export const DIRECT_UPLOAD_STAGE_BYTES = DISK_SAFE_BYTES;
  * Above the staging ceiling the disk is never used: the file is read out of
  * Drive once to hash its slices, the transaction is opened, and then each
  * 25 MB slice is fetched again by Range request and put to its signed address
- * — two passes over the network, a slice or three in memory, nothing on disk.
- * The 477 MB reel that was refused as "more than this function can stage" is
- * exactly the file this exists for. What bounds it is TIME: the function has
- * 300 seconds, and two passes over two gigabytes is where that stops being
- * plausible on any connection.
+ * — a slice or three in memory, nothing on disk. The 477 MB reel that was
+ * refused as "more than this function can stage" is exactly the file this
+ * exists for.
+ *
+ * AND IT RESUMES. Row 200 is 2785 MB, and no single 300-second request moves
+ * that. A multipart upload is a list of slices, each its own PUT with its own
+ * ETag, so what one request could not finish is written to
+ * metricool_uploads (lib/metricool-upload-state.ts) — the hashes, the signed
+ * addresses, every ETag so far — and the next pass (the 15-minute sweep, or a
+ * person pressing again) carries on at the first slice without one. The one
+ * thing that must fit in a single request is the hashing pass, one read of
+ * the file; five gigabytes is where that stops being plausible.
  */
-export const DIRECT_UPLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+export const DIRECT_UPLOAD_MAX_BYTES = 5 * 1024 * 1024 * 1024;
+
+/** How long signed addresses are trusted when the reply did not say. */
+const DEFAULT_SIGNED_TTL_MS = 50 * 60_000;
+/** Time kept back before starting another batch, so the ETags so far can be banked. */
+const BATCH_RESERVE_MS = 30_000;
 
 const TRANSACTIONS_PATH = '/v2/media/s3/upload-transactions';
 /** One small JSON call; it should not take long. */
@@ -109,11 +122,14 @@ export type DirectUpload =
   | { ok: true; url: string; copyId: string; bytes: number; sizeBytes: number | null }
   | {
       ok: false;
-      reason: 'off' | 'unconfigured' | 'too_large' | 'unreachable' | 'refused' | 'unreadable' | 'failed';
+      /** `pending`: not failed — the slices so far are banked and the next pass continues. */
+      reason: 'off' | 'unconfigured' | 'too_large' | 'unreachable' | 'refused' | 'unreadable' | 'failed' | 'pending';
       message: string;
       status?: number | null;
       shape?: string;
       sizeBytes?: number | null;
+      /** For `pending`: slices in Metricool so far, and the total. */
+      progress?: { done: number; total: number };
     };
 
 /** Can this route even be attempted for a file of this size? */
@@ -292,17 +308,6 @@ async function putPart(
   return { ok: true, etag };
 }
 
-/** A few at a time, in order of submission; the first failure stops the rest. */
-async function inBatches<T, R>(items: T[], size: number, run: (item: T, index: number) => Promise<R>): Promise<R[]> {
-  const out: R[] = [];
-  for (let i = 0; i < items.length; i += size) {
-    const batch = items.slice(i, i + size);
-    const done = await Promise.all(batch.map((item, j) => run(item, i + j)));
-    out.push(...done);
-  }
-  return out;
-}
-
 /**
  * Upload one Drive video into Metricool's storage and answer with its address.
  *
@@ -353,9 +358,19 @@ export async function uploadVideoToMetricool(
     let bytes: number;
     let declared: DeclaredPart[];
     let wholeHash: string | null = null;
-    if (streamed) {
+    // An upload of this video that an earlier request did not finish. Its
+    // hashes are reused whatever else happens; its signed addresses and ETags
+    // only while they are still good.
+    const prior = streamed ? await loadUploadState(id) : null;
+    const priorFits = Boolean(prior && sizeBytes != null && prior.sizeBytes === sizeBytes && prior.declared.length === partRanges(sizeBytes).length);
+    if (streamed && prior && priorFits) {
+      // 1 (resumed). The hashes were paid for once already.
+      bytes = sizeBytes as number;
+      declared = prior.declared;
+      console.info('metricool:upload resumed', bytes, 'bytes,', Object.keys(prior.etags).length, 'of', declared.length, 'parts already there');
+    } else if (streamed) {
       // 1 (streamed). ONE PASS over the file, hashing as it goes. Nothing kept.
-      const pass = await declarePartsFromDrive(id, sizeBytes, Math.min(200_000, left() - 60_000));
+      const pass = await declarePartsFromDrive(id, sizeBytes as number, Math.min(250_000, left() - 20_000));
       bytes = pass.bytes;
       declared = pass.declared;
       wholeHash = pass.wholeHash;
@@ -386,27 +401,52 @@ export async function uploadVideoToMetricool(
       declared = await declareParts(tmp, bytes);
     }
     if (left() < 20_000) return { ok: false, reason: 'failed', sizeBytes, message: 'There was no time left to open the upload.' };
-    let opened: Opened | NotOpened;
-    try {
-      opened = await openTransaction({ contentType, bytes, parts: declared, blogId: opts.blogId, left });
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      reportError('metricool-upload:transaction', e, { fileId: id });
-      return { ok: false, reason: 'unreachable', sizeBytes, message: 'Metricool could not be reached to open an upload: ' + message };
+    // The signed addresses of an earlier request, while they still work: an
+    // upload is resumed into the SAME transaction or not at all, because a
+    // reopened one is a different S3 upload id and its slices start again.
+    const stillGood = prior && priorFits && (prior.expiresAt == null || prior.expiresAt - Date.now() > 60_000) && prior.tx.uploadType === 'MULTIPART';
+    let tx: OpenedTransaction;
+    let txStatus = 200;
+    let etags: Record<string, string> = {};
+    if (stillGood && prior) {
+      tx = prior.tx;
+      etags = { ...prior.etags };
+    } else {
+      let opened: Opened | NotOpened;
+      try {
+        opened = await openTransaction({ contentType, bytes, parts: declared, blogId: opts.blogId, left });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        reportError('metricool-upload:transaction', e, { fileId: id });
+        return { ok: false, reason: 'unreachable', sizeBytes, message: 'Metricool could not be reached to open an upload: ' + message };
+      }
+      if (!opened.tx) {
+        const status = opened.status ?? 0;
+        return {
+          ok: false,
+          reason: status >= 500 ? 'unreachable' : 'refused',
+          status: opened.status,
+          sizeBytes,
+          message: 'Metricool answered ' + status + ' when asked to open an upload' +
+            (status === 404 ? ' — no such endpoint on this account' : '') +
+            (opened.detail ? '. It said: ' + opened.detail : '.'),
+        };
+      }
+      tx = opened.tx;
+      txStatus = opened.status;
+      // Banked at once for a streamed multipart upload: from here on, whatever
+      // this request manages is kept, and the hashes never have to be paid
+      // for again.
+      if (streamed && tx.uploadType === 'MULTIPART') {
+        await saveUploadState({
+          videoId: id, blogId: opts.blogId ?? null, sizeBytes: bytes, contentType, declared, tx, etags: {},
+          expiresAt: tx.expiresAt ?? Date.now() + DEFAULT_SIGNED_TTL_MS,
+        });
+      }
     }
-    if (!opened.tx) {
-      const status = opened.status ?? 0;
-      return {
-        ok: false,
-        reason: status >= 500 ? 'unreachable' : 'refused',
-        status: opened.status,
-        sizeBytes,
-        message: 'Metricool answered ' + status + ' when asked to open an upload' +
-          (status === 404 ? ' — no such endpoint on this account' : '') +
-          (opened.detail ? '. It said: ' + opened.detail : '.'),
-      };
-    }
-    const tx = opened.tx;
+    /** Whether what this request leaves behind is picked up by the next one. */
+    const resumable = streamed && tx.uploadType === 'MULTIPART';
+    const opened = { status: txStatus };
     const unreadable = (what: string): DirectUpload => {
       // The one failure whose fix is a key name. Types only: the reply may
       // carry a credential, and the shape is the diagnosis.
@@ -430,33 +470,62 @@ export async function uploadVideoToMetricool(
       if (tx.parts.length !== declared.length) {
         console.warn('metricool:upload-transaction signed', tx.parts.length, 'parts for', declared.length, 'declared');
       }
-      const results = await inBatches(tx.parts, whole ? PART_CONCURRENCY : STREAMED_PART_CONCURRENCY, async (part) => {
-        // The range and the checksum are the declared part's, by number — the
-        // web app pairs them by position, and a reply that renumbers them would
-        // fail S3's checksum rather than send the wrong bytes quietly.
-        const mine = declared[part.partNumber - 1];
-        if (!mine) return { ok: false as const, status: 0, detail: 'part ' + part.partNumber + ' was signed but never declared', partNumber: part.partNumber };
-        const start = part.startByte ?? mine.startByte;
-        const end = part.endByte ?? mine.endByte;
-        const blob = whole
-          ? whole.slice(start, end, contentType)
-          : await partFromDrive(id, start, end, contentType, Math.max(10_000, left() - 10_000));
-        const r = await putPart({ url: part.presignedUrl, blob, contentType, hash: mine.hash, left });
-        return { ...r, partNumber: part.partNumber };
-      });
-      for (const r of results) {
-        if (!r.ok) {
-          console.warn('metricool:upload part non-ok', r.partNumber, r.status, r.detail);
+      // The slices already in S3 from an earlier request are not sent again.
+      for (const [n, etag] of Object.entries(etags)) uploaded.push({ partNumber: Number(n), etag });
+      const todo = tx.parts.filter((p) => !etags[String(p.partNumber)]);
+      const concurrency = whole ? PART_CONCURRENCY : STREAMED_PART_CONCURRENCY;
+      for (let i = 0; i < todo.length; i += concurrency) {
+        // A resumable upload stops BEFORE a batch it cannot finish, with its
+        // ETags banked, rather than dying mid-slice with nothing to show. A
+        // staged one is small enough to run on; its timeouts still hold.
+        if (resumable && left() < BATCH_RESERVE_MS) {
+          await saveUploadEtags(id, etags);
+          const done = uploaded.length;
+          const total = tx.parts.length;
+          console.info('metricool:upload pending', done, 'of', total, 'parts; continues next pass');
           return {
-            ok: false, reason: r.status >= 500 ? 'unreachable' : 'refused', status: r.status || null, sizeBytes,
-            message: 'Metricool opened a multipart upload (' + tx.parts.length + ' parts) but part ' + r.partNumber + ' was refused by the storage it named' +
-              (r.status ? ' (' + r.status + ')' : '') + (r.detail ? ': ' + r.detail : '.'),
+            ok: false,
+            reason: 'pending',
+            sizeBytes,
+            progress: { done, total },
+            message: 'Uploading into Metricool: ' + done + ' of ' + total + ' slices are there (' +
+              mb(Math.min(bytes, done * declared[0].size)) + ' of ' + mb(bytes) + '). It continues on the next pass — the video sweep runs every ' +
+              '15 minutes, or press again — and the drafts get their video when it lands.',
           };
         }
-        if (!r.etag) {
-          return { ok: false, reason: 'unreadable', sizeBytes, message: 'Part ' + r.partNumber + ' went up but the storage returned no ETag, and the completion is made of ETags.' };
+        const batch = todo.slice(i, i + concurrency);
+        const results = await Promise.all(batch.map(async (part) => {
+          // The range and the checksum are the declared part's, by number — the
+          // web app pairs them by position, and a reply that renumbers them would
+          // fail S3's checksum rather than send the wrong bytes quietly.
+          const mine = declared[part.partNumber - 1];
+          if (!mine) return { ok: false as const, status: 0, detail: 'part ' + part.partNumber + ' was signed but never declared', partNumber: part.partNumber };
+          const start = part.startByte ?? mine.startByte;
+          const end = part.endByte ?? mine.endByte;
+          const blob = whole
+            ? whole.slice(start, end, contentType)
+            : await partFromDrive(id, start, end, contentType, Math.max(10_000, left() - 10_000));
+          const r = await putPart({ url: part.presignedUrl, blob, contentType, hash: mine.hash, left });
+          return { ...r, partNumber: part.partNumber };
+        }));
+        for (const r of results) {
+          if (!r.ok) {
+            console.warn('metricool:upload part non-ok', r.partNumber, r.status, r.detail);
+            const message = 'Metricool opened a multipart upload (' + tx.parts.length + ' parts) but part ' + r.partNumber + ' was refused by the storage it named' +
+              (r.status ? ' (' + r.status + ')' : '') + (r.detail ? ': ' + r.detail : '.');
+            // The addresses are no good; the hashes still are. Next pass reopens.
+            if (resumable) await resetUploadState(id, message);
+            return { ok: false, reason: r.status >= 500 ? 'unreachable' : 'refused', status: r.status || null, sizeBytes, message };
+          }
+          if (!r.etag) {
+            const message = 'Part ' + r.partNumber + ' went up but the storage returned no ETag, and the completion is made of ETags.';
+            if (resumable) await resetUploadState(id, message);
+            return { ok: false, reason: 'unreadable', sizeBytes, message };
+          }
+          uploaded.push({ partNumber: r.partNumber, etag: r.etag });
+          etags[String(r.partNumber)] = r.etag;
         }
-        uploaded.push({ partNumber: r.partNumber, etag: r.etag });
+        if (resumable) await saveUploadEtags(id, etags);
       }
     } else {
       // SIMPLE — or a type this code does not know, sent the simple way and
@@ -465,6 +534,10 @@ export async function uploadVideoToMetricool(
       // S3 PUT of the whole object actually checks.
       if (!tx.presignedUrl) return unreadable('a signed upload address');
       if (tx.uploadType !== 'SIMPLE') console.warn('metricool:upload-transaction unknown type, sent as SIMPLE', tx.uploadType);
+      // A streamed file resumed from its stored hashes has no whole-file hash;
+      // a SIMPLE reply for one is not expected, but a reply is read, not
+      // assumed, so the pass is made once more.
+      if (!tmp && !wholeHash && declared.length > 1) wholeHash = (await declarePartsFromDrive(id, bytes, Math.min(200_000, Math.max(10_000, left() - 20_000)))).wholeHash;
       const hash = declared.length === 1 ? declared[0].hash : (wholeHash ?? await sha256Base64(tmp as string, 0, bytes));
       const r = whole
         ? await putPart({ url: tx.presignedUrl, blob: whole, contentType, hash, left })
@@ -495,15 +568,12 @@ export async function uploadVideoToMetricool(
     if (!done.ok) {
       const detail = said(doneText);
       console.warn('metricool:upload-complete non-ok', done.status, detail.slice(0, 160));
-      return {
-        ok: false,
-        reason: done.status >= 500 ? 'unreachable' : 'refused',
-        status: done.status,
-        shape: tx.shape,
-        sizeBytes,
-        message: 'The bytes went up (' + mb(bytes) + ', ' + (tx.uploadType || 'simple').toLowerCase() + ') but Metricool answered ' + done.status +
-          ' to completing the upload, so it has no file yet' + (detail ? '. It said: ' + detail : '.'),
-      };
+      const message = 'The bytes went up (' + mb(bytes) + ', ' + (tx.uploadType || 'simple').toLowerCase() + ') but Metricool answered ' + done.status +
+        ' to completing the upload, so it has no file yet' + (detail ? '. It said: ' + detail : '.');
+      // A 5xx is theirs and this transaction may still complete next pass; a
+      // refusal means the transaction is spent, and the next pass reopens it.
+      if (resumable && done.status < 500) await resetUploadState(id, message);
+      return { ok: false, reason: done.status >= 500 ? 'unreachable' : 'refused', status: done.status, shape: tx.shape, sizeBytes, message };
     }
     const finished = readCompletedTransaction(doneText);
     // The converted copy is what the web app puts in a post; the raw object on
@@ -525,7 +595,9 @@ export async function uploadVideoToMetricool(
       console.warn('metricool:upload unfamiliar host', fileUrl.slice(0, 120));
     }
     console.info('metricool:upload complete', finished.convertedFileUrl ? 'converted' : 'raw', finished.shape);
-    return { ok: true, url: fileUrl, copyId: metricoolCopyId(finished.key || tx.key || new URL(fileUrl).pathname), bytes, sizeBytes };
+    const copyId = metricoolCopyId(finished.key || tx.key || new URL(fileUrl).pathname);
+    if (resumable) await finishUploadState(id, { fileUrl, copyId });
+    return { ok: true, url: fileUrl, copyId, bytes, sizeBytes };
   } catch (e) {
     reportError('metricool-upload:transfer', e, { fileId: id });
     const aborted = e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError');
