@@ -80,11 +80,13 @@ export async function attachPendingVideos(args: {
   actor: VideoActor;
   /** Register coordinates, so the line carries the row. */
   where?: Record<string, unknown>;
+  /** What is left of the caller's clock: a big upload stops before it, with its progress banked. */
+  budgetMs?: number;
 }): Promise<AttachResult> {
   const posts = await pendingVideoPosts(args.userId, args.draftId);
   if (!posts.length) return { pending: 0, attached: 0, failed: 0 };
 
-  const made = await ensureShareableVideo(args.videoLink, args.title, { userId: args.userId, actor: args.actor });
+  const made = await ensureShareableVideo(args.videoLink, args.title, { userId: args.userId, actor: args.actor, budgetMs: args.budgetMs });
   if (!made.ok) return { pending: posts.length, attached: 0, failed: posts.length, error: made.message };
 
   // Metricool discards a media URL it has not normalised, silently and with a

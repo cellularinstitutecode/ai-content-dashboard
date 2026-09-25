@@ -460,11 +460,72 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
             const out = await attachPendingVideos({
               userId: opts.userId, draftId: prior.draft_id, videoKey: videoKeyFor(spreadsheetId, tab.title, rowKey),
               videoLink, title: title || videoLink, actor: 'sweep', where,
+              // The sweep's own clock, not a fresh one: a big upload that ran
+              // on its own 270 s inside a sweep already 200 s in was killed
+              // by the platform mid-batch, and everything after it here —
+              // the register line, the next row — never ran.
+              budgetMs: Math.max(20_000, budgetMs - (Date.now() - started)),
             });
             if (out.pending) {
               attachedThisRun++;
               result.attached += out.attached;
               result.rows.push({ tab: tab.title, row, rowKey, title: title || videoLink, state: out.attached ? 'attached' : 'failed', message: out.error || ('Video attached to ' + out.attached + ' of ' + out.pending + ' waiting draft' + (out.pending === 1 ? '' : 's') + '.') });
+            }
+          }
+        }
+        // THE DRAFTS STILL OWED. A row whose video was uploading when it was
+        // prepared got its text-only drafts and nothing for the networks that
+        // need the video — recorded per network as upload_pending (or
+        // no_video). Later passes only attached a video to drafts that
+        // existed, so those networks were never made. Once the copy exists,
+        // they are: onto the same draft, deduped by the hand-off itself.
+        const priorOutcomes = Array.isArray((existing as { metricool?: unknown } | null)?.metricool)
+          ? ((existing as { metricool: PublishOutcome[] }).metricool)
+          : [];
+        const owedNets = priorOutcomes.filter((p) => !p.ok && (p.reason === 'upload_pending' || p.reason === 'no_video')).map((p) => p.network);
+        const owedFileId = parseDriveFileId(videoLink);
+        if (owedNets.length && owedFileId && prior.draft_id && !opts.dryRun && attachedThisRun < ATTACH_PER_RUN
+            && budgetMs - (Date.now() - started) > 30_000) {
+          const copyNow = await cachedPublicCopy(owedFileId);
+          if (copyNow) {
+            const { data: d } = await admin.from('drafts').select('pack').eq('id', prior.draft_id).maybeSingle().then((x) => x, () => ({ data: null }));
+            const pack = ((d as { pack?: Record<string, unknown> | null } | null)?.pack || {}) as { linkedin?: unknown; tiktok?: unknown; title?: unknown };
+            const sheetCopy = existingCopyText(pick(rec, 'copy', 'caption'));
+            const linkedin = typeof pack.linkedin === 'string' && pack.linkedin.trim() ? pack.linkedin : sheetCopy;
+            const tiktok = typeof pack.tiktok === 'string' && pack.tiktok.trim() ? pack.tiktok : sheetCopy;
+            if (linkedin || tiktok) {
+              attachedThisRun++;
+              const made = await handOffToMetricool({
+                userId: opts.userId,
+                prepared: { linkedin: linkedin || tiktok, tiktok: tiktok || linkedin, draftId: prior.draft_id, title: typeof pack.title === 'string' ? pack.title : null },
+                networks: owedNets,
+                videoLink,
+                title: title || videoLink,
+                format: pick(rec, 'formato', 'format'),
+                sheetYoutube: pick(rec, 'youtube'),
+                published: publishedNetworks(VIDEO_NETWORK_COLUMNS, (col: string) => pick(rec, col)),
+                publicationDate: await slotForNextRow(),
+                rowLabel: tab.title + ' · row ' + row,
+                budgetMs: Math.max(20_000, budgetMs - (Date.now() - started)),
+              });
+              const kept = priorOutcomes.filter((p) => !owedNets.includes(p.network));
+              await updateRun(admin, { spreadsheetId, tab: tab.title, rowKey }, { metricool: [...kept, ...made], updated_at: new Date().toISOString() });
+              const sentNow = made.filter((p) => p.ok);
+              const stillPending = made.length > 0 && made.every((p) => !p.ok && p.reason === 'upload_pending');
+              result.metricoolDrafts += sentNow.length;
+              result.rows.push({
+                tab: tab.title, row, rowKey, title: title || videoLink,
+                state: sentNow.length ? 'queued_existing' : stillPending ? 'skipped' : 'failed',
+                draftId: prior.draft_id, metricool: made,
+                message: sentNow.length
+                  ? 'The video landed; ' + sentNow.map((p) => p.network).join(', ') + ' drafted.'
+                  : (made.find((p) => !p.ok)?.message || 'The owed drafts could not be made.'),
+              });
+              void recordVideoEvent({
+                userId: opts.userId, videoKey: videoKeyFor(spreadsheetId, tab.title, rowKey), event: 'queued', actor: 'sweep',
+                title: title || videoLink, link: videoLink,
+                detail: { ...where, owed: owedNets, networks: sentNow.map((p) => p.network), refused: made.filter((p) => !p.ok).map((p) => ({ network: p.network, reason: p.reason, message: p.message })) },
+              });
             }
           }
         }
@@ -712,6 +773,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
               // the calendar could not be read, and the hand-off then reports
               // that per network exactly as it always has.
               publicationDate: await slotForNextRow(),
+              budgetMs: Math.max(20_000, budgetMs - (Date.now() - started)),
             });
 
         // ESTADO IA last, once both the keyword coverage and the hand-off are
@@ -1275,6 +1337,8 @@ export async function handOffToMetricool(args: {
   publicationDate?: string;
   /** "2026 CELLULAR HOPE · row 179", for the sentence a skipped network gets. */
   rowLabel?: string | null;
+  /** What is left of the caller's clock. A big upload stops before it, with its progress banked. */
+  budgetMs?: number;
 }): Promise<PublishOutcome[]> {
   const { userId, prepared, networks, videoLink, title: sheetTitle, format, sheetYoutube, published = [] } = args;
   // The drafted title when there is one, else the sheet cell. Two of the three
@@ -1293,25 +1357,44 @@ export async function handOffToMetricool(args: {
   const wantsVideo = networksFor(networks, true, format, published).length > 0;
   let mediaUrl: string | null = null;
   let mediaFileId: string | null = null;
+  /** Why there is no video, when there is none: the networks owed one say so. */
+  let noVideo: { code: string; message: string } | null = null;
   if (wantsVideo && fileId) {
     // Made once per video, not once per run, and VERIFIED before it is recorded
     // — lib/media-library.ts streams the file into the app's bucket and reads
     // its first bytes back the way Metricool will. This used to be an inline
     // Drive copy handing over a download link that Google answered with a web
     // page for any reel over ~100 MB.
-    const made = await ensureShareableVideo(videoLink, title, { userId, actor: 'sweep' });
+    const made = await ensureShareableVideo(videoLink, title, { userId, actor: 'sweep', budgetMs: args.budgetMs });
     if (made.ok) {
       mediaFileId = made.fileId;
       mediaUrl = made.url;
     } else {
-      // Not fatal here: the networks that need a video are dropped below, and
+      // Not fatal here: the networks that need a video are held below, and
       // the text-only ones still get their drafts. The register carries why.
-      reportError('video-sweep:media-copy', new Error(made.message), { fileId });
+      noVideo = { code: made.code || made.reason, message: made.message };
+      if (made.code !== 'upload_pending') reportError('video-sweep:media-copy', new Error(made.message), { fileId });
     }
   }
 
   const wanted = networksFor(networks, Boolean(mediaUrl), format, published);
-  if (!wanted.length) return [];
+  // THE NETWORKS STILL OWED A DRAFT. networksFor silently drops the ones that
+  // need a video when there is none, and nothing downstream ever knew: the
+  // row read as prepared, the LinkedIn draft existed, and YouTube and TikTok
+  // were never made — not on this pass, and not on any later one, because
+  // later passes only attach a video to drafts that exist. Named here, so the
+  // sweep can make them once the video lands (a pending upload) or a person
+  // can see why they are missing (no copy at all).
+  const owed = networksFor(networks, true, format, published).filter((n) => !wanted.includes(n));
+  const held: PublishOutcome[] = owed.map((network) => ({
+    network,
+    ok: false as const,
+    reason: noVideo?.code === 'upload_pending' ? ('upload_pending' as const) : ('no_video' as const),
+    message: noVideo
+      ? (noVideo.code === 'upload_pending' ? noVideo.message + ' This draft is made when it lands.' : 'No video could be attached: ' + noVideo.message)
+      : 'This network needs the video, and the row has none to attach.',
+  }));
+  if (!wanted.length) return held;
 
   // ONE DRAFT PER VIDEO AND NETWORK while it waits for approval. Four paths
   // reach this hand-off — the sweep's two branches, Prepare, Attach videos —
@@ -1324,6 +1407,7 @@ export async function handOffToMetricool(args: {
   const gone = networksAlreadyPublished(already, wanted);
   const split = networksAlreadyQueued(already, gone.free);
   const out: PublishOutcome[] = [
+    ...held,
     ...gone.published.map((network) => ({
       network, ok: false as const, reason: 'already_published' as const,
       message: (args.rowLabel ? args.rowLabel + ' has' : 'This video has') + ' already been published on ' + network + ', so nothing was sent \u2014 posting it again would publish the same video twice.',

@@ -532,9 +532,23 @@ export function readOpenedTransaction(raw: string): OpenedTransaction {
     uploadId: str(node.uploadId),
     parts,
     fileUrl: (() => { const f = str(node.fileUrl); return f && isHttpUrl(f) ? f : null; })(),
-    expiresAt: readExpiresAt(node.expiresAt) ?? signedUrlExpiry(parts[0]?.presignedUrl || signed),
+    expiresAt: earliestExpiry([readExpiresAt(node.expiresAt), signedUrlExpiry(parts[0]?.presignedUrl || signed)]),
     shape,
   };
+}
+
+/**
+ * The soonest of the expiries on offer, ignoring any that cannot be a time.
+ *
+ * `expiresAt` in the reply is not documented: a duration in seconds (3600)
+ * read as an epoch is 1970, and an upload judged by that would be reopened
+ * on every pass — its slices thrown away each time. Anything before 2020 is
+ * not a time this code can be running at, and is not used.
+ */
+export function earliestExpiry(candidates: readonly (number | null | undefined)[]): number | null {
+  const floor = Date.UTC(2020, 0, 1);
+  const good = candidates.filter((c): c is number => typeof c === 'number' && Number.isFinite(c) && c >= floor);
+  return good.length ? Math.min(...good) : null;
 }
 
 /** What a finished part is reported as: its number and the ETag S3 answered with. */
