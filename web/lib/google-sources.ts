@@ -900,11 +900,26 @@ export async function downloadDriveMedia(fileId: string, maxBytes = MEDIA_MAX_BY
   return { ok: true, media: { bytes, contentType: meta.mimeType, name: meta.name, sizeBytes: bytes.byteLength } };
 }
 
-export async function downloadDriveFile(fileId: string): Promise<{ bytes: Buffer; contentType: string; name: string }> {
+export const DRIVE_FILE_MAX_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Read one Drive file.
+ *
+ * `maxBytes` is a guard against pulling something absurd into a serverless
+ * function, not a statement about what the app can handle. Callers that scale
+ * the picture down before they use it - the captioner and the palette probe -
+ * raise it, because the folder's best photography is 30-45 MB camera exports
+ * and the default silently made those files invisible.
+ */
+export async function downloadDriveFile(
+  fileId: string,
+  maxBytes: number = DRIVE_FILE_MAX_BYTES,
+): Promise<{ bytes: Buffer; contentType: string; name: string }> {
   const metaRes = await gfetch(DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?fields=' + encodeURIComponent('id,name,mimeType,size') + '&supportsAllDrives=true');
   const meta = await json<{ name: string; mimeType: string; size?: string }>(metaRes, 'file metadata');
   if (!/^image\//.test(meta.mimeType || '')) throw new GoogleSourceError(415, 'not an image');
-  if (meta.size && Number(meta.size) > 25 * 1024 * 1024) throw new GoogleSourceError(413, 'image larger than 25 MB');
+  if (meta.size && Number(meta.size) > maxBytes)
+    throw new GoogleSourceError(413, 'image larger than ' + Math.round(maxBytes / 1048576) + ' MB');
   const res = await gfetch(DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true', {}, 60000);
   if (!res.ok) throw new GoogleSourceError(res.status, 'file download failed: HTTP ' + res.status);
   const bytes = Buffer.from(await res.arrayBuffer());
