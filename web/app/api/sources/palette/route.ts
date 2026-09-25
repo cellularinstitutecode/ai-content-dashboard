@@ -8,6 +8,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { downloadDriveFile, listFolderImages, sourcesConfigured } from '@/lib/google-sources';
+
+// The camera exports in the folder run 30-45 MB. Both of these routes scale the
+// picture down before they look at it, so the only thing the ceiling has to do
+// here is refuse something pathological.
+const BIG_FILE_MAX_BYTES = 64 * 1024 * 1024;
 import { measureImage } from '@/lib/palette-measure';
 import { BRAND_TARGET, gradeFor } from '@/lib/palette';
 import { reportError } from '@/lib/report';
@@ -30,7 +35,7 @@ export async function GET(req: NextRequest) {
     const rows: Array<Record<string, unknown>> = [];
     for (const f of slice) {
       try {
-        const file = await downloadDriveFile(f.id);
+        const file = await downloadDriveFile(f.id, BIG_FILE_MAX_BYTES);
         const ext = /png$/i.test(file.contentType) ? 'png' : /webp$/i.test(file.contentType) ? 'webp' : 'jpg';
         const stats = await measureImage(file.bytes, ext);
         if (!stats) { rows.push({ id: f.id, name: f.name, verdict: 'unreadable' }); continue; }

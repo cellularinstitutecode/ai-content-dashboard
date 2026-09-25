@@ -11,6 +11,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { downloadDriveFile, listFolderImages, sourcesConfigured } from '@/lib/google-sources';
+
+// The camera exports in the folder run 30-45 MB. Both of these routes scale the
+// picture down before they look at it, so the only thing the ceiling has to do
+// here is refuse something pathological.
+const BIG_FILE_MAX_BYTES = 64 * 1024 * 1024;
 import { PILLARS } from '@/lib/content-strategy';
 import { captionSystemPrompt, coverSafe, inventory, parseCaption, pillarsFor, type Caption } from '@/lib/library-caption';
 import { smallJpeg } from '@/lib/image-small';
@@ -76,7 +81,7 @@ export async function GET(req: NextRequest) {
     const caps: Caption[] = [];
     for (const f of slice) {
       try {
-        const file = await downloadDriveFile(f.id);
+        const file = await downloadDriveFile(f.id, BIG_FILE_MAX_BYTES);
         const ext = /png$/i.test(file.contentType) ? 'png' : /webp$/i.test(file.contentType) ? 'webp' : 'jpg';
         // A 30 MB camera export is far more than the model needs and more than
         // the request will carry, so it is scaled first rather than skipped —
