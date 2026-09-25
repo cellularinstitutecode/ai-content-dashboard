@@ -444,9 +444,47 @@ export type OpenedTransaction = {
   parts: SignedPart[];
   /** The object's address once the bytes are there. */
   fileUrl: string | null;
+  /**
+   * When the signed addresses stop working, as epoch ms, or null.
+   *
+   * From the reply's own `expiresAt` when it carries one, else from the first
+   * signed address's X-Amz-Date + X-Amz-Expires. An upload resumed after this
+   * must reopen the transaction (its hashes are kept; only the addresses are
+   * asked for again).
+   */
+  expiresAt: number | null;
   /** The reply's structure in types, for when a field above is null. */
   shape: string;
 };
+
+/**
+ * When a pre-signed S3 address expires, as epoch ms, from its own query.
+ *
+ * X-Amz-Date is `YYYYMMDDTHHMMSSZ` and X-Amz-Expires is seconds from it.
+ * Null when either is missing or unreadable: an unknown expiry is not a
+ * guess, it is a default the caller chooses.
+ */
+export function signedUrlExpiry(url: string | null | undefined): number | null {
+  let u: URL;
+  try { u = new URL(String(url || '')); } catch { return null; }
+  const date = u.searchParams.get('X-Amz-Date') || '';
+  const expires = Number(u.searchParams.get('X-Amz-Expires'));
+  const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(date);
+  if (!m || !Number.isFinite(expires) || expires <= 0) return null;
+  const at = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
+  return Number.isFinite(at) ? at + expires * 1000 : null;
+}
+
+/** An `expiresAt` value as the API might write it: epoch seconds, epoch ms, or ISO. */
+function readExpiresAt(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v < 1e11 ? v * 1000 : v;
+  if (typeof v === 'string' && v.trim()) {
+    if (/^\d+$/.test(v.trim())) return readExpiresAt(Number(v));
+    const t = Date.parse(v);
+    return Number.isFinite(t) ? t : null;
+  }
+  return null;
+}
 
 /** The reply's payload: under `data`, as the API answers, or bare. */
 function payloadOf(raw: string): { node: Record<string, unknown> | null; data: unknown } {
@@ -466,7 +504,7 @@ const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFi
 export function readOpenedTransaction(raw: string): OpenedTransaction {
   const { node, data } = payloadOf(raw);
   const shape = describeShape(data);
-  if (!node) return { uploadType: null, presignedUrl: null, key: null, bucket: null, uploadId: null, parts: [], fileUrl: null, shape };
+  if (!node) return { uploadType: null, presignedUrl: null, key: null, bucket: null, uploadId: null, parts: [], fileUrl: null, expiresAt: null, shape };
   const type = String(node.uploadType || '').trim().toUpperCase();
   const parts: SignedPart[] = [];
   if (Array.isArray(node.parts)) {
@@ -485,14 +523,16 @@ export function readOpenedTransaction(raw: string): OpenedTransaction {
     parts.sort((a, b) => a.partNumber - b.partNumber);
   }
   const presignedUrl = str(node.presignedUrl);
+  const signed = presignedUrl && isHttpUrl(presignedUrl) ? presignedUrl : null;
   return {
     uploadType: type === 'SIMPLE' || type === 'MULTIPART' ? type : null,
-    presignedUrl: presignedUrl && isHttpUrl(presignedUrl) ? presignedUrl : null,
+    presignedUrl: signed,
     key: str(node.key),
     bucket: str(node.bucket),
     uploadId: str(node.uploadId),
     parts,
     fileUrl: (() => { const f = str(node.fileUrl); return f && isHttpUrl(f) ? f : null; })(),
+    expiresAt: readExpiresAt(node.expiresAt) ?? signedUrlExpiry(parts[0]?.presignedUrl || signed),
     shape,
   };
 }

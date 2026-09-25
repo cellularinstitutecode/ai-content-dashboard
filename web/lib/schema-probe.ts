@@ -123,6 +123,16 @@ export const REQUIRED_SCHEMA: SchemaProbe[] = [
     breaks: 'attaching any video to any post — the picker lists the videos that have a shareable copy by reading this column, so it is always empty',
   },
   {
+    // Where a Metricool upload that one request could not finish is kept
+    // (lib/metricool-upload-state.ts). Without it every pass over a reel past
+    // the scratch disk starts from the first slice again and never lands.
+    table: 'metricool_uploads',
+    column: 'video_id',
+    kind: 'table',
+    file: 'supabase/metricool-uploads.sql',
+    breaks: 'resuming a Metricool upload across passes — a reel over 360 MB is hashed and started again on every pass and can never finish',
+  },
+  {
     table: 'posts',
     column: 'media_drive_file_id',
     kind: 'column',

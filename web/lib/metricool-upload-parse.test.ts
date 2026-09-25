@@ -33,6 +33,7 @@ import {
   partRanges,
   readCompletedTransaction,
   readOpenedTransaction,
+  signedUrlExpiry,
   readUploadTransaction,
   refusedFields,
   transactionBody,
@@ -347,7 +348,7 @@ test('above the scratch disk the file is streamed, not refused', () => {
   // the disk is not needed: one pass to hash, then each slice by Range.
   const lib = src('lib/metricool-upload.ts');
   assert.match(lib, /export const DIRECT_UPLOAD_STAGE_BYTES = DISK_SAFE_BYTES/, 'the disk path keeps its ceiling');
-  assert.match(lib, /export const DIRECT_UPLOAD_MAX_BYTES = 2 \* 1024 \* 1024 \* 1024/, 'the route’s ceiling is time, not storage');
+  assert.match(lib, /export const DIRECT_UPLOAD_MAX_BYTES = 5 \* 1024 \* 1024 \* 1024/, 'the route’s ceiling is one hashing pass, not storage');
   assert.match(lib, /const streamed = sizeBytes != null && sizeBytes > DIRECT_UPLOAD_STAGE_BYTES/, 'streamed only above the disk, and only with a known size');
   assert.match(lib, /await declarePartsFromDrive\(id, sizeBytes/, 'one pass to hash');
   assert.match(lib, /await partFromDrive\(id, start, end, contentType/, 'then each slice by Range request');
@@ -356,6 +357,50 @@ test('above the scratch disk the file is streamed, not refused', () => {
   assert.match(lib, /'content-length': String\(input\.bytes\)/, 'a whole-file PUT names its length');
   // The staged path is untouched: same download, same hashing, same order.
   assert.match(lib, /await declareParts\(tmp, bytes\)/);
+});
+
+test('a signed address says when it expires, and the opened reply carries it', () => {
+  // X-Amz-Date=20260921T000000Z + X-Amz-Expires=3600 → 01:00 UTC that day.
+  assert.equal(signedUrlExpiry(CAPTURED_SIGNED), Date.UTC(2026, 8, 21, 1, 0, 0));
+  assert.equal(signedUrlExpiry('https://x.example/no-signature'), null);
+  assert.equal(signedUrlExpiry('https://x.example/?X-Amz-Date=garbage&X-Amz-Expires=3600'), null);
+  assert.equal(signedUrlExpiry(''), null);
+  // The reply's own expiresAt wins, in any of the ways an API writes one.
+  const at = Date.UTC(2026, 8, 25, 12, 0, 0);
+  for (const v of [at, Math.floor(at / 1000), new Date(at).toISOString(), String(at)]) {
+    const tx = readOpenedTransaction(JSON.stringify({ data: { uploadType: 'MULTIPART', uploadId: 'u', key: 'k', parts: [{ partNumber: 1, presignedUrl: CAPTURED_SIGNED }], expiresAt: v } }));
+    assert.equal(tx.expiresAt, at, JSON.stringify(v));
+  }
+  // Without one, the first signed address decides.
+  const tx = readOpenedTransaction(JSON.stringify({ data: { uploadType: 'MULTIPART', uploadId: 'u', key: 'k', parts: [{ partNumber: 1, presignedUrl: CAPTURED_SIGNED }] } }));
+  assert.equal(tx.expiresAt, Date.UTC(2026, 8, 21, 1, 0, 0));
+  assert.equal(readOpenedTransaction('{"data":{"uploadType":"SIMPLE","presignedUrl":"https://x.example/plain"}}').expiresAt, null);
+});
+
+test('a reel one request cannot finish is resumed by the next, never restarted', () => {
+  // Row 200: 2785 MB. No single 300-second request moves that, and the first
+  // version refused it past 2 GB. A multipart upload resumes by construction.
+  const lib = src('lib/metricool-upload.ts');
+  assert.match(lib, /const prior = streamed \? await loadUploadState\(id\) : null/, 'an earlier request’s state is looked for');
+  assert.match(lib, /declared = prior\.declared/, 'its hashes are reused — the expensive pass is paid once');
+  assert.match(lib, /prior\.expiresAt - Date\.now\(\) > 60_000/, 'its signed addresses only while they are good');
+  assert.match(lib, /const todo = tx\.parts\.filter\(\(p\) => !etags\[String\(p\.partNumber\)\]\)/, 'slices already there are not sent again');
+  assert.match(lib, /if \(resumable && left\(\) < BATCH_RESERVE_MS\)/, 'it stops before a batch it cannot finish');
+  assert.match(lib, /reason: 'pending'/, 'and says so, as progress rather than failure');
+  assert.match(lib, /if \(resumable\) await saveUploadEtags\(id, etags\)/, 'banking the ETags after every batch');
+  assert.match(lib, /if \(resumable\) await finishUploadState\(id, \{ fileUrl, copyId \}\)/, 'and closing the record when it lands');
+  assert.match(lib, /if \(resumable\) await resetUploadState\(id, message\)/, 'a refused slice keeps the hashes and drops the addresses');
+  // The copy maker passes "pending" up as its own thing, and tries no other route meanwhile.
+  const media = src('lib/media-library.ts');
+  assert.match(media, /direct\.reason === 'pending'/);
+  assert.match(media, /code: 'upload_pending'/);
+  // The state lives in its own table, named for the health check.
+  const probe = src('lib/schema-probe.ts');
+  assert.match(probe, /table: 'metricool_uploads'/);
+  assert.match(probe, /file: 'supabase\/metricool-uploads\.sql'/);
+  const sql = src('supabase/metricool-uploads.sql');
+  assert.match(sql, /create table if not exists public\.metricool_uploads/);
+  for (const col of ['declared jsonb', 'transaction jsonb', 'etags jsonb', 'expires_at timestamptz']) assert.ok(sql.includes(col), col);
 });
 
 test('the copy maker tries the upload only when the bucket would not take the file', () => {

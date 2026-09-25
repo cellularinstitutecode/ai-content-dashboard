@@ -84,7 +84,11 @@ published something.
      opens an upload transaction (`PUT /v2/media/s3/upload-transactions`), is
      handed a pre-signed S3 address, and puts the bytes there itself — staged
      on the function's scratch disk up to 360 MB, and above that streamed out
-     of Drive in 25 MB slices with no disk at all, up to 2 GB. The
+     of Drive in 25 MB slices with no disk at all, up to 5 GB. A reel one
+     request cannot finish is **resumed** by the next pass of the sweep: the
+     slices already in Metricool are kept in the `metricool_uploads` table
+     (`supabase/metricool-uploads.sql`), and the row's drafts get their video
+     when the last slice lands. The
      resulting Metricool-hosted URL goes into the post as is — it needs no
      host of ours and no normalise step. `METRICOOL_DIRECT_UPLOAD=off` turns it
      off; when it fails, the routes above run exactly as before and the refusal

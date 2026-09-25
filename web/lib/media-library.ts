@@ -218,6 +218,20 @@ export async function ensureShareableVideo(
     let directUpload: DirectUploadState = { available: !staged.ok && directUploadPossible(sizeBytes) };
     if (directUpload.available) {
       direct = await uploadVideoToMetricool(fileId, title, { blogId: who?.blogId });
+      if (!direct.ok && direct.reason === 'pending') {
+        // NOT A FAILURE, and not a refusal either: the slices so far are in
+        // Metricool and banked, and the next pass — the 15-minute sweep, or
+        // the same button — carries on from the first one missing. Nothing
+        // else is tried meanwhile: a Drive copy of a 2.7 GB reel is a link
+        // Metricool hands back, and a second world-readable copy besides.
+        if (who?.userId) {
+          void recordVideoEvent({
+            userId: who.userId, videoKey: driveVideoKey(fileId), event: 'copy_failed', actor: who.actor ?? 'unknown',
+            title, link: videoLink, detail: { reason: 'upload_pending', error: direct.message, ...(direct.progress || {}) },
+          });
+        }
+        return { ok: false, reason: 'failed', code: 'upload_pending', message: direct.message };
+      }
       if (!direct.ok) {
         reportError('media-library:direct-upload', new Error(direct.message), {
           fileId, reason: direct.reason, status: String(direct.status ?? ''), shape: direct.shape ?? '',
