@@ -56,6 +56,7 @@ import { metricoolConfigured, metricoolFetch } from '@/lib/metricool';
 import {
   bareEtag,
   completionBody,
+  derivedConvertedUrl,
   directUploadEnabled,
   isMetricoolHostedUrl,
   metricoolCopyId,
@@ -68,6 +69,7 @@ import {
   type UploadedPart,
 } from '@/lib/metricool-upload-parse';
 import { redact, reportError } from '@/lib/report';
+import { verifyPlayableMp4 } from '@/lib/media-verify';
 import {
   claimUpload, finishUploadState, loadUploadState, releaseUpload, resetUploadState, saveHashingProgress, saveUploadEtags, saveUploadState,
 } from '@/lib/metricool-upload-state';
@@ -618,18 +620,69 @@ export async function uploadVideoToMetricool(
     // 4. COMPLETION. Neither kind is a file Metricool knows about until the
     // transaction is completed: a multipart upload is not even an object, and a
     // simple one is not converted onto static.metricool.com.
+    //
+    // ROW 200 GOT HERE AND THE APP GAVE UP. The whole 2785 MB went up in one
+    // request, and the completion — which CONVERTS the video before it
+    // answers — was given 30 seconds like any other small call. "Metricool
+    // timed out after 30s" was the last word, the state was left as if the
+    // slices were still owed, and the next pass would have asked Metricool to
+    // complete an upload it had already completed. So: the completion gets
+    // the whole of what is left; a timeout there is "still converting", not a
+    // failure, and the state is kept; and before asking again the converted
+    // copy is looked for at the address the key implies, because a previous
+    // PATCH may have finished after the app stopped listening.
     if (left() < 5_000) return { ok: false, reason: 'failed', sizeBytes, message: 'The bytes went up but there was no time left to complete the upload.' };
+    const alreadyThere = derivedConvertedUrl(tx.key);
+    const uploadedNothingHere = resumable && uploaded.length === tx.parts.length && Object.keys(prior?.etags || {}).length === tx.parts.length;
+    if (alreadyThere && uploadedNothingHere) {
+      const probe = await verifyPlayableMp4(alreadyThere, null, 15_000);
+      if (probe.ok) {
+        console.info('metricool:upload already converted', alreadyThere.slice(0, 120));
+        const copyId = metricoolCopyId(tx.key || new URL(alreadyThere).pathname);
+        if (resumable) await finishUploadState(id, { fileUrl: alreadyThere, copyId });
+        return { ok: true, url: alreadyThere, copyId, bytes, sizeBytes };
+      }
+    }
     const completion = completionBody(tx, uploaded);
-    const done = await metricoolFetch(TRANSACTIONS_PATH, {
-      method: 'PATCH',
-      body: JSON.stringify(completion),
-      timeoutMs: Math.min(CALL_MS, Math.max(5_000, left())),
-      blogId: opts.blogId,
-    });
-    const doneText = await done.text();
+    let done: Response;
+    let doneText = '';
+    try {
+      done = await metricoolFetch(TRANSACTIONS_PATH, {
+        method: 'PATCH',
+        body: JSON.stringify(completion),
+        // Not a small call: Metricool converts the video before it answers.
+        timeoutMs: Math.max(CALL_MS, left() - 5_000),
+        blogId: opts.blogId,
+      });
+      doneText = await done.text();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (/timed out|timeout|abort/i.test(message)) {
+        // Still converting. The slices are all there and banked; the next
+        // pass looks for the converted copy first and asks again only if it
+        // is not there yet.
+        console.warn('metricool:upload-complete timed out', Math.round((left() + 5_000) / 1000), 's left when asked');
+        return {
+          ok: false, reason: 'pending', sizeBytes, progress: { done: tx.parts.length || 1, total: tx.parts.length || 1 },
+          message: 'Every slice of the ' + mb(bytes) + ' video is in Metricool, and Metricool was still converting it when this request ran out of time. ' +
+            'Nothing is lost: the next pass — the video sweep runs every 15 minutes, or press again — checks for the converted copy and finishes the post.',
+        };
+      }
+      throw e;
+    }
     if (!done.ok) {
       const detail = said(doneText);
       console.warn('metricool:upload-complete non-ok', done.status, detail.slice(0, 160));
+      // A refusal after an earlier attempt may mean the earlier one went
+      // through: look for the converted copy before treating it as spent.
+      if (alreadyThere && uploadedNothingHere) {
+        const probe = await verifyPlayableMp4(alreadyThere, null, 15_000);
+        if (probe.ok) {
+          const copyId = metricoolCopyId(tx.key || new URL(alreadyThere).pathname);
+          if (resumable) await finishUploadState(id, { fileUrl: alreadyThere, copyId });
+          return { ok: true, url: alreadyThere, copyId, bytes, sizeBytes };
+        }
+      }
       const message = 'The bytes went up (' + mb(bytes) + ', ' + (tx.uploadType || 'simple').toLowerCase() + ') but Metricool answered ' + done.status +
         ' to completing the upload, so it has no file yet' + (detail ? '. It said: ' + detail : '.');
       // A 5xx is theirs and this transaction may still complete next pass; a

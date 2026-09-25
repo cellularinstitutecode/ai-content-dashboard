@@ -597,6 +597,23 @@ export function readCompletedTransaction(raw: string): CompletedTransaction {
   };
 }
 
+/**
+ * Where Metricool's converted copy lives, from the object key alone.
+ *
+ * The captured completion pairs key `planner/<user>/<yyyymm>/<id>.mp4` with
+ * `https://static.metricool.com/video/<user>/<yyyymm>/<id>.mp4`. Needed when
+ * the completion's reply never arrived — Metricool converts a 2.7 GB video
+ * synchronously inside the PATCH, and a 30-second wait gave up on it — so
+ * the next pass can look for the copy before asking Metricool to complete an
+ * upload it has already completed. Null for a key of any other shape: this
+ * is a place to LOOK, never an address to post unverified.
+ */
+export function derivedConvertedUrl(key: string | null | undefined): string | null {
+  const k = String(key || '').trim().replace(/^\/+/, '');
+  const m = /^planner\/(.+\.(?:mp4|mov|m4v))$/i.exec(k);
+  return m ? 'https://static.metricool.com/video/' + m[1] : null;
+}
+
 /** S3 quotes its ETags; the completion wants them bare, as the web app strips them. */
 export function bareEtag(header: string | null | undefined): string | null {
   const v = String(header || '').trim().replace(/^W\//, '').replace(/"/g, '');
