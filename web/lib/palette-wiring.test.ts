@@ -47,3 +47,22 @@ test('captioning asks for the small image, not the 30 MB original', () => {
   assert.match(caption, /detail: 'low'/);
   assert.match(caption, /skipped: 'too_large'/, 'an oversized file is reported, not silently dropped');
 });
+
+const small = readFileSync(new URL('./image-small.ts', import.meta.url), 'utf8');
+const measure2 = readFileSync(new URL('./palette-measure.ts', import.meta.url), 'utf8');
+
+test('a 30 MB camera export is scaled, not skipped', () => {
+  assert.match(caption, /smallJpeg/);
+  assert.doesNotMatch(caption, /if \(file\.bytes\.length > 12 \* 1024 \* 1024\) \{\s*rows\.push/,
+    'the size check must come after the downscale attempt, not instead of it');
+});
+
+test('both passes allow long enough for a large decode', () => {
+  assert.match(small, /timeout: 90_000/);
+  assert.match(measure2, /timeout: 90_000/);
+});
+
+test('downscaling fails soft — the caller keeps the original bytes', () => {
+  assert.match(small, /catch \{\s*return null;/);
+  assert.match(small, /finally \{/);
+});
