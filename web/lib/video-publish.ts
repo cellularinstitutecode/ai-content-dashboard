@@ -66,7 +66,9 @@ export type PublishOutcome = {
   /** False when Metricool took the post but the `posts` row could not be written — the guard cannot see it. */
   recorded?: boolean;
   /** Why it was not sent — a compliance refusal reads differently from an outage. */
-  reason?: 'not_configured' | 'compliance' | 'metricool_error' | 'too_long' | 'already_queued' | 'already_published' | 'media_unverified' | 'no_video' | 'needs_media' | 'wrong_aspect' | 'past';
+  reason?: 'not_configured' | 'compliance' | 'metricool_error' | 'too_long' | 'already_queued' | 'already_published' | 'media_unverified' | 'no_video' | 'needs_media' | 'wrong_aspect' | 'past'
+    /** The video is still uploading into Metricool; this network's draft is owed and made on a later pass. */
+    | 'upload_pending';
   message?: string;
 };
 

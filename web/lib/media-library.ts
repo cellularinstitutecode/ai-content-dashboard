@@ -153,7 +153,7 @@ export async function ensureShareableVideo(
    * (the direct upload lands it in that brand's library). Optional so existing
    * callers keep compiling.
    */
-  who?: { userId?: string; actor?: VideoActor; blogId?: string | null },
+  who?: { userId?: string; actor?: VideoActor; blogId?: string | null; /** What is left of the caller's own clock. */ budgetMs?: number },
 ): Promise<
   | { ok: true; url: string; fileId: string; created: boolean }
   | { ok: false; reason: 'not_drive' | 'failed'; code?: string; message: string }
@@ -217,7 +217,7 @@ export async function ensureShareableVideo(
     // exactly as they did, and the refusal says what the upload answered.
     let directUpload: DirectUploadState = { available: !staged.ok && directUploadPossible(sizeBytes) };
     if (directUpload.available) {
-      direct = await uploadVideoToMetricool(fileId, title, { blogId: who?.blogId });
+      direct = await uploadVideoToMetricool(fileId, title, { blogId: who?.blogId, budgetMs: who?.budgetMs });
       if (!direct.ok && direct.reason === 'pending') {
         // NOT A FAILURE, and not a refusal either: the slices so far are in
         // Metricool and banked, and the next pass — the 15-minute sweep, or

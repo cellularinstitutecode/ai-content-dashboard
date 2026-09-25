@@ -44,3 +44,22 @@ create table if not exists public.metricool_uploads (
 );
 
 alter table public.metricool_uploads enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- Added after the first run (re-run this whole file; every statement is safe).
+--
+-- HASHING RESUMES TOO. The one pass that had to fit a single request was the
+-- hashing pass, and a 2.7 GB reel does not always fit: it would be measured
+-- again from byte zero on every pass and never open. So the slices measured
+-- so far are kept as they are made (status 'hashing', `transaction` empty
+-- until the open), and the next pass measures on from the next slice.
+alter table public.metricool_uploads alter column transaction drop not null;
+alter table public.metricool_uploads add column if not exists hashed_bytes bigint not null default 0;
+
+-- ONE REQUEST AT A TIME. The composer sends a post to three networks in
+-- parallel, and each send asked for the copy — three requests hashing and
+-- uploading the same 2.7 GB file at once, each overwriting the others' record.
+-- A request claims the video for a bounded time before it touches the file;
+-- the others answer "in progress" and the next pass carries on from the
+-- claimant's progress.
+alter table public.metricool_uploads add column if not exists claimed_until timestamptz;

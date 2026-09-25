@@ -68,7 +68,9 @@ import {
   type UploadedPart,
 } from '@/lib/metricool-upload-parse';
 import { redact, reportError } from '@/lib/report';
-import { finishUploadState, loadUploadState, resetUploadState, saveUploadEtags, saveUploadState } from '@/lib/metricool-upload-state';
+import {
+  claimUpload, finishUploadState, loadUploadState, releaseUpload, resetUploadState, saveHashingProgress, saveUploadEtags, saveUploadState,
+} from '@/lib/metricool-upload-state';
 
 export { directUploadEnabled, isMetricoolHostedUrl, isMetricoolCopyId, metricoolCopyId } from '@/lib/metricool-upload-parse';
 
@@ -177,19 +179,39 @@ async function declareParts(path: string, bytes: number): Promise<DeclaredPart[]
  */
 async function declarePartsFromDrive(
   fileId: string, size: number, transferMs: number,
-): Promise<{ declared: DeclaredPart[]; wholeHash: string; bytes: number }> {
-  const res = await driveMediaStream(fileId, transferMs);
-  if (!res.ok || !res.body) throw new Error('Drive answered HTTP ' + res.status + ' to the download.');
+  /**
+   * `declared`: slices already measured by an earlier request, so this one
+   * starts at the next byte. `stopWhen`: asked after every slice; when true,
+   * the pass stops there and reports `complete: false` with what it has.
+   */
+  opts: { declared?: DeclaredPart[]; stopWhen?: () => boolean } = {},
+): Promise<{ declared: DeclaredPart[]; wholeHash: string | null; bytes: number; complete: boolean }> {
   const ranges = partRanges(size);
-  const declared: DeclaredPart[] = [];
-  const whole = createHash('sha256');
+  const declared: DeclaredPart[] = [...(opts.declared || [])];
+  const from = declared.reduce((n, p) => Math.max(n, p.endByte), 0);
+  if (from >= size) return { declared, wholeHash: null, bytes: size, complete: true };
+  const res = await driveMediaStream(fileId, transferMs, from > 0 ? { range: 'bytes=' + from + '-' } : {});
+  if (!res.ok || !res.body) throw new Error('Drive answered HTTP ' + res.status + ' to the download.');
+  // A 200 to a Range request is the whole file from byte zero; skip what is
+  // already measured rather than measure it twice.
+  let skip = from > 0 && res.status === 200 ? from : 0;
+  // The whole-file hash only exists when this pass saw every byte.
+  const whole = from === 0 ? createHash('sha256') : null;
   let part = createHash('sha256');
-  let idx = 0;
+  let idx = declared.length;
   let inPart = 0;
-  let total = 0;
-  for await (const chunk of Readable.fromWeb(res.body as unknown as import('node:stream/web').ReadableStream)) {
+  let total = from;
+  let stopped = false;
+  const body = Readable.fromWeb(res.body as unknown as import('node:stream/web').ReadableStream);
+  for await (const chunk of body) {
     let buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
-    whole.update(buf);
+    if (skip > 0) {
+      const drop = Math.min(skip, buf.length);
+      buf = buf.subarray(drop);
+      skip -= drop;
+      if (!buf.length) continue;
+    }
+    whole?.update(buf);
     total += buf.length;
     while (buf.length) {
       const r = ranges[idx];
@@ -203,11 +225,17 @@ async function declarePartsFromDrive(
         part = createHash('sha256');
         inPart = 0;
         idx++;
+        if (idx < ranges.length && opts.stopWhen?.()) { stopped = true; break; }
       }
     }
+    if (stopped) break;
+  }
+  if (stopped) {
+    body.destroy();
+    return { declared, wholeHash: null, bytes: total, complete: false };
   }
   if (total !== size) throw new Error('The download stopped at ' + total.toLocaleString() + ' of ' + size.toLocaleString() + ' bytes.');
-  return { declared, wholeHash: whole.digest('base64'), bytes: total };
+  return { declared, wholeHash: whole ? whole.digest('base64') : null, bytes: total, complete: true };
 }
 
 /** One slice of the file, fetched from Drive by Range request, as a body of known length. */
@@ -352,6 +380,8 @@ export async function uploadVideoToMetricool(
   const streamed = sizeBytes != null && sizeBytes > DIRECT_UPLOAD_STAGE_BYTES;
 
   let dir: string | null = null;
+  /** Whether this request holds the video's claim, and must let it go on every way out. */
+  let claimed = false;
   try {
     if (left() < 20_000) return { ok: false, reason: 'failed', sizeBytes, message: 'There was no time left to move the video.' };
     let tmp: string | null = null;
@@ -361,16 +391,48 @@ export async function uploadVideoToMetricool(
     // An upload of this video that an earlier request did not finish. Its
     // hashes are reused whatever else happens; its signed addresses and ETags
     // only while they are still good.
+    // ONE REQUEST AT A TIME on a streamed file. The composer sends a post to
+    // its networks in parallel and each send asks for the copy; without the
+    // claim, three requests hashed and uploaded the same 2.7 GB file at once
+    // and overwrote each other's record. The others answer "in progress".
+    if (streamed) {
+      claimed = await claimUpload(id, sizeBytes as number, opts.blogId ?? null);
+      if (!claimed) {
+        return {
+          ok: false, reason: 'pending', sizeBytes,
+          message: 'This video is being uploaded into Metricool by another request right now. It carries on from where that one gets to; send again in a few minutes.',
+        };
+      }
+    }
     const prior = streamed ? await loadUploadState(id) : null;
-    const priorFits = Boolean(prior && sizeBytes != null && prior.sizeBytes === sizeBytes && prior.declared.length === partRanges(sizeBytes).length);
-    if (streamed && prior && priorFits) {
+    const total = sizeBytes != null ? partRanges(sizeBytes).length : 0;
+    // The same file: same size, and never more slices than it has.
+    const priorFits = Boolean(prior && sizeBytes != null && prior.sizeBytes === sizeBytes && prior.declared.length <= total);
+    const priorHashed = Boolean(prior && priorFits && prior.declared.length === total);
+    if (streamed && prior && priorHashed) {
       // 1 (resumed). The hashes were paid for once already.
       bytes = sizeBytes as number;
       declared = prior.declared;
       console.info('metricool:upload resumed', bytes, 'bytes,', Object.keys(prior.etags).length, 'of', declared.length, 'parts already there');
     } else if (streamed) {
-      // 1 (streamed). ONE PASS over the file, hashing as it goes. Nothing kept.
-      const pass = await declarePartsFromDrive(id, sizeBytes as number, Math.min(250_000, left() - 20_000));
+      // 1 (streamed). Hashing as the bytes go by, nothing kept — and RESUMED
+      // from the last slice an earlier request measured, because this pass
+      // is the one thing that once had to fit a single request, and a 2.7 GB
+      // reel does not always. It stops at a slice boundary while there is
+      // still time to bank what it has.
+      const pass = await declarePartsFromDrive(id, sizeBytes as number, Math.min(250_000, left() - 20_000), {
+        declared: prior && priorFits ? prior.declared : [],
+        stopWhen: () => left() < BATCH_RESERVE_MS,
+      });
+      await saveHashingProgress(id, { sizeBytes: sizeBytes as number, declared: pass.declared, hashedBytes: pass.bytes, blogId: opts.blogId ?? null });
+      if (!pass.complete) {
+        console.info('metricool:upload hashing pending', pass.declared.length, 'of', total, 'parts measured');
+        return {
+          ok: false, reason: 'pending', sizeBytes, progress: { done: 0, total },
+          message: 'Measuring the video for Metricool: ' + pass.declared.length + ' of ' + total + ' slices done (' + mb(pass.bytes) + ' of ' + mb(sizeBytes as number) +
+            '). It continues on the next pass — the video sweep runs every 15 minutes, or press again — and the upload itself follows.',
+        };
+      }
       bytes = pass.bytes;
       declared = pass.declared;
       wholeHash = pass.wholeHash;
@@ -404,11 +466,11 @@ export async function uploadVideoToMetricool(
     // The signed addresses of an earlier request, while they still work: an
     // upload is resumed into the SAME transaction or not at all, because a
     // reopened one is a different S3 upload id and its slices start again.
-    const stillGood = prior && priorFits && (prior.expiresAt == null || prior.expiresAt - Date.now() > 60_000) && prior.tx.uploadType === 'MULTIPART';
+    const stillGood = prior && priorHashed && prior.tx && (prior.expiresAt == null || prior.expiresAt - Date.now() > 60_000) && prior.tx.uploadType === 'MULTIPART';
     let tx: OpenedTransaction;
     let txStatus = 200;
     let etags: Record<string, string> = {};
-    if (stillGood && prior) {
+    if (stillGood && prior && prior.tx) {
       tx = prior.tx;
       etags = { ...prior.etags };
     } else {
@@ -609,5 +671,6 @@ export async function uploadVideoToMetricool(
     };
   } finally {
     if (dir) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    if (claimed) await releaseUpload(id);
   }
 }

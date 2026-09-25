@@ -32,6 +32,7 @@ import {
   metricoolCopyId,
   partRanges,
   readCompletedTransaction,
+  earliestExpiry,
   readOpenedTransaction,
   signedUrlExpiry,
   readUploadTransaction,
@@ -365,12 +366,17 @@ test('a signed address says when it expires, and the opened reply carries it', (
   assert.equal(signedUrlExpiry('https://x.example/no-signature'), null);
   assert.equal(signedUrlExpiry('https://x.example/?X-Amz-Date=garbage&X-Amz-Expires=3600'), null);
   assert.equal(signedUrlExpiry(''), null);
-  // The reply's own expiresAt wins, in any of the ways an API writes one.
+  // The reply's own expiresAt is read, in any of the ways an API writes one
+  // (here the signed address carries no date of its own).
   const at = Date.UTC(2026, 8, 25, 12, 0, 0);
+  const undated = 'https://metricool-temp.s3.eu-west-1.amazonaws.com/k?Signature=abc';
   for (const v of [at, Math.floor(at / 1000), new Date(at).toISOString(), String(at)]) {
-    const tx = readOpenedTransaction(JSON.stringify({ data: { uploadType: 'MULTIPART', uploadId: 'u', key: 'k', parts: [{ partNumber: 1, presignedUrl: CAPTURED_SIGNED }], expiresAt: v } }));
+    const tx = readOpenedTransaction(JSON.stringify({ data: { uploadType: 'MULTIPART', uploadId: 'u', key: 'k', parts: [{ partNumber: 1, presignedUrl: undated }], expiresAt: v } }));
     assert.equal(tx.expiresAt, at, JSON.stringify(v));
   }
+  // When both are known, the SOONER one is the truth: S3 stops answering at its own.
+  const both = readOpenedTransaction(JSON.stringify({ data: { uploadType: 'MULTIPART', uploadId: 'u', key: 'k', parts: [{ partNumber: 1, presignedUrl: CAPTURED_SIGNED }], expiresAt: at } }));
+  assert.equal(both.expiresAt, Date.UTC(2026, 8, 21, 1, 0, 0));
   // Without one, the first signed address decides.
   const tx = readOpenedTransaction(JSON.stringify({ data: { uploadType: 'MULTIPART', uploadId: 'u', key: 'k', parts: [{ partNumber: 1, presignedUrl: CAPTURED_SIGNED }] } }));
   assert.equal(tx.expiresAt, Date.UTC(2026, 8, 21, 1, 0, 0));
@@ -403,10 +409,56 @@ test('a reel one request cannot finish is resumed by the next, never restarted',
   for (const col of ['declared jsonb', 'transaction jsonb', 'etags jsonb', 'expires_at timestamptz']) assert.ok(sql.includes(col), col);
 });
 
+test('an expiry that cannot be a time is not one — a duration read as an epoch is 1970', () => {
+  // {"expiresAt":3600} read as epoch seconds is 1970; an upload judged by it
+  // would be reopened on every pass and its slices thrown away each time.
+  const at = Date.UTC(2026, 8, 25, 12, 0, 0);
+  assert.equal(earliestExpiry([3600 * 1000, at]), at, 'the 1970 reading is ignored');
+  assert.equal(earliestExpiry([at + 60_000, at]), at, 'the soonest of two real times');
+  assert.equal(earliestExpiry([null, undefined, NaN, 0]), null);
+  const tx = readOpenedTransaction(JSON.stringify({ data: { uploadType: 'MULTIPART', uploadId: 'u', key: 'k', parts: [{ partNumber: 1, presignedUrl: CAPTURED_SIGNED }], expiresAt: 3600 } }));
+  assert.equal(tx.expiresAt, Date.UTC(2026, 8, 21, 1, 0, 0), 'falls back to the signed address');
+});
+
+test('the audit after #322: one request at a time, hashing that resumes, the sweep’s own clock', () => {
+  const lib = src('lib/metricool-upload.ts');
+  // 1. The composer sends to three networks in parallel; each asked for the copy.
+  assert.match(lib, /claimed = await claimUpload\(id, sizeBytes as number, opts\.blogId \?\? null\)/, 'a streamed upload is claimed before the file is touched');
+  assert.match(lib, /if \(claimed\) await releaseUpload\(id\);/, 'and released on every way out');
+  assert.match(lib, /being uploaded into Metricool by another request right now/, 'the others say so instead of starting a second one');
+  // 2. The hashing pass was the one thing that had to fit a single request.
+  assert.match(lib, /declared: prior && priorFits \? prior\.declared : \[\]/, 'it resumes from the slices an earlier request measured');
+  assert.match(lib, /stopWhen: \(\) => left\(\) < BATCH_RESERVE_MS/, 'and stops at a slice boundary while there is time to bank');
+  assert.match(lib, /await saveHashingProgress\(id, \{ sizeBytes: sizeBytes as number, declared: pass\.declared/, 'banked whether or not it finished');
+  assert.match(lib, /Measuring the video for Metricool: /, 'and reported as progress, not failure');
+  assert.match(lib, /range: 'bytes=' \+ from \+ '-'/, 'the next pass reads on from the last slice');
+  // 3. The sweep's own clock reaches the upload.
+  const sweep = src('lib/video-autopilot.ts');
+  assert.equal((sweep.match(/budgetMs: Math\.max\(20_000, budgetMs - \(Date\.now\(\) - started\)\)/g) || []).length >= 3, true, 'attach, first hand-off and the owed hand-off all pass what is left');
+  const attach = src('lib/video-attach.ts');
+  assert.match(attach, /budgetMs: args\.budgetMs/);
+  // 4. Networks that need the video are named when it is missing, and made when it lands.
+  assert.match(sweep, /const owed = networksFor\(networks, true, format, published\)\.filter\(\(n\) => !wanted\.includes\(n\)\)/, 'the hand-off names what it dropped');
+  assert.match(sweep, /reason: noVideo\?\.code === 'upload_pending' \? \('upload_pending' as const\) : \('no_video' as const\)/);
+  assert.match(sweep, /const owedNets = priorOutcomes\.filter\(\(p\) => !p\.ok && \(p\.reason === 'upload_pending' \|\| p\.reason === 'no_video'\)\)/, 'a later pass reads them back');
+  assert.match(sweep, /const copyNow = await cachedPublicCopy\(owedFileId\)/, 'and makes the drafts once the copy exists');
+  assert.match(sweep, /draftId: prior\.draft_id, title: typeof pack\.title === 'string'/, 'onto the same draft');
+  const publish = src('lib/video-publish.ts');
+  assert.match(publish, /\| 'upload_pending'/);
+  // 5. The table carries the claim and the partial hashing.
+  const sql = src('supabase/metricool-uploads.sql');
+  assert.match(sql, /alter column transaction drop not null/);
+  assert.match(sql, /add column if not exists hashed_bytes bigint/);
+  assert.match(sql, /add column if not exists claimed_until timestamptz/);
+  const state = src('lib/metricool-upload-state.ts');
+  assert.match(state, /or\('claimed_until\.is\.null,claimed_until\.lt\.' \+ now\.toISOString\(\)\)/, 'a claim is taken only when free or stale');
+  assert.match(state, /made\.error\.code !== '23505'/, 'a duplicate insert is the other request winning, not an error');
+});
+
 test('the copy maker tries the upload only when the bucket would not take the file', () => {
   const lib = src('lib/media-library.ts');
   assert.match(lib, /available: !staged\.ok && directUploadPossible\(sizeBytes\)/);
-  assert.match(lib, /uploadVideoToMetricool\(fileId, title, \{ blogId: who\?\.blogId \}\)/, 'for the brand the post is for');
+  assert.match(lib, /uploadVideoToMetricool\(fileId, title, \{ blogId: who\?\.blogId, budgetMs: who\?\.budgetMs \}\)/, 'for the brand the post is for, on the caller’s clock');
   assert.match(lib, /where: 'metricool'/, 'and records where the bytes went');
   // A failed upload is a NOTE on the refusal, never a thrown error.
   assert.match(lib, /directUpload = \{ available: false, note: direct\.message \}/);
