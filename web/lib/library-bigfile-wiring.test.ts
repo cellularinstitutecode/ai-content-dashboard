@@ -46,3 +46,13 @@ test('the ceiling stays 25 MB for callers that did not opt in', () => {
 test('cataloguing is deterministic - the same photograph gets the same verdict', () => {
   assert.match(caption, /temperature: 0,/);
 });
+
+test('a page is small enough to finish - 25 photographs did not fit in one call', () => {
+  assert.match(caption, /Math\.min\(10, Math\.max\(1, Number\(url\.searchParams\.get\('limit'\)\) \|\| 8\)\)/);
+});
+
+test('a skip says which kind of skip it was', () => {
+  assert.match(caption, /skipped: 'no_caption'/);
+  assert.match(caption, /skipped: 'failed', why:/);
+  assert.doesNotMatch(caption, /skipped: 'unreadable'/);
+});

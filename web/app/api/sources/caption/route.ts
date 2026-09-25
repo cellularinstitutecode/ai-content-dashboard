@@ -76,7 +76,11 @@ export async function GET(req: NextRequest) {
   if (!key) return NextResponse.json({ error: 'no_openai_key' }, { status: 503 });
 
   const url = new URL(req.url);
-  const limit = Math.min(60, Math.max(1, Number(url.searchParams.get('limit')) || 25));
+  // Each photograph here is a Drive download of up to 45 MB, an ffmpeg pass and
+  // a vision call, all inside one function. A page of 25 quietly ran out of room:
+  // one sweep skipped 21 of 25, and the same 20 files read perfectly in pages of
+  // five. The page size, not the pictures, was the problem.
+  const limit = Math.min(10, Math.max(1, Number(url.searchParams.get('limit')) || 8));
   const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
 
   try {
@@ -97,14 +101,16 @@ export async function GET(req: NextRequest) {
           continue;
         }
         const c = await captionOne(small ?? file.bytes, small ? 'image/jpeg' : file.contentType, key);
-        if (!c) { rows.push({ id: f.id, name: f.name, skipped: 'unreadable' }); continue; }
+        if (!c) { rows.push({ id: f.id, name: f.name, skipped: 'no_caption' }); continue; }
         caps.push(c);
         const safe = coverSafe(c);
         rows.push({ id: f.id, name: f.name, caption: c.caption, subjects: c.subjects, blockers: c.blockers,
                     pillars: pillarsFor(c), coverSafe: safe.ok, needsConsent: safe.needsConsent });
       } catch (e) {
         reportError('sources-caption:one', e);
-        rows.push({ id: f.id, name: f.name, skipped: 'unreadable' });
+        // 'unreadable' told us nothing and cost an afternoon: it was read as
+      // 'this file cannot be read' when it meant 'this attempt did not finish'.
+      rows.push({ id: f.id, name: f.name, skipped: 'failed', why: e instanceof Error ? e.message.slice(0, 140) : 'unknown' });
       }
     }
     return NextResponse.json({
