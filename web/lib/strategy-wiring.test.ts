@@ -74,7 +74,7 @@ test('the route reads what is already there before it writes, and fails closed',
   const route = src('app/api/templates/strategy/route.ts');
   // `strategy` as well as the name: the mark inside it is the only thing that
   // makes a row safe to overwrite.
-  assert.match(route, /\.select\('id, name, strategy, weekdays, time_of_day'\)/);
+  assert.match(route, /\.select\('id, name, strategy, weekdays, time_of_day, providers'\)/);
   assert.match(route, /if \(readError\)/);
   assert.match(route, /status: 503/, 'an unreadable account is refused, not guessed at');
   assert.match(route, /planSeed\(/, 'the decision itself lives in the tested module');
@@ -95,7 +95,9 @@ test('new rows are inserted, and existing ones get their strategy updated — no
   // back over the operator's edits. Only the strategy is written now.
   assert.doesNotMatch(route, /\.upsert\(/, 'no whole-row upsert of an existing slot');
   assert.match(route, /\.update\(next\)\.eq\('id', id\)\.eq\('user_id', userId\)/);
-  assert.match(route, /return \{ strategy: normalizeStrategy\(row\.strategy\), updated_at: now \};/);
+  assert.match(route, /const out: Row = \{ strategy: normalizeStrategy\(row\.strategy\), updated_at: now \};/);
+  // The only other field: the article's channels, and only when the seed wrote them.
+  assert.match(route, /if \(row\.providers\) out\.providers = row\.providers;/);
   assert.match(route, /plan\.create\.map/);
   assert.match(route, /plan\.update\.map/);
   // And neither leg can run twice: a retry that re-ran the insert wrote

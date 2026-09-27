@@ -59,16 +59,26 @@ export const STRATEGY_LEAD_HOURS = 24;
  * the week's short posts circle the same territory. At 11:00 because 08:00 and
  * 17:00 belong to the reels and 09:00 and 18:00 to the social slots.
  *
- * It carries `blog` AND the three social networks: one pack produces the
- * article and three short promo posts pointing at it, which is what the format
- * already does (lib/ai.ts) and one generation rather than two.
+ * It carries `blog` and the two networks where a link works — Facebook and
+ * LinkedIn. One pack produces the article and a short promo for each, sent
+ * after WordPress has the article and carrying its link (lib/article-promo.ts).
+ * Not Instagram: a caption cannot carry a clickable link, and a third post on
+ * Monday made fifteen Instagram posts a week where the strategy asks for
+ * fourteen.
  */
 export const BLOG_SLOT = {
   name: 'Weekly article',
   day: 1 as const,
   time: '11:00',
-  providers: ['blog', 'instagram', 'facebook', 'linkedin'] as readonly string[],
+  providers: ['blog', 'facebook', 'linkedin'] as readonly string[],
 };
+
+/**
+ * What the article slot was seeded with before. A row still carrying exactly
+ * this is moved to BLOG_SLOT.providers by the next "Load the weekly
+ * strategy"; a row somebody changed by hand is left as they set it.
+ */
+export const LEGACY_BLOG_PROVIDERS: readonly string[] = ['blog', 'instagram', 'facebook', 'linkedin'];
 
 /**
  * The article's angle bank.
@@ -126,13 +136,19 @@ export type SeedRow = {
 };
 
 /** Enough of an existing template to decide whether it is one of ours. */
-export type ExistingTemplate = { id?: unknown; name?: unknown; strategy?: unknown; weekdays?: unknown; time_of_day?: unknown };
+export type ExistingTemplate = { id?: unknown; name?: unknown; strategy?: unknown; weekdays?: unknown; time_of_day?: unknown; providers?: unknown };
 
 /**
  * A re-seed of a row the seed already owns: its id, the name it is reported
  * under, and its strategy with ONLY the seed's own fields refreshed.
  */
-export type SeedUpdate = { id: string; name: string; strategy: Record<string, unknown> };
+export type SeedUpdate = {
+  id: string;
+  name: string;
+  strategy: Record<string, unknown>;
+  /** Only when a row still carries a channel list the seed itself wrote and has since changed. */
+  providers?: string[];
+};
 
 /**
  * The fields of `strategy` that belong to the document, and therefore to the
@@ -295,11 +311,19 @@ export function planSeed(existing: readonly ExistingTemplate[] = []): SeedPlan {
     }
     const first = matches[0];
     claimed.add(String(first.id));
-    update.push({
+    const u: SeedUpdate = {
       id: String(first.id),
       name: typeof first.name === 'string' && first.name.trim() ? first.name : row.name,
       strategy: mergeSeedStrategy(strategyOf(first), row.strategy),
-    });
+    };
+    // The one channel change the seed makes on an existing row: the article's
+    // promos leaving Instagram — and only if the row still has the seed's own
+    // old list. Channels a person chose are theirs.
+    if (row.strategy.slot === BLOG_SLOT_KEY && Array.isArray(first.providers) &&
+        JSON.stringify(first.providers) === JSON.stringify(LEGACY_BLOG_PROVIDERS)) {
+      u.providers = [...BLOG_SLOT.providers];
+    }
+    update.push(u);
     if (matches.length > 1 && !duplicates.includes(row.name)) duplicates.push(row.name);
   }
   return { create, update, duplicates, collisions };
@@ -311,7 +335,6 @@ export function seedSummary(plan: SeedPlan): string {
   if (plan.create.length) parts.push(plan.create.length + (plan.create.length === 1 ? ' slot added' : ' slots added'));
   if (plan.update.length) parts.push(plan.update.length + ' brought up to date (their days, times, channels and on/off state were kept)');
   const head = parts.length ? parts.join(', ') : 'Nothing to do';
-  const total = plan.create.length + plan.update.length;
   const tail = (plan.duplicates.length
     ? ' There is more than one slot named ' + plan.duplicates.map((d) => '"' + d + '"').join(', ') +
       ' — the extra ones were left alone, but they will post in the same slot.'
@@ -319,5 +342,5 @@ export function seedSummary(plan: SeedPlan): string {
     ? ' You already have a template called ' + plan.collisions.map((d) => '"' + d + '"').join(', ') +
       ' — it was NOT touched, and the new slot was added beside it. Rename or pause one of them if you do not want both posting.'
     : '');
-  return head + ' — ' + total + ' posts a week: two a day, plus the Monday article. All of them waiting in the review queue.' + tail;
+  return head + ' — fourteen posts a week, two a day, plus the Monday article on WordPress, promoted on Facebook and LinkedIn with its link. All of them waiting in the review queue.' + tail;
 }

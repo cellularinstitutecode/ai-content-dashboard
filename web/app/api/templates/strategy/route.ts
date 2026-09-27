@@ -54,7 +54,10 @@ function dbRow(userId: string, row: SeedRow, now: string): Row {
  * press moved every edited slot back and switched paused ones on again.
  */
 function updateRow(row: SeedUpdate, now: string): Row {
-  return { strategy: normalizeStrategy(row.strategy), updated_at: now };
+  const out: Row = { strategy: normalizeStrategy(row.strategy), updated_at: now };
+  // Present only for the article row still on the seed's own old channel list.
+  if (row.providers) out.providers = row.providers;
+  return out;
 }
 
 export async function POST() {
@@ -78,7 +81,7 @@ export async function POST() {
     .from('schedule_templates')
     // Day and time too: a slot written before slot keys existed and since
     // renamed is recognised by them rather than duplicated.
-    .select('id, name, strategy, weekdays, time_of_day')
+    .select('id, name, strategy, weekdays, time_of_day, providers')
     .eq('user_id', userId);
   if (readError) {
     // Fail closed. Writing without knowing what is there is exactly how the
@@ -140,7 +143,7 @@ export async function POST() {
       // whole row, which is what put back the seed's time, channels and
       // `active: true` over the operator's own.
       for (const { id, patch } of existingRows) {
-        const next = withStrategy ? patch : { updated_at: patch.updated_at };
+        const next = withStrategy ? patch : { updated_at: patch.updated_at, ...(patch.providers ? { providers: patch.providers } : {}) };
         const { error } = await sb.from('schedule_templates').update(next).eq('id', id).eq('user_id', userId).select('id');
         if (error) return { message: error.message };
       }

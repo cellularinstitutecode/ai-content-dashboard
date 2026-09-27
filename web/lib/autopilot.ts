@@ -58,10 +58,11 @@ import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance
 import { metricoolSchedulePost, readPostId } from '@/lib/metricool';
 import { metricoolNetworks, wantsBlog, type McNetwork } from '@/lib/metricool-networks';
 import { professionalTitle } from '@/lib/post-title';
-import { publishArticle, wordpressConfigured } from '@/lib/wordpress';
+import { publishArticle, wordpressConfig, wordpressConfigured } from '@/lib/wordpress';
 import { ensureDraftImage, type PackImage } from '@/lib/images';
 import { imageUnshippable } from '@/lib/image-verdict';
 import { channelCopy, doisIn, knownBadCitation, perNetworkPlan } from '@/lib/approve-plan';
+import { ARTICLE_LINK_PLACEHOLDER, PROMO_DELAY_MINUTES, articleLogNote, articleUrl, readArticleLog, withArticleLink } from '@/lib/article-promo';
 import { verifyDoi } from '@/lib/citation';
 import { NETWORKS_NEEDING_MEDIA, mediaProblem } from '@/lib/composer';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
@@ -911,9 +912,11 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   // log, never a failed run. ensureDraftImage is idempotent, so a redraft
   // reuses the stored one unless the text checker flagged it.
   let imageNote = '';
+  // The weekly article needs one too: it is its featured image on WordPress
+  // and the picture on its promos, now that none of them goes to Instagram.
   const needsImage = (template.providers || []).some(
     (p) => NETWORKS_NEEDING_MEDIA.has(String(p || '').trim().toLowerCase())
-  );
+  ) || wantsBlog(template.providers || []);
   if (needsImage && draftId) {
     try {
       const img = await ensureDraftImage(draftId, run.user_id);
@@ -1935,12 +1938,18 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // cannot be invented and returns the run for review with the reason written
   // down. Every network is checked before any is sent.
   const aviso = mcProviders.length ? await avisoForUser(run.user_id) : null;
-  const plan = perNetworkPlan(pack as unknown as Record<string, unknown>, mcProviders, { aviso });
+  // The weekly article's promos carry its link, which only exists once
+  // WordPress has the article. They are checked here with a stand-in link of
+  // realistic length, and built again around the real one after publishing.
+  const plan = perNetworkPlan(pack as unknown as Record<string, unknown>, mcProviders, {
+    aviso,
+    transform: wantsArticle ? (_network, text) => withArticleLink(text, ARTICLE_LINK_PLACEHOLDER) : undefined,
+  });
   if (!plan.ok) {
     await releaseClaim(db, run, 'approve-refused', 'Not sent: ' + plan.reason + ' Edit the draft, then approve again.');
     return { ok: false, note: plan.reason + ' The run is back in your queue.' };
   }
-  const sends = plan.sends;
+  let sends = plan.sends;
 
   // A CITATION CROSSREF SAID DOES NOT EXIST. The generator re-rolls a DOI
   // Crossref does not know once, then keeps the first draft and leaves "the
@@ -2093,9 +2102,71 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   const sent: { network: string; text: string; postId: string | null }[] = [];
   /** A network that refused after another had already been accepted. */
   let sendFailure = '';
+  // THE ARTICLE GOES FIRST, and its promos carry its link.
+  //
+  // It used to go last: Metricool accepted three promo posts, then WordPress
+  // was asked for the article — so the promos could never contain its link,
+  // and a WordPress refusal left promos live for an article that did not
+  // exist. Now the article is published first; its id and link are written to
+  // the run before anything else (lib/article-promo.ts), so a retry after a
+  // promo failure promotes the article already there instead of publishing a
+  // second one; and only then are the promos built around the real URL and
+  // sent — ten minutes after the article, so the link is live when they are.
+  let articleNote = '';
+  let promoAt = run.scheduled_for;
+  if (article) {
+    const prior = readArticleLog(run.log);
+    let link = '';
+    if (prior) {
+      link = prior.url;
+      articleNote = 'The article was already on WordPress from the previous attempt (' + link + '), so it was not published again.';
+    } else {
+      const published = await publishArticle({
+        title: article.title,
+        html: article.body,
+        date: run.scheduled_for,
+        featuredImageUrl: packImage?.url || null,
+        // A draft approval is a draft EVERYWHERE. Without this the queue's
+        // "Approve" (schedule: false) sent Metricool a reviewable draft and
+        // WordPress a scheduled post that publishes itself — while the calendar
+        // row read "waiting for your approval".
+        status: opts.schedule ? undefined : 'draft',
+      });
+      if (!published.ok) {
+        // Nothing has gone anywhere yet: release, and a retry is safe.
+        handoffFailed = true;
+        note = published.message + ' Nothing was sent anywhere; the run is back in your queue.';
+      } else {
+        link = articleUrl(published, wordpressConfig()?.baseUrl || '');
+        run.log = logLine(run, 'article', articleLogNote(published, link));
+        const { error: articleLogError } = await db.from('template_runs').update({ log: run.log }).eq('id', run.id);
+        if (articleLogError) reportError('autopilot:approve-article-log', articleLogError, { runId: run.id });
+        articleNote = 'Article ' + (published.status === 'draft' ? 'saved to WordPress as a draft' : 'published to WordPress (' + published.status + ')') +
+          (link ? ': ' + link : '') + '.' + (published.note ? ' ' + published.note : '');
+      }
+    }
+    if (!handoffFailed && mcProviders.length) {
+      const withLink = perNetworkPlan(pack as unknown as Record<string, unknown>, mcProviders, {
+        aviso,
+        transform: (_network, text) => withArticleLink(text, link),
+      });
+      if (!withLink.ok) {
+        // Not reachable in practice — the stand-in link above is at least as
+        // long — but if it happens the article is live and the promos are not,
+        // and a retry will not publish the article twice.
+        handoffFailed = true;
+        note = articleNote + ' Its promo posts could not be prepared: ' + withLink.reason + ' Approve again to send them; the article will not be published twice.';
+      } else {
+        sends = withLink.sends;
+        promoAt = new Date(new Date(run.scheduled_for).getTime() + PROMO_DELAY_MINUTES * 60_000).toISOString();
+      }
+    }
+    if (!handoffFailed) note = articleNote;
+  }
+
   // Push a Metricool DRAFT (autoPublish: false) so it lands in the approval
   // queue there too. Fail-soft: missing env just means dashboard-only staging.
-  if (mcProviders.length) {
+  if (mcProviders.length && !handoffFailed) {
     // A matched video clip wins; otherwise attach the generated hero image.
     const media = clip?.url
       ? [{ url: clip.url }]
@@ -2110,7 +2181,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
         const created = await metricoolSchedulePost({
           text: send.text,
           providers: [send.network as McNetwork],
-          publicationDate: run.scheduled_for,
+          publicationDate: promoAt,
           media,
         }, opts.schedule ? 'scheduled' : 'review');
         metricoolSent = true;
@@ -2138,9 +2209,11 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     }
     if (!sent.length) {
       handoffFailed = true;
-      note = 'Could not send this to Metricool: ' + sendFailure + '. Nothing was scheduled and the run is back in your queue — press Approve again to retry.';
+      note = articleNote
+        ? articleNote + ' But its promo posts could not be sent to Metricool: ' + sendFailure + '. The run is back in your queue — press Approve again to send them; the article will not be published twice.'
+        : 'Could not send this to Metricool: ' + sendFailure + '. Nothing was scheduled and the run is back in your queue — press Approve again to retry.';
     } else {
-      note =
+      note = (articleNote ? articleNote + ' ' : '') +
         (opts.schedule ? 'Approved and SCHEDULED in Metricool for ' : 'Sent to Metricool as a DRAFT for ') + sent.map((x) => x.network).join(', ') +
         ', each with its own copy' +
         (clip?.url
@@ -2149,43 +2222,6 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
             ? ' and the AI hero image attached'
             : '') +
         (opts.schedule ? ' — Metricool will publish it at the scheduled time.' : ' — press Approve in your queue to publish.');
-    }
-  }
-
-  // The article, already checked, now sent.
-  //
-  // WHAT HAPPENS WHEN THIS FAILS AND METRICOOL DID NOT. Nothing has gone
-  // anywhere, so the run is released and a retry is safe — the ordinary path.
-  //
-  // WHAT HAPPENS WHEN METRICOOL ALREADY SUCCEEDED. The run is NOT released,
-  // because releasing it invites a retry and a retry re-sends to Metricool:
-  // there is no idempotency key and no unique constraint on `posts`, so every
-  // attempt would add another live post for the same slot. The promo posts are
-  // real and they are recorded; the article's failure is said out loud on the
-  // run and in the answer, and publishing it is a decision for a person rather
-  // than something to retry blindly.
-  let articleFailure = '';
-  if (!handoffFailed && article) {
-    const published = await publishArticle({
-      title: article.title,
-      html: article.body,
-      date: run.scheduled_for,
-      featuredImageUrl: packImage?.url || null,
-      // A draft approval is a draft EVERYWHERE. Without this the queue's
-      // "Approve" (schedule: false) sent Metricool a reviewable draft and
-      // WordPress a scheduled post that publishes itself — while the calendar
-      // row read "waiting for your approval".
-      status: opts.schedule ? undefined : 'draft',
-    });
-    if (published.ok) {
-      note += (note ? ' ' : '') + 'Article ' + (published.status === 'draft' ? 'saved to WordPress as a draft' : 'published to WordPress (' + published.status + ')') +
-        (published.link ? ': ' + published.link : '') + '.' +
-        (published.note ? ' ' + published.note : '');
-    } else if (metricoolSent) {
-      articleFailure = published.message;
-    } else {
-      handoffFailed = true;
-      note = published.message + ' Nothing was sent anywhere; the run is back in your queue.';
     }
   }
 
@@ -2284,7 +2320,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
 
   // A PARTIAL ACROSS NETWORKS: some were accepted, then one refused.
   //
-  // Not released, for the same reason as the article below: the accepted posts
+  // Not released: the accepted posts
   // are real, recorded, and would be sent a second time by a retry. The
   // networks that did not go are named, for a person to post by hand.
   if (sendFailure && sent.length) {
@@ -2292,25 +2328,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     const partial = note + ' BUT NOT EVERY NETWORK WENT: Metricool refused ' + sendFailure +
       (missing.length > 1 ? ', and ' + missing.slice(1).join(', ') + ' was not attempted' : '') +
       '. The posts above are scheduled and recorded; approving this run again would send them a second time, so post the ' +
-      missing.join(' and ') + ' copy from the draft by hand.' +
-      (articleFailure ? ' THE ARTICLE WAS NOT PUBLISHED EITHER: ' + articleFailure : '');
-    const { error: partialError } = await db
-      .from('template_runs')
-      .update({ log: logLine(run, 'approve-partial', partial) })
-      .eq('id', run.id);
-    if (partialError) reportError('autopilot:approve-partial-log', partialError, { runId: run.id });
-    return { ok: false, note: partial + bookkeeping };
-  }
-
-  // A PARTIAL: the promo posts went out, the article did not.
-  //
-  // Said as a failure, because something a person asked for did not happen —
-  // but the run is NOT released and the row above is written, because the
-  // Metricool post is real and a retry would send a second one. Publishing the
-  // article is a decision for a person now, not a button to press again.
-  if (articleFailure) {
-    const partial = note + ' BUT THE ARTICLE WAS NOT PUBLISHED: ' + articleFailure +
-      ' The promo posts above are scheduled and recorded; approving this run again would send them a second time, so fix WordPress and publish the article from the draft.';
+      missing.join(' and ') + ' copy from the draft by hand.';
     const { error: partialError } = await db
       .from('template_runs')
       .update({ log: logLine(run, 'approve-partial', partial) })

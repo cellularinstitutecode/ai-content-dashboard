@@ -48,12 +48,15 @@ export function channelCopy(pack: Record<string, unknown> | null | undefined, ne
 export function perNetworkPlan(
   pack: Record<string, unknown> | null | undefined,
   networks: readonly string[],
-  opts: { aviso?: string | null } = {},
+  opts: { aviso?: string | null; transform?: (network: string, text: string) => string } = {},
 ): NetworkPlan {
   const sends: NetworkSend[] = [];
   for (const network of networks) {
     let text = channelCopy(pack, network).trim();
     if (!text) return { ok: false, network, reason: 'The draft has no copy for ' + label(network) + '.' };
+    // e.g. the weekly article's link, written in before the checks so the
+    // length and the advertising rule are measured on what is actually sent.
+    if (opts.transform) text = opts.transform(network, text).trim();
     if (appliesTo([network])) {
       text = ensureAviso(text, opts.aviso);
       const check = checkCompliance(text, opts.aviso);

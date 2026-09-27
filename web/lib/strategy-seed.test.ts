@@ -155,8 +155,8 @@ test('a duplicated name updates the first and says so about the rest', () => {
 });
 
 test('the summary is a sentence, not a pair of numbers', () => {
-  assert.match(seedSummary(planSeed([])), /^15 slots added — 15 posts a week/);
-  assert.match(seedSummary(planSeed([])), /plus the Monday article/);
+  assert.match(seedSummary(planSeed([])), /^15 slots added — fourteen posts a week, two a day/);
+  assert.match(seedSummary(planSeed([])), /plus the Monday article on WordPress, promoted on Facebook and LinkedIn/);
   assert.match(seedSummary(planSeed([])), /waiting in the review queue\.$/);
   const second = seedSummary(planSeed(asSeeded()));
   assert.match(second, /15 brought up to date/);
@@ -176,9 +176,11 @@ test('the weekly article leads the week, and carries its promos with it', () => 
   for (const clash of ['08:00', '17:00', '09:00', '18:00']) {
     assert.notEqual(article!.time_of_day, clash);
   }
-  // One pack, four destinations: the article to WordPress and three short
-  // promos pointing at it.
-  assert.deepEqual(article!.providers, ['blog', 'instagram', 'facebook', 'linkedin']);
+  // One pack, three destinations: the article to WordPress and a promo
+  // carrying its link on the two networks where a link works. Not Instagram:
+  // that made fifteen Instagram posts a week where the strategy asks fourteen.
+  assert.deepEqual(article!.providers, ['blog', 'facebook', 'linkedin']);
+  assert.ok(!article!.providers.includes('instagram'));
   assert.ok(article!.strategy.pillars.length >= 5, 'it rotates like every other slot');
   assert.equal(new Set(article!.strategy.pillars).size, article!.strategy.pillars.length);
 });
@@ -235,4 +237,15 @@ test('every seeded row carries its slot key and pillar', () => {
   assert.equal(new Set(keys).size, rows.length, 'keys are unique');
   assert.ok(keys.includes('mon-blog'));
   for (const r of rows.filter((x) => x.strategy.format === 'social')) assert.ok(r.strategy.pillarId, r.name);
+});
+
+test('an article row still on the seed\'s old channel list moves off Instagram; a hand-set one does not', async () => {
+  const { LEGACY_BLOG_PROVIDERS } = await import('./strategy-seed.ts');
+  const rows = asSeeded().map((r) => ({ ...r, providers: r.strategy.format === 'blog' ? [...LEGACY_BLOG_PROVIDERS] : ['instagram', 'facebook', 'linkedin'] }));
+  const u = planSeed(rows).update.find((x) => x.strategy.slot === 'mon-blog')!;
+  assert.deepEqual(u.providers, ['blog', 'facebook', 'linkedin']);
+  const mine = asSeeded().map((r) => ({ ...r, providers: r.strategy.format === 'blog' ? ['blog', 'linkedin'] : ['instagram'] }));
+  const kept = planSeed(mine).update.find((x) => x.strategy.slot === 'mon-blog')!;
+  assert.equal(kept.providers, undefined, 'a list somebody chose is theirs');
+  assert.ok(planSeed(rows).update.filter((x) => x.providers).length === 1, 'no other row has its channels touched');
 });

@@ -181,7 +181,7 @@ export default function WeeklyPlanner({
               {loadingStrategy ? 'Loading…' : 'Load the weekly strategy'}
             </button>
             <div style={{ fontSize: 11, opacity: .6, marginTop: 5, maxWidth: 230 }}>
-              Fills the week from the clinic&apos;s written strategy: 15 slots — two posts a day, plus Monday&apos;s article. Nothing is published by this; every one waits for your approval.
+              Fills the week from the clinic&apos;s written strategy: 15 slots — two posts a day, plus Monday&apos;s article, promoted on Facebook and LinkedIn with its link. Nothing is published by this; every one waits for your approval.
             </div>
           </div>
         )}
