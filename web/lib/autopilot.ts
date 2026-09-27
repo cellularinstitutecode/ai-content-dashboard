@@ -86,6 +86,8 @@ import { RECONCILABLE_STATES, reconcilePlan, slotMatches } from '@/lib/run-recon
 // because this is where callers have always looked for them.
 import { normalizeStrategy, type StrategyMode, type TemplateStrategy } from '@/lib/template-strategy';
 import { rulesForSlot, slotContext } from '@/lib/content-strategy';
+import { angleFor, siblingAngles } from '@/lib/strategy-rotation';
+import { BLOG_ANGLES } from '@/lib/strategy-seed';
 import { scorePack, type RunScore } from '@/lib/score-pack';
 export { scorePack };
 import { isStrategySlot, pickSupportingPhrase, pillarForStrategy, strategyBrand, strategyTopicPrompt } from '@/lib/strategy-voice';
@@ -111,6 +113,7 @@ export type Angle = {
   supportingPhrase?: string; // weekly-strategy slots: an optional search phrase found by research
   media?: { url: string; title: string } | null; // matching clip to attach on approve
   redatedFrom?: string; // the slot this run missed, when a reviewer moved it to the next free one
+  coveredThisWeek?: string[]; // weekly-strategy slots: what the related slots write the same week
 };
 
 export type { RunScore } from '@/lib/score-pack';
@@ -454,7 +457,7 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
   if (strategy.mode === 'auto') {
     seedPool = await autoSeedPool(strategy.pillars || [], brandKeywords);
   }
-  const seedTopic = pickSeedTopic(strategy, occurrenceIndex, seedPool);
+  let seedTopic = pickSeedTopic(strategy, occurrenceIndex, seedPool);
 
   // Anti-repetition: primary keywords used in the last 30 days.
   const recent = new Set<string>();
@@ -527,6 +530,23 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
     angleHistory = (past || []).map((r) => (r as { angle?: PastAngle }).angle);
   } catch (err) { /* history is a tiebreak, never a blocker */ reportError('autopilot:angle-history', err); }
 
+  // THE WEEKLY STRATEGY'S OWN ROTATION (lib/strategy-rotation.ts). For a
+  // seeded slot whose bank is still the document's, the angle comes from the
+  // dealt schedule — counted in weeks from a fixed Monday, never by counting
+  // runs, and dealt so that sibling slots and the weekly article never write
+  // the same thing, or near enough, in the same week. The slot's recently
+  // published angles are handed over for the switch-over weeks. Anything else
+  // (a hand-edited bank, a slot with no key) keeps the rotation above.
+  let dealt: ReturnType<typeof angleFor> = null;
+  if (isStrategySlot(strategy) && strategy.slot) {
+    dealt = angleFor(strategy.slot, run.scheduled_for, {
+      bank: strategy.pillars,
+      articleBank: BLOG_ANGLES,
+      avoid: angleHistory.map((h) => String((h as { query?: unknown } | null)?.query || '')).filter(Boolean),
+    });
+    if (dealt) seedTopic = dealt.angle;
+  }
+
   // Live data (all cache-first + unit-floor guarded).
   const bundle = await researchBundle(seedTopic, { relatedLimit: 12, questionLimit: 6 });
   let movers: KeywordMovers | null = null;
@@ -570,12 +590,16 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
       query: seedTopic,
       seedTopic,
       rationale:
-        'From the weekly strategy — "' + template.name + '", angle ' + ((occurrenceIndex % pool) + 1) + ' of ' + pool + '.' +
+        'From the weekly strategy — "' + template.name + '", angle ' +
+        (dealt ? dealt.position + ' of ' + dealt.of + ' (week ' + (dealt.week + 1) + ' of the dealt schedule)' : ((occurrenceIndex % pool) + 1) + ' of ' + pool) + '.' +
         (picked ? ' Supporting search phrase: "' + picked + '".' : ''),
       volume: pickedRow?.volume ?? null,
       difficulty: pickedRow?.difficulty ?? null,
       intent: pickedRow ? (pickedRow.intents || []).join(', ') || null : null,
       supportingPhrase: picked,
+      // What this slot's siblings — and, for the article, the week's medical
+      // posts — are writing this same week, so the brief can say "not these".
+      coveredThisWeek: dealt ? siblingAngles(strategy.slot || '', dealt.week) : undefined,
     };
   }
 
@@ -637,6 +661,7 @@ function topicPromptFor(angle: Angle, strategy: TemplateStrategy, templateName =
       dayTheme: ctx?.dayTheme,
       alsoCovers: ctx?.alsoCovers,
       integrated: ctx?.integrated,
+      coveredThisWeek: angle.coveredThisWeek,
       reviewerNote: angle.reviewerNote,
       supportingPhrase: angle.supportingPhrase,
     });

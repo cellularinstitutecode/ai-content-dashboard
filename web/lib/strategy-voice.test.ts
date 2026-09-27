@@ -122,3 +122,8 @@ test('"Balanced" is the document\'s own sentence', async () => {
   const { EDITORIAL_DIRECTION } = await import('./strategy-voice.ts');
   assert.match(EDITORIAL_DIRECTION, /Balanced: medical education supported by lifestyle, recovery, and destination content\./);
 });
+
+test('the brief names what related slots already cover this week', () => {
+  const p = strategyTopicPrompt({ angle: 'Nutrition and inflammation', pillarName: 'Nutrition', coveredThisWeek: ['Snacks that support steady energy'] });
+  assert.match(p, /Already covered by other posts this week, so do not repeat their points: "Snacks that support steady energy"/);
+});

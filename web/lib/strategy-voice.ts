@@ -114,6 +114,8 @@ export function strategyTopicPrompt(opts: {
   alsoCovers?: string[];
   /** A pillar the table integrates into this slot without making it the subject. */
   integrated?: string[];
+  /** What the related slots write this same week — ground not to repeat. */
+  coveredThisWeek?: string[];
 }): string {
   const parts = [
     'Write about: ' + opts.angle + '.',
@@ -126,6 +128,10 @@ export function strategyTopicPrompt(opts: {
   if (opts.integrated && opts.integrated.length) {
     parts.push('Where it fits naturally, connect the angle to ' + opts.integrated.map((n) => '"' + n + '"').join(' and ') +
       ' — for example, how what is learned at the first evaluation becomes the baseline later follow-ups measure progress against. One sentence is enough; do not change the subject.');
+  }
+  if (opts.coveredThisWeek && opts.coveredThisWeek.length) {
+    parts.push('Already covered by other posts this week, so do not repeat their points: ' +
+      opts.coveredThisWeek.map((a) => '"' + a + '"').join('; ') + '.');
   }
   parts.push(EDITORIAL_DIRECTION, NO_PROMOTION_RULES);
   if (opts.supportingPhrase) {
