@@ -15,6 +15,7 @@ import { describeFailure, historyForDisplay, type RunLogEntry } from '@/lib/run-
 import { MAX_ATTEMPTS } from '@/lib/planner-constants';
 import { plannerImageFor } from '@/lib/planner-image';
 import { imageUnshippable } from '@/lib/image-verdict';
+import { citationLabel, type CitationCheck } from '@/lib/citation';
 
 // The visible pipeline an engine run walks through. The tick call does all of
 // this server-side in one request; the tracker paces the display so the viewer
@@ -85,7 +86,7 @@ type Run = {
   state: string;
   angle: Angle | null;
   score: RunScore | null;
-  pack: (Record<string, string> & { _image?: PackImage; _imageOptions?: PackImage[] }) | null;
+  pack: (Record<string, string> & { _image?: PackImage; _imageOptions?: PackImage[]; _compliance?: { citation?: CitationCheck | null } }) | null;
   recent_angles?: { query: string; type: string }[];
   // The engine's own record of what happened to this run, and how many tries it
   // has spent. Both were already fetched by /api/autopilot/runs (log) or
@@ -562,6 +563,19 @@ export default function AutopilotQueue() {
                     <div className="border-b border-line bg-amber-50 px-5 py-2.5 text-[12px] text-amber-800">
                       ⚠ {r.score.safetyFlags.length} compliance flag(s):{' '}
                       {r.score.safetyFlags.map((f) => f.message).join(' ')}
+                    </div>
+                  )}
+
+                  {/* The Crossref verdict on the study in the REF line. It was
+                      stamped on every pack and shown nowhere on this card, so a
+                      DOI Crossref had never heard of could be approved with
+                      nobody told. A not-found citation is also refused at
+                      Approve (lib/approve-plan.ts). */}
+                  {r.pack?._compliance?.citation && r.pack._compliance.citation.status !== 'verified' && (
+                    <div className={'border-b border-line px-5 py-2.5 text-[12px] ' + (r.pack._compliance.citation.status === 'not_found' || r.pack._compliance.citation.status === 'no_doi' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}>
+                      {r.pack._compliance.citation.status === 'not_found' ? '✗ ' : '⚠ '}
+                      {citationLabel(r.pack._compliance.citation)}
+                      {r.pack._compliance.citation.status === 'not_found' ? ' — this post will not be sent until the REF line cites a real study.' : ''}
                     </div>
                   )}
 

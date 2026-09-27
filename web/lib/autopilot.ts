@@ -33,7 +33,7 @@ import { reportError, redact } from '@/lib/report';
 import 'server-only';
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { appliesTo, checkCompliance, complianceMessage, ensureAviso } from '@/lib/compliance';
+import { checkCompliance, complianceMessage, ensureAviso } from '@/lib/compliance';
 import { avisoForUser } from '@/lib/compliance-gate';
 import { recordApproval } from '@/lib/approval-log';
 import { loadBrandContext } from '@/lib/brand-context';
@@ -57,11 +57,13 @@ import {
 import { keywordMovers, primaryDomain, topOrganicKeywords, type KeywordMovers } from '@/lib/semrush-domain';
 import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
 import { metricoolSchedulePost, readPostId } from '@/lib/metricool';
-import { metricoolNetworks, wantsBlog } from '@/lib/metricool-networks';
+import { metricoolNetworks, wantsBlog, type McNetwork } from '@/lib/metricool-networks';
 import { professionalTitle } from '@/lib/post-title';
 import { publishArticle, wordpressConfigured } from '@/lib/wordpress';
 import { ensureDraftImage, type PackImage } from '@/lib/images';
 import { imageUnshippable } from '@/lib/image-verdict';
+import { channelCopy, doisIn, knownBadCitation, perNetworkPlan } from '@/lib/approve-plan';
+import { verifyDoi } from '@/lib/citation';
 import { NETWORKS_NEEDING_MEDIA, mediaProblem } from '@/lib/composer';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
@@ -1837,32 +1839,46 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   }
 
   const mcProviders = metricoolNetworks(providers);
-  // Pick the copy for a network we are actually posting to. This used
-  // providers[0], which is whatever the user clicked FIRST in the template
-  // editor — including 'blog', which is not a Metricool network. A template
-  // with providers ['blog','instagram'] shipped the full long-form article as
-  // the Instagram caption (far past the 2,200-char limit) while the
-  // purpose-written pack.instagram copy went unused.
-  let text = channelText(pack, mcProviders[0] || providers[0] || 'instagram');
+  // ONE SEND PER NETWORK, EACH WITH ITS OWN COPY (lib/approve-plan.ts).
+  //
+  // This picked one text — the first network's, in practice the Instagram
+  // caption — and sent it to every network in a single post. The Facebook and
+  // LinkedIn copy the writer produced, the scorer graded and the review card
+  // showed in their own tabs was thrown away, and LinkedIn got an Instagram
+  // caption with its hashtags.
+  //
+  // Advertising rule (lib/compliance.ts), per network: the AVISO is
+  // deterministic and is added if the pack predates the rule; a missing REF
+  // cannot be invented and returns the run for review with the reason written
+  // down. Every network is checked before any is sent.
+  const aviso = mcProviders.length ? await avisoForUser(run.user_id) : null;
+  const plan = perNetworkPlan(pack as unknown as Record<string, unknown>, mcProviders, { aviso });
+  if (!plan.ok) {
+    await releaseClaim(db, run, 'approve-refused', 'Not sent: ' + plan.reason + ' Edit the draft, then approve again.');
+    return { ok: false, note: plan.reason + ' The run is back in your queue.' };
+  }
+  const sends = plan.sends;
 
-  // Advertising rule (lib/compliance.ts): Instagram / Facebook copy must carry
-  // the AVISO line and a REF citation. The AVISO is deterministic, so it is
-  // added here if the pack predates the rule; a missing REF cannot be invented
-  // and returns the run for review with the reason written down.
-  if (appliesTo(mcProviders)) {
-    const aviso = await avisoForUser(run.user_id);
-    text = ensureAviso(text, aviso);
-    const check = checkCompliance(text, aviso);
-    if (!check.ok) {
-      await db
-        .from('template_runs')
-        .update({
-          state: 'ready_for_review',
-          log: logLine(run, 'approve-refused', 'Not sent: ' + complianceMessage(check) + ' Edit the draft, then approve again.'),
-        })
-        .eq('id', run.id)
-        .eq('state', 'approved');
-      return { ok: false, note: complianceMessage(check) + ' The run is back in your queue.' };
+  // A CITATION CROSSREF SAID DOES NOT EXIST. The generator re-rolls a DOI
+  // Crossref does not know once, then keeps the first draft and leaves "the
+  // badge" to tell the reviewer — and the planner card never showed that
+  // badge, so a made-up study could go out on a person's Approve. Refused
+  // here instead. A DOI the reviewer has since edited in is checked now.
+  const stamp = (pack as ContentPack & { _compliance?: { citation?: { status?: string | null; doi?: string | null } | null } })._compliance;
+  const badDoi = knownBadCitation(stamp, sends);
+  if (badDoi) {
+    const why = 'Not sent: Crossref has no record of the study cited in the REF line (DOI ' + badDoi + '). Replace the citation with a real study, then approve again. Nothing was sent.';
+    await releaseClaim(db, run, 'approve-refused', why);
+    return { ok: false, note: why };
+  }
+  const stampedDoi = String(stamp?.citation?.doi || '').toLowerCase();
+  for (const doi of doisIn(sends)) {
+    if (doi === stampedDoi) continue;
+    const checked = await verifyDoi(doi);
+    if (checked.status === 'not_found') {
+      const why = 'Not sent: Crossref has no record of the study cited in the REF line (DOI ' + doi + '). Replace the citation with a real study, then approve again. Nothing was sent.';
+      await releaseClaim(db, run, 'approve-refused', why);
+      return { ok: false, note: why };
     }
   }
 
@@ -1971,16 +1987,15 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   }
 
   let note = 'Staged for publishing review.';
-  // Did the Metricool handoff actually happen? The local `posts` row exists to
+  // Did the Metricool handoff actually happen? The local `posts` rows exist to
   // mirror Metricool; writing one after a FAILED handoff put a post in the
   // queue and on the calendar marked "waiting for your approval" that had been
   // sent nowhere and would never publish. Every other route in this app
   // ("the two sides can never disagree") refuses to record that state — so
   // does this one now.
   let handoffFailed = false;
-  let metricoolPostId: string | null = null;
   /**
-   * Did the Metricool call RETURN, without throwing?
+   * Did a Metricool call RETURN, without throwing?
    *
    * Not the same question as "did we get an id out of it". readPostId answers
    * null whenever the envelope carries no recognisable id — which a successful
@@ -1991,6 +2006,10 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
    * whether the request was accepted is the thing that must never be guessed.
    */
   let metricoolSent = false;
+  /** The networks Metricool accepted, each with the copy it got and its id. */
+  const sent: { network: string; text: string; postId: string | null }[] = [];
+  /** A network that refused after another had already been accepted. */
+  let sendFailure = '';
   // Push a Metricool DRAFT (autoPublish: false) so it lands in the approval
   // queue there too. Fail-soft: missing env just means dashboard-only staging.
   if (mcProviders.length) {
@@ -2000,40 +2019,53 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
       : packImage?.url
         ? [{ url: packImage.url }]
         : [];
-    try {
-      const created = await metricoolSchedulePost({
-        text,
-        providers: mcProviders,
-        publicationDate: run.scheduled_for,
-        media,
-      }, opts.schedule ? 'scheduled' : 'review');
-      // Keep Metricool's id on our row. Without it the queue's Approve,
-      // Reschedule and Delete had nothing to address upstream, so an Autopilot
-      // post could only ever be managed inside Metricool.
-      metricoolSent = true;
-      metricoolPostId = readPostId(created);
-      // Written to the run BEFORE anything else can fail. rescueStrandedApprovals
-      // decides whether an approval really happened, and its only evidence used
-      // to be the `posts` row — the one artifact that is missing in exactly the
-      // case where the send DID happen and the bookkeeping did not. A run
-      // carrying this step is never rescued, so a failed insert can no longer
-      // turn into a second live post fifteen minutes later.
-      const { error: sentError } = await db
-        .from('template_runs')
-        .update({ log: logLine(run, 'sent', 'Sent to Metricool' + (metricoolPostId ? ' (post ' + metricoolPostId + ')' : ' — it answered without a post id') + '.') })
-        .eq('id', run.id);
-      if (sentError) reportError('autopilot:approve-sent-log', sentError, { runId: run.id });
+    // One at a time, in order, and stop at the first refusal: a network that
+    // was never attempted is one a person can still post by hand, and a
+    // parallel burst would leave no way to say which ones went.
+    for (const send of sends) {
+      try {
+        const created = await metricoolSchedulePost({
+          text: send.text,
+          providers: [send.network as McNetwork],
+          publicationDate: run.scheduled_for,
+          media,
+        }, opts.schedule ? 'scheduled' : 'review');
+        metricoolSent = true;
+        // Keep Metricool's id on our row. Without it the queue's Approve,
+        // Reschedule and Delete had nothing to address upstream, so an
+        // Autopilot post could only ever be managed inside Metricool.
+        const postId = readPostId(created);
+        sent.push({ ...send, postId });
+        // Written to the run BEFORE anything else can fail. rescueStrandedApprovals
+        // decides whether an approval really happened, and its only evidence
+        // used to be the `posts` row — the one artifact that is missing in
+        // exactly the case where the send DID happen and the bookkeeping did
+        // not. A run carrying this step is never rescued, so a failed insert
+        // can no longer turn into a second live post fifteen minutes later.
+        run.log = logLine(run, 'sent', 'Sent to Metricool for ' + send.network + (postId ? ' (post ' + postId + ')' : ' — it answered without a post id') + '.');
+        const { error: sentError } = await db
+          .from('template_runs')
+          .update({ log: run.log })
+          .eq('id', run.id);
+        if (sentError) reportError('autopilot:approve-sent-log', sentError, { runId: run.id });
+      } catch (e) {
+        sendFailure = send.network + ' (' + (e instanceof Error ? e.message : 'error') + ')';
+        break;
+      }
+    }
+    if (!sent.length) {
+      handoffFailed = true;
+      note = 'Could not send this to Metricool: ' + sendFailure + '. Nothing was scheduled and the run is back in your queue — press Approve again to retry.';
+    } else {
       note =
-        (opts.schedule ? 'Approved and SCHEDULED in Metricool for ' : 'Sent to Metricool as a DRAFT for ') + mcProviders.join(', ') +
+        (opts.schedule ? 'Approved and SCHEDULED in Metricool for ' : 'Sent to Metricool as a DRAFT for ') + sent.map((x) => x.network).join(', ') +
+        ', each with its own copy' +
         (clip?.url
-          ? ' with clip "' + (clip.title || 'video') + '" attached'
+          ? ' and clip "' + (clip.title || 'video') + '" attached'
           : packImage?.url
-            ? ' with the AI hero image attached'
+            ? ' and the AI hero image attached'
             : '') +
         (opts.schedule ? ' — Metricool will publish it at the scheduled time.' : ' — press Approve in your queue to publish.');
-    } catch (e) {
-      handoffFailed = true;
-      note = 'Could not send this to Metricool (' + (e instanceof Error ? e.message : 'error') + '). Nothing was scheduled and the run is back in your queue — press Approve again to retry.';
     }
   }
 
@@ -2087,40 +2119,58 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     return { ok: false, note };
   }
 
-  const { data: inserted, error: insertError } = await db.from('posts').insert({
-    user_id: userId,
-    draft_id: run.draft_id,
-    // What was actually SENT to Metricool, not what the template lists. A row
-    // carrying `blog` is read back by the reschedule path and sent onward; an
-    // entry that never went to Metricool has no business in that column.
-    providers: mcProviders.length ? mcProviders : providers,
-    text,
-    publication_date: run.scheduled_for,
-    metricool_post_id: metricoolPostId,
-    // 'approved' — not 'scheduled' — is the one word /api/posts treats as
-    // live. See modeOf() there: 'scheduled' is also the column default and
-    // part of Metricool's own vocabulary, so it cannot mean "a person said
-    // yes to this".
-    // An article that WordPress accepted counts too: a blog-only run that
-    // reached this line has published something, and recording it as still
-    // waiting for approval is the same disagreement this row exists to avoid.
-    status: opts.schedule && (mcProviders.length || wantsArticle) ? 'approved' : 'pending_review',
-  }).select('id').maybeSingle();
-  // READ, not assumed. The Metricool post already exists at this point — with
-  // opts.schedule it is in the LIVE queue with autoPublish: true — so a
-  // swallowed error here leaves a post that will publish and that this
+  // One row per network that was sent, each carrying the copy that network
+  // actually got and its own Metricool id — the same shape the Content
+  // Generator's scheduler writes. The weekly pace ceiling counts by draft_id,
+  // so three rows for one post still count as one. A blog-only run, which
+  // sent nothing to Metricool, keeps its single row.
+  const statusWord = opts.schedule && (mcProviders.length || wantsArticle) ? 'approved' : 'pending_review';
+  const rows = sent.length
+    ? sent.map((x) => ({
+        user_id: userId,
+        draft_id: run.draft_id,
+        // What was actually SENT to Metricool, not what the template lists. A
+        // row carrying `blog` is read back by the reschedule path and sent
+        // onward; an entry that never went to Metricool has no business here.
+        providers: [x.network],
+        text: x.text,
+        publication_date: run.scheduled_for,
+        metricool_post_id: x.postId,
+        // 'approved' — not 'scheduled' — is the one word /api/posts treats as
+        // live. See modeOf() there: 'scheduled' is also the column default and
+        // part of Metricool's own vocabulary, so it cannot mean "a person said
+        // yes to this".
+        status: statusWord,
+      }))
+    : [{
+        user_id: userId,
+        draft_id: run.draft_id,
+        providers,
+        text: article?.body || channelCopy(pack as unknown as Record<string, unknown>, 'blog'),
+        publication_date: run.scheduled_for,
+        metricool_post_id: null,
+        // An article that WordPress accepted counts too: a blog-only run that
+        // reached this line has published something, and recording it as
+        // still waiting for approval is the disagreement this row avoids.
+        status: statusWord,
+      }];
+  const { data: inserted, error: insertError } = await db.from('posts').insert(rows).select('id');
+  // READ, not assumed. The Metricool posts already exist at this point — with
+  // opts.schedule they are in the LIVE queue with autoPublish: true — so a
+  // swallowed error here leaves posts that will publish and that this
   // dashboard has no row for: nothing to approve, reschedule or delete, and
   // `ok: true` returned. templates/apply handles this exact case correctly and
   // says so in a comment; this did not.
   let bookkeeping = '';
   if (insertError) {
-    reportError('autopilot:approve-posts-insert', insertError, { runId: run.id, metricoolPostId: metricoolPostId || '' });
-    bookkeeping = metricoolPostId
+    const ids = sent.map((x) => x.postId).filter(Boolean).join(',');
+    reportError('autopilot:approve-posts-insert', insertError, { runId: run.id, metricoolPostId: ids });
+    bookkeeping = ids
       ? ' NOTE: it is in Metricool but could not be saved to this dashboard, so it will not appear on your calendar here — manage it in Metricool.'
       : ' NOTE: it could not be saved to this dashboard.';
   }
   // A run approved straight to a live slot is also recorded on the team's
-  // calendar sheet (best-effort; see lib/approval-log.ts).
+  // calendar sheet (best-effort; see lib/approval-log.ts), one line per post.
   if (opts.schedule && mcProviders.length) {
     // AWAITED, not fire-and-forget. This same file says so 500 lines earlier
     // about recordDraftKeywords: "on Vercel the lambda can freeze once the
@@ -2128,16 +2178,19 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     // Identical construct, same runtime — and this is the audit record for the
     // LIVE-scheduled posts specifically. recordApproval is already fail-soft
     // (it catches and returns false), so awaiting it costs nothing.
-    await recordApproval({
-      publishDate: run.scheduled_for,
-      networks: providers,
-      caption: text,
-      mediaUrl: clip?.url || packImage?.url || '',
-      source: 'Autopilot · approve & schedule',
-      // The run id is NOT a post id. Falling back to it silently mixed two id
-      // spaces in the audit column; an empty cell is honest, a wrong id is not.
-      postId: String((inserted as { id?: string } | null)?.id || ''),
-    });
+    const insertedIds = ((inserted || []) as { id?: string }[]).map((r) => String(r?.id || ''));
+    for (let i = 0; i < sent.length; i++) {
+      await recordApproval({
+        publishDate: run.scheduled_for,
+        networks: [sent[i].network],
+        caption: sent[i].text,
+        mediaUrl: clip?.url || packImage?.url || '',
+        source: 'Autopilot · approve & schedule',
+        // The run id is NOT a post id. Falling back to it silently mixed two
+        // id spaces in the audit column; an empty cell is honest, a wrong id is not.
+        postId: insertedIds[i] || '',
+      });
+    }
   }
   const { error: logError } = await db
     .from('template_runs')
@@ -2145,6 +2198,26 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     .update({ log: logLine(run, 'approve', note) })
     .eq('id', run.id);
   if (logError) reportError('autopilot:approve-log', logError, { runId: run.id });
+
+  // A PARTIAL ACROSS NETWORKS: some were accepted, then one refused.
+  //
+  // Not released, for the same reason as the article below: the accepted posts
+  // are real, recorded, and would be sent a second time by a retry. The
+  // networks that did not go are named, for a person to post by hand.
+  if (sendFailure && sent.length) {
+    const missing = sends.map((x) => x.network).filter((n) => !sent.some((y) => y.network === n));
+    const partial = note + ' BUT NOT EVERY NETWORK WENT: Metricool refused ' + sendFailure +
+      (missing.length > 1 ? ', and ' + missing.slice(1).join(', ') + ' was not attempted' : '') +
+      '. The posts above are scheduled and recorded; approving this run again would send them a second time, so post the ' +
+      missing.join(' and ') + ' copy from the draft by hand.' +
+      (articleFailure ? ' THE ARTICLE WAS NOT PUBLISHED EITHER: ' + articleFailure : '');
+    const { error: partialError } = await db
+      .from('template_runs')
+      .update({ log: logLine(run, 'approve-partial', partial) })
+      .eq('id', run.id);
+    if (partialError) reportError('autopilot:approve-partial-log', partialError, { runId: run.id });
+    return { ok: false, note: partial + bookkeeping };
+  }
 
   // A PARTIAL: the promo posts went out, the article did not.
   //
