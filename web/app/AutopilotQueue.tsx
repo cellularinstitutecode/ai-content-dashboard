@@ -16,6 +16,7 @@ import { MAX_ATTEMPTS } from '@/lib/planner-constants';
 import { plannerImageFor } from '@/lib/planner-image';
 import { imageUnshippable } from '@/lib/image-verdict';
 import { citationLabel, type CitationCheck } from '@/lib/citation';
+import { claimSupportNote, type ClaimSupportStamp } from '@/lib/claim-support';
 
 // The visible pipeline an engine run walks through. The tick call does all of
 // this server-side in one request; the tracker paces the display so the viewer
@@ -86,7 +87,7 @@ type Run = {
   state: string;
   angle: Angle | null;
   score: RunScore | null;
-  pack: (Record<string, string> & { _image?: PackImage; _imageOptions?: PackImage[]; _compliance?: { citation?: CitationCheck | null } }) | null;
+  pack: (Record<string, string> & { _image?: PackImage; _imageOptions?: PackImage[]; _compliance?: { citation?: CitationCheck | null }; _claimSupport?: ClaimSupportStamp | null }) | null;
   recent_angles?: { query: string; type: string }[];
   // The engine's own record of what happened to this run, and how many tries it
   // has spent. Both were already fetched by /api/autopilot/runs (log) or
@@ -576,6 +577,15 @@ export default function AutopilotQueue() {
                       {r.pack._compliance.citation.status === 'not_found' ? '✗ ' : '⚠ '}
                       {citationLabel(r.pack._compliance.citation)}
                       {r.pack._compliance.citation.status === 'not_found' ? ' — this post will not be sent until the REF line cites a real study.' : ''}
+                    </div>
+                  )}
+
+                  {/* Whether the cited study backs what the post says — the
+                      judge's verdict on a strategy post (lib/claim-support.ts).
+                      An 'unsupported' also holds an auto-scheduled post. */}
+                  {claimSupportNote(r.pack?._claimSupport) && (
+                    <div className={'border-b border-line px-5 py-2.5 text-[12px] ' + (r.pack?._claimSupport?.status === 'unsupported' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}>
+                      ⚠ {claimSupportNote(r.pack?._claimSupport)}
                     </div>
                   )}
 

@@ -17,9 +17,18 @@
 // person wrote by hand still get the Brand Brain exactly as it is.
 //
 // Pure: `./x.ts` imports only, so the test runner reads this file directly.
-import { PILLARS, pillarById, slotByKey, type Pillar } from './content-strategy.ts';
+import { PILLARS, citationPolicyForSlot, pillarById, slotByKey, type CitationPolicy, type Pillar } from './content-strategy.ts';
 import { SEED_MARK } from './strategy-seed.ts';
 import { negatedAt } from './safety-rules.ts';
+
+/**
+ * Whether this template's posts must cite a study: the document slot's policy
+ * for a seeded slot (lib/content-strategy.ts), 'required' for everything else.
+ */
+export function citationPolicyFor(strategy: { seeded?: unknown; slot?: unknown } | null | undefined): CitationPolicy {
+  if (!isStrategySlot(strategy)) return 'required';
+  return citationPolicyForSlot(String(strategy?.slot || ''));
+}
 
 /** Is this template one of the weekly strategy's own slots? */
 export function isStrategySlot(strategy: { seeded?: unknown } | null | undefined): boolean {
@@ -89,15 +98,22 @@ export const NO_PROMOTION_RULES = [
  * instructions live. The COFEPRIS aviso and the visual identity are kept, so the
  * compliance gate and the images behave exactly as before.
  */
-export function strategyBrand<T extends Record<string, unknown>>(brand: T | undefined | null): T {
+export function strategyBrand<T extends Record<string, unknown>>(
+  brand: T | undefined | null,
+  opts: { citation?: 'required' | 'if-health-claim' } = {},
+): T {
   const b = (brand || {}) as T;
+  // A destination or logistics post cites a study only when it makes a health
+  // claim (lib/content-strategy.ts citation policy) — and must not invent one
+  // to have something to cite.
+  const cite = opts.citation === 'if-health-claim'
+    ? ' Keep claims responsible and evidence-based; cite one real, relevant study only if the post makes a health claim, and do not add a health claim just to cite one.'
+    : ' Keep claims responsible and evidence-based; cite one real, relevant study.';
   return {
     ...b,
     mission: STRATEGY_POSITIONING,
     keywords: [],
-    guidelines:
-      EDITORIAL_DIRECTION + ' ' + NO_PROMOTION_RULES +
-      ' Write in English. Keep claims responsible and evidence-based; cite one real, relevant study.',
+    guidelines: EDITORIAL_DIRECTION + ' ' + NO_PROMOTION_RULES + ' Write in English.' + cite,
   } as T;
 }
 

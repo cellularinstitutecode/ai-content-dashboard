@@ -71,7 +71,10 @@ export function autoScheduleVerdict(input: AutoScheduleInput): AutoScheduleVerdi
   // 1. The citation. `checkCompliance` only proves a DOI is SHAPED like a DOI;
   //    this is the one signal that says a real paper answered to it. An
   //    unreachable Crossref reads as "not known", never as "fine".
-  if (input.citation !== 'verified') {
+  // 'not_required': no REF line and none needed — a destination post under the
+  // "only when it makes a health claim" policy that makes none, decided on its
+  // text (lib/health-claim.ts). There is no citation to verify.
+  if (input.citation !== 'verified' && input.citation !== 'not_required') {
     const said =
       input.citation === 'not_found'
         ? 'Crossref has no record of the DOI in the REF line'

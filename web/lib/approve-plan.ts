@@ -14,7 +14,7 @@
 // first one is sent: a refusal is a refusal, never a half-send.
 //
 // Pure: `./x.ts` imports only, so the test runner reads this file directly.
-import { appliesTo, checkCompliance, complianceMessage, ensureAviso } from './compliance.ts';
+import { appliesTo, checkCompliance, complianceMessage, ensureAviso, type RefPolicy } from './compliance.ts';
 import { fitsNetwork } from './video-row.ts';
 
 export type NetworkSend = { network: string; text: string };
@@ -48,7 +48,7 @@ export function channelCopy(pack: Record<string, unknown> | null | undefined, ne
 export function perNetworkPlan(
   pack: Record<string, unknown> | null | undefined,
   networks: readonly string[],
-  opts: { aviso?: string | null; transform?: (network: string, text: string) => string } = {},
+  opts: { aviso?: string | null; transform?: (network: string, text: string) => string; refPolicy?: RefPolicy } = {},
 ): NetworkPlan {
   const sends: NetworkSend[] = [];
   for (const network of networks) {
@@ -59,7 +59,7 @@ export function perNetworkPlan(
     if (opts.transform) text = opts.transform(network, text).trim();
     if (appliesTo([network])) {
       text = ensureAviso(text, opts.aviso);
-      const check = checkCompliance(text, opts.aviso);
+      const check = checkCompliance(text, opts.aviso, { refPolicy: opts.refPolicy });
       if (!check.ok) return { ok: false, network, reason: complianceMessage(check, [network]) };
     }
     const fit = fitsNetwork(network, text);

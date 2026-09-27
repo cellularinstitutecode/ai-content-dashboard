@@ -4,7 +4,7 @@
 import 'server-only';
 
 import { MEDICAL_SAFETY_GUARDRAILS } from '@/lib/safety';
-import { REF_INSTRUCTION, avisoNumberFor, checkCompliance, ensureAviso, type ComplianceCheck } from '@/lib/compliance';
+import { REF_IF_CLAIM_INSTRUCTION, REF_INSTRUCTION, avisoNumberFor, checkCompliance, ensureAviso, type ComplianceCheck, type RefPolicy } from '@/lib/compliance';
 import { verifyDoi, type CitationCheck } from '@/lib/citation';
 import { researchBundle, briefPromptFrom, type KeywordBrief } from '@/lib/semrush';
 import { attemptPlan } from '@/lib/ai-attempts';
@@ -87,6 +87,8 @@ export type ComplianceStamp = {
   instagram: ComplianceCheck;
   facebook: ComplianceCheck;
   citation: CitationCheck | null;
+  /** The REF policy the pack was written under; every gate that re-checks it reads this. */
+  refPolicy?: RefPolicy;
   /** True when the first draft's citation was rejected by Crossref and the copy was regenerated once. */
   regenerated: boolean;
 };
@@ -139,6 +141,11 @@ export type GenerateInput = {
    * style says so here, and this is placed last so it wins.
    */
   styleHint?: string;
+  /**
+   * Whether the copy must cite a study ('required', the default) or only when
+   * it makes a health claim — the weekly strategy's destination posts.
+   */
+  citationPolicy?: RefPolicy;
 };
 
 // Retryable transient statuses: 408 timeout, 409 conflict, 429 rate limit, 5xx overloaded/errors
@@ -258,9 +265,12 @@ const TYPE_INSTRUCTIONS: Record<ContentType, string> = {
  * leaves the prompt byte-for-byte as it was, which is what keeps
  * lib/autopilot.ts, the assistant and /api/generate on today's behaviour.
  */
-function systemPrompt(type: ContentType, brand?: BrandContext, channels?: string[]) {
+function systemPrompt(type: ContentType, brand?: BrandContext, channels?: string[], citationPolicy?: RefPolicy) {
   const voice = brand?.voice ? `You are the marketing content writer for ${brand.name || 'this brand'}. Write in this brand voice: ${brand.voice}` : DEFAULT_VOICE;
-  return `${voice} ${packKeyContract(channels)} Each value is a finished, ready-to-use string. ${TYPE_INSTRUCTIONS[type]}${MEDICAL_SAFETY_GUARDRAILS}${REF_INSTRUCTION} Return strict JSON only. No prose, no markdown fences.`;
+  // The weekly strategy's destination posts cite a study only when they make a
+  // health claim (the clinic's decision). Every other caller: unchanged.
+  const refRule = citationPolicy === 'if-health-claim' ? REF_IF_CLAIM_INSTRUCTION : REF_INSTRUCTION;
+  return `${voice} ${packKeyContract(channels)} Each value is a finished, ready-to-use string. ${TYPE_INSTRUCTIONS[type]}${MEDICAL_SAFETY_GUARDRAILS}${refRule} Return strict JSON only. No prose, no markdown fences.`;
 }
 
 /**
@@ -327,7 +337,7 @@ async function callAnthropic(input: GenerateInput): Promise<ContentPack> {
     // Silently a no-op when the prefix is below the model's minimum
     // cacheable length, which is the correct failure: nothing breaks, the
     // saving simply does not appear.
-    system: [{ type: 'text', text: systemPrompt(type, input.brand, input.channels), cache_control: { type: 'ephemeral' } }],
+    system: [{ type: 'text', text: systemPrompt(type, input.brand, input.channels, input.citationPolicy), cache_control: { type: 'ephemeral' } }],
     messages: [{ role: 'user', content: buildUserPrompt(input) }],
     // Streamed. A non-streaming request holds the socket silent until the
     // whole answer is composed, which for two 800-1100 character posts is
@@ -406,7 +416,7 @@ async function callOpenAI(input: GenerateInput): Promise<ContentPack> {
       // in which specifics it picks, not in how far it wanders.
       temperature: 0.4,
       messages: [
-        { role: 'system', content: systemPrompt(type, input.brand, input.channels) },
+        { role: 'system', content: systemPrompt(type, input.brand, input.channels, input.citationPolicy) },
         { role: 'user', content: buildUserPrompt(input) },
       ],
     }),
@@ -616,12 +626,21 @@ export async function generateContentPack(
       }
     }
   }
+  const refPolicy: RefPolicy = input.citationPolicy === 'if-health-claim' ? 'if-health-claim' : 'required';
+  const igCheck = checkCompliance(pack.instagram, aviso, { refPolicy });
+  const fbCheck = checkCompliance(pack.facebook, aviso, { refPolicy });
+  // No REF line, and none needed: said as such rather than as "no DOI", which
+  // every gate downstream would read as a citation to go and fix.
+  if (citation.status === 'no_doi' && refPolicy === 'if-health-claim' && igCheck.refWaived && (fbCheck.refWaived || !String(pack.facebook || '').trim())) {
+    citation = { status: 'not_required', doi: null, title: null, year: null };
+  }
   const stamp: ComplianceStamp = {
     aviso,
-    instagram: checkCompliance(pack.instagram, aviso),
-    facebook: checkCompliance(pack.facebook, aviso),
+    instagram: igCheck,
+    facebook: fbCheck,
     citation,
     regenerated,
+    refPolicy,
   };
   (pack as ContentPack & { _compliance?: ComplianceStamp })._compliance = stamp;
 

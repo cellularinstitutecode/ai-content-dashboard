@@ -11,7 +11,11 @@
 // the reviewer sees, because Crossref being down must not stop the clinic
 // from posting a caption it has already read.
 
-export type CitationStatus = 'verified' | 'not_found' | 'no_doi' | 'unavailable';
+/**
+ * 'not_required': the post carries no REF line and needs none — it is under the
+ * "only when it makes a health claim" policy and makes no claim (lib/health-claim.ts).
+ */
+export type CitationStatus = 'verified' | 'not_found' | 'no_doi' | 'unavailable' | 'not_required';
 
 export type CitationCheck = {
   status: CitationStatus;
@@ -55,6 +59,7 @@ export function citationLabel(c: CitationCheck | null | undefined): string {
     case 'verified': return 'Citation verified' + (c.year ? ' (' + c.year + ')' : '');
     case 'not_found': return 'Citation not found — check the reference';
     case 'no_doi': return 'Reference has no DOI — check it by hand';
+    case 'not_required': return 'No citation needed — this post makes no health claim';
     default: return 'Citation could not be verified right now';
   }
 }

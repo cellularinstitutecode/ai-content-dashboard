@@ -22,6 +22,8 @@
 // "Send for review" and "Approve" — refuse an Instagram/Facebook post that is
 // missing either line. Nothing about the rule lives in the UI alone.
 
+import { makesHealthClaim } from './health-claim.ts';
+
 export const DEFAULT_AVISO_NUMBER = '2623022002A00090';
 
 /**
@@ -137,14 +139,33 @@ export type ComplianceCheck = {
   ref: string | null;
   /** The DOI inside the REF line, when it has one. */
   doi: string | null;
+  /**
+   * True when no REF line was needed: the post is under the "only when it
+   * makes a health claim" policy and makes none (lib/health-claim.ts).
+   */
+  refWaived?: boolean;
 };
+
+/**
+ * Whether a post must carry a REF line: 'required' (the rule as it always
+ * was, and the default for every caller that does not say otherwise), or
+ * 'if-health-claim' — the weekly strategy's destination posts, by the
+ * clinic's decision. The AVISO is required either way.
+ */
+export type RefPolicy = 'required' | 'if-health-claim';
+
+/** The policy a draft was written under, read from its compliance stamp. Anything else is 'required'. */
+export function refPolicyOf(pack: unknown): RefPolicy {
+  const stamp = pack && typeof pack === 'object' ? (pack as { _compliance?: { refPolicy?: unknown } })._compliance : null;
+  return stamp?.refPolicy === 'if-health-claim' ? 'if-health-claim' : 'required';
+}
 
 /**
  * Does this caption satisfy the rule? `expectedAviso` is the permit number the
  * post should carry; a present-but-different number is reported as a mismatch
  * (and counts as missing, because the wrong permit is not compliance).
  */
-export function checkCompliance(text: string, expectedAviso?: string | null): ComplianceCheck {
+export function checkCompliance(text: string, expectedAviso?: string | null, opts: { refPolicy?: RefPolicy } = {}): ComplianceCheck {
   const t = String(text || '');
   const missing: ('aviso' | 'ref' | 'doi')[] = [];
   const av = AVISO_RE.exec(t);
@@ -159,9 +180,18 @@ export function checkCompliance(text: string, expectedAviso?: string | null): Co
   // reaches Crossref, so a plausible-looking reference without one was passing every
   // check while nothing had ever confirmed the study exists — the exact failure the
   // "never invent a citation" instruction is there to prevent, with no way to catch it.
-  if (!ref) missing.push('ref');
+  //
+  // Waived only when the policy allows it AND the post makes no health claim —
+  // decided on the text itself, every time, so a policy stamped on a draft can
+  // never carry an uncited claim past this line. A REF that IS present is
+  // checked as always.
+  const refWaived = !ref && opts.refPolicy === 'if-health-claim' && !makesHealthClaim(t);
+  if (!ref) { if (!refWaived) missing.push('ref'); }
   else if (!doi) missing.push('doi');
-  return { ok: missing.length === 0, missing, avisoFound, avisoMismatch, ref, doi: doi ? doi.replace(/[.,;]+$/, '') : null };
+  return {
+    ok: missing.length === 0, missing, avisoFound, avisoMismatch, ref, doi: doi ? doi.replace(/[.,;]+$/, '') : null,
+    ...(refWaived ? { refWaived: true } : {}),
+  };
 }
 
 /**
@@ -217,6 +247,18 @@ export function complianceMessage(check: ComplianceCheck, networks?: readonly st
  * something to write separately — a second citation would need verifying a
  * second time.
  */
+/**
+ * The same instruction for a post under the "only when it makes a health
+ * claim" policy: a destination or logistics post needs no study, and must not
+ * reach for a health claim just to be able to cite one.
+ */
+export const REF_IF_CLAIM_INSTRUCTION =
+  ' Compliance (Mexican health-advertising rules for this clinic): if — and only if — the post makes a health claim (anything about' +
+  ' the body, an outcome, a treatment or a condition), the "instagram" and "facebook" values MUST each end with a line that starts' +
+  ' with "REF: " citing ONE real, peer-reviewed study that supports that claim, with its real DOI (checked against Crossref; never' +
+  ' invent one). A post about travel, logistics, the destination or the patient experience that makes no health claim needs no REF' +
+  ' line — do not add a health claim just to have something to cite. Do NOT write an "AVISO DE PUBLICIDAD" line yourself; the app adds it.';
+
 export const REF_INSTRUCTION =
   ' Compliance (Mexican health-advertising rules for this clinic): the "instagram" and "facebook" values MUST each end with' +
   ' a line that starts with "REF: " citing ONE real, peer-reviewed study that supports the post\'s main claim, in the form' +

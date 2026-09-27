@@ -137,3 +137,11 @@ test('an educational post that still reads as promotion does not go', () => {
   assert.match(holdNote(v), /reads as promotion in 1 place/);
   assert.deepEqual(autoScheduleVerdict({ ...GOOD, promotionFlags: 0 }), { ok: true });
 });
+
+test('a post that needs no citation is not held for lacking one', () => {
+  // A destination post under the "only when it makes a health claim" policy,
+  // with no claim, carries no REF line; there is nothing to verify.
+  assert.deepEqual(autoScheduleVerdict({ ...GOOD, citation: 'not_required' }), { ok: true });
+  const v = autoScheduleVerdict({ ...GOOD, claimSupport: 'unsupported' });
+  assert.equal(!v.ok && v.reason, 'claim', 'the judge saying no still holds');
+});

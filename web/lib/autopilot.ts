@@ -40,6 +40,7 @@ import { loadBrandContext } from '@/lib/brand-context';
 import {
   chatAssistant,
   generateContentPack,
+  judgeClaimSupport,
   type BrandContext,
   type ContentPack,
   type ContentType,
@@ -64,6 +65,9 @@ import { imageUnshippable } from '@/lib/image-verdict';
 import { channelCopy, doisIn, knownBadCitation, perNetworkPlan } from '@/lib/approve-plan';
 import { ARTICLE_LINK_PLACEHOLDER, PROMO_DELAY_MINUTES, articleLogNote, articleUrl, readArticleLog, withArticleLink } from '@/lib/article-promo';
 import { verifyDoi } from '@/lib/citation';
+import { findEvidence } from '@/lib/evidence';
+import { evidenceBriefFrom, type EvidenceItem } from '@/lib/evidence-brief';
+import { MAX_CANDIDATES, claimFrom, type ClaimSupportStamp } from '@/lib/claim-support';
 import { NETWORKS_NEEDING_MEDIA, mediaProblem } from '@/lib/composer';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
@@ -91,7 +95,7 @@ import { angleFor, siblingAngles } from '@/lib/strategy-rotation';
 import { BLOG_ANGLES } from '@/lib/strategy-seed';
 import { scorePack, type RunScore } from '@/lib/score-pack';
 export { scorePack };
-import { isStrategySlot, pickSupportingPhrase, pillarForStrategy, strategyBrand, strategyTopicPrompt } from '@/lib/strategy-voice';
+import { citationPolicyFor, isStrategySlot, pickSupportingPhrase, pillarForStrategy, strategyBrand, strategyTopicPrompt } from '@/lib/strategy-voice';
 export { normalizeStrategy };
 export type { StrategyFormat, StrategyMode, TemplateStrategy } from '@/lib/template-strategy';
 
@@ -790,6 +794,23 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
     }
   } catch (err) { /* optional */ reportError('autopilot:clip-lookup', err); }
 
+  // REAL PAPERS FOR A STRATEGY POST, the way the video pipeline has them.
+  //
+  // Every strategy post was told to cite "one real, relevant study" with no
+  // study in hand, so the writer recalled one, Crossref confirmed only that it
+  // exists, and nothing ever asked whether it backs the post. Now the week's
+  // angle is looked up first (PubMed, then Crossref; lib/evidence.ts), the
+  // abstracts are handed to the writer, and they are kept on the draft so the
+  // score step can ask whether the cited paper supports the copy. Fail-open:
+  // no papers means the post is written exactly as before.
+  const strategySlot = isStrategySlot(strategy);
+  const citationPolicy = citationPolicyFor(strategy);
+  let evidence: EvidenceItem[] = [];
+  if (strategySlot) {
+    try { evidence = await findEvidence(angle.query); } catch (err) { reportError('autopilot:evidence', err, { runId: run.id }); }
+  }
+  const evidenceHint = evidence.length ? evidenceBriefFrom(evidence) : undefined;
+
   const { provider, pack } = await generateContentPack({
     topic: topicPromptFor(angle, strategy, template.name),
     contentType: strategy.format || 'social',
@@ -797,12 +818,20 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
     // Strategy slots swap the Brand Brain's promotional guidelines for the
     // strategy's editorial direction, and skip the top-performer hint — the
     // top performers are procedure posts, and imitating them is the problem.
-    brand: isStrategySlot(strategy) ? strategyBrand(brand) : brand,
-    performanceHint: isStrategySlot(strategy) ? undefined : performanceHint,
+    brand: strategySlot ? strategyBrand(brand, { citation: citationPolicy }) : brand,
+    performanceHint: strategySlot ? undefined : performanceHint,
     // Pass the prepared hint ('' = researched, nothing found) so the
     // generator does not run a second, redundant Semrush lookup.
     keywordHint: hint,
+    evidenceHint,
+    citationPolicy,
   });
+  if (evidence.length) {
+    (pack as ContentPack & { _evidence?: EvidenceItem[] })._evidence = evidence.slice(0, MAX_CANDIDATES).map((e) => ({
+      ...e,
+      abstract: String(e.abstract || '').slice(0, 1200),
+    }));
+  }
 
   // Stamp autopilot provenance on the pack (same pattern as _semrush).
   (pack as ContentPack & { _autopilot?: Record<string, unknown> })._autopilot = {
@@ -952,6 +981,34 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
 
 // The rubric itself lives in lib/score-pack.ts, where it can be run by a test.
 
+/**
+ * Does the paper in a strategy post's REF line support what the post says?
+ *
+ * Asked only of papers fetched for this post (pack._evidence) — the judge
+ * reads their abstracts, and cannot judge a paper it has never seen, so a DOI
+ * the writer recalled from elsewhere is 'unchecked', not a failure. The judge
+ * picking a DIFFERENT paper, or none, is 'unsupported'. A post with no REF
+ * line has nothing to judge (null). Never throws.
+ */
+async function strategyClaimSupport(pack: ContentPack): Promise<ClaimSupportStamp | null> {
+  try {
+    const items = (pack as ContentPack & { _evidence?: EvidenceItem[] })._evidence || [];
+    const caption = String((pack as unknown as Record<string, unknown>).instagram || (pack as unknown as Record<string, unknown>).facebook || '');
+    const cited = checkCompliance(caption).doi;
+    if (!cited) return null;
+    const index = items.findIndex((i) => String(i.doi || '').toLowerCase() === cited.toLowerCase());
+    if (index < 0 || !items.length) return { status: 'unchecked', doi: cited };
+    const claim = claimFrom(caption);
+    const verdict = await judgeClaimSupport({ claim, items });
+    if (verdict.status === 'unchecked') return { status: 'unchecked', doi: cited };
+    if (verdict.status === 'supported' && verdict.index === index) return { status: 'supported', doi: cited };
+    return { status: 'unsupported', doi: cited };
+  } catch (err) {
+    reportError('autopilot:claim-support', err);
+    return null;
+  }
+}
+
 async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateStrategy): Promise<Partial<RunRow>> {
   const db = supabaseAdmin();
   const angle = run.angle as Angle;
@@ -989,7 +1046,9 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
       // its own auto-brief when the field is absent and skips it when the field
       // is an empty string, so '' was explicitly turning the research off.
       const loaded = await loadBrandContext(db, run.user_id);
-      const brand = strategySlot ? strategyBrand(loaded) : loaded;
+      const citationPolicy = citationPolicyFor(strategy);
+      const brand = strategySlot ? strategyBrand(loaded, { citation: citationPolicy }) : loaded;
+      const keptEvidence = (pack as ContentPack & { _evidence?: EvidenceItem[] })._evidence;
       // A strategy slot passes '' explicitly: left undefined, the generator
       // ran its own keyword brief on this whole critique prompt and handed the
       // rewrite a Semrush contract the first draft had been kept from.
@@ -998,12 +1057,13 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
         contentType: strategy.format || 'social',
         channels: template.providers,
         brand,
-        ...(strategySlot ? { keywordHint: '' } : {}),
+        ...(strategySlot ? { keywordHint: '', citationPolicy, evidenceHint: keptEvidence?.length ? evidenceBriefFrom(keptEvidence) : undefined } : {}),
       });
       const retryScore = scorePack(retry, template.providers || [], angle, { strategySlot });
       if (retryScore.total > score.total) {
         (retry as ContentPack & { _autopilot?: unknown })._autopilot =
           (pack as ContentPack & { _autopilot?: unknown })._autopilot;
+        if (keptEvidence?.length) (retry as ContentPack & { _evidence?: EvidenceItem[] })._evidence = keptEvidence;
         const { error: saveError } = await db.from('drafts').update({ pack: retry })
           .eq('id', run.draft_id).eq('user_id', run.user_id);
         // Read, not assumed. Unread, the SCORE was persisted while the pack was
@@ -1017,6 +1077,21 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
         }
       }
     } catch (err) { /* keep the original pack+score */ reportError('autopilot:regen-rescore', err); }
+  }
+
+  // DOES THE CITED PAPER BACK THE POST? For a strategy post whose papers were
+  // fetched at draft time. The verdict is stamped on the draft, shown on the
+  // card, and read by autoScheduleVerdict (an 'unsupported' holds the post).
+  if (strategySlot) {
+    const stamp = await strategyClaimSupport(pack);
+    if (stamp) {
+      (pack as ContentPack & { _claimSupport?: ClaimSupportStamp })._claimSupport = stamp;
+      const { data: fresh } = await db.from('drafts').select('pack').eq('id', run.draft_id).eq('user_id', run.user_id).maybeSingle();
+      const current = (fresh as { pack?: Record<string, unknown> } | null)?.pack || (pack as unknown as Record<string, unknown>);
+      const { error: stampError } = await db.from('drafts').update({ pack: { ...current, _claimSupport: stamp } })
+        .eq('id', run.draft_id).eq('user_id', run.user_id);
+      if (stampError) reportError('autopilot:claim-support-save', stampError, { runId: run.id });
+    }
   }
 
   return {
@@ -1343,7 +1418,9 @@ async function autoSchedule(
       promotionFlags: run.score?.promotionFlags?.length ?? 0,
       networks: template.providers || [],
       hasMedia: hasImage || (!isStrategySlot(template.strategy) && Boolean(run.angle?.media?.url)),
-      claimSupport: null,
+      // The judge's verdict on a strategy post's citation (stepScore). Null for
+      // every other post, which is what this always was.
+      claimSupport: (pack?._claimSupport as { status?: string } | undefined)?.status ?? null,
     });
 
     if (!verdict.ok) {
@@ -1941,8 +2018,10 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // The weekly article's promos carry its link, which only exists once
   // WordPress has the article. They are checked here with a stand-in link of
   // realistic length, and built again around the real one after publishing.
+  const refPolicy = citationPolicyFor((t as { strategy?: TemplateStrategy | null } | null)?.strategy);
   const plan = perNetworkPlan(pack as unknown as Record<string, unknown>, mcProviders, {
     aviso,
+    refPolicy,
     transform: wantsArticle ? (_network, text) => withArticleLink(text, ARTICLE_LINK_PLACEHOLDER) : undefined,
   });
   if (!plan.ok) {
@@ -2148,6 +2227,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     if (!handoffFailed && mcProviders.length) {
       const withLink = perNetworkPlan(pack as unknown as Record<string, unknown>, mcProviders, {
         aviso,
+        refPolicy,
         transform: (_network, text) => withArticleLink(text, link),
       });
       if (!withLink.ok) {

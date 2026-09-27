@@ -1,5 +1,6 @@
 // web/app/api/posts/route.ts
 import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
+import { refPolicyOf } from '@/lib/compliance';
 import { videoVerdict, pendingRefusal, videoSourceOf, type PackLike } from '@/lib/video-required';
 import { ensureShareableVideo } from '@/lib/media-library';
 import { recordApproval } from '@/lib/approval-log';
@@ -573,7 +574,9 @@ export async function PATCH(req: Request) {
     // can hold `blog`, which the gate covers now — so a legacy row going only
     // to Instagram was refused with a message naming an article. The same
     // defect, in the same shape, as the one fixed in templates/apply.
-    const gate = await complianceGate(user.id, String(existing.text || ''), metricoolNetworks(existing.providers));
+    // Under the policy the draft was written with: a weekly-strategy
+    // destination post needs a REF only when its text makes a health claim.
+    const gate = await complianceGate(user.id, String(existing.text || ''), metricoolNetworks(existing.providers), { refPolicy: refPolicyOf(draftPack) });
     if (!gate.ok) return NextResponse.json(gateRefusal(gate), { status: 422 });
 
     // And the video rule, at the same door rather than in a mechanism of its
