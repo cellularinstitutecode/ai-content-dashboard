@@ -70,6 +70,8 @@ import { autoSchedules } from '@/lib/autopilot-mode';
 import { usableLeadHours } from '@/lib/lead-window';
 import { weeklyPaceVerdict, weeklyCeiling, paceNote, ROLLING_WINDOW_DAYS, PACE_SCAN_LIMIT, NOT_PUBLISHING } from '@/lib/weekly-pace';
 import { videoVerdict, pendingRefusal, type PackLike } from '@/lib/video-required';
+import { isMissed, MISSED_RETIRE_DAYS } from '@/lib/review-queue';
+import { nextFreeSlot } from '@/lib/missed-slot';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -102,6 +104,7 @@ export type Angle = {
   provenPerformer?: boolean; // boosted by the measured-engagement learning loop
   supportingPhrase?: string; // weekly-strategy slots: an optional search phrase found by research
   media?: { url: string; title: string } | null; // matching clip to attach on approve
+  redatedFrom?: string; // the slot this run missed, when a reviewer moved it to the next free one
 };
 
 export type RunScore = {
@@ -156,6 +159,15 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+
+/** "Tue, Sep 29, 9:00 AM" in the clinic's zone — a slot as a reviewer reads it. */
+function slotLabel(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return String(iso || '');
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: SCHEDULE_TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  }).format(d);
+}
 
 function logLine(run: RunRow, step: string, note: string): { at: string; step: string; note: string }[] {
   // REDACTED before it is stored, not merely before it is logged.
@@ -1123,6 +1135,39 @@ export async function expireStaleRuns(scopeUserId?: string): Promise<number> {
     if (expireError) reportError('autopilot:expire', expireError, { runId: row.id });
     if (updated) expired++;
   }
+
+  // A finished post nobody decided on. It stays in the queue as "missed" —
+  // shown first, with "Approve for next free slot" — for MISSED_RETIRE_DAYS.
+  // Past that it is retired to skipped, with the reason on it: a fortnight-old
+  // post about this week's angle is not something to publish late, and a
+  // queue that only grows is one nobody reads.
+  const retireBefore = new Date(Date.now() - MISSED_RETIRE_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  let rq = db
+    .from('template_runs')
+    .select('id, state, log, scheduled_for')
+    .eq('state', 'ready_for_review')
+    .lt('scheduled_for', retireBefore)
+    .limit(50);
+  if (scopeUserId) rq = rq.eq('user_id', scopeUserId);
+  const { data: stale, error: staleError } = await rq;
+  if (staleError) {
+    reportError('autopilot:missed-expire-read', staleError);
+    return expired;
+  }
+  for (const row of (stale || []) as RunRow[]) {
+    const { data: updated, error: retireError } = await db
+      .from('template_runs')
+      .update({
+        state: 'skipped',
+        log: logLine(row, 'missed-expired', 'Nobody approved this post within ' + MISSED_RETIRE_DAYS + ' days of its time, so it was retired. Nothing was sent.'),
+      })
+      .eq('id', row.id)
+      .eq('state', 'ready_for_review')
+      .select('id')
+      .maybeSingle();
+    if (retireError) reportError('autopilot:missed-expire', retireError, { runId: row.id });
+    if (updated) expired++;
+  }
   return expired;
 }
 
@@ -1178,6 +1223,13 @@ async function autoSchedule(
   template: TemplateRow,
 ): Promise<void> {
   try {
+    // A slot that has already passed is a person's decision, never the
+    // engine's: approveRun would refuse it anyway, and moving a post to a new
+    // time is something only a reviewer asks for.
+    if (isMissed(run)) {
+      await hold(db, run, 'Held for you because this post\'s time has already passed. Nothing was sent. Use "Approve for next free slot" to send it at the next open time, or skip it.');
+      return;
+    }
     // The pack carries both signals: the Crossref verdict stamped at
     // generation time (lib/ai.ts) and the hero image stamped at draft time.
     let pack: Record<string, unknown> | null = null;
@@ -1545,7 +1597,78 @@ export type ApproveOptions = {
    * the Metricool handoff all run the same way whoever asked.
    */
   schedule?: boolean;
+  /**
+   * The reviewer pressed "Approve for next free slot" on a post whose time has
+   * passed. Without it a past slot is refused: Metricool will not take a date
+   * in the past, and guessing a new time for somebody is not this function's
+   * call. Only a person sets it — the engine holds a missed post instead.
+   */
+  redate?: boolean;
 };
+
+/**
+ * Move a claimed run whose slot has passed to the next free slot.
+ *
+ * "Free" is lib/missed-slot.ts's answer: inside posting hours in the clinic's
+ * time zone and an hour clear of every post already going out and every run
+ * still on its way. The move is conditional on the claim still holding, and
+ * the unique (template_id, scheduled_for) key is answered by trying the next
+ * candidate rather than failing.
+ *
+ * Returns the new slot, or null after writing nothing.
+ */
+async function redateClaimedRun(
+  db: ReturnType<typeof supabaseAdmin>,
+  run: RunRow,
+): Promise<string | null> {
+  const now = new Date();
+  const horizon = new Date(now.getTime() + 8 * 24 * 60 * 60 * 1000).toISOString();
+  const [posts, runs] = await Promise.all([
+    db.from('posts').select('publication_date')
+      .eq('user_id', run.user_id)
+      .not('status', 'in', '(' + [...NOT_PUBLISHING].join(',') + ')')
+      .gte('publication_date', now.toISOString())
+      .lte('publication_date', horizon)
+      .limit(500),
+    db.from('template_runs').select('scheduled_for')
+      .eq('user_id', run.user_id)
+      .in('state', [...ACTIVE_STATES, 'ready_for_review'])
+      .neq('id', run.id)
+      .gte('scheduled_for', now.toISOString())
+      .lte('scheduled_for', horizon)
+      .limit(500),
+  ]);
+  if (posts.error || runs.error) {
+    reportError('autopilot:redate-read', posts.error || runs.error, { runId: run.id });
+    return null;
+  }
+  const busy: Date[] = [
+    ...((posts.data || []) as { publication_date?: string | null }[]).map((p) => new Date(String(p.publication_date || ''))),
+    ...((runs.data || []) as { scheduled_for?: string | null }[]).map((r) => new Date(String(r.scheduled_for || ''))),
+  ].filter((d) => Number.isFinite(d.getTime()));
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const slot = nextFreeSlot({ now, busy, tz: SCHEDULE_TZ });
+    if (!slot) return null;
+    const iso = slot.toISOString();
+    const angle = run.angle ? { ...run.angle, redatedFrom: run.angle.redatedFrom || run.scheduled_for } : run.angle;
+    const { data, error } = await db
+      .from('template_runs')
+      .update({ scheduled_for: iso, angle })
+      .eq('id', run.id)
+      .eq('state', 'approved')
+      .select('id');
+    if (error) {
+      // Another run of this template already holds that instant: take the next.
+      if ((error as { code?: string }).code === '23505') { busy.push(slot); continue; }
+      reportError('autopilot:redate-write', error, { runId: run.id });
+      return null;
+    }
+    if (!Array.isArray(data) || !data.length) return null;
+    return iso;
+  }
+  return null;
+}
 
 /**
  * Put a run that has already been CLAIMED back in the queue.
@@ -1614,6 +1737,31 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   }
   if (!Array.isArray(claimed) || claimed.length === 0) {
     return { ok: false, note: 'this run was already actioned' };
+  }
+
+  // A SLOT THAT HAS ALREADY GONE BY. Sending it anyway handed Metricool a
+  // publication date in the past, which it refuses — after the reviewer had
+  // moved on. So a missed post is either moved, because the reviewer asked for
+  // exactly that, or refused here with the way forward written on the card.
+  if (isMissed(run)) {
+    const missedAt = slotLabel(run.scheduled_for);
+    if (!opts.redate) {
+      const why = 'Not sent: this post was due ' + missedAt + ' and that time has passed. ' +
+        'Press "Approve for next free slot" to send it at the next open time, or skip it. Nothing was sent.';
+      await releaseClaim(db, run, 'approve-refused', why);
+      return { ok: false, note: why };
+    }
+    const moved = await redateClaimedRun(db, run);
+    if (!moved) {
+      const why = 'Not sent: this post missed ' + missedAt + ' and no free slot could be found in the next week. Nothing was sent; try again, or skip it.';
+      await releaseClaim(db, run, 'approve-failed', why);
+      return { ok: false, note: why };
+    }
+    // Everything below — the Metricool date, the posts row, the article —
+    // reads the slot from here.
+    run.angle = run.angle ? { ...run.angle, redatedFrom: run.angle.redatedFrom || run.scheduled_for } : run.angle;
+    run.scheduled_for = moved;
+    run.log = logLine(run, 'redated', 'Missed ' + missedAt + '; moved to ' + slotLabel(moved) + ' at the reviewer\'s request.');
   }
 
   // THE READ THAT COULD NOT FAIL QUIETLY.

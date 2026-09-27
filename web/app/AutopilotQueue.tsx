@@ -92,6 +92,9 @@ type Run = {
   // the payload. See lib/run-failure.ts.
   log?: RunLogEntry[] | null;
   attempts?: number | null;
+  // A finished post whose time has already passed (lib/review-queue.ts). It
+  // can only go out at a new time, which the reviewer asks for explicitly.
+  missed?: boolean;
 };
 
 const ANGLE_META: Record<Angle['type'], { label: string; cls: string }> = {
@@ -120,7 +123,7 @@ const fmtSlot = fmtScheduleSlot;
  * The decision and the wording live in lib/run-failure.ts, which is pure and
  * tested. This component only draws them.
  */
-function FailedRun({ run, busy, onRetry }: { run: Run; busy: boolean; onRetry: () => void }) {
+function FailedRun({ run, busy, onRetry, onDismiss }: { run: Run; busy: boolean; onRetry: () => void; onDismiss: () => void }) {
   const [open, setOpen] = useState(false);
   const failure = describeFailure(run.log, run.attempts, MAX_ATTEMPTS);
   const history = historyForDisplay(run.log);
@@ -160,6 +163,17 @@ function FailedRun({ run, busy, onRetry }: { run: Run; busy: boolean; onRetry: (
             {busy ? 'Retrying…' : 'Retry'}
           </button>
         )}
+        {/* Always offered. A failure nobody can act on used to stay here for
+            good and, in numbers, push the posts waiting for approval off the
+            queue altogether. */}
+        <button
+          type="button"
+          onClick={onDismiss}
+          disabled={busy}
+          className="shrink-0 rounded-full px-3 py-1 text-[12px] font-medium text-red-700/80 ring-1 ring-red-200 transition hover:bg-white disabled:opacity-50"
+        >
+          Dismiss
+        </button>
       </div>
 
       {/* The last entry says what broke. The thirty before it say whether it was
@@ -275,7 +289,7 @@ export default function AutopilotQueue() {
     return () => { cancelled = true; };
   }, [runs, load]);
 
-  async function act(id: string, action: 'approve' | 'skip' | 'run_now' | 'regenerate', extraNote?: string, schedule = false) {
+  async function act(id: string, action: 'approve' | 'skip' | 'run_now' | 'regenerate', extraNote?: string, schedule = false, redate = false) {
     setBusyId(id);
     setErr(null);
     setNote(null);
@@ -283,7 +297,7 @@ export default function AutopilotQueue() {
       const r = await fetch('/api/autopilot/runs', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id, action, note: extraNote, schedule }),
+        body: JSON.stringify({ id, action, note: extraNote, schedule, redate }),
       });
       const j = await r.json().catch(() => ({}));
       // `message` first, `error` second. `error` is the machine code — the
@@ -502,6 +516,11 @@ export default function AutopilotQueue() {
                       <span>{r.template_name}</span>
                       <span aria-hidden>·</span>
                       <span>{fmtSlot(r.scheduled_for)}</span>
+                      {r.missed && (
+                        <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700" title="Its time passed before it was approved">
+                          Missed
+                        </span>
+                      )}
                       {r.score && (
                         <span className={'rounded-full px-2 py-0.5 text-[11px] font-semibold ' + (r.score.total >= 70 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700')}>
                           {r.score.total}/100
@@ -666,25 +685,43 @@ export default function AutopilotQueue() {
                         final word — Metricool publishes at the slot, nobody opens
                         it. "Approve as draft" keeps the older two-step for anyone
                         who wants a second look in the queue first. */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!window.confirm('Approve and schedule this post?\n\nIt will be published at ' + fmtSlot(r.scheduled_for) + ' (clinic time). Metricool does the publishing; you will not need to open it.')) return;
-                        void act(r.id, 'approve', undefined, true);
-                      }}
-                      disabled={busyId === r.id}
-                      className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
-                    >
-                      {busyId === r.id ? 'Working…' : 'Approve & schedule'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => act(r.id, 'approve')}
-                      disabled={busyId === r.id}
-                      className="rounded-full px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:text-ink disabled:opacity-50"
-                    >
-                      Approve as draft
-                    </button>
+                    {r.missed ? (
+                      // Its time has gone by. The only way out is a NEW time,
+                      // and that is said before anything is sent.
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!window.confirm('This post was due ' + fmtSlot(r.scheduled_for) + ' and that time has passed.\n\nSchedule it at the next free slot (clinic posting hours, clear of anything else going out)?')) return;
+                          void act(r.id, 'approve', undefined, true, true);
+                        }}
+                        disabled={busyId === r.id}
+                        className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+                      >
+                        {busyId === r.id ? 'Working…' : 'Approve for next free slot'}
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!window.confirm('Approve and schedule this post?\n\nIt will be published at ' + fmtSlot(r.scheduled_for) + ' (clinic time). Metricool does the publishing; you will not need to open it.')) return;
+                            void act(r.id, 'approve', undefined, true);
+                          }}
+                          disabled={busyId === r.id}
+                          className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+                        >
+                          {busyId === r.id ? 'Working…' : 'Approve & schedule'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => act(r.id, 'approve')}
+                          disabled={busyId === r.id}
+                          className="rounded-full px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:text-ink disabled:opacity-50"
+                        >
+                          Approve as draft
+                        </button>
+                      </>
+                    )}
                     <button
                       type="button"
                       onClick={() => {
@@ -739,7 +776,7 @@ export default function AutopilotQueue() {
         {failed.length > 0 && (
           <div className="mt-6 space-y-2">
             <div className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">Needs attention</div>
-            {failed.map((r) => <FailedRun key={r.id} run={r} busy={busyId === r.id} onRetry={() => act(r.id, 'run_now')} />)}
+            {failed.map((r) => <FailedRun key={r.id} run={r} busy={busyId === r.id} onRetry={() => act(r.id, 'run_now')} onDismiss={() => act(r.id, 'skip')} />)}
           </div>
         )}
       </div>
