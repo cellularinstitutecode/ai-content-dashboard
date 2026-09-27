@@ -61,6 +61,7 @@ import { metricoolNetworks, wantsBlog } from '@/lib/metricool-networks';
 import { professionalTitle } from '@/lib/post-title';
 import { publishArticle, wordpressConfigured } from '@/lib/wordpress';
 import { ensureDraftImage, type PackImage } from '@/lib/images';
+import { imageUnshippable } from '@/lib/image-verdict';
 import { NETWORKS_NEEDING_MEDIA, mediaProblem } from '@/lib/composer';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
@@ -755,7 +756,13 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
 
   // Media enrichment: remember the best matching finished clip so approval
   // can attach it to the Metricool draft. Purely additive.
-  const media = await findMatchingClip(run.user_id, angle);
+  //
+  // NOT for the weekly strategy. The matcher accepts any clip sharing one word
+  // longer than three letters with the angle — "what", "with", "time" — and a
+  // matched clip wins over the picture at approval. So a Tuesday post on
+  // protein could go out carrying an HBOT procedure reel in place of the
+  // educational cover it was made with. Those posts have their own picture.
+  const media = isStrategySlot(strategy) ? null : await findMatchingClip(run.user_id, angle);
   const angleOut: Angle = { ...angle, media };
 
   // Reuse the existing draft row on regeneration so the library doesn't
@@ -1257,11 +1264,11 @@ async function autoSchedule(
       pack = (data as { pack?: Record<string, unknown> } | null)?.pack || null;
     }
     const compliance = pack?._compliance as { citation?: { status?: string } } | undefined;
-    const image = pack?._image as { url?: string; verification?: { textDetected?: boolean } } | undefined;
-    // An image the checker flagged for text is treated as no image, exactly as
-    // the ship-point treats it (see approveRun): it can never be attached, so
-    // a post that needs one does not have one.
-    const hasImage = Boolean(image?.url) && image?.verification?.textDetected !== true;
+    const image = pack?._image as { url?: string; verification?: { textDetected?: boolean; bannedProp?: boolean; issues?: string[] } } | undefined;
+    // An image the checker flagged for text or a banned prop is treated as no
+    // image, exactly as the ship-point treats it (see approveRun): it can never
+    // be attached, so a post that needs one does not have one.
+    const hasImage = Boolean(image?.url) && !imageUnshippable(image?.verification);
 
     const verdict = autoScheduleVerdict({
       citation: compliance?.citation?.status ?? null,
@@ -1270,7 +1277,7 @@ async function autoSchedule(
       safetyFlags: run.score?.safetyFlags?.length ?? 0,
       promotionFlags: run.score?.promotionFlags?.length ?? 0,
       networks: template.providers || [],
-      hasMedia: hasImage || Boolean(run.angle?.media?.url),
+      hasMedia: hasImage || (!isStrategySlot(template.strategy) && Boolean(run.angle?.media?.url)),
       claimSupport: null,
     });
 
@@ -1788,7 +1795,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // The post sits on the calendar saying "waiting for your approval" and can
   // never publish. This is the exact invariant the comment below claims.
   const { data: t, error: templateError } = await db
-    .from('schedule_templates').select('providers, name').eq('id', run.template_id).maybeSingle();
+    .from('schedule_templates').select('providers, name, strategy').eq('id', run.template_id).maybeSingle();
   if (templateError) {
     reportError('autopilot:approve-template', templateError, { runId: run.id });
     await releaseClaim(db, run, 'approve-failed', 'Approval could not proceed: the template could not be read. Returned for review.');
@@ -1808,6 +1815,11 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // never publish. Exactly the state the comment above the insert says this
   // function refuses to record.
   const wantsArticle = wantsBlog(providers);
+  // A weekly-strategy post never carries a matched clip. Runs drafted before
+  // stepDraft stopped matching them may still have one stored; it is ignored
+  // here rather than shipped over the post's own picture.
+  const strategyPost = isStrategySlot((t as { strategy?: TemplateStrategy | null } | null)?.strategy);
+  const clip = strategyPost ? null : run.angle?.media?.url ? run.angle.media : null;
   if (!metricoolNetworks(providers).length && !wantsArticle) {
     await releaseClaim(db, run, 'approve-failed', 'Approval could not proceed: the template has no networks selected. Returned for review.');
     return { ok: false, note: 'That template has no networks selected, so there was nowhere to send it. It is back in your queue.' };
@@ -1867,7 +1879,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // "Has the video" here means the matched clip, not the hero image: `angle
   // .media.url` is the only video this path can attach, and the image below is
   // a picture.
-  const videoRule = videoVerdict(pack as PackLike, Boolean(run.angle?.media?.url));
+  const videoRule = videoVerdict(pack as PackLike, Boolean(clip?.url));
   if (videoRule.pending) {
     await releaseClaim(db, run, 'approve-refused', 'Not sent: ' + pendingRefusal(videoRule));
     return { ok: false, note: pendingRefusal(videoRule) + ' The run is back in your queue.' };
@@ -1882,8 +1894,11 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // is treated as missing (ensureDraftImage regenerates it with the next
   // composition variant), and if the regeneration still carries text, the
   // post ships with no image rather than a text-bearing one.
+  // And an image showing a banned prop — a syringe, a pill, a cuff on an arm —
+  // is refused the same way. It used to be only text: a banned-prop image was
+  // flagged, kept as the best of three flagged candidates, and attached.
   const shippable = (img: PackImage | null): PackImage | null =>
-    img?.verification?.textDetected === true ? null : img;
+    imageUnshippable(img?.verification) ? null : img;
   let packImage: PackImage | null = shippable(
     (pack as ContentPack & { _image?: PackImage })._image || null
   );
@@ -1897,7 +1912,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // after the reviewer pressed Approve and moved on. Refuse here instead, where
   // the reviewer is standing: the run goes back to the queue with "New image"
   // one click away. (A matched clip counts as the attachment, as it always has.)
-  const noMedia = mediaProblem(mcProviders, run.angle?.media?.url || packImage?.url || '');
+  const noMedia = mediaProblem(mcProviders, clip?.url || packImage?.url || '');
   if (noMedia) {
     const why = 'Not sent: ' + noMedia.replace(/ Attach one below, or unselect (it|them)\./, '') +
       ' The picture for this post could not be made — press "New image" on the card, then approve again. Nothing was sent anywhere.';
@@ -1980,8 +1995,8 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // queue there too. Fail-soft: missing env just means dashboard-only staging.
   if (mcProviders.length) {
     // A matched video clip wins; otherwise attach the generated hero image.
-    const media = run.angle?.media?.url
-      ? [{ url: run.angle.media.url }]
+    const media = clip?.url
+      ? [{ url: clip.url }]
       : packImage?.url
         ? [{ url: packImage.url }]
         : [];
@@ -2010,8 +2025,8 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
       if (sentError) reportError('autopilot:approve-sent-log', sentError, { runId: run.id });
       note =
         (opts.schedule ? 'Approved and SCHEDULED in Metricool for ' : 'Sent to Metricool as a DRAFT for ') + mcProviders.join(', ') +
-        (run.angle?.media?.url
-          ? ' with clip "' + (run.angle?.media?.title || 'video') + '" attached'
+        (clip?.url
+          ? ' with clip "' + (clip.title || 'video') + '" attached'
           : packImage?.url
             ? ' with the AI hero image attached'
             : '') +
@@ -2117,7 +2132,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
       publishDate: run.scheduled_for,
       networks: providers,
       caption: text,
-      mediaUrl: run.angle?.media?.url || packImage?.url || '',
+      mediaUrl: clip?.url || packImage?.url || '',
       source: 'Autopilot · approve & schedule',
       // The run id is NOT a post id. Falling back to it silently mixed two id
       // spaces in the audit column; an empty cell is honest, a wrong id is not.

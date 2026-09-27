@@ -14,6 +14,7 @@ import { fmtScheduleSlot } from '@/lib/schedule-clock';
 import { describeFailure, historyForDisplay, type RunLogEntry } from '@/lib/run-failure';
 import { MAX_ATTEMPTS } from '@/lib/planner-constants';
 import { plannerImageFor } from '@/lib/planner-image';
+import { imageUnshippable } from '@/lib/image-verdict';
 
 // The visible pipeline an engine run walks through. The tick call does all of
 // this server-side in one request; the tracker paces the display so the viewer
@@ -63,7 +64,7 @@ type PackImage = {
   alt?: string;
   model?: string;
   variant?: number;
-  verification?: { status?: 'approved' | 'flagged' | 'unchecked'; score?: number | null; issues?: string[]; textDetected?: boolean };
+  verification?: { status?: 'approved' | 'flagged' | 'unchecked'; score?: number | null; issues?: string[]; textDetected?: boolean; bannedProp?: boolean };
   /** Weekly-planner covers: the photo with its title set on top (lib/title-cover.ts). */
   titled?: { title: string; photoUrl: string };
   source?: string;
@@ -603,6 +604,8 @@ export default function AutopilotQueue() {
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         {r.pack._image.verification?.textDetected ? (
                           <span className="rounded-full bg-red-600/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(r.pack._image.verification?.issues || []).join(' · ') || 'Text detected — content images must be text-free'}>✗ text in image — reroll before approving</span>
+                        ) : imageUnshippable(r.pack._image.verification) ? (
+                          <span className="rounded-full bg-red-600/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(r.pack._image.verification?.issues || []).join(' · ')}>✗ banned prop in frame — this image will not ship; choose another</span>
                         ) : r.pack._image.verification?.status === 'approved' ? (
                           <span className="rounded-full bg-emerald-600/90 px-2 py-0.5 text-[10px] font-semibold text-white" title={'Machine-verified clean' + (r.pack._image.verification?.score != null ? ' · ' + r.pack._image.verification.score + '/100' : '')}>✓ verified</span>
                         ) : r.pack._image.verification?.status === 'flagged' ? (

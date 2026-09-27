@@ -23,6 +23,11 @@ export type ImageVerdict = {
   /** Notes worth showing a person, that do not fail the image. */
   advisory: string[];
   textDetected: boolean;
+  /**
+   * A banned prop or a device on a person is in frame. Like text, this is a
+   * picture that must never be attached to a post — see imageUnshippable.
+   */
+  bannedProp: boolean;
   /** Advisory 0-100: how much the picture lives in the brand's own world. Never affects status. */
   brandFit: number | null;
   /** Planner covers: how far down the frame the highest head starts, as a percentage. Null when not measured. */
@@ -54,6 +59,41 @@ const BLOCKING_RE = new RegExp(
   ].join('|'),
   'i',
 );
+
+/**
+ * The props-and-devices part of BLOCKING_RE, on its own: a clinic photograph
+ * contains no anatomical model, no medicine, and nothing worn by or given to a
+ * patient. Exported so the planner's own scene briefs can be checked against
+ * it — two of them used to ASK for a cuff on an arm and a dish of capsules.
+ */
+export const BANNED_PROP_RE = new RegExp(
+  [
+    'model (brain|heart|spine|lung|kidney|organ|skull|torso)', '(brain|heart|spine|organ|torso) model',
+    'skeleton', 'skull', 'mannequin', 'teaching (model|prop|aid)', 'anatomical (chart|poster|model)',
+    '(pill|supplement|vitamin|medicine|medication|tablet|capsule) bottle', 'blister pack', '\\bpills?\\b', '\\bcapsules?\\b', '\\btablets\\b',
+    'syringe', '\\bvials?\\b', 'ampoule', '\\bneedles?\\b',
+    'blood.?pressure cuff[^,;.]{0,20}\\b(on|around) (the |a |an |their |his |her )?(patient.s |person.s )?(upper )?arm', 'bp cuff', 'ecg', 'ekg', 'electrode',
+    'pulse oximeter', 'iv (line|drip|bag)', 'cannula', 'catheter', 'glucose monitor', 'oxygen mask', 'injector pen', 'infusion',
+    'banned prop',
+  ].join('|'),
+  'i',
+);
+
+/**
+ * May this picture be attached to a post at all?
+ *
+ * Text has always been refused at the ship-point. A banned prop was not: the
+ * verdict flagged the image, the pipeline kept the best flagged candidate when
+ * three attempts were all flagged, and approval — and autoschedule — attached
+ * it anyway. So a planner post could go out showing a syringe or a cuff on an
+ * arm. Now both are the same rule, in one place. `issues` is read too, so an
+ * image verified before `bannedProp` was recorded is judged the same way.
+ */
+export function imageUnshippable(v: { textDetected?: boolean; bannedProp?: boolean; issues?: readonly string[] } | null | undefined): boolean {
+  if (!v) return false;
+  if (v.textDetected === true || v.bannedProp === true) return true;
+  return (v.issues || []).some((i) => /banned prop/i.test(String(i)));
+}
 
 function strings(v: unknown, cap = 8): string[] {
   return Array.isArray(v) ? v.map((i) => String(i).slice(0, 160)).filter(Boolean).slice(0, cap) : [];
@@ -128,6 +168,7 @@ export function classifyVerdict(raw: unknown, opts: { requireOnTopic?: boolean; 
     issues: flagged && vetoWithoutReason && !blocking.length ? ['reviewer declined the image without naming a defect'] : blocking,
     advisory,
     textDetected,
+    bannedProp: obj.bannedProp === true,
     brandFit,
   };
 }

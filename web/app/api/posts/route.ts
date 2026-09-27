@@ -26,6 +26,7 @@ import { tabGid } from '@/lib/google-sources';
 import type { PostSource } from '@/lib/sheet-link';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { resolvePostSources, type RegisterEntryLike, type RunLike } from '@/lib/post-source';
+import { imageUnshippable } from '@/lib/image-verdict';
 
 /** The draft's own public title, when the pack carries one. */
 function packTitleOf(pack: unknown): string | null {
@@ -367,7 +368,8 @@ export async function PATCH(req: Request) {
     }
     draftPack = (d as any)?.pack ?? null;
     const url = (d as any)?.pack?._image?.url;
-    const textInImage = (d as any)?.pack?._image?.verification?.textDetected === true;
+    // Text or a banned prop: a picture that may never be attached (lib/image-verdict.ts).
+    const textInImage = imageUnshippable((d as any)?.pack?._image?.verification);
     if (typeof url === 'string' && url && !textInImage) heroImage = url;
   }
 

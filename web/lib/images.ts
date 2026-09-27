@@ -32,7 +32,7 @@ import 'server-only';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import type { BrandContext } from '@/lib/ai';
 import { normalizeVisual, visualPromptBlock, brandFitRubric, type BrandVisual } from '@/lib/brand-visual';
-import { classifyVerdict } from './image-verdict.ts';
+import { classifyVerdict, imageUnshippable } from './image-verdict.ts';
 import { supersededKeys } from './storage-prune.ts';
 import { recordImageOutcome } from '@/lib/provider-status';
 
@@ -55,6 +55,9 @@ export type ImageVerification = {
   // and the pipeline treats it as the worst possible outcome (always
   // regenerates; a text-bearing candidate can never beat a text-free one).
   textDetected?: boolean;
+  // Same weight as text: a banned prop or a device on a person in frame. Such
+  // an image may never be attached (lib/image-verdict.ts imageUnshippable).
+  bannedProp?: boolean;
   /** Planner covers: where the highest head starts, as a percentage of the photo's height. */
   headTopPct?: number | null;
   // Advisory 0-100 from the same reviewer: does the picture live in the
@@ -483,6 +486,7 @@ async function verifyGeneratedImage(img: GeneratedImage, topic: string, visual?:
       issues: verdict.issues,
       advisory: verdict.advisory,
       textDetected: verdict.textDetected,
+      bannedProp: verdict.bannedProp,
       brandFit: verdict.brandFit,
       model: VISION_MODEL,
       checkedAt: new Date().toISOString(),
@@ -675,10 +679,11 @@ async function generateBestPackImage(opts: {
     const verification = await verifyGeneratedImage(img, subject, normalizeVisual(opts.brand?.visual), plannerNow);
     const candidate = { img, prompt, variant, verification };
     // Keep the better candidate. Ranking encodes the content-image rule:
-    // approved > unchecked > flagged-without-text > ANY candidate with text.
-    // A text-bearing image can never beat a text-free one, whatever its score.
+    // approved > unchecked > flagged-without-text > ANY candidate that can
+    // never ship (text, or a banned prop in frame). An unshippable image can
+    // never beat a shippable one, whatever its score.
     const rank = (v: ImageVerification) =>
-      (v.textDetected ? 0 : v.status === 'approved' ? 600 : v.status === 'unchecked' ? 400 : 200) + (v.score ?? 0) + (v.brandFit ?? 0) / 200;
+      (imageUnshippable(v) ? 0 : v.status === 'approved' ? 600 : v.status === 'unchecked' ? 400 : 200) + (v.score ?? 0) + (v.brandFit ?? 0) / 200;
     if (!best || rank(verification) > rank(best.verification)) best = candidate;
     if (verification.status !== 'flagged') break; // clean (or uncheckable) — done
     // Flagged (text or other defects): retry with the next composition while
@@ -739,7 +744,8 @@ export async function ensureDraftImage(draftId: string, ownerId: string): Promis
   const existing = (pack as { _image?: PackImage })._image;
   // Same content-image rule as the route: an image flagged for text is never
   // reused — regenerate with the next composition variant instead.
-  const existingHasText = existing?.verification?.textDetected === true;
+  // And one showing a banned prop is treated the same way: it can never ship.
+  const existingHasText = imageUnshippable(existing?.verification);
   // A planner draft still carrying a pre-cover picture gets the new cover once.
   const plannerNeedsCover = Boolean(plannerImageFor(pack)) && !existing?.titled &&
     !['library', 'upload'].includes(String(existing?.source || ''));

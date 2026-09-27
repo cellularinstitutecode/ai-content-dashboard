@@ -53,7 +53,9 @@ test('a text-flagged image counts as no image', () => {
   // picture and has only a flagged one has no picture. Counting it would send
   // an Instagram post that Instagram then refuses.
   const autopilot = src('lib/autopilot.ts');
-  assert.match(autopilot, /image\?\.verification\?\.textDetected !== true/);
+  // A banned prop is the same rule now (lib/image-verdict.ts imageUnshippable).
+  assert.match(autopilot, /Boolean\(image\?\.url\) && !imageUnshippable\(image\?\.verification\)/);
+  assert.match(autopilot, /imageUnshippable\(img\?\.verification\) \? null : img/, 'and the ship-point refuses it too');
 });
 
 test('a failure leaves the post in the queue rather than losing it', () => {

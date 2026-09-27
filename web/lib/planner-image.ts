@@ -115,12 +115,16 @@ export const PILLAR_SCENES: Record<string, SceneSet> = {
       'A physician holding an orange and smiling as she explains; a bowl of citrus and a plate of leafy greens and nuts on the table; the patient seen from behind.',
     ],
   },
+  // Food first, and no product in frame. The supplementation pillar is about
+  // personalising and reviewing, not about pills — and the image check fails
+  // any capsule or tablet on sight, so a brief that asked for a dish of them
+  // was a brief for a picture that could never ship.
   supplementation: {
-    mustShow: 'a small dish of a few plain, unlabeled capsules next to a glass of water and fresh fruit on the consultation table',
+    mustShow: 'a careful review conversation — a glass of water, whole foods such as nuts, seeds and fresh fruit, and a notebook with a blank checklist on the table',
     scenes: [
-      `A physician gesturing toward a small ceramic dish holding a few plain unlabeled capsules ${TABLE}, next to a glass of water and a bowl of fruit; the patient listens with a thoughtful expression.`,
-      'A physician reviewing a blank tablet with the patient; in the foreground a single plain glass jar of unlabeled capsules, a lemon and a sprig of herbs.',
-      'A physician holding up one plain capsule between two fingers while explaining; a glass of water and a bowl of greens on the table.',
+      `A physician going through a blank checklist in a notebook with the patient ${TABLE}, next to a glass of water, a small bowl of nuts and seeds and a bowl of fruit; the patient listens with a thoughtful expression.`,
+      'A physician reviewing a blank tablet with the patient; in the foreground a glass of water, a lemon, a sprig of herbs and a small dish of almonds.',
+      'A physician explaining with an open hand while the patient takes notes; a glass of water, a bowl of leafy greens and a notebook with blank pages on the table.',
     ],
   },
   movement: {
@@ -139,11 +143,14 @@ export const PILLAR_SCENES: Record<string, SceneSet> = {
       'A physician and patient sitting side by side on a linen sofa in a quiet corner of the practice, a cup of herbal tea on a side table, warm dusk light through sheer curtains.',
     ],
   },
+  // A conversation, never a procedure: nothing worn by or used on the patient
+  // (the image check fails a cuff on an arm on sight). The instruments rest,
+  // unused, on the table.
   prevention: {
-    mustShow: 'a routine, reassuring check-up — a blood-pressure cuff on the patient\'s arm or a stethoscope in use',
+    mustShow: 'a calm, reassuring check-in conversation — a stethoscope resting unused on the table beside a notebook with blank pages',
     scenes: [
-      'A physician fitting a blood-pressure cuff on the relaxed patient\'s upper arm at the table, both calm and smiling; a plant and daylight behind.',
-      'A physician listening with a stethoscope to the back of a seated patient in their 50s, natural light, reassuring atmosphere.',
+      `A physician and a relaxed patient in their 50s talking at the table, both calm and smiling; a stethoscope resting unused ${TABLE} beside a notebook with blank pages; a plant and daylight behind.`,
+      'A physician turning a blank tablet toward a seated patient in their 50s to talk through a yearly check-in plan, natural light, reassuring atmosphere; a stethoscope lies on the table.',
       `A physician and a healthy adult patient in a relaxed conversation; a stethoscope and a blank notebook ${TABLE}, a bowl of green apples beside them.`,
     ],
   },
@@ -700,14 +707,14 @@ export function seedOf(text: string): number {
 const CANCUN = new Set(['cancun', 'recovery-cancun']);
 
 /** When no brief could be written: the pillar's own objects and gesture. */
-const FALLBACK_OBJECTS: Record<string, { table: string[]; foreground: string; action: string }> = {
+export const FALLBACK_OBJECTS: Record<string, { table: string[]; foreground: string; action: string }> = {
   diagnosis: { table: ['a stethoscope', 'a closed blank folder', 'a glass of water'], foreground: 'a ceramic bowl of lemons with leaves', action: 'listening closely, a pen resting on the blank folder' },
   protocols: { table: ['a notepad with blank pages', 'two cups of tea'], foreground: 'a small vase of eucalyptus', action: 'sketching on the blank notepad and turning it toward the patient' },
   nutrition: { table: ['a book open to full-page photographs of avocado, greens, grains and salmon'], foreground: 'a ceramic bowl of oranges with leaves', action: 'pointing at the food photographs in the book' },
-  supplementation: { table: ['a small ceramic dish with a few plain unlabeled capsules', 'a glass of water'], foreground: 'a bowl of fresh fruit', action: 'gesturing gently toward the dish of capsules' },
+  supplementation: { table: ['a notebook with a blank checklist', 'a glass of water', 'a small bowl of nuts and seeds'], foreground: 'a bowl of fresh fruit', action: 'going through the blank checklist together' },
   movement: { table: ['a light resistance band', 'a water bottle', 'a folded towel'], foreground: 'a rolled yoga mat', action: 'demonstrating a slow shoulder stretch' },
   sleep: { table: ['a cup of chamomile tea', 'a small bunch of lavender'], foreground: 'a folded linen throw', action: 'speaking gently, hands around a warm cup' },
-  prevention: { table: ['a blood-pressure cuff', 'a stethoscope', 'a notebook with blank pages'], foreground: 'a bowl of green apples', action: 'resting a hand beside the blood-pressure cuff while explaining' },
+  prevention: { table: ['a stethoscope resting unused', 'a notebook with blank pages'], foreground: 'a bowl of green apples', action: 'explaining with an open hand beside the notebook' },
   cancun: { table: ['a bowl of tropical fruit', 'two glasses of water with lime'], foreground: 'a small potted palm', action: 'gesturing toward the sea beyond the window' },
   'follow-up': { table: ['a tablet with a blank screen', 'a notebook with blank pages'], foreground: 'a small plant', action: 'reviewing the blank tablet together' },
   recovery: { table: ['a glass of water', 'a folded light linen blanket'], foreground: 'a bowl of cucumber and mint', action: 'offering a glass of water' },
