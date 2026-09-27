@@ -1,7 +1,7 @@
 // web/app/api/templates/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
-import { normalizeStrategy } from '@/lib/autopilot';
+import { normalizeStrategy, reconcileTemplateRuns } from '@/lib/autopilot';
 import { cleanTime, cleanWeekdays } from '@/lib/template-input';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -123,6 +123,11 @@ export async function POST(req: NextRequest) {
     ({ data, error } = await sb.from('schedule_templates').upsert(row).select().maybeSingle());
   }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  // Runs already planned for this template's OLD day or time are retired, and
+  // the new slots are planned now (lib/run-reconcile.ts). Otherwise a moved
+  // slot kept its old runs and published at the time just removed.
+  const savedId = (data as { id?: string } | null)?.id;
+  if (savedId) await reconcileTemplateRuns(user.id, savedId);
   return NextResponse.json({ template: data });
 }
 

@@ -75,6 +75,7 @@ import { weeklyPaceVerdict, weeklyCeiling, paceNote, ROLLING_WINDOW_DAYS, PACE_S
 import { videoVerdict, pendingRefusal, type PackLike } from '@/lib/video-required';
 import { isMissed, MISSED_RETIRE_DAYS } from '@/lib/review-queue';
 import { nextFreeSlot } from '@/lib/missed-slot';
+import { RECONCILABLE_STATES, reconcilePlan, slotMatches } from '@/lib/run-reconcile';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -425,6 +426,9 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
     .from('template_runs')
     .select('id', { count: 'exact', head: true })
     .eq('template_id', run.template_id)
+    // A run retired because its slot moved never became a post; counting it
+    // moved the rotation on an extra angle every time a slot was re-timed.
+    .neq('state', 'superseded')
     .lt('scheduled_for', run.scheduled_for);
   // THE ONE THAT MAKES ROTATION COLLAPSE. Unread, a failed count gives null →
   // occurrenceIndex 0 → pickSeedTopic always returns seedPool[0] and decideAngle
@@ -1130,6 +1134,68 @@ export async function rescueStrandedApprovals(scopeUserId?: string): Promise<num
   return rescued;
 }
 
+/** Retire one run whose slot no longer exists, with the reason on it. Conditional on its state. */
+async function supersedeRun(db: ReturnType<typeof supabaseAdmin>, run: RunRow, note: string): Promise<boolean> {
+  const { data, error } = await db
+    .from('template_runs')
+    .update({ state: 'superseded', log: logLine(run, 'superseded', note) })
+    .eq('id', run.id)
+    .eq('state', run.state)
+    .select('id');
+  if (error) reportError('autopilot:supersede', error, { runId: run.id });
+  return Array.isArray(data) && data.length > 0;
+}
+
+/**
+ * Bring a template's future runs in line with the template as it now is.
+ *
+ * Called after every save of a template (the templates route, the planner and
+ * the assistant's tools). planRuns only ever adds runs, so without this a slot
+ * moved from 09:00 to 10:00 kept its 09:00 runs — some already drafted — and
+ * gained 10:00 ones beside them: two posts, two angles used, and the orphan
+ * published at the time the operator had removed. lib/run-reconcile.ts decides;
+ * this applies it, then plans the new slots straight away.
+ *
+ * Best-effort: a failure is reported and the save still stands. The guards in
+ * advanceRuns and approveRun catch any orphan this misses.
+ */
+export async function reconcileTemplateRuns(userId: string, templateId: string): Promise<{ removed: number; superseded: number }> {
+  const db = supabaseAdmin();
+  const out = { removed: 0, superseded: 0 };
+  try {
+    const { data: t, error: tError } = await db
+      .from('schedule_templates').select('id, weekdays, time_of_day, active')
+      .eq('id', templateId).eq('user_id', userId).maybeSingle();
+    if (tError) { reportError('autopilot:reconcile-template', tError, { templateId }); return out; }
+    if (!t) return out;
+    const { data: runs, error: runsError } = await db
+      .from('template_runs')
+      .select('id, template_id, user_id, state, scheduled_for, angle, log, attempts, regens, brief, score, draft_id')
+      .eq('template_id', templateId)
+      .eq('user_id', userId)
+      .in('state', [...RECONCILABLE_STATES])
+      .gt('scheduled_for', new Date().toISOString());
+    if (runsError) { reportError('autopilot:reconcile-runs', runsError, { templateId }); return out; }
+    const rows = (runs || []) as RunRow[];
+    const plan = reconcilePlan(rows, t as { weekdays?: number[]; time_of_day?: string; active?: boolean });
+    if (plan.remove.length) {
+      // Planned runs have nothing spent on them: no research, no draft.
+      const { data: gone, error: delError } = await db
+        .from('template_runs').delete().in('id', plan.remove).eq('state', 'planned').select('id');
+      if (delError) reportError('autopilot:reconcile-delete', delError, { templateId });
+      out.removed = Array.isArray(gone) ? gone.length : 0;
+    }
+    for (const id of plan.supersede) {
+      const run = rows.find((r) => r.id === id);
+      if (run && await supersedeRun(db, run, 'The template moved to a different day or time after this post was started, so it will not be sent. The new time gets its own post.')) out.superseded++;
+    }
+    if ((t as { active?: boolean }).active !== false) await planRuns(userId);
+  } catch (err) {
+    reportError('autopilot:reconcile', err, { templateId });
+  }
+  return out;
+}
+
 export async function expireStaleRuns(scopeUserId?: string): Promise<number> {
   const db = supabaseAdmin();
   // A couple of hours of grace: a slot that just passed may still be mid-tick.
@@ -1454,6 +1520,16 @@ export async function advanceRuns(opts: {
         (template.active ? 'to manual (Autopilot off)' : 'off') +
         ', so the engine will not prepare this occurrence. Turn it back on under Templates, then retry.',
       );
+      continue;
+    }
+
+    // A SLOT THAT HAS MOVED. The template's day or time changed after this run
+    // was planned (lib/run-reconcile.ts). Saving a template reconciles its runs,
+    // but any door that does not — a direct edit, a failed reconcile — must
+    // still not have its orphan prepared, sent, and counted.
+    if (!(raw.angle?.redatedFrom) && !slotMatches(raw.scheduled_for, template.weekdays, template.time_of_day, SCHEDULE_TZ)) {
+      await supersedeRun(db, raw, 'This occurrence was planned for a time the template no longer uses, so it will not be prepared. The new time has its own occurrence.');
+      skip('The template “' + (template.name || 'Untitled template') + '” now runs at a different day or time, so this occurrence was retired in favour of the new one.');
       continue;
     }
 
@@ -1800,7 +1876,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // The post sits on the calendar saying "waiting for your approval" and can
   // never publish. This is the exact invariant the comment below claims.
   const { data: t, error: templateError } = await db
-    .from('schedule_templates').select('providers, name, strategy').eq('id', run.template_id).maybeSingle();
+    .from('schedule_templates').select('providers, name, strategy, weekdays, time_of_day').eq('id', run.template_id).maybeSingle();
   if (templateError) {
     reportError('autopilot:approve-template', templateError, { runId: run.id });
     await releaseClaim(db, run, 'approve-failed', 'Approval could not proceed: the template could not be read. Returned for review.');
@@ -1819,6 +1895,19 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // marked "waiting for your approval", having been sent nowhere, and could
   // never publish. Exactly the state the comment above the insert says this
   // function refuses to record.
+  // THE SLOT MOVED after this post was prepared. Sending it would publish at
+  // the time the operator believes they removed, beside a fresh post for the
+  // new time. A re-dated run is exempt: its time is the reviewer's own choice.
+  const tpl = t as { weekdays?: number[] | null; time_of_day?: string | null } | null;
+  if (tpl && !run.angle?.redatedFrom && !slotMatches(run.scheduled_for, tpl.weekdays, tpl.time_of_day, SCHEDULE_TZ)) {
+    const why = 'Not sent: this post was prepared for ' + slotLabel(run.scheduled_for) + ', but the slot has since moved to a different day or time. ' +
+      'It has been retired, and the new time gets its own post. Nothing was sent.';
+    await db.from('template_runs')
+      .update({ state: 'superseded', log: logLine(run, 'superseded', why) })
+      .eq('id', run.id)
+      .eq('state', 'approved');
+    return { ok: false, note: why };
+  }
   const wantsArticle = wantsBlog(providers);
   // A weekly-strategy post never carries a matched clip. Runs drafted before
   // stepDraft stopped matching them may still have one stored; it is ignored
@@ -2304,7 +2393,7 @@ export async function skipRun(runId: string, userId: string): Promise<boolean> {
   // existed and still shipped. Nothing in the app compensates for that, so
   // refuse instead: a terminal run cannot be skipped.
   const priorState = (r as RunRow).state;
-  if (priorState === 'approved' || priorState === 'skipped') return false;
+  if (priorState === 'approved' || priorState === 'skipped' || priorState === 'superseded') return false;
   const { data: skipped, error } = await db
     .from('template_runs')
     .update({ state: 'skipped', log: logLine(r as RunRow, 'skip', 'Skipped by reviewer.') })

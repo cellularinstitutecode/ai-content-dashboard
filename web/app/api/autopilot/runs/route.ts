@@ -122,6 +122,8 @@ export async function GET(req: NextRequest) {
       .select('template_id, angle, scheduled_for')
       .eq('user_id', user.id)
       .not('angle', 'is', null)
+      // Retired because the slot moved: never a post, so not a "previous occurrence".
+      .neq('state', 'superseded')
       .order('scheduled_for', { ascending: false })
       .limit(40);
     for (const p of past || []) {
