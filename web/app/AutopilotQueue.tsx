@@ -55,6 +55,7 @@ type RunScore = {
   breakdown: Record<string, number>;
   safetyFlags: { code: string; message: string }[];
   critique: string[];
+  promotionFlags?: string[];
 };
 
 type PackImage = {
@@ -560,6 +561,15 @@ export default function AutopilotQueue() {
                     <div className="border-b border-line bg-amber-50 px-5 py-2.5 text-[12px] text-amber-800">
                       ⚠ {r.score.safetyFlags.length} compliance flag(s):{' '}
                       {r.score.safetyFlags.map((f) => f.message).join(' ')}
+                    </div>
+                  )}
+
+                  {/* Weekly-strategy posts are education, not adverts. What the
+                      rubric found is shown here, because it is also what holds
+                      an auto-scheduled post. */}
+                  {Boolean(r.score?.promotionFlags?.length) && (
+                    <div className="border-b border-line bg-amber-50 px-5 py-2.5 text-[12px] text-amber-800">
+                      ⚠ Reads as promotion: {r.score!.promotionFlags!.join(', ')}. The strategy asks for guidance, not a sales pitch — edit it or ask for changes.
                     </div>
                   )}
 

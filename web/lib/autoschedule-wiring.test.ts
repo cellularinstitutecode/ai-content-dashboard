@@ -34,6 +34,7 @@ test('the verdict decides, and the reason is written on the card', () => {
   assert.match(autopilot, /citation: compliance\?\.citation\?\.status \?\? null/, 'the Crossref verdict, from the pack stamp');
   assert.match(autopilot, /threshold: SCORE_THRESHOLD/, 'the threshold stays in planner-constants.ts');
   assert.match(autopilot, /safetyFlags: run\.score\?\.safetyFlags\?\.length \?\? 0/);
+  assert.match(autopilot, /promotionFlags: run\.score\?\.promotionFlags\?\.length \?\? 0/, 'a post that reads as an advert is held, not just marked down');
   assert.match(autopilot, /if \(!verdict\.ok\)/);
   // The write moved into a `hold` helper when the weekly ceiling gave the
   // engine a SECOND reason to hold a run; both go through it, so the two

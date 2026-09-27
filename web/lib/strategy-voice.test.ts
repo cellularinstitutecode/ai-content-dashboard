@@ -44,3 +44,42 @@ test('a gentle next step counts as a call to action', () => {
   assert.match('Save this for your next trip.', SOFT_CTA_RE);
   assert.match('Talk it through with your physician.', SOFT_CTA_RE);
 });
+
+test('recovery services may be introduced, never sold', () => {
+  assert.ok(promotionFlags('Our red light therapy and PEMF packages speed healing.', 'recovery').includes('service promotion'));
+  assert.ok(promotionFlags('Book your HBOT session in our recovery lounge today.', 'recovery').includes('service promotion'));
+  assert.deepEqual(
+    promotionFlags('Recovery may involve rest, hydration and, for some patients, technologies such as HBOT or red light therapy, chosen with the care team.', 'Technologies that may support the recovery experience'),
+    [],
+  );
+  const around = 'HBOT raises oxygen. HBOT sessions last an hour. Many people ask about HBOT.';
+  assert.ok(promotionFlags(around, 'recovery').includes('post built around one service'));
+});
+
+test('a sales close is flagged; a sleep schedule is not', () => {
+  assert.ok(promotionFlags('Sleep matters. Book your visit today.', 'sleep').includes('booking call to action'));
+  assert.ok(promotionFlags('Questions? Contact us or DM us.', 'sleep').includes('booking call to action'));
+  assert.deepEqual(promotionFlags('Keep a steady sleep schedule, even on weekends.', 'sleep'), []);
+  assert.deepEqual(promotionFlags('Talk it through with your physician.', 'sleep'), []);
+});
+
+test('invented patient testimonials are flagged', () => {
+  assert.ok(promotionFlags('As one patient put it: "I slept like a baby."', 'sleep').includes('patient testimonial'));
+  assert.ok(promotionFlags('Our patients often tell us the beach helps.', 'recovery').includes('patient testimonial'));
+  assert.deepEqual(promotionFlags('One patient may need three sessions while another needs one.', 'personalization'), []);
+});
+
+test('Cancun is described by its advantages, never ranked above other places', () => {
+  assert.ok(promotionFlags('Cancun is the best destination in Mexico for recovery.', 'cancun').includes('destination superiority claim'));
+  assert.ok(promotionFlags('Unlike other destinations, Cancun has it all.', 'cancun').includes('destination superiority claim'));
+  assert.deepEqual(promotionFlags('Cancun has direct flights from many US and Canadian cities and a warm climate.', 'cancun'), []);
+  assert.deepEqual(promotionFlags('A short walk is better than nothing.', 'movement'), [], 'no destination in the sentence');
+  assert.deepEqual(promotionFlags('Cancun is not better than every other destination; it offers specific advantages.', 'cancun'), []);
+});
+
+test('identical outcomes are flagged; "not everyone will" is the point', () => {
+  assert.ok(promotionFlags('Everyone who follows this will feel ten years younger.', 'protocols').includes('outcome promise'));
+  assert.ok(promotionFlags('This approach reverses aging.', 'protocols').includes('outcome promise'));
+  assert.ok(promotionFlags('A 90% success rate.', 'protocols').includes('outcome promise'));
+  assert.deepEqual(promotionFlags('Not everyone will respond the same way, which is why plans differ.', 'protocols'), []);
+});

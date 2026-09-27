@@ -180,6 +180,20 @@ export function ensureAviso(text: string, avisoNumber?: string | null): string {
   return t ? t + '\n\n' + line : line;
 }
 
+/**
+ * The text with its REF and AVISO lines removed — the post as a reader reads
+ * it, for checks that are about what the POST says. A paper title in the REF
+ * line ("…in patients diagnosed with…", "1.6 g/kg/day") is the study's
+ * wording, not the clinic's, and scanning it as copy flagged the citation the
+ * rule requires.
+ */
+export function stripComplianceLines(text: string): string {
+  return String(text || '')
+    .split('\n')
+    .filter((line) => !/^[ \t]*REF(?:ERENCIA)?[ \t]*[.:：]/i.test(line) && !/^[ \t]*AVISO\s+DE\s+PUBLICIDAD\b/i.test(line))
+    .join('\n');
+}
+
 /** Sentence for a person, when a post is refused. */
 export function complianceMessage(check: ComplianceCheck, networks?: readonly string[] | null): string {
   if (check.ok) return '';

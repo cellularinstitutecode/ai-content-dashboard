@@ -112,6 +112,8 @@ export type RunScore = {
   breakdown: Record<string, number>;
   safetyFlags: SafetyFlag[];
   critique: string[];
+  /** Weekly-strategy posts only: the promotional habits found (lib/strategy-voice.ts). */
+  promotionFlags?: string[];
 };
 
 export type TemplateRow = {
@@ -912,8 +914,11 @@ export function scorePack(pack: ContentPack, providers: string[], angle: Angle, 
 
   // CTA (0-15).
   // A weekly-strategy post closes with a gentle next step (save, share, ask
-  // your physician), not a sales call to action — both count.
-  breakdown.cta = CTA_RE.test(joined) || (opts.strategySlot && SOFT_CTA_RE.test(joined)) ? 15 : 0;
+  // your physician), and ONLY that counts. It used to be either: a strategy
+  // post ending "Book your HBOT session today" collected the full fifteen for
+  // exactly the sales close its rules forbid. A booking close is now a
+  // promotion flag below instead.
+  breakdown.cta = (opts.strategySlot ? SOFT_CTA_RE.test(joined) : CTA_RE.test(joined)) ? 15 : 0;
   if (!breakdown.cta) {
     critique.push(opts.strategySlot
       ? 'Close with a gentle, useful next step (save this, share it, talk it through with your physician) — not a sales pitch.'
@@ -926,15 +931,19 @@ export function scorePack(pack: ContentPack, providers: string[], angle: Angle, 
   if (safetyFlags.length) critique.push('Rephrase flagged passages: ' + safetyFlags.map((f) => f.code).join(', ') + '.');
 
   // Strategy posts are educational: every promotional habit costs 10 points
-  // (so one is enough to trigger the self-critique rewrite) and is named.
+  // and is named. Points alone never forced anything — a post that otherwise
+  // scored 100 dropped to 90, above the rewrite threshold, and could be
+  // auto-scheduled with the pitch in it — so stepScore also rewrites on ANY
+  // flag, and autoScheduleVerdict holds on one.
+  let promo: string[] | undefined;
   if (opts.strategySlot) {
-    const promo = promotionFlags(texts.join('\n'), angle.query);
+    promo = promotionFlags(texts.join('\n'), angle.query);
     breakdown.promotion = -Math.min(40, promo.length * 10);
     if (promo.length) critique.push('This is an educational post, not an advert — remove: ' + promo.join(', ') + '.');
   }
 
   const total = Math.max(0, Object.values(breakdown).reduce((s, v) => s + v, 0));
-  return { total, breakdown, safetyFlags, critique };
+  return promo ? { total, breakdown, safetyFlags, critique, promotionFlags: promo } : { total, breakdown, safetyFlags, critique };
 }
 
 async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateStrategy): Promise<Partial<RunRow>> {
@@ -952,8 +961,10 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
   let score = scorePack(pack, template.providers || [], angle, { strategySlot });
   let regens = run.regens;
 
-  // Self-critique: one bounded regeneration when below threshold.
-  if (score.total < SCORE_THRESHOLD && regens < (strategy.max_regens ?? 1)) {
+  // Self-critique: one bounded regeneration when below threshold — or, for a
+  // strategy post, when it reads as an advert at all, whatever it scored.
+  const promoted = strategySlot && Boolean(score.promotionFlags?.length);
+  if ((score.total < SCORE_THRESHOLD || promoted) && regens < (strategy.max_regens ?? 1)) {
     regens++;
     try {
       const critiqueNote =
@@ -1007,7 +1018,8 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
       'score',
       'Scored ' + score.total + '/100 (' +
         Object.entries(score.breakdown).map(([k, v]) => k + ' ' + v).join(', ') + ')' +
-        (score.safetyFlags.length ? ' — ' + score.safetyFlags.length + ' safety flag(s) for review' : '')
+        (score.safetyFlags.length ? ' — ' + score.safetyFlags.length + ' safety flag(s) for review' : '') +
+        (score.promotionFlags?.length ? ' — reads as promotion: ' + score.promotionFlags.join(', ') : '')
     ),
   };
 }
@@ -1256,6 +1268,7 @@ async function autoSchedule(
       score: run.score?.total ?? null,
       threshold: SCORE_THRESHOLD,
       safetyFlags: run.score?.safetyFlags?.length ?? 0,
+      promotionFlags: run.score?.promotionFlags?.length ?? 0,
       networks: template.providers || [],
       hasMedia: hasImage || Boolean(run.angle?.media?.url),
       claimSupport: null,

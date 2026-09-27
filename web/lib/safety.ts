@@ -43,57 +43,7 @@ export const MEDICAL_SAFETY_GUARDRAILS =
   NAMING_RULE;
 
 
-export type SafetyFlag = {
-  code: string;
-  message: string;
-};
-
-// Each rule is advisory. Keep patterns conservative to limit false positives.
-const RULES: { code: string; message: string; re: RegExp }[] = [
-  {
-    code: 'cure_claim',
-    message: 'Possible cure/guarantee claim - verify this is supportable.',
-    re: /\b(cure[sd]?|guaranteed?|miracle|100%\s+effective|completely\s+heals?)\b/i,
-  },
-  {
-    code: 'dosing',
-    message: 'Specific dosing/frequency detected - medical dosing should not be advised in marketing copy.',
-    re: /\b\d+\s?(mg|mcg|ml|g|iu)\b|\b(take|dose)\b[^.]{0,40}\b(daily|twice|per day|every\s+\d+)\b/i,
-  },
-  {
-    code: 'regulatory_claim',
-    message: 'Regulatory/clinical claim (e.g. FDA-approved, clinically proven) - confirm before publishing.',
-    re: /\b(fda[- ]approved|clinically proven|doctor[- ]recommended|scientifically proven)\b/i,
-  },
-  {
-    code: 'diagnosis',
-    message: 'Diagnostic/treatment-advice phrasing - keep copy general and defer to professionals.',
-    re: /\b(diagnos(e|is|ed)|you (have|are suffering from)|treat your\b|self[- ]medicat)/i,
-  },
-];
-
-// Scan a single string; returns any advisory flags that matched.
-export function scanContent(text: string): SafetyFlag[] {
-  if (!text) return [];
-  const out: SafetyFlag[] = [];
-  for (const rule of RULES) {
-    if (rule.re.test(text)) out.push({ code: rule.code, message: rule.message });
-  }
-  return out;
-}
-
-// Review every field of a generated pack; returns a deduped list of advisories.
-export function reviewPack(pack: Record<string, unknown>): SafetyFlag[] {
-  const seen = new Set<string>();
-  const out: SafetyFlag[] = [];
-  for (const value of Object.values(pack || {})) {
-    if (typeof value !== 'string') continue;
-    for (const f of scanContent(value)) {
-      if (!seen.has(f.code)) {
-        seen.add(f.code);
-        out.push(f);
-      }
-    }
-  }
-  return out;
-}
+// The scan itself lives in lib/safety-rules.ts, a pure module, so the rules
+// can be tested against real strategy copy. Re-exported here because this is
+// where every caller has always imported them from.
+export { reviewPack, scanContent, type SafetyFlag } from './safety-rules.ts';
