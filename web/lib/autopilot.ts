@@ -85,6 +85,7 @@ import { RECONCILABLE_STATES, reconcilePlan, slotMatches } from '@/lib/run-recon
 // into that column depends on can actually be run by a test. Re-exported here
 // because this is where callers have always looked for them.
 import { normalizeStrategy, type StrategyMode, type TemplateStrategy } from '@/lib/template-strategy';
+import { rulesForSlot, slotContext } from '@/lib/content-strategy';
 import { scorePack, type RunScore } from '@/lib/score-pack';
 export { scorePack };
 import { isStrategySlot, pickSupportingPhrase, pillarForStrategy, strategyBrand, strategyTopicPrompt } from '@/lib/strategy-voice';
@@ -624,10 +625,18 @@ function topicPromptFor(angle: Angle, strategy: TemplateStrategy, templateName =
   // A weekly-strategy slot gets the strategy's own brief: pillar, angle,
   // editorial direction and the no-promotion rules (lib/strategy-voice.ts).
   if (isStrategySlot(strategy)) {
+    // Rules, day theme and what else the slot counts as come from the document
+    // data at run time when the slot is known (lib/content-strategy.ts), so a
+    // change to the strategy reaches every slot on deploy without a re-seed.
+    // The stored rule is the fallback for rows seeded before slot keys.
+    const ctx = strategy.slot ? slotContext(strategy.slot) : null;
     const brief = strategyTopicPrompt({
       angle: angle.query,
       pillarName: pillarForStrategy(strategy, templateName)?.name || templateName || angle.seedTopic,
-      rule: strategy.rule,
+      rule: (strategy.slot && rulesForSlot(strategy.slot)) || strategy.rule,
+      dayTheme: ctx?.dayTheme,
+      alsoCovers: ctx?.alsoCovers,
+      integrated: ctx?.integrated,
       reviewerNote: angle.reviewerNote,
       supportingPhrase: angle.supportingPhrase,
     });

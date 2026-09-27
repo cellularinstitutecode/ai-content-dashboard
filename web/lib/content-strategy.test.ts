@@ -13,14 +13,25 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CANCUN_RULE,
+  DAY_THEMES,
+  FREQUENCY_PILLARS,
   PILLARS,
   POSTS_PER_WEEK,
+  RECOVERY_RULE,
   SLOT_TIMES,
   WEEK,
   WEEKLY_MIX,
+  citationPolicyForSlot,
   daysFor,
+  frequencyDays,
+  frequencyPillarById,
+  mixByPillarDays,
   pillarById,
   plannedTemplates,
+  rulesForSlot,
+  slotContext,
+  slotKey,
 } from './content-strategy.ts';
 
 test('fourteen posts a week, two a day, seven days', () => {
@@ -33,10 +44,10 @@ test('fourteen posts a week, two a day, seven days', () => {
   }
 });
 
-test('the pillar-to-day table matches the document', () => {
-  // The document's own frequency table, which is the unambiguous half of it.
-  // Monday: diagnosis + personalized protocols. Thursday: prevention + Cancun.
-  // Sunday: sleep/stress + recovery in Cancun. And so on.
+test('each day page\'s angle bank sits on its day', () => {
+  // The page-2 day map. Monday: diagnosis + personalized protocols. Thursday:
+  // prevention + Cancun. Sunday: sleep/stress + recovery in Cancun. And so on.
+  // (The frequency table's two-day rows are asserted separately below.)
   assert.deepEqual(daysFor('diagnosis'), [1]);
   assert.deepEqual(daysFor('protocols'), [1]);
   assert.deepEqual(daysFor('nutrition'), [2]);
@@ -89,42 +100,76 @@ test('every pillar is named as the document names its post', () => {
   assert.ok(names.includes('Sleep, stress, and rest'));
 });
 
-test('the two standing notes are attached to the pillars they govern', () => {
-  // These are the document's only two rules that are not about a day, and they
-  // had nowhere to live before this file. Losing them is how a post ends up
-  // claiming Cancún beats everywhere else, or turning a recovery post into an
-  // advertisement for HBOT.
-  const cancun = pillarById('cancun');
+test('the two standing notes govern every slot counted towards their rows', () => {
+  // These are the document's only two rules that are not about a day. They
+  // attach to the frequency table's rows, not to one day's post — so Sunday's
+  // "Recovery in Cancun", which the table counts under BOTH recovery and
+  // Cancun, carries both. It used to carry neither.
+  const cancun = frequencyPillarById('cancun');
   assert.match(cancun?.rule || '', /Never claim that Cancun is categorically better/);
   assert.match(cancun?.rule || '', /air connectivity/i);
-
-  const recovery = pillarById('recovery');
+  const recovery = frequencyPillarById('recovery');
   assert.match(recovery?.rule || '', /INTRODUCED here and never promoted/);
   assert.match(recovery?.rule || '', /HBOT/);
   assert.match(recovery?.rule || '', /do not present any of them as something to buy/i);
 
+  assert.equal(rulesForSlot('thu-2'), CANCUN_RULE);
+  assert.equal(rulesForSlot('fri-2'), RECOVERY_RULE);
+  assert.match(rulesForSlot('sun-2'), /categorically better/);
+  assert.match(rulesForSlot('sun-2'), /INTRODUCED here and never promoted/);
   // And nothing else invents one.
-  const withRules = PILLARS.filter((p) => p.rule).map((p) => p.id);
-  assert.deepEqual(withRules.sort(), ['cancun', 'recovery']);
+  const withRules = WEEK.map((s) => slotKey(s)).filter((k) => rulesForSlot(k));
+  assert.deepEqual(withRules.sort(), ['fri-2', 'sun-2', 'thu-2']);
+  assert.ok(rulesForSlot('sun-2').length <= 800, 'both rules fit the stored rule cap');
 });
 
-test('the recommended mix and the day map are both recorded, disagreement and all', () => {
-  // The document recommends 5 medical / 5 lifestyle / 2 recovery / 2 Cancun,
-  // and its own day map does not produce that. Two slots are listed twice in
-  // the frequency table (Friday Post 1 under protocols AND follow-up; Sunday
-  // Post 2 under recovery AND Cancun), and "5 healthy-lifestyle posts" names
-  // five SUBJECTS that the day map spreads over seven slots.
-  //
-  // Both halves are asserted so that changing either one is a decision someone
-  // makes on purpose, not a drift nobody notices.
+test('the frequency table is data, and the day map reproduces every row of it', () => {
+  assert.equal(FREQUENCY_PILLARS.length, 9);
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const expected: Record<string, number[]> = {
+    'assessment-prevention': [1, 4], protocols: [1, 5], nutrition: [2, 6], supplementation: [2],
+    movement: [3, 6], 'sleep-stress': [3, 0], recovery: [5, 0], cancun: [4, 0],
+  };
+  for (const [id, days] of Object.entries(expected)) {
+    assert.deepEqual(frequencyDays(id, ['primary']).sort(), days.slice().sort(), id);
+    const row = frequencyPillarById(id)!;
+    for (const d of days) assert.match(row.days, new RegExp(dayNames[d]), id + ' names ' + dayNames[d]);
+  }
+  // "Primarily Friday; also integrated into assessment content".
+  assert.deepEqual(frequencyDays('follow-up', ['primary']), [5]);
+  assert.deepEqual(frequencyDays('follow-up', ['integrated']), [1]);
+  assert.match(frequencyPillarById('follow-up')!.days, /Primarily Friday; also integrated into assessment content/);
+});
+
+test('the recommended mix and the day map are both recorded, and the one difference named', () => {
+  // The document recommends 5 medical / 5 lifestyle / 2 recovery / 2 Cancun.
+  // Counted the frequency table's way (each primary row a slot belongs to),
+  // the day map gives exactly that for medical, recovery and Cancun — and 7
+  // lifestyle, because "5 healthy-lifestyle posts" names five SUBJECTS that
+  // the day map spreads over seven. Both are asserted so changing either is a
+  // decision somebody makes on purpose.
   assert.deepEqual(WEEKLY_MIX, { medical: 5, lifestyle: 5, recovery: 2, cancun: 2 });
   assert.equal(Object.values(WEEKLY_MIX).reduce((a, b) => a + b, 0), 14);
+  const mix = mixByPillarDays();
+  assert.deepEqual(mix, { medical: 5, lifestyle: 7, recovery: 2, cancun: 2 });
+  assert.equal(Object.values(mix).reduce((a, b) => a + b, 0), 16, 'sixteen pillar-days over fourteen slots');
+  assert.notEqual(mix.lifestyle, WEEKLY_MIX.lifestyle, 'the source disagrees with itself here; do not paper over it');
+});
 
-  const actual: Record<string, number> = { medical: 0, lifestyle: 0, recovery: 0, cancun: 0 };
-  for (const slot of WEEK) actual[pillarById(slot.pillarId)!.group] += 1;
-  assert.deepEqual(actual, { medical: 4, lifestyle: 7, recovery: 2, cancun: 1 });
-  assert.equal(Object.values(actual).reduce((a, b) => a + b, 0), 14, 'every slot is counted once');
-  assert.notDeepEqual(actual, WEEKLY_MIX, 'the source disagrees with itself; do not paper over it');
+test('every slot knows its day theme and what else it counts as', () => {
+  assert.equal(Object.keys(DAY_THEMES).length, 7);
+  assert.deepEqual(slotContext('mon-1'), { dayTheme: 'Understand before treating', alsoCovers: [], integrated: ['Patient follow-up'] });
+  assert.deepEqual(slotContext('fri-1')!.alsoCovers, ['Personalized protocols', 'Patient follow-up']);
+  assert.deepEqual(slotContext('sun-2')!.alsoCovers, ['Recovery and restoration', 'Cancun and health tourism']);
+  assert.equal(slotContext('sun-2')!.dayTheme, 'Well-being and the Cancun experience');
+  assert.equal(slotContext('mon-blog'), null);
+});
+
+test('only the destination slots may go without a citation', () => {
+  const relaxed = WEEK.map((s) => slotKey(s)).filter((k) => citationPolicyForSlot(k) === 'if-health-claim');
+  assert.deepEqual(relaxed.sort(), ['sun-2', 'thu-2']);
+  assert.equal(citationPolicyForSlot('mon-blog'), 'required');
+  assert.equal(citationPolicyForSlot('nonsense'), 'required');
 });
 
 // --- WHAT THE ENGINE IS HANDED ----------------------------------------------

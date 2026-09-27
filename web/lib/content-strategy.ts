@@ -2,11 +2,16 @@
 // The clinic's written content strategy, as data the engine can run.
 //
 // "CELLULAR INSTITUTE — WEEKLY SOCIAL CONTENT STRATEGY": 14 posts a week, two a
-// day, Monday to Sunday, across 8 recurring pillars. Its governing rule is the
-// one that makes it hard:
+// day, Monday to Sunday. Its cover says "8 recurring content pillars"; its
+// frequency table (page 3) lists nine rows, and its day pages fourteen post
+// headings. All three are recorded here: FREQUENCY_PILLARS is the table,
+// PILLARS the day pages' angle banks, WEEK the day map that joins them. Its
+// governing rule is the one that makes it hard (page 2, and its "Core
+// principle" box):
 //
-//   "Repeat the content pillar, not the wording. Each time a pillar returns,
-//    the angle, question, format, or audience should change."
+//   "The calendar repeats strategic content pillars, not identical posts.
+//    Each time a pillar returns, the angle, question, format, or audience
+//    should change."  —  "Repeat the content pillar, not the wording."
 //
 // WHY THIS FILE IS A LIST AND NOT AN ENGINE. The engine already exists.
 // lib/autopilot.ts runs a template once per weekday and rotates its seed list by
@@ -41,19 +46,93 @@ export type Pillar = {
    * pass before the pillar returns to its first angle.
    */
   angles: string[];
+};
+
+/** How a slot relates to a row of the frequency table. */
+export type SlotTag = {
+  freqId: string;
   /**
-   * A rule that applies to this pillar and no other, appended to the writer's
-   * brief. Both of the document's standing notes live here; they had nowhere
-   * else to go.
+   * 'primary': the slot IS this pillar's post that day. 'integrated': the
+   * pillar is woven into the slot without being its subject — the table's
+   * "Patient follow-up … also integrated into assessment content".
    */
-  rule?: string;
+  role: 'primary' | 'integrated';
 };
 
 export type Slot = {
   day: Weekday;
   /** 1 or 2 — "Post 1" and "Post 2" as the document numbers them. */
   post: 1 | 2;
+  /** The day page's angle bank this slot rotates (PILLARS). */
   pillarId: string;
+  /** The slot's name in the page-2 day map, which is not always its day-page heading. */
+  mapName: string;
+  /** The frequency-table rows this slot counts towards (page 3). */
+  tags: SlotTag[];
+};
+
+/**
+ * The two standing notes, as writer rules.
+ *
+ * Broadened from the document's wording on purpose, and said so here rather
+ * than called verbatim: the positioning note names "every other Mexican
+ * destination", and the rule forbids superiority over ANY destination; the
+ * soft-service note says "without turning every post into a direct
+ * promotion", and the rule forbids promotion in every post.
+ */
+export const CANCUN_RULE =
+  'Never claim that Cancun is categorically better than any other destination, in Mexico or elsewhere. ' +
+  'Write about specific, checkable advantages instead: international air connectivity, tourism ' +
+  'infrastructure, hotel options, warm weather, and being able to combine care and recovery in one trip.';
+
+export const RECOVERY_RULE =
+  'Services may be INTRODUCED here and never promoted: HBOT, red light therapy, PEMF, hydrogen ' +
+  'inhalation and the recovery lounge can appear as part of what recovery may involve. Do not build the ' +
+  'post around one of them, do not compare them, and do not present any of them as something to buy.';
+
+/** Whether a post in this pillar must carry a REF citation (see lib/compliance.ts). */
+export type CitationPolicy = 'required' | 'if-health-claim';
+
+export type FrequencyPillar = {
+  id: string;
+  /** The table's own words, for all three columns. */
+  name: string;
+  days: string;
+  frequency: string;
+  group: MixGroup;
+  /**
+   * The clinic's decision, not the document's: a pillar that teaches health
+   * always cites a study; the destination pillar cites one only when a post
+   * makes a health claim — no paper supports "air connectivity from the
+   * United States and Canada".
+   */
+  citation: CitationPolicy;
+  /** A standing note that governs every slot counted towards this row. */
+  rule?: string;
+};
+
+/** Page 3, "Content pillar frequency", row for row. */
+export const FREQUENCY_PILLARS: FrequencyPillar[] = [
+  { id: 'assessment-prevention', name: 'Diagnosis, assessment, and prevention', days: 'Monday and Thursday', frequency: '2x weekly', group: 'medical', citation: 'required' },
+  { id: 'protocols', name: 'Personalized protocols', days: 'Monday and Friday', frequency: '2x weekly', group: 'medical', citation: 'required' },
+  { id: 'nutrition', name: 'Nutrition', days: 'Tuesday and Saturday', frequency: '2x weekly', group: 'lifestyle', citation: 'required' },
+  { id: 'supplementation', name: 'Supplementation', days: 'Tuesday', frequency: '1x weekly', group: 'lifestyle', citation: 'required' },
+  { id: 'movement', name: 'Movement and exercise', days: 'Wednesday and Saturday', frequency: '2x weekly', group: 'lifestyle', citation: 'required' },
+  { id: 'sleep-stress', name: 'Sleep and stress management', days: 'Wednesday and Sunday', frequency: '2x weekly', group: 'lifestyle', citation: 'required' },
+  { id: 'recovery', name: 'Recovery and restoration', days: 'Friday and Sunday', frequency: '2x weekly', group: 'recovery', citation: 'required', rule: RECOVERY_RULE },
+  { id: 'cancun', name: 'Cancun and health tourism', days: 'Thursday and Sunday', frequency: '2x weekly', group: 'cancun', citation: 'if-health-claim', rule: CANCUN_RULE },
+  { id: 'follow-up', name: 'Patient follow-up', days: 'Primarily Friday; also integrated into assessment content', frequency: '1-2x weekly', group: 'medical', citation: 'required' },
+];
+
+/** Each day page's subtitle — the theme the day's two posts share. 0 = Sunday. */
+export const DAY_THEMES: Record<Weekday, string> = {
+  1: 'Understand before treating',
+  2: 'Support the body from within',
+  3: 'Movement and restoration',
+  4: 'Prevention and destination',
+  5: 'Guidance beyond the appointment',
+  6: 'Healthy habits in real life',
+  0: 'Well-being and the Cancun experience',
 };
 
 export const PILLARS: Pillar[] = [
@@ -158,12 +237,6 @@ export const PILLARS: Pillar[] = [
       'What patients can do during open days in their protocol',
       'How to organize a medical trip that feels supported and comfortable',
     ],
-    // The document's positioning note, verbatim in substance: comparative
-    // superiority claims are the failure mode, specific advantages are the fix.
-    rule:
-      'Never claim that Cancun is categorically better than any other destination, in Mexico or elsewhere. ' +
-      'Write about specific, checkable advantages instead: international air connectivity, tourism ' +
-      'infrastructure, hotel options, warm weather, and being able to combine care and recovery in one trip.',
   },
   {
     id: 'follow-up',
@@ -190,14 +263,6 @@ export const PILLARS: Pillar[] = [
       'What it means to build a personalized recovery plan',
       'Why patients should avoid overloading the body immediately afterward',
     ],
-    // The document's "soft service integration" note. The distinction it draws —
-    // introduced, not promoted — is the whole point: a recovery post that turns
-    // into an advertisement for HBOT stops being the educational content this
-    // strategy is built on.
-    rule:
-      'Services may be INTRODUCED here and never promoted: HBOT, red light therapy, PEMF, hydrogen ' +
-      'inhalation and the recovery lounge can appear as part of what recovery may involve. Do not build the ' +
-      'post around one of them, do not compare them, and do not present any of them as something to buy.',
   },
   {
     id: 'active-living',
@@ -253,47 +318,48 @@ export const PILLARS: Pillar[] = [
   },
 ];
 
-/** The document's day map: two posts a day, Monday through Sunday. */
+/**
+ * The document's day map: two posts a day, Monday through Sunday.
+ *
+ * `tags` are the frequency table's rows. Two slots count towards two rows,
+ * exactly as the table lists them: Friday's first post is both "Personalized
+ * protocols — Monday and Friday" and "Patient follow-up — primarily Friday",
+ * and Sunday's second is both "Recovery and restoration — Friday and Sunday"
+ * and "Cancun and health tourism — Thursday and Sunday" (its day-map name is
+ * "Recovery, rest, and the Cancun experience"). Monday's assessment post
+ * carries follow-up as 'integrated', the table's "also integrated into
+ * assessment content".
+ */
 export const WEEK: Slot[] = [
-  { day: 1, post: 1, pillarId: 'diagnosis' },
-  { day: 1, post: 2, pillarId: 'protocols' },
-  { day: 2, post: 1, pillarId: 'nutrition' },
-  { day: 2, post: 2, pillarId: 'supplementation' },
-  { day: 3, post: 1, pillarId: 'movement' },
-  { day: 3, post: 2, pillarId: 'sleep' },
-  { day: 4, post: 1, pillarId: 'prevention' },
-  { day: 4, post: 2, pillarId: 'cancun' },
-  { day: 5, post: 1, pillarId: 'follow-up' },
-  { day: 5, post: 2, pillarId: 'recovery' },
-  { day: 6, post: 1, pillarId: 'active-living' },
-  { day: 6, post: 2, pillarId: 'practical-nutrition' },
-  { day: 0, post: 1, pillarId: 'stress' },
-  { day: 0, post: 2, pillarId: 'recovery-cancun' },
+  { day: 1, post: 1, pillarId: 'diagnosis', mapName: 'Diagnosis and comprehensive assessment', tags: [{ freqId: 'assessment-prevention', role: 'primary' }, { freqId: 'follow-up', role: 'integrated' }] },
+  { day: 1, post: 2, pillarId: 'protocols', mapName: 'Personalized protocols', tags: [{ freqId: 'protocols', role: 'primary' }] },
+  { day: 2, post: 1, pillarId: 'nutrition', mapName: 'Nutrition', tags: [{ freqId: 'nutrition', role: 'primary' }] },
+  { day: 2, post: 2, pillarId: 'supplementation', mapName: 'Supplementation', tags: [{ freqId: 'supplementation', role: 'primary' }] },
+  { day: 3, post: 1, pillarId: 'movement', mapName: 'Movement and exercise', tags: [{ freqId: 'movement', role: 'primary' }] },
+  { day: 3, post: 2, pillarId: 'sleep', mapName: 'Sleep and rest', tags: [{ freqId: 'sleep-stress', role: 'primary' }] },
+  { day: 4, post: 1, pillarId: 'prevention', mapName: 'Prevention and early detection', tags: [{ freqId: 'assessment-prevention', role: 'primary' }] },
+  { day: 4, post: 2, pillarId: 'cancun', mapName: 'Cancun as a health tourism destination', tags: [{ freqId: 'cancun', role: 'primary' }] },
+  { day: 5, post: 1, pillarId: 'follow-up', mapName: 'Personalization and follow-up', tags: [{ freqId: 'protocols', role: 'primary' }, { freqId: 'follow-up', role: 'primary' }] },
+  { day: 5, post: 2, pillarId: 'recovery', mapName: 'Recovery and restoration', tags: [{ freqId: 'recovery', role: 'primary' }] },
+  { day: 6, post: 1, pillarId: 'active-living', mapName: 'Active living and longevity', tags: [{ freqId: 'movement', role: 'primary' }] },
+  { day: 6, post: 2, pillarId: 'practical-nutrition', mapName: 'Practical nutrition', tags: [{ freqId: 'nutrition', role: 'primary' }] },
+  { day: 0, post: 1, pillarId: 'stress', mapName: 'Sleep, stress, and well-being', tags: [{ freqId: 'sleep-stress', role: 'primary' }] },
+  { day: 0, post: 2, pillarId: 'recovery-cancun', mapName: 'Recovery, rest, and the Cancun experience', tags: [{ freqId: 'recovery', role: 'primary' }, { freqId: 'cancun', role: 'primary' }] },
 ];
 
 /**
  * The document's recommended weekly mix — 5 medical, 5 lifestyle, 2 recovery,
- * 2 Cancún — recorded as what it is: a RECOMMENDATION, and one that does NOT
- * agree with the day map printed on the facing page.
+ * 2 Cancún — recorded as what it is: a RECOMMENDATION.
  *
- * Counting WEEK by each slot's primary group gives 4 medical, 7 lifestyle,
- * 2 recovery and 1 Cancún. The gap is in the source, and it has two causes:
- *
- *  1. The frequency table hands out sixteen pillar-days for fourteen slots,
- *     because two slots are listed twice. Friday's first post is both
- *     "Personalized protocols — Monday and Friday" and "Patient follow-up —
- *     primarily Friday". Sunday's second post is both "Recovery and
- *     restoration — Friday and Sunday" and "Cancun and health tourism —
- *     Thursday and Sunday"; it is even titled "Recovery, rest, and the Cancun
- *     experience".
- *  2. The mix itself reads as a list of THEMES, not a count of posts:
- *     "5 healthy-lifestyle posts — nutrition, supplementation, sleep,
- *     movement, and stress management" names five subjects, which the day map
- *     spreads over seven slots.
- *
- * So the recommendation is kept verbatim and the day map is kept verbatim, and
- * neither is bent to fit the other. The test asserts both numbers, including
- * the fact that they differ, so a future edit to either one is deliberate.
+ * Counted the way the frequency table counts (mixByPillarDays: every primary
+ * row a slot belongs to, so sixteen pillar-days over fourteen slots), the day
+ * map gives medical 5, recovery 2 and Cancún 2 — exactly the recommendation —
+ * and lifestyle 7. That one difference is in the source: "5 healthy-lifestyle
+ * posts — nutrition, supplementation, sleep, movement, and stress management"
+ * names five SUBJECTS, which the day map spreads over seven posts (Saturday's
+ * two, "Active living" and "Practical nutrition", are the extra ones). It is
+ * the clinic's call which one to follow; neither is bent to fit the other, and
+ * the test asserts both numbers so a change to either is deliberate.
  */
 export const WEEKLY_MIX: Record<MixGroup, number> = {
   medical: 5,
@@ -336,9 +402,79 @@ export function pillarById(id: string): Pillar | null {
   return PILLARS.find((p) => p.id === id) ?? null;
 }
 
-/** The days a pillar appears on, as the document's frequency table states them. */
+/**
+ * The days a day-page angle bank is scheduled on, from the day map. Each bank
+ * is one slot, so this is one day; for the frequency table's rows, which span
+ * two, see frequencyDays.
+ */
 export function daysFor(pillarId: string): Weekday[] {
   return WEEK.filter((s) => s.pillarId === pillarId).map((s) => s.day);
+}
+
+export function frequencyPillarById(id: string): FrequencyPillar | null {
+  return FREQUENCY_PILLARS.find((f) => f.id === id) ?? null;
+}
+
+/** The days a frequency-table row covers, derived from the day map. */
+export function frequencyDays(freqId: string, roles: readonly SlotTag['role'][] = ['primary', 'integrated']): Weekday[] {
+  const out: Weekday[] = [];
+  for (const s of WEEK) {
+    if (s.tags.some((t) => t.freqId === freqId && roles.includes(t.role)) && !out.includes(s.day)) out.push(s.day);
+  }
+  return out;
+}
+
+/** The week counted the frequency table's way: each primary row a slot belongs to. */
+export function mixByPillarDays(): Record<MixGroup, number> {
+  const out: Record<MixGroup, number> = { medical: 0, lifestyle: 0, recovery: 0, cancun: 0 };
+  for (const s of WEEK) {
+    for (const t of s.tags) {
+      if (t.role !== 'primary') continue;
+      const f = frequencyPillarById(t.freqId);
+      if (f) out[f.group] += 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * Every standing rule that governs a slot: the rules of every frequency row it
+ * counts towards. So Sunday's "Recovery in Cancun" carries BOTH the Cancún
+ * positioning note and the recovery-services note — it used to carry neither.
+ */
+export function rulesForSlot(key: string): string {
+  const slot = slotByKey(key);
+  if (!slot) return '';
+  const rules: string[] = [];
+  for (const t of slot.tags) {
+    const r = frequencyPillarById(t.freqId)?.rule;
+    if (r && !rules.includes(r)) rules.push(r);
+  }
+  return rules.join(' ');
+}
+
+/** 'if-health-claim' when a row the slot is primarily about allows it; 'required' otherwise. */
+export function citationPolicyForSlot(key: string): CitationPolicy {
+  const slot = slotByKey(key);
+  if (!slot) return 'required';
+  return slot.tags.some((t) => t.role === 'primary' && frequencyPillarById(t.freqId)?.citation === 'if-health-claim')
+    ? 'if-health-claim'
+    : 'required';
+}
+
+/**
+ * What the writer is told about a slot beyond its angle: the day's theme, the
+ * rows it counts as when there are two, and a pillar woven into it.
+ */
+export function slotContext(key: string): { dayTheme: string; alsoCovers: string[]; integrated: string[] } | null {
+  const slot = slotByKey(key);
+  if (!slot) return null;
+  const primary = slot.tags.filter((t) => t.role === 'primary').map((t) => frequencyPillarById(t.freqId)?.name || '').filter(Boolean);
+  return {
+    dayTheme: DAY_THEMES[slot.day],
+    alsoCovers: primary.length > 1 ? primary : [],
+    integrated: slot.tags.filter((t) => t.role === 'integrated').map((t) => frequencyPillarById(t.freqId)?.name || '').filter(Boolean),
+  };
 }
 
 /** How many posts a week this calendar holds. The cadence everything else is sized against. */
@@ -373,7 +509,7 @@ export function plannedTemplates(): PlannedTemplate[] {
       weekdays: [slot.day],
       time_of_day: SLOT_TIMES[slot.post],
       pillars: pillar.angles.slice(),
-      rule: pillar.rule || '',
+      rule: rulesForSlot(slotKey(slot)),
       pillarId: pillar.id,
       slot: slotKey(slot),
     };

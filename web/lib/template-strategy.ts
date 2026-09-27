@@ -91,7 +91,9 @@ export function normalizeStrategy(raw: unknown): TemplateStrategy {
     // Clamped like every other field here, because this one reaches the model
     // as an instruction it must obey: a 4,000-word "rule" pasted into a
     // template would crowd out the brief it is meant to qualify.
-    rule: typeof s.rule === 'string' && s.rule.trim() ? s.rule.trim().slice(0, 400) : undefined,
+    // 800, not 400: Sunday's "Recovery in Cancun" carries both of the document's
+    // standing notes, and at 400 the second was cut off mid-sentence.
+    rule: typeof s.rule === 'string' && s.rule.trim() ? s.rule.trim().slice(0, 800) : undefined,
     seeded: typeof s.seeded === 'string' && s.seeded.trim() ? s.seeded.trim().slice(0, 40) : undefined,
     // Shapes, not free text: these are keys other code looks things up by.
     slot: typeof s.slot === 'string' && SLOT_RE.test(s.slot.trim().toLowerCase()) ? s.slot.trim().toLowerCase() : undefined,

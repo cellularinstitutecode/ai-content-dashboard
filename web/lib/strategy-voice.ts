@@ -63,8 +63,8 @@ export const EDITORIAL_DIRECTION = [
   'EDITORIAL DIRECTION (the clinic\'s written weekly strategy — must follow):',
   'Educational: clear, useful information a patient can understand and apply today.',
   'Personalized: focus on the individual rather than a universal solution.',
-  'Balanced: this is lifestyle and medical education, not an advertisement.',
-  'Responsible: no cure claims, no guarantees, no promise of identical outcomes, no "many patients feel better after one session".',
+  'Balanced: medical education supported by lifestyle, recovery, and destination content.',
+  'Responsible: no cure claims, no guarantees, no promise of identical outcomes, no "many patients feel better after one session" — this is education, not an advertisement.',
   'Supportive: centred on guidance before, during and after care.',
 ].join(' ');
 
@@ -108,13 +108,26 @@ export function strategyTopicPrompt(opts: {
   rule?: string;
   reviewerNote?: string;
   supportingPhrase?: string;
+  /** The day page's subtitle, e.g. "Understand before treating". */
+  dayTheme?: string;
+  /** The frequency-table rows this slot counts as, when it is more than one. */
+  alsoCovers?: string[];
+  /** A pillar the table integrates into this slot without making it the subject. */
+  integrated?: string[];
 }): string {
   const parts = [
     'Write about: ' + opts.angle + '.',
     'This is the weekly "' + opts.pillarName + '" post. Stay on this pillar and on this exact angle — the rest of the week covers the other topics.',
-    EDITORIAL_DIRECTION,
-    NO_PROMOTION_RULES,
   ];
+  if (opts.dayTheme) parts.push('The day\'s theme is "' + opts.dayTheme + '"; let the post sit inside it.');
+  if (opts.alsoCovers && opts.alsoCovers.length > 1) {
+    parts.push('This slot counts for both ' + opts.alsoCovers.map((n) => '"' + n + '"').join(' and ') + ' in the clinic\'s weekly mix, so the post should speak to both.');
+  }
+  if (opts.integrated && opts.integrated.length) {
+    parts.push('Where it fits naturally, connect the angle to ' + opts.integrated.map((n) => '"' + n + '"').join(' and ') +
+      ' — for example, how what is learned at the first evaluation becomes the baseline later follow-ups measure progress against. One sentence is enough; do not change the subject.');
+  }
+  parts.push(EDITORIAL_DIRECTION, NO_PROMOTION_RULES);
   if (opts.supportingPhrase) {
     parts.push('If it reads naturally, use the search phrase "' + opts.supportingPhrase + '" once; never force it.');
   }

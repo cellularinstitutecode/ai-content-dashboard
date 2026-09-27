@@ -55,7 +55,9 @@ test('the two standing rules survive the trip into the row', () => {
   // nowhere to live before lib/content-strategy.ts, and nowhere to land before
   // strategy.rule — so this is the assertion that keeps them attached.
   const withRule = seedRows().filter((r) => r.strategy.rule);
-  assert.equal(withRule.length, 2);
+  // Thursday's Cancun post, Friday's recovery post, and Sunday's recovery in
+  // Cancun — which carries both notes, as the frequency table counts it twice.
+  assert.equal(withRule.length, 3);
   const text = withRule.map((r) => r.strategy.rule).join('\n');
   assert.match(text, /Never claim that Cancun is categorically better/);
   assert.match(text, /INTRODUCED here and never promoted/);

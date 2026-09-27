@@ -104,3 +104,21 @@ test('the supporting phrase is on the angle, never a procedure search', async ()
   assert.equal(pickSupportingPhrase(angle, 'Sleep', [{ keyword: 'knee replacement recovery', intents: [] }]), undefined, 'off the subject');
   assert.equal(pickSupportingPhrase('Why supplementation should also be personalized', 'Supplementation', [{ keyword: 'personalized supplements', intents: ['informational'] }]), 'personalized supplements');
 });
+
+test('the brief carries the day theme, both pillars of a shared slot, and follow-up where it is woven in', () => {
+  const p = strategyTopicPrompt({
+    angle: 'Why effective care begins with a thorough evaluation',
+    pillarName: 'Diagnosis and assessment',
+    dayTheme: 'Understand before treating',
+    integrated: ['Patient follow-up'],
+  });
+  assert.match(p, /day's theme is "Understand before treating"/);
+  assert.match(p, /connect the angle to "Patient follow-up"/);
+  const sun = strategyTopicPrompt({ angle: 'Nature, the beach, and a calmer pace', pillarName: 'Recovery in Cancun', alsoCovers: ['Recovery and restoration', 'Cancun and health tourism'] });
+  assert.match(sun, /counts for both "Recovery and restoration" and "Cancun and health tourism"/);
+});
+
+test('"Balanced" is the document\'s own sentence', async () => {
+  const { EDITORIAL_DIRECTION } = await import('./strategy-voice.ts');
+  assert.match(EDITORIAL_DIRECTION, /Balanced: medical education supported by lifestyle, recovery, and destination content\./);
+});

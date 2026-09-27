@@ -25,7 +25,8 @@ test('a standing rule survives normalizeStrategy and reaches the writer', () => 
   const strategy = src('lib/template-strategy.ts');
   assert.match(strategy, /rule\?: string;/, 'TemplateStrategy must carry it');
   assert.match(strategy, /rule: typeof s\.rule === 'string'/, 'normalizeStrategy must keep it');
-  assert.match(strategy, /\.slice\(0, 400\)/, 'and clamp it, because it reaches the model as an instruction');
+  // 800: Sunday's slot carries both of the document's notes (~590 characters).
+  assert.match(strategy, /\.slice\(0, 800\)/, 'and clamp it, because it reaches the model as an instruction');
   // Exercised, not grepped: a rule survives the trip the route actually makes.
   assert.equal(normalizeStrategy({ mode: 'pillars', rule: '  keep me  ' }).rule, 'keep me');
   assert.match(
@@ -34,7 +35,7 @@ test('a standing rule survives normalizeStrategy and reaches the writer', () => 
     'topicPromptFor must hand it to the writer'
   );
   // And the rows that carry one still do.
-  assert.equal(seedRows().filter((r) => r.strategy.rule).length, 2);
+  assert.equal(seedRows().filter((r) => r.strategy.rule).length, 3);
 });
 
 test('the planner no longer demotes a rotating slot to a fixed topic', () => {
