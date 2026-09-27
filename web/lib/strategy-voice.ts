@@ -226,3 +226,56 @@ export function promotionFlags(text: string, angle = ''): string[] {
   if (builtAroundOneService(text) && !found.includes('post built around one service')) found.push('post built around one service');
   return found;
 }
+
+/** Therapies, services and the clinic itself: never a supporting phrase for an educational post. */
+const OFF_LIMITS_PHRASE = /\b(stem[- ]?cells?|exosomes?|nk cells?|peptides?|prp|platelet|hbot|hyperbaric|red[- ]light|pemf|hydrogen|ozone|iv therapy|infusion|clinic|cellular institute|cellular hope|price|cost|near me|best|top)\b/i;
+
+const PHRASE_STOP = new Set([
+  'about', 'after', 'also', 'before', 'being', 'between', 'does', 'doing', 'during', 'each', 'every', 'from', 'have',
+  'help', 'helps', 'into', 'just', 'like', 'many', 'mean', 'means', 'more', 'most', 'much', 'only', 'other', 'same',
+  'should', 'some', 'such', 'than', 'that', 'their', 'them', 'there', 'these', 'they', 'this', 'those', 'through',
+  'very', 'what', 'when', 'where', 'which', 'while', 'with', 'without', 'your', 'body', 'people', 'why', 'how',
+]);
+
+function subjectWords(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const w of String(text || '').toLowerCase().split(/[^a-z0-9áéíóúñü]+/)) {
+    if (w.length >= 4 && !PHRASE_STOP.has(w)) {
+      out.add(w);
+      // "supplements" and "supplement", "sleeping" and "sleep": a crude stem is enough here.
+      out.add(w.replace(/(ing|es|s)$/, ''));
+    }
+  }
+  return out;
+}
+
+/**
+ * The one search phrase a strategy post may use, if any.
+ *
+ * Research on the week's angle returns a primary keyword, related searches and
+ * questions. The first that is ON the angle's subject (shares a content word
+ * with it or its pillar), not commercial or transactional, and names no
+ * therapy, service, price or the clinic, is offered to the writer — "use it
+ * once if it reads naturally". Nothing else is: the phrase used to come from
+ * whichever angle type the rotation landed on, and one week in four that was
+ * a domain-wide procedure search on a post about sleep.
+ */
+export function pickSupportingPhrase(
+  angle: string,
+  pillarName: string,
+  candidates: readonly { keyword: string; intents?: readonly string[] | null }[],
+): string | undefined {
+  const subject = subjectWords(angle + ' ' + pillarName);
+  const angleKey = String(angle || '').trim().toLowerCase();
+  for (const c of candidates) {
+    const phrase = String(c?.keyword || '').trim();
+    if (!phrase || phrase.toLowerCase() === angleKey) continue;
+    const intents = (c.intents || []).map((i) => String(i).toLowerCase());
+    if (intents.includes('commercial') || intents.includes('transactional')) continue;
+    if (OFF_LIMITS_PHRASE.test(phrase) || promotionFlags(phrase, '').length) continue;
+    const words = [...subjectWords(phrase)];
+    if (!words.some((w) => subject.has(w))) continue;
+    return phrase;
+  }
+  return undefined;
+}

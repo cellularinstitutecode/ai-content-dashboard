@@ -91,3 +91,16 @@ test('a seeded slot finds its pillar by key, even after a rename', async () => {
   assert.equal(pillarForStrategy({}, 'Sleep')?.id, 'sleep', 'legacy rows fall back to the name');
   assert.equal(pillarForStrategy({ slot: 'mon-blog' }, 'Weekly article'), null);
 });
+
+test('the supporting phrase is on the angle, never a procedure search', async () => {
+  const { pickSupportingPhrase } = await import('./strategy-voice.ts');
+  const angle = 'Simple habits that may improve sleep quality';
+  assert.equal(pickSupportingPhrase(angle, 'Sleep', [
+    { keyword: 'stem cell therapy cancun', intents: ['informational'] },
+    { keyword: 'best sleep clinic near me', intents: ['commercial'] },
+    { keyword: 'how to improve sleep quality naturally', intents: ['informational'] },
+  ]), 'how to improve sleep quality naturally');
+  assert.equal(pickSupportingPhrase(angle, 'Sleep', [{ keyword: 'stem cell therapy cancun', intents: [] }]), undefined, 'the domain keyword is gone');
+  assert.equal(pickSupportingPhrase(angle, 'Sleep', [{ keyword: 'knee replacement recovery', intents: [] }]), undefined, 'off the subject');
+  assert.equal(pickSupportingPhrase('Why supplementation should also be personalized', 'Supplementation', [{ keyword: 'personalized supplements', intents: ['informational'] }]), 'personalized supplements');
+});

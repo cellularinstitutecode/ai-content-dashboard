@@ -44,7 +44,6 @@ import {
   type ContentPack,
   type ContentType,
 } from '@/lib/ai';
-import { reviewPack, type SafetyFlag } from '@/lib/safety';
 import {
   buildKeywordBrief,
   briefPromptFrom,
@@ -86,7 +85,9 @@ import { RECONCILABLE_STATES, reconcilePlan, slotMatches } from '@/lib/run-recon
 // into that column depends on can actually be run by a test. Re-exported here
 // because this is where callers have always looked for them.
 import { normalizeStrategy, type StrategyMode, type TemplateStrategy } from '@/lib/template-strategy';
-import { isStrategySlot, pillarForStrategy, promotionFlags, SOFT_CTA_RE, strategyBrand, strategyTopicPrompt } from '@/lib/strategy-voice';
+import { scorePack, type RunScore } from '@/lib/score-pack';
+export { scorePack };
+import { isStrategySlot, pickSupportingPhrase, pillarForStrategy, strategyBrand, strategyTopicPrompt } from '@/lib/strategy-voice';
 export { normalizeStrategy };
 export type { StrategyFormat, StrategyMode, TemplateStrategy } from '@/lib/template-strategy';
 
@@ -111,14 +112,7 @@ export type Angle = {
   redatedFrom?: string; // the slot this run missed, when a reviewer moved it to the next free one
 };
 
-export type RunScore = {
-  total: number; // 0-100
-  breakdown: Record<string, number>;
-  safetyFlags: SafetyFlag[];
-  critique: string[];
-  /** Weekly-strategy posts only: the promotional habits found (lib/strategy-voice.ts). */
-  promotionFlags?: string[];
-};
+export type { RunScore } from '@/lib/score-pack';
 
 export type TemplateRow = {
   id: string;
@@ -535,9 +529,15 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
   // Live data (all cache-first + unit-floor guarded).
   const bundle = await researchBundle(seedTopic, { relatedLimit: 12, questionLimit: 6 });
   let movers: KeywordMovers | null = null;
-  try {
-    movers = await keywordMovers(primaryDomain());
-  } catch { movers = null; }
+  // Not for a strategy slot: the domain's lost and declining keywords are the
+  // clinic's procedure searches, and one week in four the rotation offered
+  // one of them — "stem cell therapy cancun" — as the supporting phrase of a
+  // post about sleep. It also spent Semrush units on a result thrown away.
+  if (!isStrategySlot(strategy)) {
+    try {
+      movers = await keywordMovers(primaryDomain());
+    } catch { movers = null; }
+  }
 
   // bundle.questions, not bundle.brief.questions.
   //
@@ -555,18 +555,26 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
   // optional supporting phrase.
   if (isStrategySlot(strategy)) {
     const pool = seedPool.length || 1;
-    const supporting = angle.query !== seedTopic && angle.type !== 'commercial' ? angle.query : undefined;
+    // The supporting phrase comes from research on THIS angle only — its
+    // primary keyword, related searches and questions — and must be on the
+    // subject, non-commercial and free of any therapy or promotion
+    // (lib/strategy-voice.ts pickSupportingPhrase).
+    const candidates = [bundle.brief.primary, ...(bundle.brief.supporting || []), ...(bundle.brief.questions || []), ...(bundle.questions || [])]
+      .filter((k): k is SemKeyword => Boolean(k && k.keyword));
+    const pillarName = pillarForStrategy(strategy, template.name)?.name || template.name;
+    const picked = pickSupportingPhrase(seedTopic, pillarName, candidates);
+    const pickedRow = picked ? candidates.find((k) => k.keyword === picked) : undefined;
     angle = {
       type: 'answer',
       query: seedTopic,
       seedTopic,
       rationale:
         'From the weekly strategy — "' + template.name + '", angle ' + ((occurrenceIndex % pool) + 1) + ' of ' + pool + '.' +
-        (supporting ? ' Supporting search phrase: "' + supporting + '".' : ''),
-      volume: supporting ? angle.volume : null,
-      difficulty: supporting ? angle.difficulty : null,
-      intent: supporting ? angle.intent : null,
-      supportingPhrase: supporting,
+        (picked ? ' Supporting search phrase: "' + picked + '".' : ''),
+      volume: pickedRow?.volume ?? null,
+      difficulty: pickedRow?.difficulty ?? null,
+      intent: pickedRow ? (pickedRow.intents || []).join(', ') || null : null,
+      supportingPhrase: picked,
     };
   }
 
@@ -688,15 +696,25 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   // Brief for the CHOSEN query (cache-first; distinct from the seed brief).
   // Falls back to the seed-topic brief already gathered at research time so
   // the model still writes with real numbers in cache-only mode.
+  //
+  // NOT for a weekly-strategy slot. Its "query" is a sentence from the clinic's
+  // document, and the brief is a contract — "work it into the BODY 2-3 times",
+  // "answer at least one of these searcher questions", "match the searcher's
+  // intent", commercial terms included — which pulls an educational post back
+  // toward search copy. stepResearch already refuses to let a keyword replace
+  // the angle; this stops the brief doing it by the back door. '' tells the
+  // generator "researched, nothing to add" rather than running its own.
   let brief: KeywordBrief | null = null;
   let hint = '';
-  try {
-    brief = await buildKeywordBrief(angle.query);
-    if (brief.source === 'semrush') hint = briefPromptFrom(brief);
-    else brief = null;
-  } catch { brief = null; }
-  if (!brief && run.brief && run.brief.source === 'semrush') {
-    hint = briefPromptFrom(run.brief);
+  if (!isStrategySlot(strategy)) {
+    try {
+      brief = await buildKeywordBrief(angle.query);
+      if (brief.source === 'semrush') hint = briefPromptFrom(brief);
+      else brief = null;
+    } catch { brief = null; }
+    if (!brief && run.brief && run.brief.source === 'semrush') {
+      hint = briefPromptFrom(run.brief);
+    }
   }
 
   // Brand voice.
@@ -895,72 +913,7 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
 // Step 3: score against the rubric; one self-critique regeneration if weak.
 // ---------------------------------------------------------------------------
 
-const CTA_RE = /\b(book|schedule|contact|call|visit|learn more|read more|watch|subscribe|sign up|reach out|dm us|link in bio)\b/i;
-
-function channelText(pack: ContentPack, provider: string): string {
-  const key = provider === 'twitter' ? 'instagram' : provider; // closest fit
-  const p = pack as unknown as Record<string, string>;
-  return String(p[key] || p.instagram || p.blog || '');
-}
-
-export function scorePack(pack: ContentPack, providers: string[], angle: Angle, opts: { strategySlot?: boolean } = {}): RunScore {
-  const texts = (providers.length ? providers : ['instagram']).map((p) => channelText(pack, p));
-  const joined = texts.join('\n').toLowerCase();
-  const critique: string[] = [];
-  const breakdown: Record<string, number> = {};
-
-  // Keyword coverage (0-30): primary phrase (or most of its words) present.
-  const query = angle.query.toLowerCase().trim();
-  const words = query.split(/\s+/).filter((w) => w.length > 2);
-  const covered = words.length ? words.filter((w) => joined.includes(w)).length / words.length : 0;
-  // `joined.includes('')` is TRUE, so a blank query — reachable from a Semrush
-  // row with an empty keyword — scored a perfect 30/30 for covering nothing.
-  breakdown.keyword = !query ? 0 : Math.round(30 * (joined.includes(query) ? 1 : covered));
-  if (breakdown.keyword < 18) critique.push('Work the exact phrase "' + angle.query + '" naturally into the opening.');
-
-  // Channel completeness (0-25): every requested channel has real copy.
-  const complete = texts.filter((t) => t.trim().length >= 80).length;
-  breakdown.channels = Math.round(25 * (texts.length ? complete / texts.length : 0));
-  if (breakdown.channels < 25) critique.push('One or more channels came back empty or too short — write full copy for each.');
-
-  // Hook (0-20): first line short and strong.
-  const firstLine = (texts[0] || '').split('\n').find((l) => l.trim()) || '';
-  breakdown.hook = firstLine && firstLine.length <= 140 ? 20 : firstLine ? 10 : 0;
-  if (breakdown.hook < 20) critique.push('Open with a one-line scroll-stopping hook under 140 characters.');
-
-  // CTA (0-15).
-  // A weekly-strategy post closes with a gentle next step (save, share, ask
-  // your physician), and ONLY that counts. It used to be either: a strategy
-  // post ending "Book your HBOT session today" collected the full fifteen for
-  // exactly the sales close its rules forbid. A booking close is now a
-  // promotion flag below instead.
-  breakdown.cta = (opts.strategySlot ? SOFT_CTA_RE.test(joined) : CTA_RE.test(joined)) ? 15 : 0;
-  if (!breakdown.cta) {
-    critique.push(opts.strategySlot
-      ? 'Close with a gentle, useful next step (save this, share it, talk it through with your physician) — not a sales pitch.'
-      : 'Close with a clear, compliant call to action.');
-  }
-
-  // Safety (0-10): advisory flags cost points and surface to the reviewer.
-  const safetyFlags = reviewPack(pack as unknown as Record<string, unknown>);
-  breakdown.safety = Math.max(0, 10 - safetyFlags.length * 5);
-  if (safetyFlags.length) critique.push('Rephrase flagged passages: ' + safetyFlags.map((f) => f.code).join(', ') + '.');
-
-  // Strategy posts are educational: every promotional habit costs 10 points
-  // and is named. Points alone never forced anything — a post that otherwise
-  // scored 100 dropped to 90, above the rewrite threshold, and could be
-  // auto-scheduled with the pitch in it — so stepScore also rewrites on ANY
-  // flag, and autoScheduleVerdict holds on one.
-  let promo: string[] | undefined;
-  if (opts.strategySlot) {
-    promo = promotionFlags(texts.join('\n'), angle.query);
-    breakdown.promotion = -Math.min(40, promo.length * 10);
-    if (promo.length) critique.push('This is an educational post, not an advert — remove: ' + promo.join(', ') + '.');
-  }
-
-  const total = Math.max(0, Object.values(breakdown).reduce((s, v) => s + v, 0));
-  return promo ? { total, breakdown, safetyFlags, critique, promotionFlags: promo } : { total, breakdown, safetyFlags, critique };
-}
+// The rubric itself lives in lib/score-pack.ts, where it can be run by a test.
 
 async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateStrategy): Promise<Partial<RunRow>> {
   const db = supabaseAdmin();
@@ -1000,11 +953,15 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
       // is an empty string, so '' was explicitly turning the research off.
       const loaded = await loadBrandContext(db, run.user_id);
       const brand = strategySlot ? strategyBrand(loaded) : loaded;
+      // A strategy slot passes '' explicitly: left undefined, the generator
+      // ran its own keyword brief on this whole critique prompt and handed the
+      // rewrite a Semrush contract the first draft had been kept from.
       const { pack: retry } = await generateContentPack({
         topic: critiqueNote,
         contentType: strategy.format || 'social',
         channels: template.providers,
         brand,
+        ...(strategySlot ? { keywordHint: '' } : {}),
       });
       const retryScore = scorePack(retry, template.providers || [], angle, { strategySlot });
       if (retryScore.total > score.total) {

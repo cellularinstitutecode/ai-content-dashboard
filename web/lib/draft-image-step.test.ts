@@ -17,7 +17,7 @@ function stepDraftBody(): string {
   const autopilot = src('lib/autopilot.ts');
   const start = autopilot.indexOf('async function stepDraft(');
   assert.ok(start > 0, 'stepDraft is gone — has it been renamed?');
-  const end = autopilot.indexOf('export function scorePack(', start);
+  const end = autopilot.indexOf('async function stepScore(', start);
   assert.ok(end > start, 'could not find the end of stepDraft');
   return autopilot.slice(start, end);
 }
