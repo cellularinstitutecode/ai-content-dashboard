@@ -341,21 +341,23 @@ export function titleFor(angle: unknown, pillarName: string): string {
  */
 export function plannerImageFor(pack: unknown): PlannerImage | null {
   const auto = (pack && typeof pack === 'object' ? (pack as Record<string, unknown>)._autopilot : null) as
-    | { template_name?: unknown; angle?: { query?: unknown; seedTopic?: unknown } }
+    | { template_name?: unknown; slot?: unknown; pillar_id?: unknown; angle?: { query?: unknown; seedTopic?: unknown } }
     | null
     | undefined;
   if (!auto || typeof auto !== 'object') return null;
   const name = key(auto.template_name);
   const subject = cleanTopic(auto.angle?.query || auto.angle?.seedTopic);
   if (!name || !subject) return null;
-  if (name === key(BLOG_SLOT.name)) {
+  if (name === key(BLOG_SLOT.name) || key(auto.slot) === 'mon-blog') {
     // The article's angles are borrowed from the medical pillars; picture it as
     // the pillar it came from.
     const pillar = PILLARS.find((p) => p.angles.some((a) => key(a) === key(subject)));
     const set = (pillar && PILLAR_SCENES[pillar.id]) || PILLAR_SCENES.diagnosis;
     return { pillarId: 'article', pillarName: BLOG_SLOT.name, subject, title: titleFor(subject, pillar?.name || 'Evaluation'), ...set, size: '1024x1536' };
   }
-  const pillar = PILLARS.find((p) => key(p.name) === name);
+  // The stamped pillar first: it survives a rename. The name is the fallback
+  // for drafts written before the stamp existed.
+  const pillar = PILLARS.find((p) => p.id === String(auto.pillar_id || '')) || PILLARS.find((p) => key(p.name) === name);
   if (!pillar) return null;
   const set = PILLAR_SCENES[pillar.id];
   if (!set) return null;

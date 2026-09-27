@@ -25,7 +25,7 @@
 // template, until the setting that governs that is turned on somewhere else.
 //
 // Pure: `./x.ts` imports only, so the test runner reads this file directly.
-import { plannedTemplates } from './content-strategy.ts';
+import { BLOG_SLOT_KEY, plannedTemplates } from './content-strategy.ts';
 
 /**
  * The networks each of the fourteen SOCIAL slots posts to.
@@ -108,6 +108,10 @@ export type SeedStrategy = {
   lead_hours: number;
   /** SEED_MARK. Its presence is what makes a row safe to overwrite. */
   seeded: string;
+  /** The slot's stable key (lib/content-strategy.ts slotKey). What a re-seed matches on. */
+  slot: string;
+  /** The document pillar; absent for the article, which draws on several. */
+  pillarId?: string;
 };
 
 export type SeedRow = {
@@ -122,7 +126,22 @@ export type SeedRow = {
 };
 
 /** Enough of an existing template to decide whether it is one of ours. */
-export type ExistingTemplate = { id?: unknown; name?: unknown; strategy?: unknown };
+export type ExistingTemplate = { id?: unknown; name?: unknown; strategy?: unknown; weekdays?: unknown; time_of_day?: unknown };
+
+/**
+ * A re-seed of a row the seed already owns: its id, the name it is reported
+ * under, and its strategy with ONLY the seed's own fields refreshed.
+ */
+export type SeedUpdate = { id: string; name: string; strategy: Record<string, unknown> };
+
+/**
+ * The fields of `strategy` that belong to the document, and therefore to the
+ * seed: the angle bank, the standing rule, the mark, the slot's identity, its
+ * pillar and its format. Everything else about a seeded template — its name,
+ * days, time, channels, whether it is paused, its goal, its lead time — is the
+ * operator's, and a re-seed leaves it exactly as they set it.
+ */
+export const SEED_OWNED = ['mode', 'pillars', 'rule', 'seeded', 'slot', 'pillarId', 'format'] as const;
 
 /** Was this row written by the seed? Only these are ever overwritten. */
 export function isSeeded(row: ExistingTemplate | null | undefined): boolean {
@@ -155,6 +174,8 @@ export function seedRows(): SeedRow[] {
       format: 'social' as const,
       lead_hours: STRATEGY_LEAD_HOURS,
       seeded: SEED_MARK,
+      slot: t.slot,
+      pillarId: t.pillarId,
     },
   }));
   return [
@@ -173,6 +194,7 @@ export function seedRows(): SeedRow[] {
         format: 'blog' as const,
         lead_hours: STRATEGY_LEAD_HOURS,
         seeded: SEED_MARK,
+        slot: BLOG_SLOT_KEY,
       },
     },
   ];
@@ -181,14 +203,14 @@ export function seedRows(): SeedRow[] {
 export type SeedPlan = {
   /** Rows with no counterpart in the account yet. */
   create: SeedRow[];
-  /** Rows that carry the id of the template they replace. */
-  update: SeedRow[];
+  /** Rows the seed already owns, with only the seed's own fields refreshed. */
+  update: SeedUpdate[];
   /**
-   * Names that matched MORE than one row the seed owns.
+   * Slots matched by MORE than one row the seed owns.
    *
    * The first is updated and the others are left alone rather than deleted —
    * this seed does not remove anybody's work — but the caller should say so,
-   * because two templates with one name means two posts in that slot.
+   * because two templates in one slot means two posts in that slot.
    */
   duplicates: string[];
   /**
@@ -201,43 +223,84 @@ export type SeedPlan = {
   collisions: string[];
 };
 
+function strategyOf(row: ExistingTemplate | undefined): Record<string, unknown> {
+  const s = row?.strategy;
+  return s && typeof s === 'object' ? (s as Record<string, unknown>) : {};
+}
+
+function hhmm(v: unknown): string {
+  return String(v || '').slice(0, 5);
+}
+
+/** The existing strategy, with only SEED_OWNED refreshed from the document. */
+export function mergeSeedStrategy(existing: Record<string, unknown>, seed: SeedStrategy): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...existing };
+  for (const k of SEED_OWNED) {
+    const v = (seed as Record<string, unknown>)[k];
+    if (v === undefined) delete out[k];
+    else out[k] = Array.isArray(v) ? [...v] : v;
+  }
+  return out;
+}
+
 /**
  * What to write, given what the account already holds.
  *
- * Every row is either created or updated; nothing is deleted, and no template
- * whose name is not one of the fifteen is read as ours.
+ * Every seed slot is either created or updated; nothing is deleted, and no
+ * template the seed did not write is ever read as its own.
+ *
+ * WHICH ROW IS WHICH SLOT. By `strategy.slot` first — the key the seed stamps
+ * and nobody edits. Rows written before that key existed are found by their
+ * name, and failing that by their day and time: a legacy row somebody had
+ * renamed was otherwise invisible to the seed and got a duplicate beside it.
+ *
+ * WHAT AN UPDATE CHANGES. Only SEED_OWNED. It used to rewrite the whole row,
+ * so pressing the button again undid every edit — a slot moved to 10:00 went
+ * back to 09:00, a paused slot was switched back on, channels were reset.
  */
 export function planSeed(existing: readonly ExistingTemplate[] = []): SeedPlan {
-  // Two maps: what the seed owns, and what merely shares a name. Only the
-  // first is ever written to.
-  const ours = new Map<string, string[]>();
+  // What the seed owns, and what merely shares a name. Only the first is
+  // ever written to.
+  const owned = existing.filter((row) => typeof row?.id === 'string' && row.id && isSeeded(row));
   const theirs = new Set<string>();
   for (const row of existing) {
-    const id = typeof row?.id === 'string' ? row.id : '';
     const key = matchKey(row?.name);
-    if (!key) continue;
-    if (!id || !isSeeded(row)) { theirs.add(key); continue; }
-    const list = ours.get(key);
-    if (list) list.push(id);
-    else ours.set(key, [id]);
+    if (key && !(typeof row?.id === 'string' && row.id && isSeeded(row))) theirs.add(key);
   }
+  const claimed = new Set<string>();
+  const unclaimed = (rows: readonly ExistingTemplate[]) => rows.filter((r) => !claimed.has(String(r.id)));
+  const legacy = owned.filter((r) => !strategyOf(r).slot);
 
   const create: SeedRow[] = [];
-  const update: SeedRow[] = [];
+  const update: SeedUpdate[] = [];
   const duplicates: string[] = [];
   const collisions: string[] = [];
   for (const row of seedRows()) {
-    const key = matchKey(row.name);
-    const ids = ours.get(key) || [];
-    if (!ids.length) {
+    const key = row.strategy.slot;
+    let matches = unclaimed(owned.filter((r) => String(strategyOf(r).slot || '') === key));
+    if (!matches.length) matches = unclaimed(legacy.filter((r) => matchKey(r.name) === matchKey(row.name)));
+    if (!matches.length) {
+      // A legacy row that was renamed: same single day, same time.
+      matches = unclaimed(legacy.filter((r) =>
+        Array.isArray(r.weekdays) && r.weekdays.length === 1 && Number(r.weekdays[0]) === row.weekdays[0] &&
+        hhmm(r.time_of_day) === row.time_of_day &&
+        String(strategyOf(r).format || 'social') === row.strategy.format));
+    }
+    if (!matches.length) {
       create.push(row);
       // Somebody's own template is sitting on this name. It is left exactly as
       // it is, and said out loud.
-      if (theirs.has(key) && !collisions.includes(row.name)) collisions.push(row.name);
+      if (theirs.has(matchKey(row.name)) && !collisions.includes(row.name)) collisions.push(row.name);
       continue;
     }
-    update.push({ ...row, id: ids[0] });
-    if (ids.length > 1 && !duplicates.includes(row.name)) duplicates.push(row.name);
+    const first = matches[0];
+    claimed.add(String(first.id));
+    update.push({
+      id: String(first.id),
+      name: typeof first.name === 'string' && first.name.trim() ? first.name : row.name,
+      strategy: mergeSeedStrategy(strategyOf(first), row.strategy),
+    });
+    if (matches.length > 1 && !duplicates.includes(row.name)) duplicates.push(row.name);
   }
   return { create, update, duplicates, collisions };
 }
@@ -246,7 +309,7 @@ export function planSeed(existing: readonly ExistingTemplate[] = []): SeedPlan {
 export function seedSummary(plan: SeedPlan): string {
   const parts: string[] = [];
   if (plan.create.length) parts.push(plan.create.length + (plan.create.length === 1 ? ' slot added' : ' slots added'));
-  if (plan.update.length) parts.push(plan.update.length + ' brought up to date');
+  if (plan.update.length) parts.push(plan.update.length + ' brought up to date (their days, times, channels and on/off state were kept)');
   const head = parts.length ? parts.join(', ') : 'Nothing to do';
   const total = plan.create.length + plan.update.length;
   const tail = (plan.duplicates.length

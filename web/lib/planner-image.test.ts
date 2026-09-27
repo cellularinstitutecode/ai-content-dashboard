@@ -262,3 +262,11 @@ test('no planner brief asks for a picture the image check would fail', async () 
     for (const t of [...fb.table, fb.foreground, fb.action]) assert.doesNotMatch(t, BANNED_PROP_RE, id + ': ' + t);
   }
 });
+
+test('the stamped pillar wins over the template name', async () => {
+  const { plannerImageFor } = await import('./planner-image.ts');
+  const img = plannerImageFor({ _autopilot: { template_name: 'Nutrition (Tuesday AM)', slot: 'tue-1', pillar_id: 'nutrition', angle: { query: 'The role of protein in recovery' } } });
+  assert.equal(img?.pillarId, 'nutrition', 'a renamed slot keeps its picture');
+  const legacy = plannerImageFor({ _autopilot: { template_name: 'Sleep', angle: { query: 'What happens in the body while we sleep' } } });
+  assert.equal(legacy?.pillarId, 'sleep');
+});

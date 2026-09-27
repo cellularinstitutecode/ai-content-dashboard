@@ -43,7 +43,21 @@ export type TemplateStrategy = {
    * enforced by nobody. This is where they live.
    */
   rule?: string;
+  /**
+   * Which of the weekly strategy's slots this template is: 'mon-1' … 'sun-2',
+   * or 'mon-blog' for the article (lib/content-strategy.ts slotKey).
+   *
+   * The seed matches on this, not on the name, and the brief and the planner
+   * picture find the pillar through it — a name is the one thing a person may
+   * change, and every lookup by name broke when they did.
+   */
+  slot?: string;
+  /** The document pillar this slot writes about (lib/content-strategy.ts PILLARS). */
+  pillarId?: string;
 };
+
+const SLOT_RE = /^(sun|mon|tue|wed|thu|fri|sat)-(1|2|blog)$/;
+const PILLAR_ID_RE = /^[a-z][a-z-]{0,39}$/;
 
 function num(v: unknown): number | null {
   const n = typeof v === 'string' ? parseFloat(v) : (v as number);
@@ -79,5 +93,8 @@ export function normalizeStrategy(raw: unknown): TemplateStrategy {
     // template would crowd out the brief it is meant to qualify.
     rule: typeof s.rule === 'string' && s.rule.trim() ? s.rule.trim().slice(0, 400) : undefined,
     seeded: typeof s.seeded === 'string' && s.seeded.trim() ? s.seeded.trim().slice(0, 40) : undefined,
+    // Shapes, not free text: these are keys other code looks things up by.
+    slot: typeof s.slot === 'string' && SLOT_RE.test(s.slot.trim().toLowerCase()) ? s.slot.trim().toLowerCase() : undefined,
+    pillarId: typeof s.pillarId === 'string' && PILLAR_ID_RE.test(s.pillarId.trim()) ? s.pillarId.trim() : undefined,
   };
 }

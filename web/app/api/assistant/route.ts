@@ -1191,6 +1191,10 @@ async function runAgent(session: Session, input: string, userId: string | null, 
               // posts every Monday, for one plain-language edit.
               rule: current.rule,
               seeded: current.seeded,
+              // And the slot's identity, for the same reason: without it the
+              // seed falls back to matching by name, and a rename is a duplicate.
+              slot: current.slot,
+              pillarId: current.pillarId,
             },
           });
           toolResult = out.ok

@@ -16,7 +16,14 @@ import {
 } from './strategy-seed.ts';
 
 /** What the account looks like after a successful press. */
-const asSeeded = () => seedRows().map((r, i) => ({ id: 'id-' + i, name: r.name, strategy: r.strategy }));
+const asSeeded = () => seedRows().map((r, i) => ({ id: 'id-' + i, name: r.name, strategy: r.strategy, weekdays: r.weekdays, time_of_day: r.time_of_day }));
+
+/** A row the seed wrote before slot keys existed: the mark, no slot. */
+const legacyMark = () => {
+  const { slot: _slot, pillarId: _pillarId, ...rest } = seedRows()[0].strategy;
+  void _slot; void _pillarId;
+  return rest;
+};
 import { POSTS_PER_WEEK } from './content-strategy.ts';
 
 /** Fourteen social slots plus the weekly article. */
@@ -87,7 +94,7 @@ test('somebody else\'s templates are never claimed, renamed or touched', () => {
 });
 
 test('matching ignores case and spacing on rows the seed owns', () => {
-  const mark = seedRows()[0].strategy;
+  const mark = legacyMark();
   const existing = [
     { id: 'x', name: '  nutrition  ', strategy: mark },
     { id: 'y', name: 'SLEEP', strategy: mark },
@@ -133,7 +140,7 @@ test('the mark is what makes a row ours, and it survives a round trip', () => {
 test('a duplicated name updates the first and says so about the rest', () => {
   // Deleting the extra would be this seed removing somebody's work. Saying
   // nothing would leave two posts in one slot with no explanation.
-  const mark = seedRows()[0].strategy;
+  const mark = legacyMark();
   const plan = planSeed([
     { id: 'first', name: 'Prevention', strategy: mark },
     { id: 'second', name: 'prevention', strategy: mark },
@@ -179,4 +186,51 @@ test('only one slot publishes an article', () => {
   // decision, taken by editing this file rather than by accident.
   assert.equal(seedRows().filter((r) => r.providers.includes('blog')).length, 1);
   assert.equal(seedRows().filter((r) => r.strategy.format === 'blog').length, 1);
+});
+
+test('a re-seed changes only what the document owns: edits and pauses survive', () => {
+  // Pressing the button again used to rewrite the whole row: a slot moved to
+  // 10:00 went back to 09:00, a paused slot was switched back on, and the
+  // channels were reset.
+  const existing = asSeeded().map((r) => ({ ...r }));
+  const nutrition = existing.find((r) => r.name === 'Nutrition')!;
+  nutrition.time_of_day = '10:30';
+  (nutrition as Record<string, unknown>).active = false;
+  (nutrition.strategy as Record<string, unknown>) = { ...nutrition.strategy, goal: 'engagement', lead_hours: 48, pillars: ['stale'] };
+  const plan = planSeed(existing);
+  assert.equal(plan.create.length, 0);
+  const u = plan.update.find((r) => r.id === nutrition.id)!;
+  // Only the strategy is in an update at all — no time, no active, no providers.
+  assert.deepEqual(Object.keys(u).sort(), ['id', 'name', 'strategy']);
+  assert.equal(u.strategy.goal, 'engagement', 'the operator\'s goal is kept');
+  assert.equal(u.strategy.lead_hours, 48, 'and their lead time');
+  assert.ok((u.strategy.pillars as string[]).length >= 5, 'the document\'s bank is restored');
+  assert.equal(u.strategy.slot, 'tue-1');
+  assert.equal(u.strategy.pillarId, 'nutrition');
+});
+
+test('a renamed slot is recognised by its key, not duplicated', () => {
+  const existing = asSeeded();
+  existing.find((r) => r.name === 'Nutrition')!.name = 'Nutrition (Tuesday AM)';
+  const plan = planSeed(existing);
+  assert.equal(plan.create.length, 0, 'no second Tuesday nutrition slot');
+  assert.equal(plan.update.length, SLOTS);
+  assert.ok(plan.update.some((u) => u.name === 'Nutrition (Tuesday AM)'), 'reported under the name it has now');
+});
+
+test('a legacy row renamed before slot keys existed is found by its day and time', () => {
+  const mark = legacyMark();
+  const plan = planSeed([{ id: 'old', name: 'Tuesday food', strategy: { ...mark, format: 'social' }, weekdays: [2], time_of_day: '09:00:00' }]);
+  const u = plan.update.find((r) => r.id === 'old');
+  assert.ok(u, 'matched');
+  assert.equal(u!.strategy.slot, 'tue-1');
+  assert.equal(plan.create.length, SLOTS - 1);
+});
+
+test('every seeded row carries its slot key and pillar', () => {
+  const rows = seedRows();
+  const keys = rows.map((r) => r.strategy.slot);
+  assert.equal(new Set(keys).size, rows.length, 'keys are unique');
+  assert.ok(keys.includes('mon-blog'));
+  for (const r of rows.filter((x) => x.strategy.format === 'social')) assert.ok(r.strategy.pillarId, r.name);
 });

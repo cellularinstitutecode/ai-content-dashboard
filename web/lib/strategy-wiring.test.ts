@@ -73,16 +73,16 @@ test('the route reads what is already there before it writes, and fails closed',
   const route = src('app/api/templates/strategy/route.ts');
   // `strategy` as well as the name: the mark inside it is the only thing that
   // makes a row safe to overwrite.
-  assert.match(route, /\.from\('schedule_templates'\)\s*\n?\s*\.select\('id, name, strategy'\)/);
+  assert.match(route, /\.select\('id, name, strategy, weekdays, time_of_day'\)/);
   assert.match(route, /if \(readError\)/);
   assert.match(route, /status: 503/, 'an unreadable account is refused, not guessed at');
   assert.match(route, /planSeed\(/, 'the decision itself lives in the tested module');
-  assert.match(route, /normalizeStrategy\(row\.strategy\)/, 'and nothing reaches the column unnormalised');
+  assert.match(route, /strategy: normalizeStrategy\(row\.strategy\)/, 'and nothing reaches the column unnormalised');
   assert.match(route, /checkRateLimit\(auth\.userId, 'templates'\)/);
   assert.match(route, /requireAllowlistedUser\(\)/);
 });
 
-test('new rows are inserted and existing ones upserted, in separate calls', () => {
+test('new rows are inserted, and existing ones get their strategy updated — nothing else', () => {
   // PostgREST takes the union of the keys in a batch and sends the missing
   // ones as NULL rather than letting the column default fill them. One mixed
   // batch would therefore insert the new templates with `id: null` and be
@@ -90,7 +90,11 @@ test('new rows are inserted and existing ones upserted, in separate calls', () =
   // only the second (all updates) would work.
   const route = src('app/api/templates/strategy/route.ts');
   assert.match(route, /\.insert\(strip\(fresh\)\)/, 'new rows must omit id, which only insert does');
-  assert.match(route, /\.upsert\(strip\(existingRows\)\)/, 'and existing ones carry theirs');
+  // An upsert of the whole row put the seed's time, channels and active:true
+  // back over the operator's edits. Only the strategy is written now.
+  assert.doesNotMatch(route, /\.upsert\(/, 'no whole-row upsert of an existing slot');
+  assert.match(route, /\.update\(next\)\.eq\('id', id\)\.eq\('user_id', userId\)/);
+  assert.match(route, /return \{ strategy: normalizeStrategy\(row\.strategy\), updated_at: now \};/);
   assert.match(route, /plan\.create\.map/);
   assert.match(route, /plan\.update\.map/);
   // And neither leg can run twice: a retry that re-ran the insert wrote
@@ -137,4 +141,21 @@ test('an assistant edit keeps the mark and the standing rule', () => {
   const obj = build.slice(0, build.indexOf('},'));
   assert.match(obj, /rule: current\.rule/, 'the standing rule must survive an edit');
   assert.match(obj, /seeded: current\.seeded/, 'and so must the mark');
+});
+
+test('no edit path drops the slot identity or turns a seeded slot into something else', () => {
+  const planner = src('components/WeeklyPlanner.tsx');
+  assert.match(planner, /: \{ \.\.\.\(existing\?\.strategy \|\| \{\}\), mode: 'fixed_topic'/, 'the themed branch spreads the stored strategy too');
+  assert.match(planner, /disabled=\{draft\.seeded\}/, 'a seeded slot\'s format is locked');
+  assert.match(planner, /format: draft\.seeded \? \(existing\?\.strategy\?\.format \|\| 'social'\) : draft\.format/);
+  assert.doesNotMatch(planner, /change the day, time, format, goal or channels/, 'no promise of a day control that does not exist');
+  const assistant = src('app/api/assistant/route.ts');
+  assert.match(assistant, /slot: current\.slot,\s*pillarId: current\.pillarId,/);
+  const strategy = src('lib/template-strategy.ts');
+  assert.match(strategy, /slot: typeof s\.slot === 'string'/);
+  for (const row of seedRows()) {
+    const n = normalizeStrategy(row.strategy);
+    assert.equal(n.slot, row.strategy.slot, row.name + ' keeps its slot through the normaliser');
+    assert.equal(n.pillarId, row.strategy.pillarId, row.name + ' keeps its pillar');
+  }
 });

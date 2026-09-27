@@ -83,3 +83,11 @@ test('identical outcomes are flagged; "not everyone will" is the point', () => {
   assert.ok(promotionFlags('A 90% success rate.', 'protocols').includes('outcome promise'));
   assert.deepEqual(promotionFlags('Not everyone will respond the same way, which is why plans differ.', 'protocols'), []);
 });
+
+test('a seeded slot finds its pillar by key, even after a rename', async () => {
+  const { pillarForStrategy } = await import('./strategy-voice.ts');
+  assert.equal(pillarForStrategy({ pillarId: 'nutrition' }, 'Nutrition (Tuesday AM)')?.id, 'nutrition');
+  assert.equal(pillarForStrategy({ slot: 'sun-2' }, 'Whatever')?.id, 'recovery-cancun');
+  assert.equal(pillarForStrategy({}, 'Sleep')?.id, 'sleep', 'legacy rows fall back to the name');
+  assert.equal(pillarForStrategy({ slot: 'mon-blog' }, 'Weekly article'), null);
+});

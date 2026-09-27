@@ -85,7 +85,7 @@ import { nextFreeSlot } from '@/lib/missed-slot';
 // into that column depends on can actually be run by a test. Re-exported here
 // because this is where callers have always looked for them.
 import { normalizeStrategy, type StrategyMode, type TemplateStrategy } from '@/lib/template-strategy';
-import { isStrategySlot, pillarForName, promotionFlags, SOFT_CTA_RE, strategyBrand, strategyTopicPrompt } from '@/lib/strategy-voice';
+import { isStrategySlot, pillarForStrategy, promotionFlags, SOFT_CTA_RE, strategyBrand, strategyTopicPrompt } from '@/lib/strategy-voice';
 export { normalizeStrategy };
 export type { StrategyFormat, StrategyMode, TemplateStrategy } from '@/lib/template-strategy';
 
@@ -614,7 +614,7 @@ function topicPromptFor(angle: Angle, strategy: TemplateStrategy, templateName =
   if (isStrategySlot(strategy)) {
     const brief = strategyTopicPrompt({
       angle: angle.query,
-      pillarName: pillarForName(templateName)?.name || templateName || angle.seedTopic,
+      pillarName: pillarForStrategy(strategy, templateName)?.name || templateName || angle.seedTopic,
       rule: strategy.rule,
       reviewerNote: angle.reviewerNote,
       supportingPhrase: angle.supportingPhrase,
@@ -752,6 +752,9 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
     run_id: run.id,
     template_id: run.template_id,
     template_name: template.name,
+    // The slot's identity, so the picture can find its pillar even after the
+    // template is renamed (lib/planner-image.ts plannerImageFor).
+    ...(isStrategySlot(strategy) ? { slot: strategy.slot || null, pillar_id: pillarForStrategy(strategy, template.name)?.id || null } : {}),
     scheduled_for: run.scheduled_for,
     angle,
   };

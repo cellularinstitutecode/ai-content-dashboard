@@ -302,6 +302,30 @@ export const WEEKLY_MIX: Record<MixGroup, number> = {
   cancun: 2,
 };
 
+const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
+
+/**
+ * A slot's stable identity: 'mon-1' … 'sun-2'.
+ *
+ * Stored on every seeded template (`strategy.slot`) so the seed, the brief and
+ * the planner picture can find a slot's pillar without going through its NAME.
+ * Names are the one thing a person is free to change, and matching on them
+ * meant a renamed "Nutrition" was duplicated by the next "Load the weekly
+ * strategy" and lost its pillar in the brief and the picture.
+ */
+export function slotKey(slot: Pick<Slot, 'day' | 'post'>): string {
+  return DAY_KEYS[slot.day] + '-' + slot.post;
+}
+
+/** The weekly article's key. It is not one of the document's fourteen. */
+export const BLOG_SLOT_KEY = 'mon-blog';
+
+/** The slot a key names, or null (the article's key names no document slot). */
+export function slotByKey(key: unknown): Slot | null {
+  const k = String(key || '').trim().toLowerCase();
+  return WEEK.find((s) => slotKey(s) === k) ?? null;
+}
+
 /** Every slot, in the order the week runs — Monday first, as the document reads. */
 export const WEEK_ORDER: Weekday[] = [1, 2, 3, 4, 5, 6, 0];
 
@@ -328,6 +352,8 @@ export type PlannedTemplate = {
   pillars: string[];
   rule: string;
   pillarId: string;
+  /** slotKey() — the identity the seed matches on. */
+  slot: string;
 };
 
 /**
@@ -349,6 +375,7 @@ export function plannedTemplates(): PlannedTemplate[] {
       pillars: pillar.angles.slice(),
       rule: pillar.rule || '',
       pillarId: pillar.id,
+      slot: slotKey(slot),
     };
   });
 }

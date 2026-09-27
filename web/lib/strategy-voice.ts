@@ -17,7 +17,7 @@
 // person wrote by hand still get the Brand Brain exactly as it is.
 //
 // Pure: `./x.ts` imports only, so the test runner reads this file directly.
-import { PILLARS, type Pillar } from './content-strategy.ts';
+import { PILLARS, pillarById, slotByKey, type Pillar } from './content-strategy.ts';
 import { SEED_MARK } from './strategy-seed.ts';
 import { negatedAt } from './safety-rules.ts';
 
@@ -34,6 +34,22 @@ function key(s: unknown): string {
 export function pillarForName(name: unknown): Pillar | null {
   const k = key(name);
   return PILLARS.find((p) => key(p.name) === k) ?? null;
+}
+
+/**
+ * The pillar a seeded template writes about, found through the keys the seed
+ * stamped (`pillarId`, then `slot`) and only then through its name.
+ *
+ * By name alone, a slot somebody renamed — "Nutrition (Tuesday AM)" — lost
+ * its pillar in the brief and its picture, and a hand-written template that
+ * happened to be called "Nutrition" gained one.
+ */
+export function pillarForStrategy(strategy: { pillarId?: unknown; slot?: unknown } | null | undefined, name?: unknown): Pillar | null {
+  const byId = typeof strategy?.pillarId === 'string' ? pillarById(strategy.pillarId) : null;
+  if (byId) return byId;
+  const slot = slotByKey(strategy?.slot);
+  if (slot) return pillarById(slot.pillarId);
+  return pillarForName(name);
 }
 
 /** The document's positioning line, used in place of the Brand Brain mission for these posts. */
