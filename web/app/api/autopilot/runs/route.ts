@@ -125,7 +125,10 @@ export async function GET(req: NextRequest) {
       // Retired because the slot moved: never a post, so not a "previous occurrence".
       .neq('state', 'superseded')
       .order('scheduled_for', { ascending: false })
-      .limit(40);
+      // One read for every template, four entries each: 40 was written for a
+      // handful of templates, and across the strategy's fifteen slots it left
+      // two or three per card.
+      .limit(160);
     for (const p of past || []) {
       const tid = String((p as { template_id: string }).template_id);
       const a = (p as { angle?: { query?: string; type?: string } }).angle;
