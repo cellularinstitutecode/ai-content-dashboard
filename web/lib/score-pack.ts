@@ -10,6 +10,7 @@
 import type { ContentPack } from './ai.ts';
 import { reviewPack, type SafetyFlag } from './safety-rules.ts';
 import { promotionFlags, SOFT_CTA_RE } from './strategy-voice.ts';
+import { openingLineOf, repeatsOpening } from './opening-line.ts';
 
 export type RunScore = {
   total: number; // 0-100
@@ -18,6 +19,8 @@ export type RunScore = {
   critique: string[];
   /** Weekly-strategy posts only: the promotional habits found (lib/strategy-voice.ts). */
   promotionFlags?: string[];
+  /** Weekly-strategy posts only: the opening repeats one the clinic already published. */
+  openingRepeat?: boolean;
 };
 
 /** Enough of an angle to score against. */
@@ -48,7 +51,12 @@ export function channelText(pack: ContentPack, provider: string): string {
   return String(p[key] || p.instagram || p.blog || '');
 }
 
-export function scorePack(pack: ContentPack, providers: string[], angle: ScoreAngle, opts: { strategySlot?: boolean } = {}): RunScore {
+export function scorePack(
+  pack: ContentPack,
+  providers: string[],
+  angle: ScoreAngle,
+  opts: { strategySlot?: boolean; recentOpenings?: readonly string[] } = {},
+): RunScore {
   const texts = (providers.length ? providers : ['instagram']).map((p) => channelText(pack, p));
   const joined = texts.join('\n').toLowerCase();
   const critique: string[] = [];
@@ -116,6 +124,24 @@ export function scorePack(pack: ContentPack, providers: string[], angle: ScoreAn
     if (promo.length) critique.push('This is an educational post, not an advert — remove: ' + promo.join(', ') + '.');
   }
 
+  // "Repeat the content pillar, not the wording." Fourteen posts a week from
+  // one writer drift toward the same first words; an opening that repeats
+  // one of the recent posts costs points and forces the rewrite (stepScore).
+  // The same guard the video captions have had (lib/opening-line.ts).
+  let openingRepeat = false;
+  if (opts.strategySlot && opts.recentOpenings?.length) {
+    const opening = openingLineOf(texts[0] || '');
+    const repeat = repeatsOpening(opening, opts.recentOpenings);
+    if (repeat) {
+      openingRepeat = true;
+      breakdown.opening = -15;
+      critique.push('The opening line repeats a recent post — start this post a different way, with a different first sentence.');
+    }
+  }
+
   const total = Math.max(0, Object.values(breakdown).reduce((s, v) => s + v, 0));
-  return promo ? { total, breakdown, safetyFlags, critique, promotionFlags: promo } : { total, breakdown, safetyFlags, critique };
+  const out: RunScore = { total, breakdown, safetyFlags, critique };
+  if (promo) out.promotionFlags = promo;
+  if (openingRepeat) out.openingRepeat = true;
+  return out;
 }

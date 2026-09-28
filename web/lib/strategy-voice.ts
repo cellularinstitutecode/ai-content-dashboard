@@ -134,12 +134,26 @@ export function strategyTopicPrompt(opts: {
   coveredThisWeek?: string[];
   /** Varies the brief's own example sentences from week to week (the dealt week). */
   variant?: number;
+  /** This occurrence's shape, reader and close (lib/strategy-variety.ts briefs). */
+  formatBrief?: string;
+  audienceBrief?: string;
+  closingBrief?: string;
+  /** The opening line this same angle had the last time it was published. */
+  previousOpening?: string;
 }): string {
   const parts = [
     'Write about: ' + opts.angle + '.',
     'This is the weekly "' + opts.pillarName + '" post. Stay on this pillar and on this exact angle — the rest of the week covers the other topics.',
   ];
   if (opts.dayTheme) parts.push('The day\'s theme is "' + opts.dayTheme + '"; let the post sit inside it.');
+  // "Each time a pillar returns, the angle, question, format, or audience
+  // should change." The angle is dealt by the rotation; these are the rest.
+  if (opts.audienceBrief) parts.push('Write it for ' + opts.audienceBrief + ' — speak to their situation, without assuming anything about their health.');
+  if (opts.formatBrief) parts.push(opts.formatBrief);
+  if (opts.previousOpening) {
+    parts.push('This angle has been published before, opening with: "' + opts.previousOpening.slice(0, 200) +
+      '". Come at it from a different question or entry point this time, and do not reuse that opening.');
+  }
   if (opts.alsoCovers && opts.alsoCovers.length > 1) {
     parts.push('This slot counts for both ' + opts.alsoCovers.map((n) => '"' + n + '"').join(' and ') + ' in the clinic\'s weekly mix, so the post should speak to both.');
   }
@@ -159,6 +173,8 @@ export function strategyTopicPrompt(opts: {
       '. Build on them from a different point or step in the patient\'s journey; do not repeat their points.');
   }
   parts.push(EDITORIAL_DIRECTION, NO_PROMOTION_RULES);
+  // After the general rule, so the specific close for this post wins.
+  if (opts.closingBrief) parts.push('For this post: ' + opts.closingBrief);
   if (opts.supportingPhrase) {
     parts.push('If it reads naturally, use the search phrase "' + opts.supportingPhrase + '" once; never force it.');
   }
@@ -176,7 +192,7 @@ const INTEGRATED_EXAMPLES = [
 
 /** A gentle next step counts as a call to action for a strategy post. */
 export const SOFT_CTA_RE =
-  /\b(save (this|it)|share (this|it)|tag someone|talk (it )?(through )?with your (physician|doctor)|ask your (physician|doctor)|comment|let us know|learn more|read more|what('s| is) your)\b/i;
+  /\b(save (this|it)|share (this|it)|tag someone|talk (it )?(through )?with your (physician|doctor)|ask your (physician|doctor)|comment|let us know|learn more|read more|what('s| is) your|what does your|how do you|try (this|it) (today|tonight|this week))\b/i;
 
 /** The recovery services the document names: to be introduced, never promoted. */
 const SERVICE = '(?:hbot|hyperbaric(?: oxygen)?(?: therapy| chamber)?|red[- ]light(?: therapy)?|pemf|hydrogen(?: inhalation)?|recovery lounge)';

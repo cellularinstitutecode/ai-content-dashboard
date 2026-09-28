@@ -16,6 +16,7 @@ import { MAX_ATTEMPTS } from '@/lib/planner-constants';
 import { plannerImageFor } from '@/lib/planner-image';
 import { imageUnshippable } from '@/lib/image-verdict';
 import { citationLabel, type CitationCheck } from '@/lib/citation';
+import { varietyLabels } from '@/lib/strategy-variety';
 import { claimSupportNote, type ClaimSupportStamp } from '@/lib/claim-support';
 
 // The visible pipeline an engine run walks through. The tick call does all of
@@ -51,6 +52,9 @@ type Angle = {
   strategistNote?: string;
   provenPerformer?: boolean;
   media?: { url: string; title: string } | null;
+  // Weekly-strategy occurrences: the shape and reader dealt for this week.
+  format?: string;
+  audience?: string;
 };
 
 type RunScore = {
@@ -510,6 +514,11 @@ export default function AutopilotQueue() {
                     <div className="flex flex-wrap items-center gap-2 text-[13px]">
                       <span className={'rounded-full px-2.5 py-0.5 text-[11px] font-semibold ' + meta.cls}>{meta.label}</span>
                       <span className="font-semibold text-ink">{r.angle?.query || 'Draft'}</span>
+                      {varietyLabels(r.angle) && (
+                        <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-700" title="This week's format and reader, from the weekly strategy's rotation">
+                          {varietyLabels(r.angle)!.format} · for {varietyLabels(r.angle)!.audience}
+                        </span>
+                      )}
                       {r.angle?.volume != null && (
                         <span className="text-[12px] text-ink-muted">
                           {r.angle.volume}/mo{r.angle.difficulty != null ? ' · KD ' + r.angle.difficulty : ''}

@@ -152,3 +152,32 @@ test('related posts are built on, and the follow-up example varies by week', () 
   assert.match(a, /Build on them from a different point/);
   assert.notEqual(a.match(/for example, ([^.]+)/)?.[1], b.match(/for example, ([^.]+)/)?.[1]);
 });
+
+test('Phase 3: the dealt format, reader and closing reach the writer, and a returning angle is told its old opening', () => {
+  const p = strategyTopicPrompt({
+    angle: 'Sleep and recovery',
+    pillarName: 'Sleep',
+    formatBrief: 'Shape: myth vs fact — open with a common belief.',
+    audienceBrief: 'a patient back home after treatment',
+    closingBrief: 'Close with one short question back to the reader.',
+    previousOpening: 'Eight hours is not the same as rest.',
+  });
+  assert.match(p, /Write it for a patient back home after treatment — speak to their situation, without assuming anything about their health\./);
+  assert.match(p, /Shape: myth vs fact/);
+  assert.match(p, /For this post: Close with one short question back to the reader\./);
+  assert.match(p, /published before, opening with: "Eight hours is not the same as rest\."/);
+  assert.match(p, /do not reuse that opening/);
+  // The closing comes after the no-promotion rules, so it is the last word on how to end.
+  assert.ok(p.indexOf('For this post:') > p.indexOf('Shape:'));
+});
+
+test('Phase 3: without a deal the prompt is unchanged', () => {
+  const p = strategyTopicPrompt({ angle: 'Sleep and recovery', pillarName: 'Sleep' });
+  assert.doesNotMatch(p, /Write it for|For this post:|published before/);
+});
+
+test('Phase 3: the new gentle closings count as a soft next step', () => {
+  for (const s of ['What does your evening look like?', 'How do you wind down?', 'Try this tonight.', 'Try it this week.']) {
+    assert.match(s, SOFT_CTA_RE, s);
+  }
+});

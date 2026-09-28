@@ -40,3 +40,18 @@ test('other templates keep the search-phrase rubric', () => {
 test('content words drop the filler', () => {
   assert.deepEqual(contentWords('Why the body needs time to respond'), ['needs', 'time', 'respond']);
 });
+
+test('Phase 3: a strategy post opening like one already published loses points and is flagged for the rewrite', () => {
+  const angle = { query: 'sleep quality' };
+  const text = body('Eight hours in bed is not the same as rest, and sleep quality matters more than length for most of us.');
+  const fresh = scorePack({ instagram: text } as never, ['instagram'], angle, { strategySlot: true, recentOpenings: ['Protein at breakfast keeps energy steady.'] });
+  assert.equal(fresh.openingRepeat, undefined);
+  const repeat = scorePack({ instagram: text } as never, ['instagram'], angle, { strategySlot: true, recentOpenings: ['Eight hours in bed is not the same as rest, and sleep quality matters more than length for most of us.'] });
+  assert.equal(repeat.openingRepeat, true);
+  assert.equal(repeat.breakdown.opening, -15);
+  assert.ok(repeat.total < fresh.total);
+  assert.ok(repeat.critique.some((c) => /opening line repeats a recent post/.test(c)));
+  // Not a strategy slot: the old scoring, untouched.
+  const other = scorePack({ instagram: text } as never, ['instagram'], angle, { recentOpenings: ['Eight hours in bed is not the same as rest, and sleep quality matters more than length for most of us.'] });
+  assert.equal(other.openingRepeat, undefined);
+});
