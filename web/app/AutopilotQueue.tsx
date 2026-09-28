@@ -88,8 +88,10 @@ type Run = {
   id: string;
   draft_id: string | null;
   template_name: string;
-  /** The template's channels; 'blog' means the run writes a WordPress article. */
+  /** The template's channels. */
   template_providers?: string[];
+  /** The run writes the WordPress article (the server's wantsBlog rule). */
+  writes_article?: boolean;
   scheduled_for: string;
   state: string;
   angle: Angle | null;
@@ -781,7 +783,7 @@ export default function AutopilotQueue() {
                             article as a draft and sends its promos without a
                             link — and nothing here can publish that draft later,
                             so the article would never go out. */}
-                        {(r.template_providers || []).includes('blog') ? (
+                        {r.writes_article ? (
                           <span className="text-[11px] text-ink-muted">
                             Articles are approved and scheduled together, so the post and its link go out at the slot.
                           </span>

@@ -102,13 +102,19 @@ export function metricMatchesRun(run: PerfRun, m: PerfMetric): boolean {
   return postForMetric(run, m) >= 0;
 }
 
+/** Which of the run's sent posts this metric row could be (own network first). */
+function postsForMetric(run: PerfRun, m: PerfMetric): number[] {
+  const net = networkOf(m.network);
+  const all = run.sent.map((p, i) => ({ p, i }));
+  const own = all.filter(({ p }) => networkOf(p.network) === net);
+  return (own.length ? own : all)
+    .filter(({ p }) => nearInTime(p.at, m.published_at) && sameOpening(p.text, m.text))
+    .map(({ i }) => i);
+}
+
 /** Which of the run's sent posts this metric row is, or -1. */
 function postForMetric(run: PerfRun, m: PerfMetric): number {
-  const net = networkOf(m.network);
-  const own = run.sent.map((p, i) => ({ p, i })).filter(({ p }) => networkOf(p.network) === net);
-  const candidates = own.length ? own : run.sent.map((p, i) => ({ p, i }));
-  const hit = candidates.find(({ p }) => nearInTime(p.at, m.published_at) && sameOpening(p.text, m.text));
-  return hit ? hit.i : -1;
+  return postsForMetric(run, m)[0] ?? -1;
 }
 
 export type PerfCell = {
@@ -137,6 +143,7 @@ export type StrategyPerformance = {
   pillars: PillarPerformance[];
   formats: FormatPerformance[];
   article: PerfCell;
+  /** metricsMatched: metric rows counted — one per measured post, duplicates not included. */
   totals: { posts: number; measured: number; metricsRead: number; metricsMatched: number };
 };
 
@@ -160,31 +167,39 @@ export function strategyPerformance(allRuns: readonly PerfRun[], metrics: readon
   // still in the future or an approval that never sent is not "published",
   // and counting it made the unmeasured share look like a sync problem.
   const candidates = allRuns.filter((r) => r.sent.length > 0);
-  const claimed = new Set<number>();
   const perRun = new Map<string, { impressions: number; engagement: number; measured: boolean }>();
-  // Newest runs first: a recent post is the more likely owner of a recent metric.
-  const ordered = [...candidates].sort((a, b) => String(b.scheduled_for).localeCompare(String(a.scheduled_for)));
-  for (const run of ordered) {
-    const acc = { impressions: 0, engagement: 0, measured: false };
-    // ONE metric row per sent post. The same post can be stored twice (a
-    // key that changed between syncs, a network spelled two ways); every
-    // copy is claimed so no other run can take it, but only the one with
-    // the most engagement — the freshest numbers — is counted.
-    const best = new Map<number, PerfMetric>();
-    metrics.forEach((m, i) => {
-      if (claimed.has(i)) return;
-      const post = postForMetric(run, m);
-      if (post < 0) return;
-      claimed.add(i);
-      const cur = best.get(post);
-      if (!cur || (Number(m.engagement) || 0) > (Number(cur.engagement) || 0)) best.set(post, m);
-    });
-    for (const m of best.values()) {
-      acc.measured = true;
-      acc.impressions += Number(m.impressions) || 0;
-      acc.engagement += Number(m.engagement) || 0;
+  // Each metric row belongs to exactly ONE sent post: of every post it could
+  // be (same opening, within a few days, its own network first), the one sent
+  // closest in time to it. Deciding run by run let the first run looked at
+  // take a metric that was another post's — two posts that opened alike a
+  // couple of days apart, and the older one showed as unmeasured.
+  const byPost = new Map<string, PerfMetric>();
+  const at = (iso: string | null | undefined) => new Date(String(iso || '')).getTime();
+  let counted = 0;
+  metrics.forEach((m) => {
+    let best: { key: string; own: boolean; dt: number } | null = null;
+    for (const run of candidates) {
+      for (const i of postsForMetric(run, m)) {
+        const post = run.sent[i];
+        const own = networkOf(post.network) === networkOf(m.network);
+        const dt = m.published_at ? Math.abs(at(m.published_at) - at(post.at)) : Number.MAX_SAFE_INTEGER;
+        if (!best || (own && !best.own) || (own === best.own && dt < best.dt)) best = { key: run.id + '\u0000' + i, own, dt };
+      }
     }
-    perRun.set(run.id, acc);
+    if (!best) return;
+    // ONE metric row per sent post. The same post can be stored twice (a key
+    // that changed between syncs, a network spelled two ways); only the copy
+    // with the most engagement — engagement only grows, so the freshest — counts.
+    const cur = byPost.get(best.key);
+    if (!cur) counted += 1;
+    if (!cur || (Number(m.engagement) || 0) > (Number(cur.engagement) || 0)) byPost.set(best.key, m);
+  });
+  for (const run of candidates) perRun.set(run.id, { impressions: 0, engagement: 0, measured: false });
+  for (const [key, m] of byPost) {
+    const acc = perRun.get(key.split('\u0000')[0])!;
+    acc.measured = true;
+    acc.impressions += Number(m.impressions) || 0;
+    acc.engagement += Number(m.engagement) || 0;
   }
   // Published: a post that is live (approved, and its time has passed), or
   // one Metricool has numbers for — a draft approved in Metricool's own queue
@@ -232,7 +247,7 @@ export function strategyPerformance(allRuns: readonly PerfRun[], metrics: readon
     pillars: [...pillars.values()].map(finish),
     formats: [...formats.values()].filter((f) => f.posts > 0).map(finish),
     article: finish(article),
-    totals: { posts: runs.length, measured, metricsRead: metrics.length, metricsMatched: claimed.size },
+    totals: { posts: runs.length, measured, metricsRead: metrics.length, metricsMatched: counted },
   };
 }
 

@@ -117,6 +117,12 @@ export type Angle = {
   // v2 enrichments (all optional, all fail-soft):
   strategistNote?: string; // AI strategist's 2-3 sentence guidance for the writer
   reviewerNote?: string; // human feedback carried into a regeneration
+  /**
+   * When a reviewer last pressed "Ask for changes". The redraft is theirs to
+   * read: autoSchedule never sends a run carrying this, however the redraft
+   * finished — in the request, or on a later tick that has no runId.
+   */
+  reviewRequestedAt?: string;
   provenPerformer?: boolean; // boosted by the measured-engagement learning loop
   supportingPhrase?: string; // weekly-strategy slots: an optional search phrase found by research
   media?: { url: string; title: string } | null; // matching clip to attach on approve
@@ -1495,6 +1501,13 @@ async function autoSchedule(
       await hold(db, run, 'Held for you because this post\'s time has already passed. Nothing was sent. Use "Approve for next free slot" to send it at the next open time, or skip it.');
       return;
     }
+    // A redraft a reviewer asked for waits for that reviewer. The !opts.runId
+    // guard in advanceRuns covers a redraft that finishes inside their
+    // request; this covers one a later tick finishes.
+    if ((run.angle as Angle | null)?.reviewRequestedAt) {
+      await hold(db, run, 'Held for you: you asked for changes, so the redraft waits for you to read it before it goes out.');
+      return;
+    }
     // The pack carries both signals: the Crossref verdict stamped at
     // generation time (lib/ai.ts) and the hero image stamped at draft time.
     let pack: Record<string, unknown> | null = null;
@@ -2575,7 +2588,11 @@ export async function regenerateRun(runId: string, userId: string, note?: string
   // day past its time, and expiry marks it failed — so the button turned a
   // missed post into a red card. Such a post is re-dated or skipped instead.
   if (Date.parse(run.scheduled_for) < Date.now() + MISSED_MARGIN_MS) return false;
-  const angle: Angle = { ...run.angle, reviewerNote: (note || '').trim().slice(0, 500) || run.angle.reviewerNote };
+  const angle: Angle = {
+    ...run.angle,
+    reviewerNote: (note || '').trim().slice(0, 500) || run.angle.reviewerNote,
+    reviewRequestedAt: new Date().toISOString(),
+  };
   // Claim the state we READ, exactly as approveRun does. Without the predicate
   // this was a read-then-blind-write: two open tabs, one approving and one
   // regenerating, and the regenerate could rewrite `approved` back to

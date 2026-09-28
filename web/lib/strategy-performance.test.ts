@@ -99,7 +99,7 @@ test('the same post stored twice is counted once, with its freshest numbers', ()
     metric('unknown', SLEEP, '2026-10-07T23:01:00Z', 9, 250),
   ]);
   assert.equal(perf.pillars.find((p) => p.id === 'sleep-stress')!.engagement, 12);
-  assert.equal(perf.totals.metricsMatched, 2, 'both copies are claimed, so no other run can take one');
+  assert.equal(perf.totals.metricsMatched, 1, 'the duplicate copy is not counted');
   // Two different networks of one run still add up.
   const both = strategyPerformance([run('r', 'wed-2', '2026-10-07T23:00:00Z', [['instagram', SLEEP], ['facebook', SLEEP]])], [
     metric('instagram', SLEEP, '2026-10-07T23:01:00Z', 12),
@@ -125,4 +125,17 @@ test('sentRowState: live, a due Metricool draft, or not counted', async () => {
   assert.equal(sentRowState({ status: 'pending_review', publication_date: '2026-10-09T00:00:00Z' }, now), 'pending');
   assert.equal(sentRowState({ status: 'pending_review', publication_date: '2026-10-11T00:00:00Z' }, now), null);
   assert.equal(sentRowState({ status: 'scheduled', publication_date: '2026-10-09T00:00:00Z' }, now), null);
+});
+
+test('two posts that opened alike keep their own numbers: each metric goes to the post sent closest to it', () => {
+  const runs = [
+    run('older', 'wed-2', '2026-10-07T23:00:00Z', [['instagram', SLEEP]]),
+    run('newer', 'sun-1', '2026-10-09T14:00:00Z', [['instagram', SLEEP]]),
+  ];
+  const perf = strategyPerformance(runs, [
+    metric('instagram', SLEEP, '2026-10-07T23:03:00Z', 20),
+    metric('instagram', SLEEP, '2026-10-09T14:02:00Z', 7),
+  ]);
+  assert.equal(perf.totals.measured, 2, 'neither run loses its metric to the other');
+  assert.equal(perf.pillars.find((p) => p.id === 'sleep-stress')!.engagement, 20 + 7);
 });
