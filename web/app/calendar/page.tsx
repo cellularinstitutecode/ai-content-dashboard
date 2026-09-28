@@ -450,25 +450,30 @@ export default function CalendarPage() {
     }
   }
 
-  // Ticks only ever refer to posts still in the past-due list — a post that was
-  // moved, approved or deleted elsewhere drops out of the selection by itself.
+  // One selection across the whole publishing list — past-due and upcoming.
+  // Ticks only ever refer to posts still listed: a post moved, approved or
+  // deleted elsewhere drops out of the selection by itself.
   const overdueIds = useMemo(() => overdueList.map((p) => String(p.id || '')).filter(Boolean), [overdueList]);
-  const pickedIds = overdueIds.filter((id) => picked.has(id));
-  const allPicked = overdueIds.length > 0 && pickedIds.length === overdueIds.length;
+  const upcomingIds = useMemo(() => upcomingList.map((p) => String(p.id || '')).filter(Boolean), [upcomingList]);
+  const listedIds = useMemo(() => Array.from(new Set([...overdueIds, ...upcomingIds])), [overdueIds, upcomingIds]);
+  const pickedIds = listedIds.filter((id) => picked.has(id));
+  const allPastPicked = overdueIds.length > 0 && overdueIds.every((id) => picked.has(id));
+  const allUpcomingPicked = upcomingIds.length > 0 && upcomingIds.every((id) => picked.has(id));
   function togglePick(id: string) {
     setPicked((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   }
-  function toggleAll() {
-    setPicked(allPicked ? new Set() : new Set(overdueIds));
+  // Ticks (or unticks) a whole group without touching the other group's ticks.
+  function toggleGroup(ids: string[], allOn: boolean) {
+    setPicked((prev) => { const next = new Set(prev); ids.forEach((id) => (allOn ? next.delete(id) : next.add(id))); return next; });
   }
 
-  // Deletes the ticked past-due posts through the same DELETE the single
+  // Deletes the ticked posts through the same DELETE the single
   // button uses (Metricool first, then our row), two at a time, and reports
   // exactly which ones failed rather than stopping at the first problem.
   async function removePicked() {
     const ids = pickedIds;
     if (!ids.length || bulk) return;
-    if (!window.confirm('Delete ' + ids.length + ' past post' + (ids.length === 1 ? '' : 's') + '? They are removed from Metricool too. This cannot be undone.')) return;
+    if (!window.confirm('Delete ' + ids.length + ' post' + (ids.length === 1 ? '' : 's') + '? They are removed from Metricool too. This cannot be undone.')) return;
     setErr(null);
     setBulk({ done: 0, total: ids.length });
     const failed: string[] = [];
@@ -572,12 +577,12 @@ export default function CalendarPage() {
                     <div
                       key={p.id}
                       draggable
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={(e) => { e.stopPropagation(); setPreviewId(String(p.id)); }}
                       onDragStart={() => setDragId(p.id || null)}
                       onDragEnd={() => setDragId(null)}
                       title={p.text || ''}
                       className={
-                        'cursor-grab rounded-lg border border-accent/20 bg-accent/5 px-2 py-1 text-[11px] leading-tight text-ink transition hover:bg-accent/10 active:cursor-grabbing ' +
+                        'cursor-pointer rounded-lg border border-accent/20 bg-accent/5 px-2 py-1 text-[11px] leading-tight text-ink transition hover:bg-accent/10 active:cursor-grabbing ' +
                         (saving === p.id ? 'opacity-50 ' : '')
                       }
                     >
@@ -635,31 +640,35 @@ export default function CalendarPage() {
             <h2 className="text-[13px] font-semibold uppercase tracking-wide text-ink/60">Publishing list</h2>
             <span className="text-xs text-ink/40">{upcomingList.length} coming up</span>
           </div>
+          {/* Bulk bar for the whole list: tick posts below (past or upcoming),
+              then delete them together. Always visible so the option is
+              obvious even before anything is ticked. */}
+          {listedIds.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl bg-subtle/70 px-3 py-2 text-[12px] ring-1 ring-line" data-testid="bulk-bar">
+              <span className="font-medium text-ink">{pickedIds.length} selected</span>
+              <span className="text-[11px] text-ink/50">Tick posts below to delete several at once</span>
+              <span className="flex-1" />
+              {pickedIds.length > 0 && !bulk && (
+                <button type="button" onClick={() => setPicked(new Set())} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/60 hover:bg-black/5">Clear</button>
+              )}
+              <button
+                type="button"
+                onClick={() => void removePicked()}
+                disabled={pickedIds.length === 0 || Boolean(bulk)}
+                className="rounded-full bg-red-600 px-3 py-[4px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-40"
+              >
+                {bulk ? 'Deleting ' + bulk.done + ' / ' + bulk.total + '…' : 'Delete selected' + (pickedIds.length ? ' (' + pickedIds.length + ')' : '')}
+              </button>
+            </div>
+          )}
           {overdueList.length > 0 && (
             <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50/70 p-3 text-[12px]">
               <div className="mb-1 font-semibold text-rose-800">{overdueList.length} past {overdueList.length === 1 ? 'its' : 'their'} time, still waiting</div>
               <p className="mb-2 text-[11px] text-rose-800/80">These were never approved, so they did not go out. Click one to preview it. Tick the ones you don&apos;t need and delete them together, or move one to tomorrow.</p>
-              {/* Bulk bar: select all + delete selected. The list below scrolls
-                  on its own, so this stays in reach. */}
-              <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-rose-100/90 px-2 py-1.5 backdrop-blur">
-                <label className="flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-rose-900">
-                  <input type="checkbox" checked={allPicked} onChange={toggleAll} disabled={Boolean(bulk)} className="h-3.5 w-3.5 accent-rose-600" aria-label="Select all past posts" />
-                  {allPicked ? 'Clear all' : 'Select all'}
-                </label>
-                <span className="text-[11px] text-rose-900/70">{pickedIds.length} selected</span>
-                <span className="flex-1" />
-                {pickedIds.length > 0 && !bulk && (
-                  <button type="button" onClick={() => setPicked(new Set())} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-rose-900/70 hover:bg-rose-200/60">Clear</button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => void removePicked()}
-                  disabled={pickedIds.length === 0 || Boolean(bulk)}
-                  className="rounded-full bg-red-600 px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-40"
-                >
-                  {bulk ? 'Deleting ' + bulk.done + ' / ' + bulk.total + '…' : 'Delete selected' + (pickedIds.length ? ' (' + pickedIds.length + ')' : '')}
-                </button>
-              </div>
+              <label className="mb-2 flex w-fit cursor-pointer items-center gap-1.5 rounded-lg bg-rose-100/90 px-2 py-1 text-[11px] font-medium text-rose-900">
+                <input type="checkbox" checked={allPastPicked} onChange={() => toggleGroup(overdueIds, allPastPicked)} disabled={Boolean(bulk)} className="h-3.5 w-3.5 accent-rose-600" aria-label="Select all past posts" />
+                Select all past ({overdueIds.length})
+              </label>
               <ul className="max-h-[45vh] space-y-1.5 overflow-y-auto pr-1">
                 {overdueList.map((p) => {
                   const id = String(p.id || '');
@@ -700,6 +709,11 @@ export default function CalendarPage() {
           ) : upcomingList.length === 0 ? (
             <p className="text-sm text-ink/50">Nothing scheduled from today onward. Write a post under Draft, or click a day on the calendar.</p>
           ) : (
+            <>
+            <label className="mb-2 flex w-fit cursor-pointer items-center gap-1.5 rounded-lg bg-black/5 px-2 py-1 text-[11px] font-medium text-ink/70">
+              <input type="checkbox" checked={allUpcomingPicked} onChange={() => toggleGroup(upcomingIds, allUpcomingPicked)} disabled={Boolean(bulk)} className="h-3.5 w-3.5 accent-rose-600" aria-label="Select all upcoming posts" />
+              Select all upcoming ({upcomingIds.length})
+            </label>
             <ol className="max-h-[70vh] space-y-2 overflow-y-auto pr-1">
               {upcomingList.map((p) => {
                 const waiting = isAwaitingApproval(p.status);
@@ -709,12 +723,21 @@ export default function CalendarPage() {
                 const pending = p.videoPending === true;
                 const d = p.publication_date ? new Date(p.publication_date) : null;
                 return (
-                  <li key={p.id} className={'rounded-xl border p-3 text-[12px] ' + (waiting ? 'border-amber-200 bg-amber-50/60' : 'border-black/5 bg-canvas')}>
-                    <button type="button" onClick={() => jumpTo(p)} className="flex w-full items-center justify-between gap-2 text-left">
+                  <li key={p.id} className={'flex gap-2 rounded-xl border p-3 text-[12px] ' + (picked.has(String(p.id)) ? 'border-red-300 bg-red-50' : waiting ? 'border-amber-200 bg-amber-50/60' : 'border-black/5 bg-canvas')}>
+                    <input
+                      type="checkbox"
+                      checked={picked.has(String(p.id))}
+                      onChange={() => togglePick(String(p.id))}
+                      disabled={Boolean(bulk)}
+                      className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-rose-600"
+                      aria-label="Select this post"
+                    />
+                    <div className="min-w-0 flex-1">
+                    <button type="button" onClick={() => setPreviewId(String(p.id))} title="Preview this post" className="flex w-full items-center justify-between gap-2 text-left">
                       <span className="font-semibold text-ink">{d ? d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : '—'} · {timeLabel(p.publication_date)}</span>
                       <span className={'rounded-full px-2 py-[2px] text-[10px] font-semibold ' + (pending ? 'bg-rose-100 text-rose-700' : waiting ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800')}>{pending ? 'Pending video' : waiting ? 'Waiting for approval' : postStatusMeta(p.status).label}</span>
                     </button>
-                    <div className="mt-1 line-clamp-2 text-ink/80" title={p.text || ''}>{p.text || 'Untitled post'}</div>
+                    <button type="button" onClick={() => setPreviewId(String(p.id))} className="mt-1 line-clamp-2 block w-full text-left text-ink/80" title="Preview this post">{p.text || 'Untitled post'}</button>
                     {/* WHICH ROW this post was written from. A two-line caption
                         preview does not identify a post in a forty-row tab; a
                         row number does, and it is the thing somebody needs in
@@ -736,18 +759,21 @@ export default function CalendarPage() {
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                       {(p.providers || []).map((n) => <span key={n} className="rounded-full bg-black/5 px-2 py-[1px] text-[10px] text-ink/60">{networkLabel(n)}</span>)}
                       <span className="flex-1" />
+                      <button type="button" onClick={() => setPreviewId(String(p.id))} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Preview</button>
                       {pending ? (
                         <button type="button" disabled={saving === p.id} onClick={() => void attachVideo(p)} title="This copy was written from a video and has none attached. Click to attach it." className="rounded-full bg-rose-600 px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{saving === p.id ? 'Attaching…' : 'Attach video'}</button>
                       ) : waiting && (
                         <button type="button" disabled={saving === p.id} onClick={() => void approve(p)} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Approve</button>
                       )}
                       <button type="button" disabled={saving === p.id} onClick={() => { const day = d ? new Date(d.getTime() + 86400000) : null; if (day) void reschedule(String(p.id), day); }} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/60 hover:bg-black/5" title="Move one day later">+1 day</button>
-                      <button type="button" disabled={saving === p.id} onClick={() => void removePost(p)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-red-600 hover:bg-red-50">Delete</button>
+                      <button type="button" disabled={saving === p.id || Boolean(bulk)} onClick={() => void removePost(p)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-50">Delete</button>
+                    </div>
                     </div>
                   </li>
                 );
               })}
             </ol>
+            </>
           )}
         </div>
       </aside>
@@ -781,7 +807,7 @@ export default function CalendarPage() {
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2 border-t border-black/5 bg-canvas px-5 py-3">
-              {overdueIds.includes(String(previewPost.id)) && (
+              {listedIds.includes(String(previewPost.id)) && (
                 <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-ink/70">
                   <input type="checkbox" checked={picked.has(String(previewPost.id))} onChange={() => togglePick(String(previewPost.id))} className="h-3.5 w-3.5 accent-rose-600" />
                   Select for bulk delete
@@ -789,7 +815,16 @@ export default function CalendarPage() {
               )}
               <span className="flex-1" />
               <button type="button" onClick={() => { jumpTo(previewPost); setPreviewId(null); }} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Show on calendar</button>
-              <button type="button" disabled={saving === previewPost.id} onClick={() => { const t = new Date(today.getTime() + 86400000); void reschedule(String(previewPost.id), t); setPreviewId(null); }} className="rounded-full bg-accent px-3 py-1 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Move to tomorrow</button>
+              {previewPost.videoPending === true ? (
+                <button type="button" disabled={saving === previewPost.id} onClick={() => void attachVideo(previewPost)} className="rounded-full bg-rose-600 px-3 py-1 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{saving === previewPost.id ? 'Attaching…' : 'Attach video'}</button>
+              ) : isAwaitingApproval(previewPost.status) && !overdueIds.includes(String(previewPost.id)) ? (
+                <button type="button" disabled={saving === previewPost.id} onClick={() => void approve(previewPost)} className="rounded-full bg-accent px-3 py-1 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Approve</button>
+              ) : null}
+              {overdueIds.includes(String(previewPost.id)) ? (
+                <button type="button" disabled={saving === previewPost.id} onClick={() => { const t = new Date(today.getTime() + 86400000); void reschedule(String(previewPost.id), t); setPreviewId(null); }} className="rounded-full bg-accent px-3 py-1 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Move to tomorrow</button>
+              ) : (
+                <button type="button" disabled={saving === previewPost.id} onClick={() => { const d = previewPost.publication_date ? new Date(new Date(previewPost.publication_date).getTime() + 86400000) : null; if (d) void reschedule(String(previewPost.id), d); }} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">+1 day</button>
+              )}
               <button type="button" disabled={saving === previewPost.id} onClick={() => void removePost(previewPost)} className="rounded-full px-3 py-1 text-[12px] font-medium text-red-600 ring-1 ring-red-200 hover:bg-red-50 disabled:opacity-50">Delete</button>
             </div>
           </div>
