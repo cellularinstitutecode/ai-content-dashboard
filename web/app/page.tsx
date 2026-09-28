@@ -26,6 +26,7 @@ import { findDuplicatePosts } from '@/lib/duplicate-posts';
 import { sheetRowUrl, sheetRowLabel, sheetRowTitle } from '@/lib/sheet-link';
 import { semrushDraftNote } from '@/lib/semrush-reason';
 import { looksInternal, professionalTitle } from '@/lib/post-title';
+import { imageUnshippable } from '@/lib/image-verdict';
 import { fmtScheduleDateTime, scheduleTzLabel, schedulePresetValue, scheduleInputValue, scheduleInstantFromInput } from '@/lib/schedule-clock';
 
 // The visible pipeline every manual generation walks through. Steps light up
@@ -487,7 +488,8 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
       // image the checker flagged for text — reroll it in the Image Studio
       // first. Content images must be text-free wherever they publish.
       const heroImg = d && d.pack && d.pack._image;
-      const heroHasText = Boolean(heroImg && heroImg.verification && heroImg.verification.textDetected === true);
+      // Text, or a banned prop in frame: never attachable (lib/image-verdict.ts).
+      const heroHasText = Boolean(heroImg && imageUnshippable(heroImg.verification));
       const heroUrl = heroImg && heroImg.url && !heroHasText ? String(heroImg.url) : "";
       if (heroUrl) { setMMedia(heroUrl); setMMediaLabel("AI hero image"); }
       else { setMMedia(""); setMMediaLabel(""); setMSource(null); }

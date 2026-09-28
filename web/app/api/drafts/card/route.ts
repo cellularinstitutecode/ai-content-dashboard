@@ -20,6 +20,7 @@ import { renderBrandCard, setStoredFontReader } from '@/lib/brand-card';
 import { readStoredFonts } from '@/lib/brand-fonts';
 import { normalizeVisual } from '@/lib/brand-visual';
 import { avisoNumberFor } from '@/lib/compliance';
+import { imageUnshippable } from '@/lib/image-verdict';
 import {
   CARD_SIZES, groundForSlide, normalizeGround, normalizeSize, normalizeSlides, slidesFromPack, type CardGround,
 } from '@/lib/brand-card-layout';
@@ -84,7 +85,7 @@ export async function POST(req: NextRequest) {
   let note: string | null = null;
   if (ground === 'photo') {
     const hero = pack._image as PackImage | undefined;
-    const usable = hero?.url && hero.verification?.textDetected !== true && hero.source !== 'brand-card';
+    const usable = hero?.url && !imageUnshippable(hero.verification) && hero.source !== 'brand-card';
     if (usable) {
       try {
         const ctl = new AbortController();

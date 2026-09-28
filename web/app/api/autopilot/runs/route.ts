@@ -11,6 +11,7 @@ import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { advanceRuns, approveRun, regenerateRun, skipRun } from '@/lib/autopilot';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { bucketRuns, DEFAULT_LIMITS, FAILED_WINDOW_DAYS } from '@/lib/review-queue';
 
 export const runtime = 'nodejs';
 // 300, not 60. The approve path runs ensureDraftImage — which lib/images.ts
@@ -44,38 +45,53 @@ export async function GET(req: NextRequest) {
   // 'failed' : startedFrom`) that never reached the screen, so the screen could
   // not reach the same conclusion the engine had.
   const COLUMNS = 'id, template_id, scheduled_for, state, attempts, brief, angle, score, draft_id, log, updated_at';
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const now = Date.now();
+  const since = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+  const failedSince = new Date(now - FAILED_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
-  // Two reads, then merge: everything in the recent window, PLUS every failed
-  // run whatever its age.
+  // Three reads, each limited on its own (lib/review-queue.ts).
   //
-  // The single query used to end at `.gte('scheduled_for', since)`, which hid
-  // exactly the runs a human needs to see - a run that stalled and was later
-  // expired sits in the past by definition, so "Needs attention" was always
-  // empty no matter how badly the engine was doing. Kept as two plain queries
-  // rather than one `.or(...)`: the filter value is a timestamp, and a broken
-  // filter here would take the whole panel down.
-  const [recent, failed] = await Promise.all([
+  // This used to be two reads merged, sorted ascending and cut to 20 — and
+  // failed runs of ANY age were one of them. Failures are never deleted, so
+  // once twenty had piled up they sorted first and filled every row: the posts
+  // waiting for approval fell off the end and nothing could be approved from
+  // the screen. And a finished post nobody approved within a day of its slot
+  // dropped out of the recent window for good.
+  //
+  //   ready     every post waiting for a decision, whatever its age — a missed
+  //             one is shown as missed, not hidden;
+  //   in flight posts still being prepared, from a day back;
+  //   failed    the last FAILED_WINDOW_DAYS only, newest first.
+  //
+  // Kept as plain queries rather than one `.or(...)`: the filter values are
+  // timestamps, and a broken filter here would take the whole panel down.
+  const [ready, inFlight, failed] = await Promise.all([
     db.from('template_runs').select(COLUMNS)
       .eq('user_id', user.id)
-      .in('state', ['planned', 'researched', 'drafted', 'ready_for_review', 'failed'])
+      .eq('state', 'ready_for_review')
+      .order('scheduled_for', { ascending: true })
+      .limit(DEFAULT_LIMITS.ready),
+    db.from('template_runs').select(COLUMNS)
+      .eq('user_id', user.id)
+      .in('state', ['planned', 'researched', 'drafted'])
       .gte('scheduled_for', since)
       .order('scheduled_for', { ascending: true })
       .limit(limit),
     db.from('template_runs').select(COLUMNS)
       .eq('user_id', user.id)
       .eq('state', 'failed')
+      .gte('scheduled_for', failedSince)
       .order('scheduled_for', { ascending: false })
       .limit(limit),
   ]);
-  const error = recent.error || failed.error;
+  const error = ready.error || inFlight.error || failed.error;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const byId = new Map<string, any>();
-  for (const r of [...(recent.data || []), ...(failed.data || [])]) byId.set((r as any).id, r);
-  const rows = Array.from(byId.values())
-    .sort((a: any, b: any) => String(a.scheduled_for).localeCompare(String(b.scheduled_for)))
-    .slice(0, limit);
+  const rows = bucketRuns(
+    { ready: ready.data as any[], inFlight: inFlight.data as any[], failed: failed.data as any[] },
+    now,
+    { ready: DEFAULT_LIMITS.ready, inFlight: limit, failed: limit },
+  );
   const templateIds = Array.from(new Set(rows.map((r: { template_id: string }) => r.template_id)));
   const draftIds = rows.map((r: { draft_id: string | null }) => r.draft_id).filter(Boolean) as string[];
 
@@ -106,6 +122,8 @@ export async function GET(req: NextRequest) {
       .select('template_id, angle, scheduled_for')
       .eq('user_id', user.id)
       .not('angle', 'is', null)
+      // Retired because the slot moved: never a post, so not a "previous occurrence".
+      .neq('state', 'superseded')
       .order('scheduled_for', { ascending: false })
       .limit(40);
     for (const p of past || []) {
@@ -165,7 +183,10 @@ export async function POST(req: NextRequest) {
     // post goes into Metricool's live queue instead of its review queue. It is
     // read only from the request a signed-in reviewer sent; the engine has no
     // path to it.
-    const result = await approveRun(id, user.id, { schedule: body?.schedule === true });
+    // `redate: true` is "Approve for next free slot" on a card whose time has
+    // already passed. Without it approveRun refuses a past slot rather than
+    // sending Metricool a date it will not accept.
+    const result = await approveRun(id, user.id, { schedule: body?.schedule === true, redate: body?.redate === true });
     if (!result.ok) return NextResponse.json({ error: result.note }, { status: 400 });
     return NextResponse.json({ ok: true, note: result.note });
   }
@@ -203,7 +224,12 @@ export async function POST(req: NextRequest) {
   if (action === 'regenerate') {
     const note = typeof body.note === 'string' ? body.note : '';
     const ok = await regenerateRun(id, user.id, note);
-    if (!ok) return NextResponse.json({ error: 'run cannot be regenerated' }, { status: 400 });
+    if (!ok) {
+      return NextResponse.json({
+        error: 'run cannot be regenerated',
+        message: 'This post cannot be redrafted. If its time has already passed, use "Approve for next free slot" or skip it.',
+      }, { status: 400 });
+    }
     // Redraft immediately so the reviewer gets the new version in one click.
     const result = await advanceRuns({ scopeUserId: user.id, runId: id, budgetMs: 45_000, maxRuns: 1 });
     // Same rule as run_now: regenerateRun succeeded, but if the redraft then

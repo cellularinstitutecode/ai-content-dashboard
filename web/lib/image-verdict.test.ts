@@ -127,3 +127,17 @@ test('the same device resting unused on a table is not blocked by wording alone'
   const v = classifyVerdict({ approved: true, textDetected: false, bannedProp: false, onTopic: true, score: 91, blocking: [], advisory: ['a stethoscope rests on the notebook'] }, { requireOnTopic: true });
   assert.equal(v.status, 'approved');
 });
+
+test('a banned prop makes an image unshippable, like text', async () => {
+  const { imageUnshippable, BANNED_PROP_RE } = await import('./image-verdict.ts');
+  const v = classifyVerdict({ approved: false, textDetected: false, bannedProp: true, score: 80, blocking: [], advisory: [] });
+  assert.equal(v.bannedProp, true);
+  assert.equal(imageUnshippable(v), true);
+  assert.equal(imageUnshippable({ textDetected: true }), true);
+  // Verified before bannedProp was recorded: the issue text still says so.
+  assert.equal(imageUnshippable({ issues: ['a banned prop is in frame — a pill'] }), true);
+  assert.equal(imageUnshippable({ textDetected: false, bannedProp: false, issues: ['off-topic'] }), false);
+  assert.equal(imageUnshippable(null), false);
+  assert.match('a blood-pressure cuff on the patient\'s arm', BANNED_PROP_RE);
+  assert.doesNotMatch('a stethoscope resting unused on the table', BANNED_PROP_RE);
+});

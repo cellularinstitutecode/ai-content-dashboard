@@ -247,3 +247,26 @@ test('nothing is worn by or connected to anyone in the frame', () => {
   // A device may still sit on the table — the pillars' own objects include one.
   assert.match(lines, /rest ON THE TABLE, unused/i);
 });
+
+test('no planner brief asks for a picture the image check would fail', async () => {
+  // Two of them did: a cuff on the patient's arm for Prevention, a dish of
+  // capsules for Supplementation. The check fails both on sight, so the
+  // pipeline kept the best of three failed candidates and it shipped.
+  const { PILLAR_SCENES, FALLBACK_OBJECTS } = await import('./planner-image.ts');
+  const { BANNED_PROP_RE } = await import('./image-verdict.ts');
+  for (const [id, set] of Object.entries(PILLAR_SCENES)) {
+    assert.doesNotMatch(set.mustShow, BANNED_PROP_RE, id + ' mustShow');
+    for (const scene of set.scenes) assert.doesNotMatch(scene, BANNED_PROP_RE, id + ': ' + scene);
+  }
+  for (const [id, fb] of Object.entries(FALLBACK_OBJECTS)) {
+    for (const t of [...fb.table, fb.foreground, fb.action]) assert.doesNotMatch(t, BANNED_PROP_RE, id + ': ' + t);
+  }
+});
+
+test('the stamped pillar wins over the template name', async () => {
+  const { plannerImageFor } = await import('./planner-image.ts');
+  const img = plannerImageFor({ _autopilot: { template_name: 'Nutrition (Tuesday AM)', slot: 'tue-1', pillar_id: 'nutrition', angle: { query: 'The role of protein in recovery' } } });
+  assert.equal(img?.pillarId, 'nutrition', 'a renamed slot keeps its picture');
+  const legacy = plannerImageFor({ _autopilot: { template_name: 'Sleep', angle: { query: 'What happens in the body while we sleep' } } });
+  assert.equal(legacy?.pillarId, 'sleep');
+});

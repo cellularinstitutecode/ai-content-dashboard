@@ -1,5 +1,6 @@
 // web/app/api/posts/route.ts
 import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
+import { refPolicyOf } from '@/lib/compliance';
 import { videoVerdict, pendingRefusal, videoSourceOf, type PackLike } from '@/lib/video-required';
 import { ensureShareableVideo } from '@/lib/media-library';
 import { recordApproval } from '@/lib/approval-log';
@@ -26,6 +27,7 @@ import { tabGid } from '@/lib/google-sources';
 import type { PostSource } from '@/lib/sheet-link';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { resolvePostSources, type RegisterEntryLike, type RunLike } from '@/lib/post-source';
+import { imageUnshippable } from '@/lib/image-verdict';
 
 /** The draft's own public title, when the pack carries one. */
 function packTitleOf(pack: unknown): string | null {
@@ -367,7 +369,8 @@ export async function PATCH(req: Request) {
     }
     draftPack = (d as any)?.pack ?? null;
     const url = (d as any)?.pack?._image?.url;
-    const textInImage = (d as any)?.pack?._image?.verification?.textDetected === true;
+    // Text or a banned prop: a picture that may never be attached (lib/image-verdict.ts).
+    const textInImage = imageUnshippable((d as any)?.pack?._image?.verification);
     if (typeof url === 'string' && url && !textInImage) heroImage = url;
   }
 
@@ -571,7 +574,9 @@ export async function PATCH(req: Request) {
     // can hold `blog`, which the gate covers now — so a legacy row going only
     // to Instagram was refused with a message naming an article. The same
     // defect, in the same shape, as the one fixed in templates/apply.
-    const gate = await complianceGate(user.id, String(existing.text || ''), metricoolNetworks(existing.providers));
+    // Under the policy the draft was written with: a weekly-strategy
+    // destination post needs a REF only when its text makes a health claim.
+    const gate = await complianceGate(user.id, String(existing.text || ''), metricoolNetworks(existing.providers), { refPolicy: refPolicyOf(draftPack) });
     if (!gate.ok) return NextResponse.json(gateRefusal(gate), { status: 422 });
 
     // And the video rule, at the same door rather than in a mechanism of its

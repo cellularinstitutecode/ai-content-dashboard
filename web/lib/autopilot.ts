@@ -33,18 +33,18 @@ import { reportError, redact } from '@/lib/report';
 import 'server-only';
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { appliesTo, checkCompliance, complianceMessage, ensureAviso } from '@/lib/compliance';
+import { checkCompliance, complianceMessage, ensureAviso } from '@/lib/compliance';
 import { avisoForUser } from '@/lib/compliance-gate';
 import { recordApproval } from '@/lib/approval-log';
 import { loadBrandContext } from '@/lib/brand-context';
 import {
   chatAssistant,
   generateContentPack,
+  judgeClaimSupport,
   type BrandContext,
   type ContentPack,
   type ContentType,
 } from '@/lib/ai';
-import { reviewPack, type SafetyFlag } from '@/lib/safety';
 import {
   buildKeywordBrief,
   briefPromptFrom,
@@ -57,10 +57,17 @@ import {
 import { keywordMovers, primaryDomain, topOrganicKeywords, type KeywordMovers } from '@/lib/semrush-domain';
 import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
 import { metricoolSchedulePost, readPostId } from '@/lib/metricool';
-import { metricoolNetworks, wantsBlog } from '@/lib/metricool-networks';
+import { metricoolNetworks, wantsBlog, type McNetwork } from '@/lib/metricool-networks';
 import { professionalTitle } from '@/lib/post-title';
-import { publishArticle, wordpressConfigured } from '@/lib/wordpress';
+import { publishArticle, wordpressConfig, wordpressConfigured } from '@/lib/wordpress';
 import { ensureDraftImage, type PackImage } from '@/lib/images';
+import { imageUnshippable } from '@/lib/image-verdict';
+import { channelCopy, doisIn, knownBadCitation, perNetworkPlan } from '@/lib/approve-plan';
+import { ARTICLE_LINK_PLACEHOLDER, PROMO_DELAY_MINUTES, articleLogNote, articleUrl, promoLink, readArticleLog, withArticleLink } from '@/lib/article-promo';
+import { verifyDoi } from '@/lib/citation';
+import { findEvidence } from '@/lib/evidence';
+import { evidenceBriefFrom, type EvidenceItem } from '@/lib/evidence-brief';
+import { MAX_CANDIDATES, claimFrom, type ClaimSupportStamp } from '@/lib/claim-support';
 import { NETWORKS_NEEDING_MEDIA, mediaProblem } from '@/lib/composer';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
@@ -70,6 +77,9 @@ import { autoSchedules } from '@/lib/autopilot-mode';
 import { usableLeadHours } from '@/lib/lead-window';
 import { weeklyPaceVerdict, weeklyCeiling, paceNote, ROLLING_WINDOW_DAYS, PACE_SCAN_LIMIT, NOT_PUBLISHING } from '@/lib/weekly-pace';
 import { videoVerdict, pendingRefusal, type PackLike } from '@/lib/video-required';
+import { isMissed, MISSED_MARGIN_MS, MISSED_RETIRE_DAYS } from '@/lib/review-queue';
+import { nextFreeSlot } from '@/lib/missed-slot';
+import { RECONCILABLE_STATES, reconcilePlan, slotMatches } from '@/lib/run-reconcile';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -80,7 +90,12 @@ import { videoVerdict, pendingRefusal, type PackLike } from '@/lib/video-require
 // into that column depends on can actually be run by a test. Re-exported here
 // because this is where callers have always looked for them.
 import { normalizeStrategy, type StrategyMode, type TemplateStrategy } from '@/lib/template-strategy';
-import { isStrategySlot, pillarForName, promotionFlags, SOFT_CTA_RE, strategyBrand, strategyTopicPrompt } from '@/lib/strategy-voice';
+import { rulesForSlot, slotContext } from '@/lib/content-strategy';
+import { angleFor, siblingAngles } from '@/lib/strategy-rotation';
+import { BLOG_ANGLES } from '@/lib/strategy-seed';
+import { scorePack, type RunScore } from '@/lib/score-pack';
+export { scorePack };
+import { citationPolicyFor, isStrategySlot, pickSupportingPhrase, pillarForStrategy, strategyBrand, strategyTopicPrompt } from '@/lib/strategy-voice';
 export { normalizeStrategy };
 export type { StrategyFormat, StrategyMode, TemplateStrategy } from '@/lib/template-strategy';
 
@@ -102,14 +117,12 @@ export type Angle = {
   provenPerformer?: boolean; // boosted by the measured-engagement learning loop
   supportingPhrase?: string; // weekly-strategy slots: an optional search phrase found by research
   media?: { url: string; title: string } | null; // matching clip to attach on approve
+  redatedFrom?: string; // the slot this run missed, when a reviewer moved it to the next free one
+  coveredThisWeek?: string[]; // weekly-strategy slots: what the related slots write the same week
+  dealtWeek?: number; // weekly-strategy slots: the week of the dealt schedule this occurrence belongs to
 };
 
-export type RunScore = {
-  total: number; // 0-100
-  breakdown: Record<string, number>;
-  safetyFlags: SafetyFlag[];
-  critique: string[];
-};
+export type { RunScore } from '@/lib/score-pack';
 
 export type TemplateRow = {
   id: string;
@@ -139,6 +152,9 @@ export type RunRow = {
 };
 
 const ACTIVE_STATES = ['planned', 'researched', 'drafted'] as const;
+
+/** Time a tick must have left to send a finished post itself (autoschedule only). */
+const AUTOSCHEDULE_MIN_MS = 60_000;
 // MAX_ATTEMPTS is two, not three. `advanceRuns` takes at most one attempt per
 // run per tick, inside an eligibility window that is only ever a couple of ticks
 // wide - so with a limit of 3 a broken run could never reach `failed`, never
@@ -156,6 +172,15 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+
+/** "Tue, Sep 29, 9:00 AM" in the clinic's zone — a slot as a reviewer reads it. */
+function slotLabel(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return String(iso || '');
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: SCHEDULE_TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  }).format(d);
+}
 
 function logLine(run: RunRow, step: string, note: string): { at: string; step: string; note: string }[] {
   // REDACTED before it is stored, not merely before it is logged.
@@ -408,6 +433,9 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
     .from('template_runs')
     .select('id', { count: 'exact', head: true })
     .eq('template_id', run.template_id)
+    // A run retired because its slot moved never became a post; counting it
+    // moved the rotation on an extra angle every time a slot was re-timed.
+    .neq('state', 'superseded')
     .lt('scheduled_for', run.scheduled_for);
   // THE ONE THAT MAKES ROTATION COLLAPSE. Unread, a failed count gives null →
   // occurrenceIndex 0 → pickSeedTopic always returns seedPool[0] and decideAngle
@@ -438,7 +466,7 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
   if (strategy.mode === 'auto') {
     seedPool = await autoSeedPool(strategy.pillars || [], brandKeywords);
   }
-  const seedTopic = pickSeedTopic(strategy, occurrenceIndex, seedPool);
+  let seedTopic = pickSeedTopic(strategy, occurrenceIndex, seedPool);
 
   // Anti-repetition: primary keywords used in the last 30 days.
   const recent = new Set<string>();
@@ -511,12 +539,35 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
     angleHistory = (past || []).map((r) => (r as { angle?: PastAngle }).angle);
   } catch (err) { /* history is a tiebreak, never a blocker */ reportError('autopilot:angle-history', err); }
 
+  // THE WEEKLY STRATEGY'S OWN ROTATION (lib/strategy-rotation.ts). For a
+  // seeded slot whose bank is still the document's, the angle comes from the
+  // dealt schedule — counted in weeks from a fixed Monday, never by counting
+  // runs, and dealt so that sibling slots and the weekly article never write
+  // the same thing, or near enough, in the same week. The slot's recently
+  // published angles are handed over for the switch-over weeks. Anything else
+  // (a hand-edited bank, a slot with no key) keeps the rotation above.
+  let dealt: ReturnType<typeof angleFor> = null;
+  if (isStrategySlot(strategy) && strategy.slot) {
+    dealt = angleFor(strategy.slot, run.scheduled_for, {
+      bank: strategy.pillars,
+      articleBank: BLOG_ANGLES,
+      avoid: angleHistory.map((h) => String((h as { query?: unknown } | null)?.query || '')).filter(Boolean),
+    });
+    if (dealt) seedTopic = dealt.angle;
+  }
+
   // Live data (all cache-first + unit-floor guarded).
   const bundle = await researchBundle(seedTopic, { relatedLimit: 12, questionLimit: 6 });
   let movers: KeywordMovers | null = null;
-  try {
-    movers = await keywordMovers(primaryDomain());
-  } catch { movers = null; }
+  // Not for a strategy slot: the domain's lost and declining keywords are the
+  // clinic's procedure searches, and one week in four the rotation offered
+  // one of them — "stem cell therapy cancun" — as the supporting phrase of a
+  // post about sleep. It also spent Semrush units on a result thrown away.
+  if (!isStrategySlot(strategy)) {
+    try {
+      movers = await keywordMovers(primaryDomain());
+    } catch { movers = null; }
+  }
 
   // bundle.questions, not bundle.brief.questions.
   //
@@ -534,18 +585,31 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
   // optional supporting phrase.
   if (isStrategySlot(strategy)) {
     const pool = seedPool.length || 1;
-    const supporting = angle.query !== seedTopic && angle.type !== 'commercial' ? angle.query : undefined;
+    // The supporting phrase comes from research on THIS angle only — its
+    // primary keyword, related searches and questions — and must be on the
+    // subject, non-commercial and free of any therapy or promotion
+    // (lib/strategy-voice.ts pickSupportingPhrase).
+    const candidates = [bundle.brief.primary, ...(bundle.brief.supporting || []), ...(bundle.brief.questions || []), ...(bundle.questions || [])]
+      .filter((k): k is SemKeyword => Boolean(k && k.keyword));
+    const pillarName = pillarForStrategy(strategy, template.name)?.name || template.name;
+    const picked = pickSupportingPhrase(seedTopic, pillarName, candidates);
+    const pickedRow = picked ? candidates.find((k) => k.keyword === picked) : undefined;
     angle = {
       type: 'answer',
       query: seedTopic,
       seedTopic,
       rationale:
-        'From the weekly strategy — "' + template.name + '", angle ' + ((occurrenceIndex % pool) + 1) + ' of ' + pool + '.' +
-        (supporting ? ' Supporting search phrase: "' + supporting + '".' : ''),
-      volume: supporting ? angle.volume : null,
-      difficulty: supporting ? angle.difficulty : null,
-      intent: supporting ? angle.intent : null,
-      supportingPhrase: supporting,
+        'From the weekly strategy — "' + template.name + '", angle ' +
+        (dealt ? dealt.position + ' of ' + dealt.of + ' (week ' + (dealt.week + 1) + ' of the dealt schedule)' : ((occurrenceIndex % pool) + 1) + ' of ' + pool) + '.' +
+        (picked ? ' Supporting search phrase: "' + picked + '".' : ''),
+      volume: pickedRow?.volume ?? null,
+      difficulty: pickedRow?.difficulty ?? null,
+      intent: pickedRow ? (pickedRow.intents || []).join(', ') || null : null,
+      supportingPhrase: picked,
+      // What this slot's siblings — and, for the article, the week's medical
+      // posts — are writing this same week, so the brief can say "not these".
+      coveredThisWeek: dealt ? siblingAngles(strategy.slot || '', dealt.week) : undefined,
+      dealtWeek: dealt ? dealt.week : undefined,
     };
   }
 
@@ -595,10 +659,20 @@ function topicPromptFor(angle: Angle, strategy: TemplateStrategy, templateName =
   // A weekly-strategy slot gets the strategy's own brief: pillar, angle,
   // editorial direction and the no-promotion rules (lib/strategy-voice.ts).
   if (isStrategySlot(strategy)) {
+    // Rules, day theme and what else the slot counts as come from the document
+    // data at run time when the slot is known (lib/content-strategy.ts), so a
+    // change to the strategy reaches every slot on deploy without a re-seed.
+    // The stored rule is the fallback for rows seeded before slot keys.
+    const ctx = strategy.slot ? slotContext(strategy.slot) : null;
     const brief = strategyTopicPrompt({
       angle: angle.query,
-      pillarName: pillarForName(templateName)?.name || templateName || angle.seedTopic,
-      rule: strategy.rule,
+      pillarName: pillarForStrategy(strategy, templateName)?.name || templateName || angle.seedTopic,
+      rule: (strategy.slot && rulesForSlot(strategy.slot)) || strategy.rule,
+      dayTheme: ctx?.dayTheme,
+      alsoCovers: ctx?.alsoCovers,
+      integrated: ctx?.integrated,
+      coveredThisWeek: angle.coveredThisWeek,
+      variant: angle.dealtWeek,
       reviewerNote: angle.reviewerNote,
       supportingPhrase: angle.supportingPhrase,
     });
@@ -667,15 +741,25 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   // Brief for the CHOSEN query (cache-first; distinct from the seed brief).
   // Falls back to the seed-topic brief already gathered at research time so
   // the model still writes with real numbers in cache-only mode.
+  //
+  // NOT for a weekly-strategy slot. Its "query" is a sentence from the clinic's
+  // document, and the brief is a contract — "work it into the BODY 2-3 times",
+  // "answer at least one of these searcher questions", "match the searcher's
+  // intent", commercial terms included — which pulls an educational post back
+  // toward search copy. stepResearch already refuses to let a keyword replace
+  // the angle; this stops the brief doing it by the back door. '' tells the
+  // generator "researched, nothing to add" rather than running its own.
   let brief: KeywordBrief | null = null;
   let hint = '';
-  try {
-    brief = await buildKeywordBrief(angle.query);
-    if (brief.source === 'semrush') hint = briefPromptFrom(brief);
-    else brief = null;
-  } catch { brief = null; }
-  if (!brief && run.brief && run.brief.source === 'semrush') {
-    hint = briefPromptFrom(run.brief);
+  if (!isStrategySlot(strategy)) {
+    try {
+      brief = await buildKeywordBrief(angle.query);
+      if (brief.source === 'semrush') hint = briefPromptFrom(brief);
+      else brief = null;
+    } catch { brief = null; }
+    if (!brief && run.brief && run.brief.source === 'semrush') {
+      hint = briefPromptFrom(run.brief);
+    }
   }
 
   // Brand voice.
@@ -716,6 +800,27 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
     }
   } catch (err) { /* optional */ reportError('autopilot:clip-lookup', err); }
 
+  // REAL PAPERS FOR A STRATEGY POST, the way the video pipeline has them.
+  //
+  // Every strategy post was told to cite "one real, relevant study" with no
+  // study in hand, so the writer recalled one, Crossref confirmed only that it
+  // exists, and nothing ever asked whether it backs the post. Now the week's
+  // angle is looked up first (PubMed, then Crossref; lib/evidence.ts), the
+  // abstracts are handed to the writer, and they are kept on the draft so the
+  // score step can ask whether the cited paper supports the copy. Fail-open:
+  // no papers means the post is written exactly as before.
+  const strategySlot = isStrategySlot(strategy);
+  const citationPolicy = citationPolicyFor(strategy);
+  let evidence: EvidenceItem[] = [];
+  // Not for a slot that cites only when it makes a health claim (the Cancun
+  // posts): handing the writer study abstracts for "Air connectivity from the
+  // United States and Canada" pushes it toward exactly the health claim the
+  // policy tells it not to make just to have something to cite.
+  if (strategySlot && citationPolicy === 'required') {
+    try { evidence = await findEvidence(angle.query); } catch (err) { reportError('autopilot:evidence', err, { runId: run.id }); }
+  }
+  const evidenceHint = evidence.length ? evidenceBriefFrom(evidence) : undefined;
+
   const { provider, pack } = await generateContentPack({
     topic: topicPromptFor(angle, strategy, template.name),
     contentType: strategy.format || 'social',
@@ -723,25 +828,42 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
     // Strategy slots swap the Brand Brain's promotional guidelines for the
     // strategy's editorial direction, and skip the top-performer hint — the
     // top performers are procedure posts, and imitating them is the problem.
-    brand: isStrategySlot(strategy) ? strategyBrand(brand) : brand,
-    performanceHint: isStrategySlot(strategy) ? undefined : performanceHint,
+    brand: strategySlot ? strategyBrand(brand, { citation: citationPolicy }) : brand,
+    performanceHint: strategySlot ? undefined : performanceHint,
     // Pass the prepared hint ('' = researched, nothing found) so the
     // generator does not run a second, redundant Semrush lookup.
     keywordHint: hint,
+    evidenceHint,
+    citationPolicy,
   });
+  if (evidence.length) {
+    (pack as ContentPack & { _evidence?: EvidenceItem[] })._evidence = evidence.slice(0, MAX_CANDIDATES).map((e) => ({
+      ...e,
+      abstract: String(e.abstract || '').slice(0, 1200),
+    }));
+  }
 
   // Stamp autopilot provenance on the pack (same pattern as _semrush).
   (pack as ContentPack & { _autopilot?: Record<string, unknown> })._autopilot = {
     run_id: run.id,
     template_id: run.template_id,
     template_name: template.name,
+    // The slot's identity, so the picture can find its pillar even after the
+    // template is renamed (lib/planner-image.ts plannerImageFor).
+    ...(isStrategySlot(strategy) ? { slot: strategy.slot || null, pillar_id: pillarForStrategy(strategy, template.name)?.id || null } : {}),
     scheduled_for: run.scheduled_for,
     angle,
   };
 
   // Media enrichment: remember the best matching finished clip so approval
   // can attach it to the Metricool draft. Purely additive.
-  const media = await findMatchingClip(run.user_id, angle);
+  //
+  // NOT for the weekly strategy. The matcher accepts any clip sharing one word
+  // longer than three letters with the angle — "what", "with", "time" — and a
+  // matched clip wins over the picture at approval. So a Tuesday post on
+  // protein could go out carrying an HBOT procedure reel in place of the
+  // educational cover it was made with. Those posts have their own picture.
+  const media = isStrategySlot(strategy) ? null : await findMatchingClip(run.user_id, angle);
   const angleOut: Angle = { ...angle, media };
 
   // Reuse the existing draft row on regeneration so the library doesn't
@@ -829,9 +951,11 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   // log, never a failed run. ensureDraftImage is idempotent, so a redraft
   // reuses the stored one unless the text checker flagged it.
   let imageNote = '';
+  // The weekly article needs one too: it is its featured image on WordPress
+  // and the picture on its promos, now that none of them goes to Instagram.
   const needsImage = (template.providers || []).some(
     (p) => NETWORKS_NEEDING_MEDIA.has(String(p || '').trim().toLowerCase())
-  );
+  ) || wantsBlog(template.providers || []);
   if (needsImage && draftId) {
     try {
       const img = await ensureDraftImage(draftId, run.user_id);
@@ -865,64 +989,34 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
 // Step 3: score against the rubric; one self-critique regeneration if weak.
 // ---------------------------------------------------------------------------
 
-const CTA_RE = /\b(book|schedule|contact|call|visit|learn more|read more|watch|subscribe|sign up|reach out|dm us|link in bio)\b/i;
+// The rubric itself lives in lib/score-pack.ts, where it can be run by a test.
 
-function channelText(pack: ContentPack, provider: string): string {
-  const key = provider === 'twitter' ? 'instagram' : provider; // closest fit
-  const p = pack as unknown as Record<string, string>;
-  return String(p[key] || p.instagram || p.blog || '');
-}
-
-export function scorePack(pack: ContentPack, providers: string[], angle: Angle, opts: { strategySlot?: boolean } = {}): RunScore {
-  const texts = (providers.length ? providers : ['instagram']).map((p) => channelText(pack, p));
-  const joined = texts.join('\n').toLowerCase();
-  const critique: string[] = [];
-  const breakdown: Record<string, number> = {};
-
-  // Keyword coverage (0-30): primary phrase (or most of its words) present.
-  const query = angle.query.toLowerCase().trim();
-  const words = query.split(/\s+/).filter((w) => w.length > 2);
-  const covered = words.length ? words.filter((w) => joined.includes(w)).length / words.length : 0;
-  // `joined.includes('')` is TRUE, so a blank query — reachable from a Semrush
-  // row with an empty keyword — scored a perfect 30/30 for covering nothing.
-  breakdown.keyword = !query ? 0 : Math.round(30 * (joined.includes(query) ? 1 : covered));
-  if (breakdown.keyword < 18) critique.push('Work the exact phrase "' + angle.query + '" naturally into the opening.');
-
-  // Channel completeness (0-25): every requested channel has real copy.
-  const complete = texts.filter((t) => t.trim().length >= 80).length;
-  breakdown.channels = Math.round(25 * (texts.length ? complete / texts.length : 0));
-  if (breakdown.channels < 25) critique.push('One or more channels came back empty or too short — write full copy for each.');
-
-  // Hook (0-20): first line short and strong.
-  const firstLine = (texts[0] || '').split('\n').find((l) => l.trim()) || '';
-  breakdown.hook = firstLine && firstLine.length <= 140 ? 20 : firstLine ? 10 : 0;
-  if (breakdown.hook < 20) critique.push('Open with a one-line scroll-stopping hook under 140 characters.');
-
-  // CTA (0-15).
-  // A weekly-strategy post closes with a gentle next step (save, share, ask
-  // your physician), not a sales call to action — both count.
-  breakdown.cta = CTA_RE.test(joined) || (opts.strategySlot && SOFT_CTA_RE.test(joined)) ? 15 : 0;
-  if (!breakdown.cta) {
-    critique.push(opts.strategySlot
-      ? 'Close with a gentle, useful next step (save this, share it, talk it through with your physician) — not a sales pitch.'
-      : 'Close with a clear, compliant call to action.');
+/**
+ * Does the paper in a strategy post's REF line support what the post says?
+ *
+ * Asked only of papers fetched for this post (pack._evidence) — the judge
+ * reads their abstracts, and cannot judge a paper it has never seen, so a DOI
+ * the writer recalled from elsewhere is 'unchecked', not a failure. The judge
+ * picking a DIFFERENT paper, or none, is 'unsupported'. A post with no REF
+ * line has nothing to judge (null). Never throws.
+ */
+async function strategyClaimSupport(pack: ContentPack): Promise<ClaimSupportStamp | null> {
+  try {
+    const items = (pack as ContentPack & { _evidence?: EvidenceItem[] })._evidence || [];
+    const caption = String((pack as unknown as Record<string, unknown>).instagram || (pack as unknown as Record<string, unknown>).facebook || '');
+    const cited = checkCompliance(caption).doi;
+    if (!cited) return null;
+    const index = items.findIndex((i) => String(i.doi || '').toLowerCase() === cited.toLowerCase());
+    if (index < 0 || !items.length) return { status: 'unchecked', doi: cited };
+    const claim = claimFrom(caption);
+    const verdict = await judgeClaimSupport({ claim, items });
+    if (verdict.status === 'unchecked') return { status: 'unchecked', doi: cited };
+    if (verdict.status === 'supported' && verdict.index === index) return { status: 'supported', doi: cited };
+    return { status: 'unsupported', doi: cited };
+  } catch (err) {
+    reportError('autopilot:claim-support', err);
+    return null;
   }
-
-  // Safety (0-10): advisory flags cost points and surface to the reviewer.
-  const safetyFlags = reviewPack(pack as unknown as Record<string, unknown>);
-  breakdown.safety = Math.max(0, 10 - safetyFlags.length * 5);
-  if (safetyFlags.length) critique.push('Rephrase flagged passages: ' + safetyFlags.map((f) => f.code).join(', ') + '.');
-
-  // Strategy posts are educational: every promotional habit costs 10 points
-  // (so one is enough to trigger the self-critique rewrite) and is named.
-  if (opts.strategySlot) {
-    const promo = promotionFlags(texts.join('\n'), angle.query);
-    breakdown.promotion = -Math.min(40, promo.length * 10);
-    if (promo.length) critique.push('This is an educational post, not an advert — remove: ' + promo.join(', ') + '.');
-  }
-
-  const total = Math.max(0, Object.values(breakdown).reduce((s, v) => s + v, 0));
-  return { total, breakdown, safetyFlags, critique };
 }
 
 async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateStrategy): Promise<Partial<RunRow>> {
@@ -940,8 +1034,10 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
   let score = scorePack(pack, template.providers || [], angle, { strategySlot });
   let regens = run.regens;
 
-  // Self-critique: one bounded regeneration when below threshold.
-  if (score.total < SCORE_THRESHOLD && regens < (strategy.max_regens ?? 1)) {
+  // Self-critique: one bounded regeneration when below threshold — or, for a
+  // strategy post, when it reads as an advert at all, whatever it scored.
+  const promoted = strategySlot && Boolean(score.promotionFlags?.length);
+  if ((score.total < SCORE_THRESHOLD || promoted) && regens < (strategy.max_regens ?? 1)) {
     regens++;
     try {
       const critiqueNote =
@@ -960,17 +1056,31 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
       // its own auto-brief when the field is absent and skips it when the field
       // is an empty string, so '' was explicitly turning the research off.
       const loaded = await loadBrandContext(db, run.user_id);
-      const brand = strategySlot ? strategyBrand(loaded) : loaded;
+      const citationPolicy = citationPolicyFor(strategy);
+      const brand = strategySlot ? strategyBrand(loaded, { citation: citationPolicy }) : loaded;
+      const keptEvidence = (pack as ContentPack & { _evidence?: EvidenceItem[] })._evidence;
+      // A strategy slot passes '' explicitly: left undefined, the generator
+      // ran its own keyword brief on this whole critique prompt and handed the
+      // rewrite a Semrush contract the first draft had been kept from.
       const { pack: retry } = await generateContentPack({
         topic: critiqueNote,
         contentType: strategy.format || 'social',
         channels: template.providers,
         brand,
+        ...(strategySlot ? { keywordHint: '', citationPolicy, evidenceHint: keptEvidence?.length ? evidenceBriefFrom(keptEvidence) : undefined } : {}),
       });
       const retryScore = scorePack(retry, template.providers || [], angle, { strategySlot });
       if (retryScore.total > score.total) {
-        (retry as ContentPack & { _autopilot?: unknown })._autopilot =
-          (pack as ContentPack & { _autopilot?: unknown })._autopilot;
+        // Everything the first draft had that is not copy comes with it: the
+        // provenance, the papers, and — above all — the picture. Dropping
+        // `_image` made approval (or the queue) generate a second, different
+        // one, and a promotion flag now triggers this rewrite often.
+        const prior = pack as unknown as Record<string, unknown>;
+        const next = retry as unknown as Record<string, unknown>;
+        for (const k of ['_autopilot', '_image', '_imageOptions', '_semrush'] as const) {
+          if (prior[k] !== undefined) next[k] = prior[k];
+        }
+        if (keptEvidence?.length) (retry as ContentPack & { _evidence?: EvidenceItem[] })._evidence = keptEvidence;
         const { error: saveError } = await db.from('drafts').update({ pack: retry })
           .eq('id', run.draft_id).eq('user_id', run.user_id);
         // Read, not assumed. Unread, the SCORE was persisted while the pack was
@@ -986,6 +1096,21 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
     } catch (err) { /* keep the original pack+score */ reportError('autopilot:regen-rescore', err); }
   }
 
+  // DOES THE CITED PAPER BACK THE POST? For a strategy post whose papers were
+  // fetched at draft time. The verdict is stamped on the draft, shown on the
+  // card, and read by autoScheduleVerdict (an 'unsupported' holds the post).
+  if (strategySlot) {
+    const stamp = await strategyClaimSupport(pack);
+    if (stamp) {
+      (pack as ContentPack & { _claimSupport?: ClaimSupportStamp })._claimSupport = stamp;
+      const { data: fresh } = await db.from('drafts').select('pack').eq('id', run.draft_id).eq('user_id', run.user_id).maybeSingle();
+      const current = (fresh as { pack?: Record<string, unknown> } | null)?.pack || (pack as unknown as Record<string, unknown>);
+      const { error: stampError } = await db.from('drafts').update({ pack: { ...current, _claimSupport: stamp } })
+        .eq('id', run.draft_id).eq('user_id', run.user_id);
+      if (stampError) reportError('autopilot:claim-support-save', stampError, { runId: run.id });
+    }
+  }
+
   return {
     state: 'ready_for_review',
     score,
@@ -995,7 +1120,8 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
       'score',
       'Scored ' + score.total + '/100 (' +
         Object.entries(score.breakdown).map(([k, v]) => k + ' ' + v).join(', ') + ')' +
-        (score.safetyFlags.length ? ' — ' + score.safetyFlags.length + ' safety flag(s) for review' : '')
+        (score.safetyFlags.length ? ' — ' + score.safetyFlags.length + ' safety flag(s) for review' : '') +
+        (score.promotionFlags?.length ? ' — reads as promotion: ' + score.promotionFlags.join(', ') : '')
     ),
   };
 }
@@ -1080,7 +1206,11 @@ export async function rescueStrandedApprovals(scopeUserId?: string): Promise<num
       .from('template_runs')
       .update({
         state: 'ready_for_review',
-        log: logLine(row as unknown as RunRow, 'rescued', 'Approval stopped part-way through and left nothing published, so this is back in your queue. Approve it again.'),
+        log: logLine(row as unknown as RunRow, 'rescued', readArticleLog(row.log)
+          // The article went to WordPress before the stop; approving again
+          // reuses it (lib/article-promo.ts) and only sends the promos.
+          ? 'Approval stopped part-way through: the article is on WordPress, but its promo posts were not sent. This is back in your queue — approve it again to send them; the article will not be published twice.'
+          : 'Approval stopped part-way through and left nothing published, so this is back in your queue. Approve it again.'),
       })
       .eq('id', row.id)
       .eq('state', 'approved')
@@ -1092,6 +1222,70 @@ export async function rescueStrandedApprovals(scopeUserId?: string): Promise<num
     if (Array.isArray(updated) && updated.length) rescued++;
   }
   return rescued;
+}
+
+/** Retire one run whose slot no longer exists, with the reason on it. Conditional on its state. */
+async function supersedeRun(db: ReturnType<typeof supabaseAdmin>, run: RunRow, note: string): Promise<boolean> {
+  const { data, error } = await db
+    .from('template_runs')
+    .update({ state: 'superseded', log: logLine(run, 'superseded', note) })
+    .eq('id', run.id)
+    .eq('state', run.state)
+    .select('id');
+  if (error) reportError('autopilot:supersede', error, { runId: run.id });
+  return Array.isArray(data) && data.length > 0;
+}
+
+/**
+ * Bring a template's future runs in line with the template as it now is.
+ *
+ * Called after every save of a template (the templates route, the planner and
+ * the assistant's tools). planRuns only ever adds runs, so without this a slot
+ * moved from 09:00 to 10:00 kept its 09:00 runs — some already drafted — and
+ * gained 10:00 ones beside them: two posts, two angles used, and the orphan
+ * published at the time the operator had removed. lib/run-reconcile.ts decides;
+ * this applies it, then plans the new slots straight away.
+ *
+ * Best-effort: a failure is reported and the save still stands. The guards in
+ * advanceRuns and approveRun catch any orphan this misses.
+ */
+export async function reconcileTemplateRuns(userId: string, templateId: string): Promise<{ removed: number; superseded: number }> {
+  const db = supabaseAdmin();
+  const out = { removed: 0, superseded: 0 };
+  try {
+    const { data: t, error: tError } = await db
+      .from('schedule_templates').select('id, weekdays, time_of_day, active')
+      .eq('id', templateId).eq('user_id', userId).maybeSingle();
+    if (tError) { reportError('autopilot:reconcile-template', tError, { templateId }); return out; }
+    if (!t) return out;
+    const { data: runs, error: runsError } = await db
+      .from('template_runs')
+      .select('id, template_id, user_id, state, scheduled_for, angle, log, attempts, regens, brief, score, draft_id')
+      .eq('template_id', templateId)
+      .eq('user_id', userId)
+      .in('state', [...RECONCILABLE_STATES, 'superseded'])
+      .gt('scheduled_for', new Date().toISOString());
+    if (runsError) { reportError('autopilot:reconcile-runs', runsError, { templateId }); return out; }
+    const rows = (runs || []) as RunRow[];
+    const plan = reconcilePlan(rows, t as { weekdays?: number[]; time_of_day?: string; active?: boolean });
+    if (plan.remove.length) {
+      // Planned runs have nothing spent on them: no research, no draft. And a
+      // superseded run back at the template's time is cleared so its slot can
+      // be planned again (lib/run-reconcile.ts).
+      const { data: gone, error: delError } = await db
+        .from('template_runs').delete().in('id', plan.remove).in('state', ['planned', 'superseded']).select('id');
+      if (delError) reportError('autopilot:reconcile-delete', delError, { templateId });
+      out.removed = Array.isArray(gone) ? gone.length : 0;
+    }
+    for (const id of plan.supersede) {
+      const run = rows.find((r) => r.id === id);
+      if (run && await supersedeRun(db, run, 'The template moved to a different day or time after this post was started, so it will not be sent. The new time gets its own post.')) out.superseded++;
+    }
+    if ((t as { active?: boolean }).active !== false) await planRuns(userId);
+  } catch (err) {
+    reportError('autopilot:reconcile', err, { templateId });
+  }
+  return out;
 }
 
 export async function expireStaleRuns(scopeUserId?: string): Promise<number> {
@@ -1121,6 +1315,39 @@ export async function expireStaleRuns(scopeUserId?: string): Promise<number> {
       .select('id')
       .maybeSingle();
     if (expireError) reportError('autopilot:expire', expireError, { runId: row.id });
+    if (updated) expired++;
+  }
+
+  // A finished post nobody decided on. It stays in the queue as "missed" —
+  // shown first, with "Approve for next free slot" — for MISSED_RETIRE_DAYS.
+  // Past that it is retired to skipped, with the reason on it: a fortnight-old
+  // post about this week's angle is not something to publish late, and a
+  // queue that only grows is one nobody reads.
+  const retireBefore = new Date(Date.now() - MISSED_RETIRE_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  let rq = db
+    .from('template_runs')
+    .select('id, state, log, scheduled_for')
+    .eq('state', 'ready_for_review')
+    .lt('scheduled_for', retireBefore)
+    .limit(50);
+  if (scopeUserId) rq = rq.eq('user_id', scopeUserId);
+  const { data: stale, error: staleError } = await rq;
+  if (staleError) {
+    reportError('autopilot:missed-expire-read', staleError);
+    return expired;
+  }
+  for (const row of (stale || []) as RunRow[]) {
+    const { data: updated, error: retireError } = await db
+      .from('template_runs')
+      .update({
+        state: 'skipped',
+        log: logLine(row, 'missed-expired', 'Nobody approved this post within ' + MISSED_RETIRE_DAYS + ' days of its time, so it was retired. Nothing was sent.'),
+      })
+      .eq('id', row.id)
+      .eq('state', 'ready_for_review')
+      .select('id')
+      .maybeSingle();
+    if (retireError) reportError('autopilot:missed-expire', retireError, { runId: row.id });
     if (updated) expired++;
   }
   return expired;
@@ -1178,6 +1405,13 @@ async function autoSchedule(
   template: TemplateRow,
 ): Promise<void> {
   try {
+    // A slot that has already passed is a person's decision, never the
+    // engine's: approveRun would refuse it anyway, and moving a post to a new
+    // time is something only a reviewer asks for.
+    if (isMissed(run)) {
+      await hold(db, run, 'Held for you because this post\'s time has already passed. Nothing was sent. Use "Approve for next free slot" to send it at the next open time, or skip it.');
+      return;
+    }
     // The pack carries both signals: the Crossref verdict stamped at
     // generation time (lib/ai.ts) and the hero image stamped at draft time.
     let pack: Record<string, unknown> | null = null;
@@ -1193,20 +1427,23 @@ async function autoSchedule(
       pack = (data as { pack?: Record<string, unknown> } | null)?.pack || null;
     }
     const compliance = pack?._compliance as { citation?: { status?: string } } | undefined;
-    const image = pack?._image as { url?: string; verification?: { textDetected?: boolean } } | undefined;
-    // An image the checker flagged for text is treated as no image, exactly as
-    // the ship-point treats it (see approveRun): it can never be attached, so
-    // a post that needs one does not have one.
-    const hasImage = Boolean(image?.url) && image?.verification?.textDetected !== true;
+    const image = pack?._image as { url?: string; verification?: { textDetected?: boolean; bannedProp?: boolean; issues?: string[] } } | undefined;
+    // An image the checker flagged for text or a banned prop is treated as no
+    // image, exactly as the ship-point treats it (see approveRun): it can never
+    // be attached, so a post that needs one does not have one.
+    const hasImage = Boolean(image?.url) && !imageUnshippable(image?.verification);
 
     const verdict = autoScheduleVerdict({
       citation: compliance?.citation?.status ?? null,
       score: run.score?.total ?? null,
       threshold: SCORE_THRESHOLD,
       safetyFlags: run.score?.safetyFlags?.length ?? 0,
+      promotionFlags: run.score?.promotionFlags?.length ?? 0,
       networks: template.providers || [],
-      hasMedia: hasImage || Boolean(run.angle?.media?.url),
-      claimSupport: null,
+      hasMedia: hasImage || (!isStrategySlot(template.strategy) && Boolean(run.angle?.media?.url)),
+      // The judge's verdict on a strategy post's citation (stepScore). Null for
+      // every other post, which is what this always was.
+      claimSupport: (pack?._claimSupport as { status?: string } | undefined)?.status ?? null,
     });
 
     if (!verdict.ok) {
@@ -1380,6 +1617,16 @@ export async function advanceRuns(opts: {
       continue;
     }
 
+    // A SLOT THAT HAS MOVED. The template's day or time changed after this run
+    // was planned (lib/run-reconcile.ts). Saving a template reconciles its runs,
+    // but any door that does not — a direct edit, a failed reconcile — must
+    // still not have its orphan prepared, sent, and counted.
+    if (!(raw.angle?.redatedFrom) && !slotMatches(raw.scheduled_for, template.weekdays, template.time_of_day, SCHEDULE_TZ)) {
+      await supersedeRun(db, raw, 'This occurrence was planned for a time the template no longer uses, so it will not be prepared. The new time has its own occurrence.');
+      skip('The template “' + (template.name || 'Untitled template') + '” now runs at a different day or time, so this occurrence was retired in favour of the new one.');
+      continue;
+    }
+
     // Respect the lead window unless this is an explicit run-now.
     //
     // RAISED to whatever the tick can actually reach. expireStaleRuns retires
@@ -1487,7 +1734,18 @@ export async function advanceRuns(opts: {
           // approveRun claims ready_for_review -> approved conditionally, so a
           // reviewer pressing Approve at this same moment does not produce two
           // posts: one of the two claims wins and the other stops.
-          if (autoSchedules()) await autoSchedule(db, run, template);
+          if (autoSchedules()) {
+            // Sending is the longest step there is — WordPress, then one
+            // Metricool post per network — and it runs inside this tick's
+            // budget with nothing to stop it mid-way. With too little time left
+            // a platform kill would strand the run half-sent, so it is held for
+            // a person instead (a held run is never lost; it waits in the queue).
+            if (deadline - Date.now() < AUTOSCHEDULE_MIN_MS) {
+              await hold(db, run, 'Held for you: this post was finished late in a run of the engine, with too little time left to send it safely. Nothing was sent. Approve it yourself.');
+            } else {
+              await autoSchedule(db, run, template);
+            }
+          }
           break;
         }
       } catch (e) {
@@ -1545,7 +1803,78 @@ export type ApproveOptions = {
    * the Metricool handoff all run the same way whoever asked.
    */
   schedule?: boolean;
+  /**
+   * The reviewer pressed "Approve for next free slot" on a post whose time has
+   * passed. Without it a past slot is refused: Metricool will not take a date
+   * in the past, and guessing a new time for somebody is not this function's
+   * call. Only a person sets it — the engine holds a missed post instead.
+   */
+  redate?: boolean;
 };
+
+/**
+ * Move a claimed run whose slot has passed to the next free slot.
+ *
+ * "Free" is lib/missed-slot.ts's answer: inside posting hours in the clinic's
+ * time zone and an hour clear of every post already going out and every run
+ * still on its way. The move is conditional on the claim still holding, and
+ * the unique (template_id, scheduled_for) key is answered by trying the next
+ * candidate rather than failing.
+ *
+ * Returns the new slot, or null after writing nothing.
+ */
+async function redateClaimedRun(
+  db: ReturnType<typeof supabaseAdmin>,
+  run: RunRow,
+): Promise<string | null> {
+  const now = new Date();
+  const horizon = new Date(now.getTime() + 8 * 24 * 60 * 60 * 1000).toISOString();
+  const [posts, runs] = await Promise.all([
+    db.from('posts').select('publication_date')
+      .eq('user_id', run.user_id)
+      .not('status', 'in', '(' + [...NOT_PUBLISHING].join(',') + ')')
+      .gte('publication_date', now.toISOString())
+      .lte('publication_date', horizon)
+      .limit(500),
+    db.from('template_runs').select('scheduled_for')
+      .eq('user_id', run.user_id)
+      .in('state', [...ACTIVE_STATES, 'ready_for_review'])
+      .neq('id', run.id)
+      .gte('scheduled_for', now.toISOString())
+      .lte('scheduled_for', horizon)
+      .limit(500),
+  ]);
+  if (posts.error || runs.error) {
+    reportError('autopilot:redate-read', posts.error || runs.error, { runId: run.id });
+    return null;
+  }
+  const busy: Date[] = [
+    ...((posts.data || []) as { publication_date?: string | null }[]).map((p) => new Date(String(p.publication_date || ''))),
+    ...((runs.data || []) as { scheduled_for?: string | null }[]).map((r) => new Date(String(r.scheduled_for || ''))),
+  ].filter((d) => Number.isFinite(d.getTime()));
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const slot = nextFreeSlot({ now, busy, tz: SCHEDULE_TZ });
+    if (!slot) return null;
+    const iso = slot.toISOString();
+    const angle = run.angle ? { ...run.angle, redatedFrom: run.angle.redatedFrom || run.scheduled_for } : run.angle;
+    const { data, error } = await db
+      .from('template_runs')
+      .update({ scheduled_for: iso, angle })
+      .eq('id', run.id)
+      .eq('state', 'approved')
+      .select('id');
+    if (error) {
+      // Another run of this template already holds that instant: take the next.
+      if ((error as { code?: string }).code === '23505') { busy.push(slot); continue; }
+      reportError('autopilot:redate-write', error, { runId: run.id });
+      return null;
+    }
+    if (!Array.isArray(data) || !data.length) return null;
+    return iso;
+  }
+  return null;
+}
 
 /**
  * Put a run that has already been CLAIMED back in the queue.
@@ -1616,6 +1945,31 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     return { ok: false, note: 'this run was already actioned' };
   }
 
+  // A SLOT THAT HAS ALREADY GONE BY. Sending it anyway handed Metricool a
+  // publication date in the past, which it refuses — after the reviewer had
+  // moved on. So a missed post is either moved, because the reviewer asked for
+  // exactly that, or refused here with the way forward written on the card.
+  if (isMissed(run)) {
+    const missedAt = slotLabel(run.scheduled_for);
+    if (!opts.redate) {
+      const why = 'Not sent: this post was due ' + missedAt + ' and that time has passed. ' +
+        'Press "Approve for next free slot" to send it at the next open time, or skip it. Nothing was sent.';
+      await releaseClaim(db, run, 'approve-refused', why);
+      return { ok: false, note: why };
+    }
+    const moved = await redateClaimedRun(db, run);
+    if (!moved) {
+      const why = 'Not sent: this post missed ' + missedAt + ' and no free slot could be found in the next week. Nothing was sent; try again, or skip it.';
+      await releaseClaim(db, run, 'approve-failed', why);
+      return { ok: false, note: why };
+    }
+    // Everything below — the Metricool date, the posts row, the article —
+    // reads the slot from here.
+    run.angle = run.angle ? { ...run.angle, redatedFrom: run.angle.redatedFrom || run.scheduled_for } : run.angle;
+    run.scheduled_for = moved;
+    run.log = logLine(run, 'redated', 'Missed ' + missedAt + '; moved to ' + slotLabel(moved) + ' at the reviewer\'s request.');
+  }
+
   // THE READ THAT COULD NOT FAIL QUIETLY.
   //
   // supabase-js resolves a failed query, so an unread error here gave `t = null`
@@ -1627,7 +1981,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // The post sits on the calendar saying "waiting for your approval" and can
   // never publish. This is the exact invariant the comment below claims.
   const { data: t, error: templateError } = await db
-    .from('schedule_templates').select('providers, name').eq('id', run.template_id).maybeSingle();
+    .from('schedule_templates').select('providers, name, strategy, weekdays, time_of_day').eq('id', run.template_id).maybeSingle();
   if (templateError) {
     reportError('autopilot:approve-template', templateError, { runId: run.id });
     await releaseClaim(db, run, 'approve-failed', 'Approval could not proceed: the template could not be read. Returned for review.');
@@ -1646,7 +2000,25 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // marked "waiting for your approval", having been sent nowhere, and could
   // never publish. Exactly the state the comment above the insert says this
   // function refuses to record.
+  // THE SLOT MOVED after this post was prepared. Sending it would publish at
+  // the time the operator believes they removed, beside a fresh post for the
+  // new time. A re-dated run is exempt: its time is the reviewer's own choice.
+  const tpl = t as { weekdays?: number[] | null; time_of_day?: string | null } | null;
+  if (tpl && !run.angle?.redatedFrom && !slotMatches(run.scheduled_for, tpl.weekdays, tpl.time_of_day, SCHEDULE_TZ)) {
+    const why = 'Not sent: this post was prepared for ' + slotLabel(run.scheduled_for) + ', but the slot has since moved to a different day or time. ' +
+      'It has been retired, and the new time gets its own post. Nothing was sent.';
+    await db.from('template_runs')
+      .update({ state: 'superseded', log: logLine(run, 'superseded', why) })
+      .eq('id', run.id)
+      .eq('state', 'approved');
+    return { ok: false, note: why };
+  }
   const wantsArticle = wantsBlog(providers);
+  // A weekly-strategy post never carries a matched clip. Runs drafted before
+  // stepDraft stopped matching them may still have one stored; it is ignored
+  // here rather than shipped over the post's own picture.
+  const strategyPost = isStrategySlot((t as { strategy?: TemplateStrategy | null } | null)?.strategy);
+  const clip = strategyPost ? null : run.angle?.media?.url ? run.angle.media : null;
   if (!metricoolNetworks(providers).length && !wantsArticle) {
     await releaseClaim(db, run, 'approve-failed', 'Approval could not proceed: the template has no networks selected. Returned for review.');
     return { ok: false, note: 'That template has no networks selected, so there was nowhere to send it. It is back in your queue.' };
@@ -1664,32 +2036,54 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   }
 
   const mcProviders = metricoolNetworks(providers);
-  // Pick the copy for a network we are actually posting to. This used
-  // providers[0], which is whatever the user clicked FIRST in the template
-  // editor — including 'blog', which is not a Metricool network. A template
-  // with providers ['blog','instagram'] shipped the full long-form article as
-  // the Instagram caption (far past the 2,200-char limit) while the
-  // purpose-written pack.instagram copy went unused.
-  let text = channelText(pack, mcProviders[0] || providers[0] || 'instagram');
+  // ONE SEND PER NETWORK, EACH WITH ITS OWN COPY (lib/approve-plan.ts).
+  //
+  // This picked one text — the first network's, in practice the Instagram
+  // caption — and sent it to every network in a single post. The Facebook and
+  // LinkedIn copy the writer produced, the scorer graded and the review card
+  // showed in their own tabs was thrown away, and LinkedIn got an Instagram
+  // caption with its hashtags.
+  //
+  // Advertising rule (lib/compliance.ts), per network: the AVISO is
+  // deterministic and is added if the pack predates the rule; a missing REF
+  // cannot be invented and returns the run for review with the reason written
+  // down. Every network is checked before any is sent.
+  const aviso = mcProviders.length ? await avisoForUser(run.user_id) : null;
+  // The weekly article's promos carry its link, which only exists once
+  // WordPress has the article. They are checked here with a stand-in link of
+  // realistic length, and built again around the real one after publishing.
+  const refPolicy = citationPolicyFor((t as { strategy?: TemplateStrategy | null } | null)?.strategy);
+  const plan = perNetworkPlan(pack as unknown as Record<string, unknown>, mcProviders, {
+    aviso,
+    refPolicy,
+    transform: wantsArticle ? (_network, text) => withArticleLink(text, ARTICLE_LINK_PLACEHOLDER) : undefined,
+  });
+  if (!plan.ok) {
+    await releaseClaim(db, run, 'approve-refused', 'Not sent: ' + plan.reason + ' Edit the draft, then approve again.');
+    return { ok: false, note: plan.reason + ' The run is back in your queue.' };
+  }
+  let sends = plan.sends;
 
-  // Advertising rule (lib/compliance.ts): Instagram / Facebook copy must carry
-  // the AVISO line and a REF citation. The AVISO is deterministic, so it is
-  // added here if the pack predates the rule; a missing REF cannot be invented
-  // and returns the run for review with the reason written down.
-  if (appliesTo(mcProviders)) {
-    const aviso = await avisoForUser(run.user_id);
-    text = ensureAviso(text, aviso);
-    const check = checkCompliance(text, aviso);
-    if (!check.ok) {
-      await db
-        .from('template_runs')
-        .update({
-          state: 'ready_for_review',
-          log: logLine(run, 'approve-refused', 'Not sent: ' + complianceMessage(check) + ' Edit the draft, then approve again.'),
-        })
-        .eq('id', run.id)
-        .eq('state', 'approved');
-      return { ok: false, note: complianceMessage(check) + ' The run is back in your queue.' };
+  // A CITATION CROSSREF SAID DOES NOT EXIST. The generator re-rolls a DOI
+  // Crossref does not know once, then keeps the first draft and leaves "the
+  // badge" to tell the reviewer — and the planner card never showed that
+  // badge, so a made-up study could go out on a person's Approve. Refused
+  // here instead. A DOI the reviewer has since edited in is checked now.
+  const stamp = (pack as ContentPack & { _compliance?: { citation?: { status?: string | null; doi?: string | null } | null } })._compliance;
+  const badDoi = knownBadCitation(stamp, sends);
+  if (badDoi) {
+    const why = 'Not sent: Crossref has no record of the study cited in the REF line (DOI ' + badDoi + '). Replace the citation with a real study, then approve again. Nothing was sent.';
+    await releaseClaim(db, run, 'approve-refused', why);
+    return { ok: false, note: why };
+  }
+  const stampedDoi = String(stamp?.citation?.doi || '').toLowerCase();
+  for (const doi of doisIn(sends)) {
+    if (doi === stampedDoi) continue;
+    const checked = await verifyDoi(doi);
+    if (checked.status === 'not_found') {
+      const why = 'Not sent: Crossref has no record of the study cited in the REF line (DOI ' + doi + '). Replace the citation with a real study, then approve again. Nothing was sent.';
+      await releaseClaim(db, run, 'approve-refused', why);
+      return { ok: false, note: why };
     }
   }
 
@@ -1706,7 +2100,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // "Has the video" here means the matched clip, not the hero image: `angle
   // .media.url` is the only video this path can attach, and the image below is
   // a picture.
-  const videoRule = videoVerdict(pack as PackLike, Boolean(run.angle?.media?.url));
+  const videoRule = videoVerdict(pack as PackLike, Boolean(clip?.url));
   if (videoRule.pending) {
     await releaseClaim(db, run, 'approve-refused', 'Not sent: ' + pendingRefusal(videoRule));
     return { ok: false, note: pendingRefusal(videoRule) + ' The run is back in your queue.' };
@@ -1721,8 +2115,11 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // is treated as missing (ensureDraftImage regenerates it with the next
   // composition variant), and if the regeneration still carries text, the
   // post ships with no image rather than a text-bearing one.
+  // And an image showing a banned prop — a syringe, a pill, a cuff on an arm —
+  // is refused the same way. It used to be only text: a banned-prop image was
+  // flagged, kept as the best of three flagged candidates, and attached.
   const shippable = (img: PackImage | null): PackImage | null =>
-    img?.verification?.textDetected === true ? null : img;
+    imageUnshippable(img?.verification) ? null : img;
   let packImage: PackImage | null = shippable(
     (pack as ContentPack & { _image?: PackImage })._image || null
   );
@@ -1736,7 +2133,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // after the reviewer pressed Approve and moved on. Refuse here instead, where
   // the reviewer is standing: the run goes back to the queue with "New image"
   // one click away. (A matched clip counts as the attachment, as it always has.)
-  const noMedia = mediaProblem(mcProviders, run.angle?.media?.url || packImage?.url || '');
+  const noMedia = mediaProblem(mcProviders, clip?.url || packImage?.url || '');
   if (noMedia) {
     const why = 'Not sent: ' + noMedia.replace(/ Attach one below, or unselect (it|them)\./, '') +
       ' The picture for this post could not be made — press "New image" on the card, then approve again. Nothing was sent anywhere.';
@@ -1795,16 +2192,15 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   }
 
   let note = 'Staged for publishing review.';
-  // Did the Metricool handoff actually happen? The local `posts` row exists to
+  // Did the Metricool handoff actually happen? The local `posts` rows exist to
   // mirror Metricool; writing one after a FAILED handoff put a post in the
   // queue and on the calendar marked "waiting for your approval" that had been
   // sent nowhere and would never publish. Every other route in this app
   // ("the two sides can never disagree") refuses to record that state — so
   // does this one now.
   let handoffFailed = false;
-  let metricoolPostId: string | null = null;
   /**
-   * Did the Metricool call RETURN, without throwing?
+   * Did a Metricool call RETURN, without throwing?
    *
    * Not the same question as "did we get an id out of it". readPostId answers
    * null whenever the envelope carries no recognisable id — which a successful
@@ -1815,86 +2211,137 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
    * whether the request was accepted is the thing that must never be guessed.
    */
   let metricoolSent = false;
+  /** The networks Metricool accepted, each with the copy it got and its id. */
+  const sent: { network: string; text: string; postId: string | null }[] = [];
+  /** A network that refused after another had already been accepted. */
+  let sendFailure = '';
+  // THE ARTICLE GOES FIRST, and its promos carry its link.
+  //
+  // It used to go last: Metricool accepted three promo posts, then WordPress
+  // was asked for the article — so the promos could never contain its link,
+  // and a WordPress refusal left promos live for an article that did not
+  // exist. Now the article is published first; its id and link are written to
+  // the run before anything else (lib/article-promo.ts), so a retry after a
+  // promo failure promotes the article already there instead of publishing a
+  // second one; and only then are the promos built around the real URL and
+  // sent — ten minutes after the article, so the link is live when they are.
+  let articleNote = '';
+  let promoAt = run.scheduled_for;
+  if (article) {
+    const prior = readArticleLog(run.log);
+    let link = '';
+    let articleStatus = '';
+    if (prior) {
+      link = prior.url;
+      articleStatus = prior.status;
+      articleNote = 'The article was already on WordPress from the previous attempt (' + link + '), so it was not published again.';
+    } else {
+      const published = await publishArticle({
+        title: article.title,
+        html: article.body,
+        date: run.scheduled_for,
+        featuredImageUrl: packImage?.url || null,
+        // A draft approval is a draft EVERYWHERE. Without this the queue's
+        // "Approve" (schedule: false) sent Metricool a reviewable draft and
+        // WordPress a scheduled post that publishes itself — while the calendar
+        // row read "waiting for your approval".
+        status: opts.schedule ? undefined : 'draft',
+      });
+      if (!published.ok) {
+        // Nothing has gone anywhere yet: release, and a retry is safe.
+        handoffFailed = true;
+        note = published.message + ' Nothing was sent anywhere; the run is back in your queue.';
+      } else {
+        link = articleUrl(published, wordpressConfig()?.baseUrl || '');
+        articleStatus = published.status;
+        run.log = logLine(run, 'article', articleLogNote(published, link));
+        const { error: articleLogError } = await db.from('template_runs').update({ log: run.log }).eq('id', run.id);
+        if (articleLogError) reportError('autopilot:approve-article-log', articleLogError, { runId: run.id });
+        articleNote = 'Article ' + (published.status === 'draft' ? 'saved to WordPress as a draft' : 'published to WordPress (' + published.status + ')') +
+          (link ? ': ' + link : '') + '.' + (published.note ? ' ' + published.note : '');
+      }
+    }
+    if (!handoffFailed && mcProviders.length) {
+      const withLink = perNetworkPlan(pack as unknown as Record<string, unknown>, mcProviders, {
+        aviso,
+        refPolicy,
+        // No link while the article is a WordPress draft: its ?p= URL leads
+        // the public to a login page, and approving the promo later does not
+        // publish the article.
+        transform: (_network, text) => withArticleLink(text, promoLink(articleStatus, link)),
+      });
+      if (!withLink.ok) {
+        // Not reachable in practice — the stand-in link above is at least as
+        // long — but if it happens the article is live and the promos are not,
+        // and a retry will not publish the article twice.
+        handoffFailed = true;
+        note = articleNote + ' Its promo posts could not be prepared: ' + withLink.reason + ' Approve again to send them; the article will not be published twice.';
+      } else {
+        sends = withLink.sends;
+        promoAt = new Date(new Date(run.scheduled_for).getTime() + PROMO_DELAY_MINUTES * 60_000).toISOString();
+      }
+    }
+    if (!handoffFailed) note = articleNote;
+  }
+
   // Push a Metricool DRAFT (autoPublish: false) so it lands in the approval
   // queue there too. Fail-soft: missing env just means dashboard-only staging.
-  if (mcProviders.length) {
+  if (mcProviders.length && !handoffFailed) {
     // A matched video clip wins; otherwise attach the generated hero image.
-    const media = run.angle?.media?.url
-      ? [{ url: run.angle.media.url }]
+    const media = clip?.url
+      ? [{ url: clip.url }]
       : packImage?.url
         ? [{ url: packImage.url }]
         : [];
-    try {
-      const created = await metricoolSchedulePost({
-        text,
-        providers: mcProviders,
-        publicationDate: run.scheduled_for,
-        media,
-      }, opts.schedule ? 'scheduled' : 'review');
-      // Keep Metricool's id on our row. Without it the queue's Approve,
-      // Reschedule and Delete had nothing to address upstream, so an Autopilot
-      // post could only ever be managed inside Metricool.
-      metricoolSent = true;
-      metricoolPostId = readPostId(created);
-      // Written to the run BEFORE anything else can fail. rescueStrandedApprovals
-      // decides whether an approval really happened, and its only evidence used
-      // to be the `posts` row — the one artifact that is missing in exactly the
-      // case where the send DID happen and the bookkeeping did not. A run
-      // carrying this step is never rescued, so a failed insert can no longer
-      // turn into a second live post fifteen minutes later.
-      const { error: sentError } = await db
-        .from('template_runs')
-        .update({ log: logLine(run, 'sent', 'Sent to Metricool' + (metricoolPostId ? ' (post ' + metricoolPostId + ')' : ' — it answered without a post id') + '.') })
-        .eq('id', run.id);
-      if (sentError) reportError('autopilot:approve-sent-log', sentError, { runId: run.id });
-      note =
-        (opts.schedule ? 'Approved and SCHEDULED in Metricool for ' : 'Sent to Metricool as a DRAFT for ') + mcProviders.join(', ') +
-        (run.angle?.media?.url
-          ? ' with clip "' + (run.angle?.media?.title || 'video') + '" attached'
+    // One at a time, in order, and stop at the first refusal: a network that
+    // was never attempted is one a person can still post by hand, and a
+    // parallel burst would leave no way to say which ones went.
+    for (const send of sends) {
+      try {
+        const created = await metricoolSchedulePost({
+          text: send.text,
+          providers: [send.network as McNetwork],
+          publicationDate: promoAt,
+          media,
+        }, opts.schedule ? 'scheduled' : 'review');
+        metricoolSent = true;
+        // Keep Metricool's id on our row. Without it the queue's Approve,
+        // Reschedule and Delete had nothing to address upstream, so an
+        // Autopilot post could only ever be managed inside Metricool.
+        const postId = readPostId(created);
+        sent.push({ ...send, postId });
+        // Written to the run BEFORE anything else can fail. rescueStrandedApprovals
+        // decides whether an approval really happened, and its only evidence
+        // used to be the `posts` row — the one artifact that is missing in
+        // exactly the case where the send DID happen and the bookkeeping did
+        // not. A run carrying this step is never rescued, so a failed insert
+        // can no longer turn into a second live post fifteen minutes later.
+        run.log = logLine(run, 'sent', 'Sent to Metricool for ' + send.network + (postId ? ' (post ' + postId + ')' : ' — it answered without a post id') + '.');
+        const { error: sentError } = await db
+          .from('template_runs')
+          .update({ log: run.log })
+          .eq('id', run.id);
+        if (sentError) reportError('autopilot:approve-sent-log', sentError, { runId: run.id });
+      } catch (e) {
+        sendFailure = send.network + ' (' + (e instanceof Error ? e.message : 'error') + ')';
+        break;
+      }
+    }
+    if (!sent.length) {
+      handoffFailed = true;
+      note = articleNote
+        ? articleNote + ' But its promo posts could not be sent to Metricool: ' + sendFailure + '. The run is back in your queue — press Approve again to send them; the article will not be published twice.'
+        : 'Could not send this to Metricool: ' + sendFailure + '. Nothing was scheduled and the run is back in your queue — press Approve again to retry.';
+    } else {
+      note = (articleNote ? articleNote + ' ' : '') +
+        (opts.schedule ? 'Approved and SCHEDULED in Metricool for ' : 'Sent to Metricool as a DRAFT for ') + sent.map((x) => x.network).join(', ') +
+        ', each with its own copy' +
+        (clip?.url
+          ? ' and clip "' + (clip.title || 'video') + '" attached'
           : packImage?.url
-            ? ' with the AI hero image attached'
+            ? ' and the AI hero image attached'
             : '') +
         (opts.schedule ? ' — Metricool will publish it at the scheduled time.' : ' — press Approve in your queue to publish.');
-    } catch (e) {
-      handoffFailed = true;
-      note = 'Could not send this to Metricool (' + (e instanceof Error ? e.message : 'error') + '). Nothing was scheduled and the run is back in your queue — press Approve again to retry.';
-    }
-  }
-
-  // The article, already checked, now sent.
-  //
-  // WHAT HAPPENS WHEN THIS FAILS AND METRICOOL DID NOT. Nothing has gone
-  // anywhere, so the run is released and a retry is safe — the ordinary path.
-  //
-  // WHAT HAPPENS WHEN METRICOOL ALREADY SUCCEEDED. The run is NOT released,
-  // because releasing it invites a retry and a retry re-sends to Metricool:
-  // there is no idempotency key and no unique constraint on `posts`, so every
-  // attempt would add another live post for the same slot. The promo posts are
-  // real and they are recorded; the article's failure is said out loud on the
-  // run and in the answer, and publishing it is a decision for a person rather
-  // than something to retry blindly.
-  let articleFailure = '';
-  if (!handoffFailed && article) {
-    const published = await publishArticle({
-      title: article.title,
-      html: article.body,
-      date: run.scheduled_for,
-      featuredImageUrl: packImage?.url || null,
-      // A draft approval is a draft EVERYWHERE. Without this the queue's
-      // "Approve" (schedule: false) sent Metricool a reviewable draft and
-      // WordPress a scheduled post that publishes itself — while the calendar
-      // row read "waiting for your approval".
-      status: opts.schedule ? undefined : 'draft',
-    });
-    if (published.ok) {
-      note += (note ? ' ' : '') + 'Article ' + (published.status === 'draft' ? 'saved to WordPress as a draft' : 'published to WordPress (' + published.status + ')') +
-        (published.link ? ': ' + published.link : '') + '.' +
-        (published.note ? ' ' + published.note : '');
-    } else if (metricoolSent) {
-      articleFailure = published.message;
-    } else {
-      handoffFailed = true;
-      note = published.message + ' Nothing was sent anywhere; the run is back in your queue.';
     }
   }
 
@@ -1911,40 +2358,61 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     return { ok: false, note };
   }
 
-  const { data: inserted, error: insertError } = await db.from('posts').insert({
-    user_id: userId,
-    draft_id: run.draft_id,
-    // What was actually SENT to Metricool, not what the template lists. A row
-    // carrying `blog` is read back by the reschedule path and sent onward; an
-    // entry that never went to Metricool has no business in that column.
-    providers: mcProviders.length ? mcProviders : providers,
-    text,
-    publication_date: run.scheduled_for,
-    metricool_post_id: metricoolPostId,
-    // 'approved' — not 'scheduled' — is the one word /api/posts treats as
-    // live. See modeOf() there: 'scheduled' is also the column default and
-    // part of Metricool's own vocabulary, so it cannot mean "a person said
-    // yes to this".
-    // An article that WordPress accepted counts too: a blog-only run that
-    // reached this line has published something, and recording it as still
-    // waiting for approval is the same disagreement this row exists to avoid.
-    status: opts.schedule && (mcProviders.length || wantsArticle) ? 'approved' : 'pending_review',
-  }).select('id').maybeSingle();
-  // READ, not assumed. The Metricool post already exists at this point — with
-  // opts.schedule it is in the LIVE queue with autoPublish: true — so a
-  // swallowed error here leaves a post that will publish and that this
+  // One row per network that was sent, each carrying the copy that network
+  // actually got and its own Metricool id — the same shape the Content
+  // Generator's scheduler writes. The weekly pace ceiling counts by draft_id,
+  // so three rows for one post still count as one. A blog-only run, which
+  // sent nothing to Metricool, keeps its single row.
+  const statusWord = opts.schedule && (mcProviders.length || wantsArticle) ? 'approved' : 'pending_review';
+  const rows = sent.length
+    ? sent.map((x) => ({
+        user_id: userId,
+        draft_id: run.draft_id,
+        // What was actually SENT to Metricool, not what the template lists. A
+        // row carrying `blog` is read back by the reschedule path and sent
+        // onward; an entry that never went to Metricool has no business here.
+        providers: [x.network],
+        text: x.text,
+        // The time Metricool was actually given: an article's promos go out ten
+        // minutes after it, and a later reschedule or approve from the posts
+        // queue re-sends this value.
+        publication_date: promoAt,
+        metricool_post_id: x.postId,
+        // 'approved' — not 'scheduled' — is the one word /api/posts treats as
+        // live. See modeOf() there: 'scheduled' is also the column default and
+        // part of Metricool's own vocabulary, so it cannot mean "a person said
+        // yes to this".
+        status: statusWord,
+      }))
+    : [{
+        user_id: userId,
+        draft_id: run.draft_id,
+        providers,
+        text: article?.body || channelCopy(pack as unknown as Record<string, unknown>, 'blog'),
+        publication_date: run.scheduled_for,
+        metricool_post_id: null,
+        // An article that WordPress accepted counts too: a blog-only run that
+        // reached this line has published something, and recording it as
+        // still waiting for approval is the disagreement this row avoids.
+        status: statusWord,
+      }];
+  const { data: inserted, error: insertError } = await db.from('posts').insert(rows).select('id');
+  // READ, not assumed. The Metricool posts already exist at this point — with
+  // opts.schedule they are in the LIVE queue with autoPublish: true — so a
+  // swallowed error here leaves posts that will publish and that this
   // dashboard has no row for: nothing to approve, reschedule or delete, and
   // `ok: true` returned. templates/apply handles this exact case correctly and
   // says so in a comment; this did not.
   let bookkeeping = '';
   if (insertError) {
-    reportError('autopilot:approve-posts-insert', insertError, { runId: run.id, metricoolPostId: metricoolPostId || '' });
-    bookkeeping = metricoolPostId
+    const ids = sent.map((x) => x.postId).filter(Boolean).join(',');
+    reportError('autopilot:approve-posts-insert', insertError, { runId: run.id, metricoolPostId: ids });
+    bookkeeping = ids
       ? ' NOTE: it is in Metricool but could not be saved to this dashboard, so it will not appear on your calendar here — manage it in Metricool.'
       : ' NOTE: it could not be saved to this dashboard.';
   }
   // A run approved straight to a live slot is also recorded on the team's
-  // calendar sheet (best-effort; see lib/approval-log.ts).
+  // calendar sheet (best-effort; see lib/approval-log.ts), one line per post.
   if (opts.schedule && mcProviders.length) {
     // AWAITED, not fire-and-forget. This same file says so 500 lines earlier
     // about recordDraftKeywords: "on Vercel the lambda can freeze once the
@@ -1952,16 +2420,19 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     // Identical construct, same runtime — and this is the audit record for the
     // LIVE-scheduled posts specifically. recordApproval is already fail-soft
     // (it catches and returns false), so awaiting it costs nothing.
-    await recordApproval({
-      publishDate: run.scheduled_for,
-      networks: providers,
-      caption: text,
-      mediaUrl: run.angle?.media?.url || packImage?.url || '',
-      source: 'Autopilot · approve & schedule',
-      // The run id is NOT a post id. Falling back to it silently mixed two id
-      // spaces in the audit column; an empty cell is honest, a wrong id is not.
-      postId: String((inserted as { id?: string } | null)?.id || ''),
-    });
+    const insertedIds = ((inserted || []) as { id?: string }[]).map((r) => String(r?.id || ''));
+    for (let i = 0; i < sent.length; i++) {
+      await recordApproval({
+        publishDate: promoAt,
+        networks: [sent[i].network],
+        caption: sent[i].text,
+        mediaUrl: clip?.url || packImage?.url || '',
+        source: 'Autopilot · approve & schedule',
+        // The run id is NOT a post id. Falling back to it silently mixed two
+        // id spaces in the audit column; an empty cell is honest, a wrong id is not.
+        postId: insertedIds[i] || '',
+      });
+    }
   }
   const { error: logError } = await db
     .from('template_runs')
@@ -1970,15 +2441,17 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     .eq('id', run.id);
   if (logError) reportError('autopilot:approve-log', logError, { runId: run.id });
 
-  // A PARTIAL: the promo posts went out, the article did not.
+  // A PARTIAL ACROSS NETWORKS: some were accepted, then one refused.
   //
-  // Said as a failure, because something a person asked for did not happen —
-  // but the run is NOT released and the row above is written, because the
-  // Metricool post is real and a retry would send a second one. Publishing the
-  // article is a decision for a person now, not a button to press again.
-  if (articleFailure) {
-    const partial = note + ' BUT THE ARTICLE WAS NOT PUBLISHED: ' + articleFailure +
-      ' The promo posts above are scheduled and recorded; approving this run again would send them a second time, so fix WordPress and publish the article from the draft.';
+  // Not released: the accepted posts
+  // are real, recorded, and would be sent a second time by a retry. The
+  // networks that did not go are named, for a person to post by hand.
+  if (sendFailure && sent.length) {
+    const missing = sends.map((x) => x.network).filter((n) => !sent.some((y) => y.network === n));
+    const partial = note + ' BUT NOT EVERY NETWORK WENT: Metricool refused ' + sendFailure +
+      (missing.length > 1 ? ', and ' + missing.slice(1).join(', ') + ' was not attempted' : '') +
+      '. The posts above are scheduled and recorded; approving this run again would send them a second time, so post the ' +
+      missing.join(' and ') + ' copy from the draft by hand.';
     const { error: partialError } = await db
       .from('template_runs')
       .update({ log: logLine(run, 'approve-partial', partial) })
@@ -2008,6 +2481,11 @@ export async function regenerateRun(runId: string, userId: string, note?: string
   const run = r as RunRow | null;
   if (!run || !run.angle) return false;
   if (!['ready_for_review', 'drafted', 'failed'].includes(run.state)) return false;
+  // A slot that has already passed cannot be redrafted into anything: the
+  // pipeline restarts at research, the tick never reaches a run more than a
+  // day past its time, and expiry marks it failed — so the button turned a
+  // missed post into a red card. Such a post is re-dated or skipped instead.
+  if (Date.parse(run.scheduled_for) < Date.now() + MISSED_MARGIN_MS) return false;
   const angle: Angle = { ...run.angle, reviewerNote: (note || '').trim().slice(0, 500) || run.angle.reviewerNote };
   // Claim the state we READ, exactly as approveRun does. Without the predicate
   // this was a read-then-blind-write: two open tabs, one approving and one
@@ -2052,7 +2530,7 @@ export async function skipRun(runId: string, userId: string): Promise<boolean> {
   // existed and still shipped. Nothing in the app compensates for that, so
   // refuse instead: a terminal run cannot be skipped.
   const priorState = (r as RunRow).state;
-  if (priorState === 'approved' || priorState === 'skipped') return false;
+  if (priorState === 'approved' || priorState === 'skipped' || priorState === 'superseded') return false;
   const { data: skipped, error } = await db
     .from('template_runs')
     .update({ state: 'skipped', log: logLine(r as RunRow, 'skip', 'Skipped by reviewer.') })

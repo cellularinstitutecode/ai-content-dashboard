@@ -39,6 +39,8 @@ export type AutoScheduleInput = {
   threshold: number;
   /** How many safety flags the rubric raised. */
   safetyFlags?: number | null;
+  /** Weekly-strategy posts: how many promotional habits the rubric found. */
+  promotionFlags?: number | null;
   /** The networks this post is going to. */
   networks?: readonly string[] | null;
   /** Does it actually carry a picture or a video? */
@@ -51,7 +53,7 @@ export type AutoScheduleVerdict =
   | { ok: true }
   | {
       ok: false;
-      reason: 'citation' | 'score' | 'safety' | 'media' | 'claim' | 'networks';
+      reason: 'citation' | 'score' | 'safety' | 'promotion' | 'media' | 'claim' | 'networks';
       message: string;
     };
 
@@ -69,7 +71,10 @@ export function autoScheduleVerdict(input: AutoScheduleInput): AutoScheduleVerdi
   // 1. The citation. `checkCompliance` only proves a DOI is SHAPED like a DOI;
   //    this is the one signal that says a real paper answered to it. An
   //    unreachable Crossref reads as "not known", never as "fine".
-  if (input.citation !== 'verified') {
+  // 'not_required': no REF line and none needed — a destination post under the
+  // "only when it makes a health claim" policy that makes none, decided on its
+  // text (lib/health-claim.ts). There is no citation to verify.
+  if (input.citation !== 'verified' && input.citation !== 'not_required') {
     const said =
       input.citation === 'not_found'
         ? 'Crossref has no record of the DOI in the REF line'
@@ -120,6 +125,17 @@ export function autoScheduleVerdict(input: AutoScheduleInput): AutoScheduleVerdi
       ok: false,
       reason: 'safety',
       message: 'Held for you because the safety review raised ' + flags + (flags === 1 ? ' flag' : ' flags') + ' on this copy.',
+    };
+  }
+
+  // 4b. An educational post that reads as an advert. The points it costs never
+  //     stopped anything on their own; with nobody reading, this has to.
+  const promo = Number(input.promotionFlags) || 0;
+  if (promo > 0) {
+    return {
+      ok: false,
+      reason: 'promotion',
+      message: 'Held for you because this educational post still reads as promotion in ' + promo + (promo === 1 ? ' place' : ' places') + '. The strategy asks for guidance, not a sales pitch.',
     };
   }
 

@@ -19,7 +19,7 @@ import { NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { normalizeStrategy } from '@/lib/autopilot';
-import { planSeed, seedSummary, type ExistingTemplate, type SeedRow } from '@/lib/strategy-seed';
+import { planSeed, seedSummary, type ExistingTemplate, type SeedRow, type SeedUpdate } from '@/lib/strategy-seed';
 import { supabaseServer } from '@/lib/supabase';
 import { reportError } from '@/lib/report';
 
@@ -43,7 +43,20 @@ function dbRow(userId: string, row: SeedRow, now: string): Row {
     strategy: normalizeStrategy(row.strategy),
     updated_at: now,
   };
-  if (row.id) out.id = row.id;
+  return out;
+}
+
+/**
+ * A slot the seed already owns: ONLY its strategy is written — the angle
+ * bank, the rule, the mark and the slot's identity (lib/strategy-seed.ts
+ * SEED_OWNED), merged into what is there. Its name, days, time, channels and
+ * on/off state are the operator's; this used to rewrite them all, so a second
+ * press moved every edited slot back and switched paused ones on again.
+ */
+function updateRow(row: SeedUpdate, now: string): Row {
+  const out: Row = { strategy: normalizeStrategy(row.strategy), updated_at: now };
+  // Present only for the article row still on the seed's own old channel list.
+  if (row.providers) out.providers = row.providers;
   return out;
 }
 
@@ -66,7 +79,9 @@ export async function POST() {
   // got absorbed.
   const { data: existing, error: readError } = await sb
     .from('schedule_templates')
-    .select('id, name, strategy')
+    // Day and time too: a slot written before slot keys existed and since
+    // renamed is recognised by them rather than duplicated.
+    .select('id, name, strategy, weekdays, time_of_day, providers')
     .eq('user_id', userId);
   if (readError) {
     // Fail closed. Writing without knowing what is there is exactly how the
@@ -84,7 +99,7 @@ export async function POST() {
   const plan = planSeed((existing || []) as ExistingTemplate[]);
   const now = new Date().toISOString();
   const fresh = plan.create.map((r) => dbRow(userId, r, now));
-  const existingRows = plan.update.map((r) => dbRow(userId, r, now));
+  const existingRows = plan.update.map((r) => ({ id: r.id, patch: updateRow(r, now) }));
 
   /**
    * INSERT and UPSERT are two calls, deliberately.
@@ -124,8 +139,14 @@ export async function POST() {
       inserted = true;
     }
     if (existingRows.length && !updated) {
-      const { error } = await sb.from('schedule_templates').upsert(strip(existingRows)).select('id');
-      if (error) return { message: error.message };
+      // One UPDATE per row, of the strategy alone — never an upsert of the
+      // whole row, which is what put back the seed's time, channels and
+      // `active: true` over the operator's own.
+      for (const { id, patch } of existingRows) {
+        const next = withStrategy ? patch : { updated_at: patch.updated_at, ...(patch.providers ? { providers: patch.providers } : {}) };
+        const { error } = await sb.from('schedule_templates').update(next).eq('id', id).eq('user_id', userId).select('id');
+        if (error) return { message: error.message };
+      }
       updated = true;
     }
     return null;

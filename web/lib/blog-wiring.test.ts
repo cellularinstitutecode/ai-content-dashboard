@@ -48,51 +48,56 @@ test('the compliance gate covers the article, and the copy carries the lines it 
 });
 
 test('everything refusable about the article is decided BEFORE anything is sent', () => {
-  // THE ONE THAT MATTERS. The first version ran these checks after Metricool
-  // had already accepted the post, so a revoked WordPress password left three
-  // promo posts live, scheduled, unrecorded and unreachable from this app —
-  // and pressing Approve again sent three more, because there is no
-  // idempotency key and no unique constraint on `posts`.
+  // The first version ran these checks after Metricool had already accepted
+  // the post, so a revoked WordPress password left three promo posts live,
+  // scheduled, unrecorded and unreachable from this app — and pressing
+  // Approve again sent three more.
   const autopilot = src('lib/autopilot.ts');
   const preflight = autopilot.indexOf('THE ARTICLE IS DECIDED BEFORE ANYTHING IS SENT');
-  const handoff = autopilot.indexOf('if (mcProviders.length) {');
+  const first = autopilot.indexOf('THE ARTICLE GOES FIRST');
   assert.ok(preflight > 0, 'the article preflight is gone');
-  assert.ok(handoff > preflight, 'the preflight must come before the Metricool handoff');
+  assert.ok(first > preflight, 'the preflight must come before the article is published');
 
-  const block = autopilot.slice(preflight, handoff);
+  const block = autopilot.slice(preflight, first);
   assert.match(block, /if \(!wordpressConfigured\(\)\)/, 'no site configured is said, not guessed');
   assert.match(block, /complianceMessage\(articleCheck, \['blog'\]\)/, 'the article passes the gate first');
   assert.match(block, /professionalTitle\(/, 'and its title goes through the publishing rules');
-  // Each of these refusals happens with nothing sent, and says so.
   const refusals = block.match(/Nothing was sent anywhere/g) || [];
   assert.ok(refusals.length >= 3, 'every pre-send refusal must say nothing was sent');
 });
 
+test('the article is published BEFORE its promos, and the promos carry its link', () => {
+  // The promos used to go to Metricool first, so they could never contain the
+  // article's link, and a WordPress refusal left them live for an article that
+  // did not exist.
+  const autopilot = src('lib/autopilot.ts');
+  const approve = autopilot.slice(autopilot.indexOf('export async function approveRun'));
+  const publishAt = approve.indexOf('const published = await publishArticle({');
+  const sendAt = approve.indexOf('await metricoolSchedulePost(');
+  assert.ok(publishAt > 0 && sendAt > publishAt, 'WordPress first, Metricool second');
+  assert.match(approve, /transform: \(_network, text\) => withArticleLink\(text, promoLink\(articleStatus, link\)\)/, 'the promo is rebuilt around the real link — none while the article is a draft');
+  assert.match(approve, /publicationDate: promoAt/, 'and goes out after the article');
+  // A published article is written to the run before anything else, and a
+  // retry reuses it instead of publishing a second article.
+  assert.match(approve, /run\.log = logLine\(run, 'article', articleLogNote\(published, link\)\)/);
+  assert.match(approve, /const prior = readArticleLog\(run\.log\);/);
+  // A WordPress refusal sends nothing anywhere and releases the run.
+  assert.match(approve, /if \(!published\.ok\) \{[\s\S]{0,200}handoffFailed = true;/);
+});
+
 test('a send that succeeded is never thrown away for a retry', () => {
   // Releasing the run after Metricool accepted invites a second send. The
-  // article failure is recorded instead, and the post is kept.
-  //
-  // THE CONDITION MATTERS, and the first version of this test pinned the wrong
-  // one: it asserted `else if (metricoolPostId)`, which asks whether an id
-  // could be PARSED out of the answer. readPostId returns null for a
-  // successful POST whose envelope has no recognisable id, so a 200 plus a
-  // WordPress refusal released the run and told the reviewer "nothing was sent
-  // anywhere" while three posts were live.
+  // guard is "the send happened", never "an id parsed": readPostId returns
+  // null for a successful POST whose envelope has no recognisable id.
   const autopilot = src('lib/autopilot.ts');
-  assert.match(autopilot, /} else if \(metricoolSent\) \{/, 'the guard must be "the send happened", not "the id parsed"');
-  assert.doesNotMatch(autopilot, /else if \(metricoolPostId\)/, 'the old guard is gone');
   assert.match(autopilot, /metricoolSent = true;/);
-  assert.match(autopilot, /BUT THE ARTICLE WAS NOT PUBLISHED/);
+  assert.doesNotMatch(autopilot, /else if \(metricoolPostId\)/, 'the old guard is gone');
+  assert.match(autopilot, /BUT NOT EVERY NETWORK WENT/);
   assert.match(autopilot, /approving this run again would send them a second time/);
   assert.match(autopilot, /logLine\(run, 'approve-partial', partial\)/);
 });
 
 test('a run that already sent something is never rescued back into the queue', () => {
-  // rescueStrandedApprovals asked the `posts` table whether an approval really
-  // happened — the one artifact that is MISSING in exactly the case where the
-  // send succeeded and the insert failed. So a transient database error turned
-  // into a second live Metricool post, and for the Monday slot a second
-  // published article, one cron tick later.
   const autopilot = src('lib/autopilot.ts');
   assert.match(autopilot, /logLine\(run, 'sent',/, 'the send is recorded on the run before anything else can fail');
   assert.match(
@@ -103,8 +108,6 @@ test('a run that already sent something is never rescued back into the queue', (
 });
 
 test('the article is sent scheduled to its slot, with the hero image', () => {
-  // Scoped to the publishArticle call. Unanchored, these two matched anywhere
-  // in a 2,000-line file — including a comment.
   const autopilot = src('lib/autopilot.ts');
   const call = autopilot.slice(autopilot.indexOf('const published = await publishArticle({'));
   const args = call.slice(0, call.indexOf('});'));

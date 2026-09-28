@@ -20,8 +20,13 @@ export type PlannerTemplate = {
   weekdays?: number[];
   time_of_day?: string;
   active?: boolean;
-  strategy?: { mode?: string; topic?: string; format?: string; goal?: string; pillars?: string[]; rule?: string };
+  strategy?: { mode?: string; topic?: string; format?: string; goal?: string; pillars?: string[]; rule?: string; seeded?: string; slot?: string; pillarId?: string };
 };
+
+/** A slot "Load the weekly strategy" wrote. Its format and angle bank are the document's. */
+function isSeededSlot(t: PlannerTemplate | undefined): boolean {
+  return String(t?.strategy?.seeded || '') === 'weekly-strategy';
+}
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const DAY_INDEX = [1, 2, 3, 4, 5, 6, 0]; // schedule_templates.weekdays uses 0=Sun
@@ -45,7 +50,9 @@ type Draft = { day: number; topic: string; format: string; time: string; provide
    * angle bank, so for these it edits the day, time, format, goal and channels
    * and leaves the rotation exactly as it found it.
    */
-  rotating?: { name: string; angles: number } & { list?: string[] } };
+  rotating?: { name: string; angles: number } & { list?: string[] };
+  /** From the weekly strategy: format and goal are the document's, not this form's. */
+  seeded?: boolean };
 
 const inputStyle: React.CSSProperties = { width: '100%', padding: 8, borderRadius: 6, background: '#f5f5f7', border: '1px solid rgba(0,0,0,0.1)', color: '#1d1d1f', marginTop: 4, boxSizing: 'border-box', fontSize: 13 };
 const btn: React.CSSProperties = { background: '#0071e3', color: '#fff', border: 'none', borderRadius: 999, padding: '7px 13px', cursor: 'pointer', fontSize: 12, fontWeight: 600 };
@@ -88,7 +95,11 @@ export default function WeeklyPlanner({
   }
   function startEdit(day: number, t: PlannerTemplate) {
     setError(null);
-    const angles = t.strategy?.mode === 'pillars' ? (t.strategy?.pillars || []).length : 0;
+    // A seeded slot is rotating whatever its mode says: the assistant can set
+    // one to fixed_topic, and treating it as a themed slot here then wrote a
+    // strategy without the seed's mark or rule.
+    const seeded = isSeededSlot(t);
+    const angles = t.strategy?.mode === 'pillars' || seeded ? (t.strategy?.pillars || []).length : 0;
     setDraft({
       day,
       id: t.id,
@@ -98,6 +109,7 @@ export default function WeeklyPlanner({
       providers: t.providers || [],
       goal: t.strategy?.goal || 'rank',
       rotating: angles ? { name: t.name || 'This slot', angles, list: (t.strategy?.pillars || []).slice() } : undefined,
+      seeded,
     });
   }
 
@@ -135,10 +147,16 @@ export default function WeeklyPlanner({
               mode: 'pillars',
               pillars: existing?.strategy?.pillars || [],
               rule: existing?.strategy?.rule,
-              format: draft.format,
+              // A seeded slot's format is the document's (a Monday article stays
+              // an article): a social slot switched to "video" or "email" here
+              // shipped a teaser for a video or newsletter that did not exist.
+              format: draft.seeded ? (existing?.strategy?.format || 'social') : draft.format,
               goal: draft.goal,
             }
-          : { mode: 'fixed_topic', topic: draft.topic.trim(), format: draft.format, goal: draft.goal, pillars: existing?.strategy?.pillars || [] },
+          // Spread, like the branch above: whatever else the strategy carries —
+          // a seed's mark, slot key and rule among them — is not this form's
+          // to drop.
+          : { ...(existing?.strategy || {}), mode: 'fixed_topic', topic: draft.topic.trim(), format: draft.format, goal: draft.goal, pillars: existing?.strategy?.pillars || [] },
       });
       setDraft(null);
     } catch (e: any) {
@@ -163,7 +181,7 @@ export default function WeeklyPlanner({
               {loadingStrategy ? 'Loading…' : 'Load the weekly strategy'}
             </button>
             <div style={{ fontSize: 11, opacity: .6, marginTop: 5, maxWidth: 230 }}>
-              Fills the week from the clinic&apos;s written strategy: 15 slots — two posts a day, plus Monday&apos;s article. Nothing is published by this; every one waits for your approval.
+              Fills the week from the clinic&apos;s written strategy: 15 slots — two posts a day, plus Monday&apos;s article, promoted on Facebook and LinkedIn with its link (15 posts a week there; Instagram stays at 14). Nothing is published by this; every one waits for your approval.
             </div>
           </div>
         )}
@@ -213,7 +231,7 @@ export default function WeeklyPlanner({
             <div style={{ fontSize: 12, marginTop: 12, background: '#fff', border: '1px solid rgba(0,0,0,0.08)', borderRadius: 8, padding: 10 }}>
               <div style={{ fontWeight: 600 }}>{draft.rotating.name}</div>
               <div style={{ opacity: .65, marginTop: 3 }}>
-                From the weekly strategy: {draft.rotating.angles} angles, one a week, so this slot does not repeat itself for {draft.rotating.angles} weeks. The rotation is kept as it is — change the day, time, format, goal or channels below.
+                From the weekly strategy: {draft.rotating.angles} angles, one a week, so this slot does not repeat itself for {draft.rotating.angles} weeks. The rotation is kept as it is — change the time or channels below. {draft.seeded ? 'Its format is set by the strategy. ' : ''}To move it to another day, remove it and add it on that day.
               </div>
               {/* The angles themselves. Until now the panel said "5 angles" and
                   showed none, so nobody could check what a slot would write. */}
@@ -233,7 +251,7 @@ export default function WeeklyPlanner({
           )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginTop: 10 }}>
             <label style={{ fontSize: 12 }}>Format
-              <select style={inputStyle} value={draft.format} onChange={(e) => setDraft({ ...draft, format: e.target.value })}>
+              <select style={inputStyle} value={draft.format} disabled={draft.seeded} title={draft.seeded ? 'Set by the weekly strategy' : undefined} onChange={(e) => setDraft({ ...draft, format: e.target.value })}>
                 {FORMATS.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
               </select>
             </label>
@@ -241,7 +259,9 @@ export default function WeeklyPlanner({
               <input type="time" style={inputStyle} value={draft.time} onChange={(e) => setDraft({ ...draft, time: e.target.value })} />
             </label>
             <label style={{ fontSize: 12 }}>Goal
-              <select style={inputStyle} value={draft.goal} onChange={(e) => setDraft({ ...draft, goal: e.target.value })}>
+              {/* A seeded slot is written from the strategy's own brief, which
+                  does not read the goal — so the control would change nothing. */}
+              <select style={inputStyle} value={draft.goal} disabled={draft.seeded} title={draft.seeded ? 'Set by the weekly strategy' : undefined} onChange={(e) => setDraft({ ...draft, goal: e.target.value })}>
                 <option value="rank">Rank for searches</option>
                 <option value="traffic">Traffic</option>
                 <option value="engagement">Engagement</option>

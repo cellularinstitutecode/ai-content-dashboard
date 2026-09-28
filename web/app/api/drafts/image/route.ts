@@ -15,6 +15,7 @@ import { generatePackImage, imagesEnabled, removeSuperseded, storeBytes, type Pa
 import { checkRateLimit } from '@/lib/rate-limit';
 import { plannerImageFor } from '@/lib/planner-image';
 import type { BrandContext } from '@/lib/ai';
+import { imageUnshippable } from '@/lib/image-verdict';
 
 export const runtime = 'nodejs';
 // THE ARITHMETIC, as with the schedule route.
@@ -144,7 +145,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ image: chosen });
     }
 
-    const existingHasText = existing?.verification?.textDetected === true;
+    // Text, or a banned prop: an image that may never ship is never reused.
+    const existingHasText = imageUnshippable(existing?.verification);
     // A weekly-planner draft whose picture predates the title cover (the old
     // dark reception photos) is replaced once with the new consultation cover.
     // Chosen photos (library / upload) are the team's own choice and are kept.

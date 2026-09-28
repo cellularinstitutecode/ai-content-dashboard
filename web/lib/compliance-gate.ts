@@ -5,7 +5,7 @@
 // "Publish now" and Autopilot's approve cannot drift apart.
 import 'server-only';
 
-import { appliesTo, avisoNumberFor, checkCompliance, complianceMessage, type ComplianceCheck } from '@/lib/compliance';
+import { appliesTo, avisoNumberFor, checkCompliance, complianceMessage, type ComplianceCheck, type RefPolicy } from '@/lib/compliance';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 
 export type GateResult = {
@@ -32,10 +32,21 @@ export async function avisoForUser(userId: string): Promise<string> {
   }
 }
 
-export async function complianceGate(userId: string, text: string, providers: readonly string[] | string | null | undefined): Promise<GateResult> {
+/**
+ * `refPolicy` is the policy the draft was written under (refPolicyOf its pack);
+ * omitted, the REF line is required, exactly as before. Under
+ * 'if-health-claim' a missing REF is waived only when the text itself makes no
+ * health claim — the stamp alone can never wave a claim through.
+ */
+export async function complianceGate(
+  userId: string,
+  text: string,
+  providers: readonly string[] | string | null | undefined,
+  opts: { refPolicy?: RefPolicy } = {},
+): Promise<GateResult> {
   const aviso = await avisoForUser(userId);
   if (!appliesTo(providers)) return { ok: true, applies: false, aviso, check: null, message: '' };
-  const check = checkCompliance(text, aviso);
+  const check = checkCompliance(text, aviso, { refPolicy: opts.refPolicy });
   return { ok: check.ok, applies: true, aviso, check, message: check.ok ? '' : complianceMessage(check, Array.isArray(providers) ? providers : providers ? [providers] : null) };
 }
 

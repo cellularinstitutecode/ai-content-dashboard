@@ -17,7 +17,7 @@
 import 'server-only';
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { normalizeStrategy } from '@/lib/autopilot';
+import { normalizeStrategy, reconcileTemplateRuns } from '@/lib/autopilot';
 import { cleanTime, cleanWeekdays, isUsableTime } from '@/lib/template-input';
 import { reportError } from '@/lib/report';
 import { leadProblem, retryBudgetProblem } from '@/lib/lead-window';
@@ -85,6 +85,8 @@ export async function upcomingRuns(userId: string, limit = 12): Promise<
     .from('template_runs')
     .select('template_id, scheduled_for, state')
     .eq('user_id', userId)
+    // A run retired because its slot moved is not coming up.
+    .neq('state', 'superseded')
     .gte('scheduled_for', new Date().toISOString())
     .order('scheduled_for', { ascending: true })
     .limit(Math.min(Math.max(Math.trunc(limit) || 12, 1), 50));
@@ -252,6 +254,10 @@ export async function saveTemplate(
   }
   if (!data) return { ok: false, message: 'The planner saved nothing and reported no error, so I cannot confirm the template exists.' };
 
+  // A moved slot retires the runs planned for its old time (lib/run-reconcile.ts).
+  const recon = await reconcileTemplateRuns(userId, String((data as { id?: string }).id || ''));
+  if (recon.superseded) notes.push(recon.superseded + ' post(s) already prepared for the old time were retired; the new time gets its own.');
+
   return { ok: true, template: shape(data), notes };
 }
 
@@ -273,6 +279,9 @@ export async function setTemplateActive(
     return { ok: false, message: 'Could not change that template just now.' };
   }
   if (!data) return { ok: false, message: 'There is no template with that id in this workspace.' };
+  // Paused: its planned runs are removed rather than left to expire into red
+  // "failed" cards. Resumed: the next slots are planned now.
+  await reconcileTemplateRuns(userId, id);
   return { ok: true, template: shape(data) };
 }
 

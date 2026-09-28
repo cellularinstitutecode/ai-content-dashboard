@@ -16,7 +16,9 @@ test('nothing auto-sends unless the setting says so', () => {
   // fact that the engine asks it before doing anything.
   assert.equal(autoSchedules({}), false);
   const autopilot = src('lib/autopilot.ts');
-  assert.match(autopilot, /if \(autoSchedules\(\)\) await autoSchedule\(db, run, template\)/);
+  assert.match(autopilot, /if \(autoSchedules\(\)\) \{[\s\S]{0,700}?await autoSchedule\(db, run, template\)/);
+  // And never with too little of the tick left to finish sending.
+  assert.match(autopilot, /if \(deadline - Date\.now\(\) < AUTOSCHEDULE_MIN_MS\) \{\s*await hold\(/);
 });
 
 test('the engine approves only at the point where a run is finished', () => {
@@ -34,6 +36,7 @@ test('the verdict decides, and the reason is written on the card', () => {
   assert.match(autopilot, /citation: compliance\?\.citation\?\.status \?\? null/, 'the Crossref verdict, from the pack stamp');
   assert.match(autopilot, /threshold: SCORE_THRESHOLD/, 'the threshold stays in planner-constants.ts');
   assert.match(autopilot, /safetyFlags: run\.score\?\.safetyFlags\?\.length \?\? 0/);
+  assert.match(autopilot, /promotionFlags: run\.score\?\.promotionFlags\?\.length \?\? 0/, 'a post that reads as an advert is held, not just marked down');
   assert.match(autopilot, /if \(!verdict\.ok\)/);
   // The write moved into a `hold` helper when the weekly ceiling gave the
   // engine a SECOND reason to hold a run; both go through it, so the two
@@ -52,7 +55,9 @@ test('a text-flagged image counts as no image', () => {
   // picture and has only a flagged one has no picture. Counting it would send
   // an Instagram post that Instagram then refuses.
   const autopilot = src('lib/autopilot.ts');
-  assert.match(autopilot, /image\?\.verification\?\.textDetected !== true/);
+  // A banned prop is the same rule now (lib/image-verdict.ts imageUnshippable).
+  assert.match(autopilot, /Boolean\(image\?\.url\) && !imageUnshippable\(image\?\.verification\)/);
+  assert.match(autopilot, /imageUnshippable\(img\?\.verification\) \? null : img/, 'and the ship-point refuses it too');
 });
 
 test('a failure leaves the post in the queue rather than losing it', () => {
