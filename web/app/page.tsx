@@ -412,7 +412,7 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
   // The sheet row the video was handed over from, sent with the post so the
   // queue can name it. Cleared with the media.
   const [mSource, setMSource] = useState<{ tab: string; row: number; link: string; format: string } | null>(null);
-  // The next free planner slots (09:00 / 17:00 Cancún), from the server: the
+  // The next free planner slots (13:00 / 17:00 Cancún), from the server: the
   // time chips and the box's default. Not "tomorrow 9 AM" on the browser's clock.
   const [mSlots, setMSlots] = useState<string[]>([]);
   useEffect(() => {

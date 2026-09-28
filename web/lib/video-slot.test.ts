@@ -169,14 +169,14 @@ test('nothing published leaves the default exactly as it was', () => {
 import { EVERY_DAY, postTimes, postWeekdays } from './video-slot.ts';
 
 test('the times of day are read from the setting, singular or plural', () => {
-  // The clinic's grid: two a day, 8 in the morning and 5 in the afternoon.
-  assert.deepEqual(postTimes({}), ['08:00', '17:00']);
+  // The clinic's grid: two a day, 1 and 5 in the afternoon — clear of the strategy's 09:00.
+  assert.deepEqual(postTimes({}), ['13:00', '17:00']);
   assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIME: '10:30' }), ['10:30']);
   assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIMES: '09:00,17:00' }), ['09:00', '17:00']);
   // The plural wins when both are set; spaces, semicolons and a bare hour are tolerated.
   assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIMES: '9:00; 17:00 ', VIDEO_AUTOPILOT_TIME: '11:00' }), ['09:00', '17:00']);
   // Junk is dropped, never guessed; nothing readable falls back to the default grid.
-  assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIMES: '25:00,abc,09:60' }), ['08:00', '17:00']);
+  assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIMES: '25:00,abc,09:60' }), ['13:00', '17:00']);
   assert.deepEqual(postTimes({ VIDEO_AUTOPILOT_TIMES: '17:00,17:00,09:00' }), ['17:00', '09:00']);
 });
 

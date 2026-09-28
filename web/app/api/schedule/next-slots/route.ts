@@ -1,6 +1,6 @@
 // GET /api/schedule/next-slots?n=3
 //
-// The next free posting slots on the clinic's planner — 08:00 and 17:00
+// The next free posting slots on the clinic's planner — 13:00 and 17:00
 // Cancún by default, skipping instants a post already holds — as UTC
 // instants. The composer's time chips and the Prepare panel's default read
 // this instead of computing "tomorrow 8 AM" on the browser's own clock,

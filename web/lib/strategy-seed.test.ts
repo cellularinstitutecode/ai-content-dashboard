@@ -166,14 +166,14 @@ test('the summary is a sentence, not a pair of numbers', () => {
 test('the weekly article leads the week, and carries its promos with it', () => {
   // Monday, because that is the day the strategy gives to its two medical
   // pillars — so the long read and the week's short posts circle the same
-  // territory. 11:00, because 08:00 and 17:00 are the reels and 09:00 and
+  // territory. 11:00, because 13:00 and 17:00 are the reels and 09:00 and
   // 18:00 are Monday's own social slots.
   const article = seedRows().find((r) => r.strategy.format === 'blog');
   assert.ok(article, 'the weekly article is gone');
   assert.deepEqual(article!.weekdays, [1]);
   assert.equal(article!.time_of_day, '11:00');
   assert.equal(article!.name, BLOG_SLOT.name);
-  for (const clash of ['08:00', '17:00', '09:00', '18:00']) {
+  for (const clash of ['13:00', '17:00', '09:00', '18:00']) {
     assert.notEqual(article!.time_of_day, clash);
   }
   // One pack, three destinations: the article to WordPress and a promo

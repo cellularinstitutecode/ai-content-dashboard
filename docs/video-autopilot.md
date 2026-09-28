@@ -110,7 +110,7 @@ published something.
   (signs them; rotating it invalidates every outstanding link). System Status's
   **video_media** check reports both, and goes red only when one is genuinely
   missing — not because of which host it resolved.
-- **Timing:** the next free slot on the clinic's clock — **08:00 and 17:00**,
+- **Timing:** the next free slot on the clinic's clock — **13:00 and 17:00**,
   two a day, every day — one post per slot. Working off a backlog therefore
   spreads across days instead of stacking thirty posts on one, which would read
   as spam on every network. Change the grid with `VIDEO_AUTOPILOT_TIMES`

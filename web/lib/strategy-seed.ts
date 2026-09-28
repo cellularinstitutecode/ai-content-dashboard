@@ -56,7 +56,7 @@ export const STRATEGY_LEAD_HOURS = 24;
  *
  * On Monday because that is the day the strategy gives to its two medical
  * pillars — diagnosis at 09:00, personalization at 18:00 — so the long read and
- * the week's short posts circle the same territory. At 11:00 because 08:00 and
+ * the week's short posts circle the same territory. At 11:00 because 13:00 and
  * 17:00 belong to the reels and 09:00 and 18:00 to the social slots.
  *
  * It carries `blog` and the two networks where a link works — Facebook and
