@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import PageNav from '@/components/PageNav';
 import { localDateKey, tightestLimit, networkLabel, PUBLISH_NETWORKS, mediaProblem } from '@/lib/composer';
 import MediaPicker from '@/components/MediaPicker';
-import { announce, onRefresh } from '@/components/refreshBus';
+import { announce, fetchPosts, onRefresh } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
 import { PanelLoader } from '@/components/LoadingScreen';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
@@ -78,6 +78,10 @@ export default function CalendarPage() {
   const [planTemplates, setPlanTemplates] = useState<PlanTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  // The list could not be read. Kept apart from `err`, which also carries
+  // warnings about a list that DID load: "No scheduled posts yet" under a
+  // failed load read as "nothing is scheduled", which is the wrong conclusion.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
 
@@ -183,17 +187,25 @@ export default function CalendarPage() {
     setLoading(true);
     setErr(null);
     try {
-      const r = await fetch('/api/posts');
-      if (!r.ok) throw new Error('Failed to load posts (' + r.status + ')');
+      const r = await fetchPosts();
+      if (!r.ok) {
+        // What was already on screen stays there: a refresh that failed is
+        // not news that every post was deleted.
+        setLoadFailed(true);
+        setErr(await friendlyErrorFromResponse(r, 'We could not load your scheduled posts. Reload in a moment.'));
+        return;
+      }
       const j = await r.json().catch(() => null);
       setPosts(toArray(j));
+      setLoadFailed(false);
       // The packs behind these posts could not be read, so nothing can be
       // marked "Pending video" and an absent chip would read as "all fine".
       if (j?.packsUnavailable === true) {
         setErr('We could not read the drafts behind these posts, so any post waiting on its video is not marked here. Approving is still blocked for those — reload in a moment.');
       }
     } catch (e: any) {
-      setErr(e && e.message ? e.message : 'Failed to load');
+      setLoadFailed(true);
+      setErr(friendlyError(e, 'We could not reach the server to load your scheduled posts.'));
     } finally {
       setLoading(false);
     }
@@ -548,7 +560,7 @@ export default function CalendarPage() {
           })}
         </div>
 
-        {!loading && posts.length === 0 && (
+        {!loading && !loadFailed && posts.length === 0 && (
           <p className="mt-6 text-sm text-ink/50">No scheduled posts yet. Click any day above to schedule one.</p>
         )}
       </div>

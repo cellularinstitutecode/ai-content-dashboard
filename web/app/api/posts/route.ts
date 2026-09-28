@@ -93,9 +93,10 @@ export async function GET() {
   const auth = await requireClinicUser(sb);
   if (!auth.ok) return auth.response;
   const user = auth.user;
-  // Reaches Metricool and Drive. Every other route that leaves the building is
-  // capped; this one, which publishes and deletes, was not.
-  const rl = await checkRateLimit(user.id, 'posts');
+  // Capped in its own bucket: this is a read of the account's own rows, and
+  // counting it with PATCH and DELETE below (which reach Metricool) blanked
+  // every screen that shows posts once a busy hour passed 120 reads.
+  const rl = await checkRateLimit(user.id, 'posts-read');
   if (!rl.ok) {
     return NextResponse.json(
       { error: 'rate_limited', limit: rl.limit },
