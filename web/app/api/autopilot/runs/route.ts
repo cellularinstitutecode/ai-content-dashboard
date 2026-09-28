@@ -13,6 +13,7 @@ import { advanceRuns, approveRun, regenerateRun, skipRun } from '@/lib/autopilot
 import { checkRateLimit } from '@/lib/rate-limit';
 import { bucketRuns, DEFAULT_LIMITS, FAILED_WINDOW_DAYS } from '@/lib/review-queue';
 import { wantsBlog } from '@/lib/metricool-networks';
+import { attachableClip } from '@/lib/clip-relevance';
 
 export const runtime = 'nodejs';
 // 300, not 60. The approve path runs ensureDraftImage — which lib/images.ts
@@ -102,12 +103,15 @@ export async function GET(req: NextRequest) {
   // app/AutopilotQueue.tsx), because nothing here could publish the
   // WordPress draft that leaves behind.
   const providersOf: Record<string, string[]> = {};
+  /** Each template's strategy, so the card names only a clip approve will attach. */
+  const strategyOf: Record<string, Record<string, unknown> | null> = {};
   if (templateIds.length) {
     const { data: ts } = await db
-      .from('schedule_templates').select('id, name, providers').in('id', templateIds).eq('user_id', user.id);
+      .from('schedule_templates').select('id, name, providers, strategy').in('id', templateIds).eq('user_id', user.id);
     for (const t of ts || []) {
       names[(t as { id: string }).id] = (t as { name?: string }).name || 'Untitled template';
       providersOf[(t as { id: string }).id] = ((t as { providers?: string[] | null }).providers || []).map(String);
+      strategyOf[(t as { id: string }).id] = (t as { strategy?: Record<string, unknown> | null }).strategy ?? null;
     }
   }
   const packs: Record<string, unknown> = {};
@@ -148,6 +152,16 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     runs: rows.map((r: Record<string, unknown>) => ({
       ...r,
+      angle: r.angle && typeof r.angle === 'object'
+        ? {
+            ...(r.angle as Record<string, unknown>),
+            media: attachableClip(
+              r.angle as Parameters<typeof attachableClip>[0],
+              strategyOf[String(r.template_id)],
+              names[String(r.template_id)],
+            ),
+          }
+        : r.angle,
       template_name: names[String(r.template_id)] || 'Template',
       template_providers: providersOf[String(r.template_id)] || [],
       // The approve step's own rule (wantsBlog trims and lower-cases), so the
