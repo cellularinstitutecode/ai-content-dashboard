@@ -16,7 +16,9 @@ test('nothing auto-sends unless the setting says so', () => {
   // fact that the engine asks it before doing anything.
   assert.equal(autoSchedules({}), false);
   const autopilot = src('lib/autopilot.ts');
-  assert.match(autopilot, /if \(autoSchedules\(\)\) \{[\s\S]{0,700}?await autoSchedule\(db, run, template\)/);
+  // Guarded by !opts.runId as well: a run a reviewer asked for by id ("Ask for
+  // changes", "Prepare now") always waits for them.
+  assert.match(autopilot, /if \(autoSchedules\(\) && !opts\.runId\) \{[\s\S]{0,700}?await autoSchedule\(db, run, template\)/);
   // And never with too little of the tick left to finish sending.
   assert.match(autopilot, /if \(deadline - Date\.now\(\) < AUTOSCHEDULE_MIN_MS\) \{\s*await hold\(/);
 });
@@ -27,7 +29,7 @@ test('the engine approves only at the point where a run is finished', () => {
   const autopilot = src('lib/autopilot.ts');
   const hook = autopilot.slice(autopilot.indexOf("if (run.state === 'ready_for_review') {"));
   assert.ok(hook, 'the hook point is gone — has the loop been rewritten?');
-  assert.match(hook.slice(0, 900), /autoSchedules\(\)/);
+  assert.match(hook.slice(0, 1300), /autoSchedules\(\)/);
 });
 
 test('the verdict decides, and the reason is written on the card', () => {

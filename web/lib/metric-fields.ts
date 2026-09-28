@@ -1,15 +1,22 @@
 // web/lib/metric-fields.ts
-// Reading the two fields of a Metricool analytics row that the rest of the
-// app joins on: when it was published, and on which network.
+// Reading a Metricool analytics row's date, network and stable key.
 //
 // Nothing in this repository pins the shape of /v2/analytics/posts, so
-// lib/performance.ts guesses field names. Two guesses could fail silently:
+// lib/performance.ts guesses field names. Two rules, kept apart on purpose:
 //
-//   the date   Metricool's scheduler API sends `publicationDate` as an object,
-//              { dateTime, timezone }. Stored as-is into a timestamptz column,
-//              that failed the whole upsert, and the cron swallows the error.
-//   the network  a row naming it under another key was stored as 'unknown',
-//              and nothing could ever be matched to the post it came from.
+//   THE KEY  post_metrics is unique on (user_id, network, external_id), and an
+//            id-less row's external_id is a hash of its network, raw date and
+//            text. Every re-sync must produce the SAME key for the same post,
+//            or the upsert inserts a second row beside the first and every
+//            reader (top performers, keyword_performance, the strategy panel)
+//            counts the post twice. So the network and the hashed date are
+//            exactly what they always were: raw, not lower-cased, not
+//            normalised. Matching lower-cases on READ (lib/strategy-performance.ts).
+//   THE DATE the stored published_at column. Metricool's scheduler API sends
+//            publicationDate as an object, { dateTime, timezone }; stored
+//            as-is into a timestamptz that failed the whole upsert, and the
+//            cron swallows the error. That column — not the key — is
+//            normalised to ISO or null.
 //
 // Pure: no imports, so the test runner reads it directly.
 
@@ -25,12 +32,20 @@ export function metricDate(v: unknown): string | null {
   return Number.isFinite(d.getTime()) ? d.toISOString() : null;
 }
 
-/** The network a row names, lower-cased; 'unknown' only when it names none. */
+/**
+ * The network as stored — part of the row's key, so exactly as it always was:
+ * the first of network / provider / platform, raw, or 'unknown'. (Not `type`:
+ * on analytics rows that is usually the post format — IMAGE, REEL.)
+ */
 export function metricNetwork(row: Record<string, unknown> | null | undefined): string {
   if (!row) return 'unknown';
-  for (const k of ['network', 'provider', 'platform', 'socialNetwork', 'social_network', 'type']) {
-    const v = row[k];
-    if (typeof v === 'string' && v.trim()) return v.trim().toLowerCase();
+  for (const k of ['network', 'provider', 'platform']) {
+    if (row[k] != null) return String(row[k]);
   }
   return 'unknown';
+}
+
+/** What an id-less row's synthetic id hashes: unchanged, so re-syncs keep the same key. */
+export function syntheticBasis(network: string, rawDate: unknown, text: string | null): string {
+  return [network, rawDate ?? '', (text ?? '').slice(0, 200)].join('|');
 }

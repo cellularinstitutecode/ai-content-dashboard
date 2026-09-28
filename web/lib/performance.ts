@@ -11,7 +11,7 @@
 // as "no signal yet".
 import 'server-only';
 import { createHash } from 'crypto';
-import { metricDate, metricNetwork } from '@/lib/metric-fields';
+import { metricDate, metricNetwork, syntheticBasis } from '@/lib/metric-fields';
 
 // Same override as lib/metricool.ts, so the end-to-end harness can point the
 // analytics read at a local mock. Unset in production.
@@ -23,9 +23,8 @@ const METRICOOL_BASE = (process.env.METRICOOL_API_BASE || 'https://app.metricool
 // id-less post again, ballooning the table and skewing the "top performers" hint.
 // Derive a deterministic synthetic id from the row's stable fields so those rows
 // dedupe on re-sync like any other.
-function syntheticId(network: string, publishedAt: string | null, text: string | null): string {
-  const basis = [network, publishedAt ?? '', (text ?? '').slice(0, 200)].join('|');
-  return 'syn:' + createHash('sha1').update(basis).digest('hex').slice(0, 16);
+function syntheticId(network: string, rawDate: unknown, text: string | null): string {
+  return 'syn:' + createHash('sha1').update(syntheticBasis(network, rawDate, text)).digest('hex').slice(0, 16);
 }
 
 export type NormalizedMetric = {
@@ -78,13 +77,15 @@ export function normalizeMetrics(payload: any): NormalizedMetric[] {
     .map((row: Record<string, any>) => {
       const network = metricNetwork(row);
       const text = (pick(row, ['text', 'content', 'message', 'caption']) ?? null) as string | null;
-      // Always an ISO string or null (lib/metric-fields.ts): an object here
-      // failed the whole upsert into published_at.
-      const publishedAt = metricDate(pick(row, ['publicationDate', 'publishedAt', 'date', 'dateTime']));
+      // The stored column is always ISO or null (an object here failed the
+      // whole upsert). The KEY hashes the raw value, as it always has, so a
+      // re-sync updates the same row instead of adding a second one.
+      const rawDate = pick(row, ['publicationDate', 'publishedAt', 'date', 'dateTime']);
+      const publishedAt = metricDate(rawDate);
       const rawId = pick(row, ['id', 'postId', 'externalId']);
       const externalId = rawId != null && String(rawId).trim()
         ? String(rawId)
-        : syntheticId(network, publishedAt, text);
+        : syntheticId(network, rawDate, text);
       return {
         network,
         externalId,

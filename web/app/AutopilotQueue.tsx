@@ -88,6 +88,8 @@ type Run = {
   id: string;
   draft_id: string | null;
   template_name: string;
+  /** The template's channels; 'blog' means the run writes a WordPress article. */
+  template_providers?: string[];
   scheduled_for: string;
   state: string;
   angle: Angle | null;
@@ -775,14 +777,24 @@ export default function AutopilotQueue() {
                         >
                           {busyIds.has(r.id) ? 'Working…' : 'Approve & schedule'}
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => act(r.id, 'approve')}
-                          disabled={busyIds.has(r.id)}
-                          className="rounded-full px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:text-ink disabled:opacity-50"
-                        >
-                          Approve as draft
-                        </button>
+                        {/* Not for an article. A draft approval saves the WordPress
+                            article as a draft and sends its promos without a
+                            link — and nothing here can publish that draft later,
+                            so the article would never go out. */}
+                        {(r.template_providers || []).includes('blog') ? (
+                          <span className="text-[11px] text-ink-muted">
+                            Articles are approved and scheduled together, so the post and its link go out at the slot.
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => act(r.id, 'approve')}
+                            disabled={busyIds.has(r.id)}
+                            className="rounded-full px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:text-ink disabled:opacity-50"
+                          >
+                            Approve as draft
+                          </button>
+                        )}
                       </>
                     )}
                     {/* Not on a missed card: redrafting restarts the pipeline for

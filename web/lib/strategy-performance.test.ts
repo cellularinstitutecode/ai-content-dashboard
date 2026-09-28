@@ -91,3 +91,38 @@ test('the article is its own line, measured by its promos', () => {
   assert.equal(perf.article.measured, 1);
   assert.equal(perf.article.engagement, 7);
 });
+
+test('the same post stored twice is counted once, with its freshest numbers', () => {
+  const runs = [run('r', 'wed-2', '2026-10-07T23:00:00Z', [['instagram', SLEEP]])];
+  const perf = strategyPerformance(runs, [
+    metric('Instagram', SLEEP, '2026-10-07T23:01:00Z', 12, 300),
+    metric('unknown', SLEEP, '2026-10-07T23:01:00Z', 9, 250),
+  ]);
+  assert.equal(perf.pillars.find((p) => p.id === 'sleep-stress')!.engagement, 12);
+  assert.equal(perf.totals.metricsMatched, 2, 'both copies are claimed, so no other run can take one');
+  // Two different networks of one run still add up.
+  const both = strategyPerformance([run('r', 'wed-2', '2026-10-07T23:00:00Z', [['instagram', SLEEP], ['facebook', SLEEP]])], [
+    metric('instagram', SLEEP, '2026-10-07T23:01:00Z', 12),
+    metric('facebook', SLEEP, '2026-10-07T23:01:00Z', 4),
+  ]);
+  assert.equal(both.totals.measured, 1);
+  assert.equal(both.pillars.find((p) => p.id === 'sleep-stress')!.engagement, 16);
+});
+
+test('a Metricool draft counts once Metricool has numbers for it — not before', () => {
+  const pending = (id: string) => ({ ...run(id, 'wed-2', '2026-10-07T23:00:00Z', [['instagram', SLEEP]]), sent: [{ network: 'instagram', text: SLEEP, at: '2026-10-07T23:00:00Z', live: false }] });
+  const unmeasured = strategyPerformance([pending('p')], []);
+  assert.equal(unmeasured.totals.posts, 0);
+  const measured = strategyPerformance([pending('p')], [metric('instagram', SLEEP, '2026-10-07T23:02:00Z', 6)]);
+  assert.equal(measured.totals.posts, 1);
+  assert.equal(measured.totals.measured, 1);
+});
+
+test('sentRowState: live, a due Metricool draft, or not counted', async () => {
+  const { sentRowState } = await import('./strategy-performance.ts');
+  const now = new Date('2026-10-10T00:00:00Z').getTime();
+  assert.equal(sentRowState({ status: 'approved', publication_date: '2026-10-09T00:00:00Z' }, now), 'live');
+  assert.equal(sentRowState({ status: 'pending_review', publication_date: '2026-10-09T00:00:00Z' }, now), 'pending');
+  assert.equal(sentRowState({ status: 'pending_review', publication_date: '2026-10-11T00:00:00Z' }, now), null);
+  assert.equal(sentRowState({ status: 'scheduled', publication_date: '2026-10-09T00:00:00Z' }, now), null);
+});

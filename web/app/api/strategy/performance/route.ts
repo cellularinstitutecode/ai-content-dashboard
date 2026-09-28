@@ -13,7 +13,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { reportError } from '@/lib/report';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { isLivePost, strategyPerformance, type PerfMetric, type PerfRun, type SentPost } from '@/lib/strategy-performance';
+import { sentRowState, strategyPerformance, type PerfMetric, type PerfRun, type SentPost } from '@/lib/strategy-performance';
 
 export const runtime = 'nodejs';
 
@@ -66,9 +66,10 @@ export async function GET() {
     if (rErr) throw rErr;
 
     // What each run actually sent: one `posts` row per network, carrying the
-    // text that went out and the time Metricool was given. Only live ones —
-    // approved and due — so a Metricool draft or a post still to come is not
-    // counted as published.
+    // text that went out and the time Metricool was given. Live ones (approved
+    // and due) count as published; a Metricool draft whose time has passed
+    // counts only if Metricool has numbers for it (lib/strategy-performance.ts).
+    // A post still to come is not read.
     const draftIds = [...new Set((runs || []).map((r) => (r as { draft_id?: string | null }).draft_id).filter(Boolean) as string[])];
     const sentBy = new Map<string, SentPost[]>();
     const now = Date.now();
@@ -81,9 +82,10 @@ export async function GET() {
       if (pErr) throw pErr;
       for (const p of ps || []) {
         const row = p as { draft_id: string; providers?: string[] | null; text?: string | null; publication_date?: string | null; status?: string | null };
-        if (!isLivePost(row, now)) continue;
+        const state = sentRowState(row, now);
+        if (!state) continue;
         const list = sentBy.get(row.draft_id) || [];
-        list.push({ network: String(row.providers?.[0] || ''), text: String(row.text || ''), at: String(row.publication_date) });
+        list.push({ network: String(row.providers?.[0] || ''), text: String(row.text || ''), at: String(row.publication_date), live: state === 'live' });
         sentBy.set(row.draft_id, list);
       }
     }
