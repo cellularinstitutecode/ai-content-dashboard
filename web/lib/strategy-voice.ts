@@ -80,7 +80,7 @@ export const EDITORIAL_DIRECTION = [
 /** What these posts must NOT do — the promotional habits the Brand Brain would otherwise add. */
 export const NO_PROMOTION_RULES = [
   'DO NOT turn the post into a promotion:',
-  'do not pitch stem cells, exosomes, NK cells, peptides or any named therapy unless this week\'s angle is about it;',
+  'do not pitch stem cells, exosomes, NK cells, peptides or any named therapy unless this week\'s angle is about it (the recovery services a STANDING RULE below names may be introduced exactly as that rule allows);',
   'do not say "drug-free", "surgery-free" or "science-backed" as selling points;',
   'do not use "See if you are a candidate" or "free consultation";',
   'do not use treatment hashtags such as #StemCellTherapy or #RegenerativeMedicine — use 3-5 hashtags about the topic itself.',
@@ -132,6 +132,8 @@ export function strategyTopicPrompt(opts: {
   integrated?: string[];
   /** What the related slots write this same week — ground not to repeat. */
   coveredThisWeek?: string[];
+  /** Varies the brief's own example sentences from week to week (the dealt week). */
+  variant?: number;
 }): string {
   const parts = [
     'Write about: ' + opts.angle + '.',
@@ -142,12 +144,19 @@ export function strategyTopicPrompt(opts: {
     parts.push('This slot counts for both ' + opts.alsoCovers.map((n) => '"' + n + '"').join(' and ') + ' in the clinic\'s weekly mix, so the post should speak to both.');
   }
   if (opts.integrated && opts.integrated.length) {
+    // Varied by week, so the same connecting sentence is not handed over every
+    // Monday — the one place the brief itself risked repeating its wording.
+    const examples = INTEGRATED_EXAMPLES;
+    const example = examples[Math.abs(Math.trunc(opts.variant ?? 0)) % examples.length];
     parts.push('Where it fits naturally, connect the angle to ' + opts.integrated.map((n) => '"' + n + '"').join(' and ') +
-      ' — for example, how what is learned at the first evaluation becomes the baseline later follow-ups measure progress against. One sentence is enough; do not change the subject.');
+      ' — for example, ' + example + ' One sentence is enough; do not change the subject.');
   }
   if (opts.coveredThisWeek && opts.coveredThisWeek.length) {
-    parts.push('Already covered by other posts this week, so do not repeat their points: ' +
-      opts.coveredThisWeek.map((a) => '"' + a + '"').join('; ') + '.');
+    // The document's own example: Monday explains why medical history
+    // matters, Thursday why follow-up testing measures progress — the same
+    // pillar, complementary points. So: build on them, do not repeat them.
+    parts.push('Related posts this week cover: ' + opts.coveredThisWeek.map((a) => '"' + a + '"').join('; ') +
+      '. Build on them from a different point or step in the patient\'s journey; do not repeat their points.');
   }
   parts.push(EDITORIAL_DIRECTION, NO_PROMOTION_RULES);
   if (opts.supportingPhrase) {
@@ -157,6 +166,13 @@ export function strategyTopicPrompt(opts: {
   if (opts.reviewerNote) parts.push('REVIEWER FEEDBACK (must address): ' + opts.reviewerNote);
   return parts.join(' ');
 }
+
+/** Ways to tie follow-up into an assessment post; one per week, in turn. */
+const INTEGRATED_EXAMPLES = [
+  'how what is learned at the first evaluation becomes the baseline later follow-ups measure progress against.',
+  'why a follow-up test means more when there is a careful first result to compare it with.',
+  'how the questions asked at the first visit shape what is checked again at 1, 3, 6 and 12 months.',
+];
 
 /** A gentle next step counts as a call to action for a strategy post. */
 export const SOFT_CTA_RE =
@@ -200,10 +216,18 @@ const PROMO_PATTERNS: { re: RegExp; label: string; negatable?: boolean; sentence
   },
   // The Cancún positioning note: specific advantages, never superiority.
   {
-    re: /\b(best|top|#1|number one|leading|premier|ultimate|perfect)\b[^.!?\n]{0,40}\b(destination|place|city|spot|location|choice)\b|\bbetter than\b|\bunlike (other|any)\b|\bnowhere else\b|\bonly place\b|\bno other (destination|place|city)\b/i,
+    re: /\b(best|top|#1|number one|leading|premier|ultimate|perfect)\b[^.!?\n]{0,40}\b(destination|place|city|spot|location|choice)\b|\bbetter than\b|\bunlike (other|any)\b|\bnowhere else\b|\bonly place\b|\bno other (destination|place|city)\b|\b(ideal|paradise|world[- ]class|unmatched|unrivall?ed|unbeatable|second to none)\b/i,
     label: 'destination superiority claim',
     negatable: true,
     sentence: /\b(canc[uú]n|mexico|m[eé]xico|riviera|quintana roo|destination)\b/i,
+  },
+  // "Personalized: focused on the individual rather than a universal
+  // solution." A blanket instruction to every reader is the opposite. Advice
+  // to talk it through with a physician is not.
+  {
+    re: /\beveryone should (?!(talk|consult|ask|speak|check))\w+|\bworks for everyone\b|\bone[- ]size[- ]fits[- ]all\b|\byou must (take|do|start|try|stop|avoid|eat)\b/i,
+    label: 'universal prescription',
+    negatable: true,
   },
   // "No cure claims, guarantees, or promises of identical outcomes."
   {
@@ -245,6 +269,19 @@ function builtAroundOneService(text: string): boolean {
 }
 
 /**
+ * The recovery rule's third clause: "do not compare them". Two of the named
+ * services in one sentence with a comparative is the comparison.
+ */
+function comparesServices(text: string): boolean {
+  const service = new RegExp('\\b' + SERVICE + '\\b', 'gi');
+  for (const sentence of sentencesOf(text)) {
+    const names = new Set([...sentence.matchAll(service)].map((m) => m[0].toLowerCase().split(/[\s-]/)[0]));
+    if (names.size >= 2 && /\b(better|more effective|less effective|superior|inferior|stronger|weaker|than|versus|vs\.?)\b/i.test(sentence)) return true;
+  }
+  return false;
+}
+
+/**
  * Promotional habits found in a strategy post.
  *
  * A therapy name is allowed when the week's angle itself is about it, so a
@@ -259,6 +296,7 @@ export function promotionFlags(text: string, angle = ''): string[] {
     if (!found.includes(p.label)) found.push(p.label);
   }
   if (builtAroundOneService(text) && !found.includes('post built around one service')) found.push('post built around one service');
+  if (comparesServices(text) && !found.includes('service comparison')) found.push('service comparison');
   return found;
 }
 

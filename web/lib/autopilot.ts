@@ -119,6 +119,7 @@ export type Angle = {
   media?: { url: string; title: string } | null; // matching clip to attach on approve
   redatedFrom?: string; // the slot this run missed, when a reviewer moved it to the next free one
   coveredThisWeek?: string[]; // weekly-strategy slots: what the related slots write the same week
+  dealtWeek?: number; // weekly-strategy slots: the week of the dealt schedule this occurrence belongs to
 };
 
 export type { RunScore } from '@/lib/score-pack';
@@ -608,6 +609,7 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
       // What this slot's siblings — and, for the article, the week's medical
       // posts — are writing this same week, so the brief can say "not these".
       coveredThisWeek: dealt ? siblingAngles(strategy.slot || '', dealt.week) : undefined,
+      dealtWeek: dealt ? dealt.week : undefined,
     };
   }
 
@@ -670,6 +672,7 @@ function topicPromptFor(angle: Angle, strategy: TemplateStrategy, templateName =
       alsoCovers: ctx?.alsoCovers,
       integrated: ctx?.integrated,
       coveredThisWeek: angle.coveredThisWeek,
+      variant: angle.dealtWeek,
       reviewerNote: angle.reviewerNote,
       supportingPhrase: angle.supportingPhrase,
     });
@@ -809,7 +812,11 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   const strategySlot = isStrategySlot(strategy);
   const citationPolicy = citationPolicyFor(strategy);
   let evidence: EvidenceItem[] = [];
-  if (strategySlot) {
+  // Not for a slot that cites only when it makes a health claim (the Cancun
+  // posts): handing the writer study abstracts for "Air connectivity from the
+  // United States and Canada" pushes it toward exactly the health claim the
+  // policy tells it not to make just to have something to cite.
+  if (strategySlot && citationPolicy === 'required') {
     try { evidence = await findEvidence(angle.query); } catch (err) { reportError('autopilot:evidence', err, { runId: run.id }); }
   }
   const evidenceHint = evidence.length ? evidenceBriefFrom(evidence) : undefined;

@@ -69,3 +69,18 @@ test('wiring: every gate that re-checks stored copy reads the draft\'s policy', 
   assert.doesNotMatch(ap, /claimSupport: null,/);
   assert.match(src('lib/ai.ts'), /citationPolicy === 'if-health-claim' \? REF_IF_CLAIM_INSTRUCTION : REF_INSTRUCTION/);
 });
+
+test('the clinic\'s own name is not a health claim', () => {
+  // "Cellular" in the name matched the body-word list, so a logistics post
+  // naming the team lost its waiver and was refused at approval.
+  assert.equal(makesHealthClaim('Cellular Institute is a team in Cancun. Direct flights from the US and Canada make the trip simple.'), false);
+  assert.equal(makesHealthClaim('The Cellular Hope Institute team will meet you at the airport.'), false);
+  assert.equal(makesHealthClaim('Your cells repair overnight.'), true);
+  assert.equal(makesHealthClaim('Supports cellular health.'), true);
+  const trip = 'Cellular Institute is a team in Cancun. Direct flights from Toronto.\n\nAVISO DE PUBLICIDAD: 2623022002A00090';
+  assert.equal(checkCompliance(trip, undefined, { refPolicy: 'if-health-claim' }).ok, true);
+});
+
+test('a Cancun post is not handed study abstracts to cite', () => {
+  assert.match(src('lib/autopilot.ts'), /if \(strategySlot && citationPolicy === 'required'\) \{\s*try \{ evidence = await findEvidence/);
+});

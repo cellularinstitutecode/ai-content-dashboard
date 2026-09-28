@@ -331,6 +331,9 @@ export function planSeed(existing: readonly ExistingTemplate[] = []): SeedPlan {
 
 /** One sentence a person can read, rather than a pair of numbers. */
 export function seedSummary(plan: SeedPlan): string {
+  // Said plainly: the article's promo is a fifteenth post on Facebook and on
+  // LinkedIn. The document asks for fourteen; the article is the clinic's own
+  // addition, and Instagram stays at fourteen.
   const parts: string[] = [];
   if (plan.create.length) parts.push(plan.create.length + (plan.create.length === 1 ? ' slot added' : ' slots added'));
   if (plan.update.length) parts.push(plan.update.length + ' brought up to date (their days, times, channels and on/off state were kept)');
@@ -342,5 +345,5 @@ export function seedSummary(plan: SeedPlan): string {
     ? ' You already have a template called ' + plan.collisions.map((d) => '"' + d + '"').join(', ') +
       ' — it was NOT touched, and the new slot was added beside it. Rename or pause one of them if you do not want both posting.'
     : '');
-  return head + ' — fourteen posts a week, two a day, plus the Monday article on WordPress, promoted on Facebook and LinkedIn with its link. All of them waiting in the review queue.' + tail;
+  return head + ' — fourteen posts a week, two a day, plus the Monday article on WordPress, promoted on Facebook and LinkedIn with its link (so those two carry fifteen a week; Instagram stays at fourteen). All of them waiting in the review queue.' + tail;
 }

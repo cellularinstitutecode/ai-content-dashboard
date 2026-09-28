@@ -125,5 +125,30 @@ test('"Balanced" is the document\'s own sentence', async () => {
 
 test('the brief names what related slots already cover this week', () => {
   const p = strategyTopicPrompt({ angle: 'Nutrition and inflammation', pillarName: 'Nutrition', coveredThisWeek: ['Snacks that support steady energy'] });
-  assert.match(p, /Already covered by other posts this week, so do not repeat their points: "Snacks that support steady energy"/);
+  assert.match(p, /Related posts this week cover: "Snacks that support steady energy"\. Build on them/);
+});
+
+test('superiority in softer words is still superiority, in a sentence about the destination', () => {
+  assert.ok(promotionFlags('Cancun is an ideal destination for recovery.', 'cancun').includes('destination superiority claim'));
+  assert.ok(promotionFlags('Cancun is a paradise and a world-class hub for care.', 'cancun').includes('destination superiority claim'));
+  assert.deepEqual(promotionFlags('An ideal breakfast has protein in it.', 'nutrition'), [], 'not a sentence about the destination');
+});
+
+test('recovery services are never compared', () => {
+  assert.ok(promotionFlags('Red light therapy is more effective than PEMF for recovery.', 'recovery').includes('service comparison'));
+  assert.deepEqual(promotionFlags('Recovery may include HBOT, red light therapy or PEMF, chosen with your care team.', 'Technologies that may support the recovery experience'), []);
+});
+
+test('a universal prescription is the opposite of personalized', () => {
+  assert.ok(promotionFlags('Everyone should take magnesium at night.', 'sleep').includes('universal prescription'));
+  assert.ok(promotionFlags('This routine works for everyone.', 'movement').includes('universal prescription'));
+  assert.deepEqual(promotionFlags('Everyone should talk to their physician before starting.', 'movement'), []);
+  assert.deepEqual(promotionFlags('There is no one-size-fits-all plan.', 'protocols'), [], 'negated');
+});
+
+test('related posts are built on, and the follow-up example varies by week', () => {
+  const a = strategyTopicPrompt({ angle: 'x', pillarName: 'Diagnosis and assessment', integrated: ['Patient follow-up'], coveredThisWeek: ['y'], variant: 0 });
+  const b = strategyTopicPrompt({ angle: 'x', pillarName: 'Diagnosis and assessment', integrated: ['Patient follow-up'], variant: 1 });
+  assert.match(a, /Build on them from a different point/);
+  assert.notEqual(a.match(/for example, ([^.]+)/)?.[1], b.match(/for example, ([^.]+)/)?.[1]);
 });

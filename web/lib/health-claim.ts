@@ -26,7 +26,7 @@ const HEALTH_CLAIM = new RegExp(
     'relie\\w*', 'restor\\w*', 'strengthen\\w*', 'enhanc\\w*', 'speed(s)? up', 'faster', 'benefit\\w*', 'effective\\w*',
     // the body
     'inflammat\\w*', 'immun\\w*', 'metabol\\w*', 'hormon\\w*', 'cortisol', 'nervous system', 'blood', 'circulat\\w*',
-    'muscle\\w*', 'joint\\w*', 'bone\\w*', 'tissue\\w*', 'cell(s|ular)?', 'brain', 'heart', 'oxygen\\w*', 'biomarker\\w*',
+    'muscle\\w*', 'joint\\w*', 'bone\\w*', 'tissue\\w*', 'cells?', 'cellular (health|repair|function|energy|aging|ageing|regeneration)', 'brain', 'heart', 'oxygen\\w*', 'biomarker\\w*',
     'sleep quality', 'recover(y|ing|ies)?', 'repair\\w*', 'longevity', 'aging', 'ageing', 'energy levels?',
     // conditions and care
     'pain', 'symptom\\w*', 'disease\\w*', 'condition\\w*', 'disorder\\w*', 'injur\\w*', 'arthritis', 'diabet\\w*',
@@ -44,7 +44,11 @@ function bodyOf(text: string): string {
   return stripComplianceLines(text)
     .split('\n')
     .filter((l) => !/^\s*(#\S+\s*)+$/.test(l))
-    .join('\n');
+    .join('\n')
+    // The clinic's own name is not a claim. "Cellular" in it read as one, so a
+    // logistics post that named the team — as the writer is told to, once —
+    // lost its citation waiver and was refused at approval.
+    .replace(/\bcellular\s+(hope\s+)?institute\b/gi, ' ');
 }
 
 /** True when the post says anything a study would have to back. When unsure: true. */
