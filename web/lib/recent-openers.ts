@@ -1,6 +1,8 @@
 // web/lib/recent-openers.ts
-// The opening lines the clinic has already published, so the next post can
-// avoid repeating them.
+// The opening lines of the account's most recent drafts — published, still in
+// the queue, or skipped — so the next post can avoid repeating them. Queued
+// siblings count on purpose: two posts waiting side by side should not open
+// the same way either.
 //
 // No migration for this. `drafts.pack` is jsonb holding the full generated pack
 // and `drafts.created_at` orders it, so every caption this pipeline has ever

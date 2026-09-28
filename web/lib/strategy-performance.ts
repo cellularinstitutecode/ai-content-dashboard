@@ -23,7 +23,13 @@ import { FREQUENCY_PILLARS, BLOG_SLOT_KEY, slotByKey, frequencyPillarById, type 
 import { FORMATS, type PostFormat } from './strategy-variety.ts';
 
 /** One network's post as it went out: a `posts` row. */
-export type SentPost = { network: string; text: string; at: string };
+/**
+ * One network's post as it went out: a `posts` row. `live` is false for a row
+ * still marked pending_review — sent to Metricool as a draft. It may since
+ * have been published from Metricool's own review queue, which nothing syncs
+ * back; a matching metric is the proof that it was.
+ */
+export type SentPost = { network: string; text: string; at: string; live?: boolean };
 
 export type PerfRun = {
   id: string;
@@ -93,10 +99,16 @@ function nearInTime(sentAt: string, publishedAt: string | null): boolean {
  * run's posts may match; the caption and the date must still agree.
  */
 export function metricMatchesRun(run: PerfRun, m: PerfMetric): boolean {
+  return postForMetric(run, m) >= 0;
+}
+
+/** Which of the run's sent posts this metric row is, or -1. */
+function postForMetric(run: PerfRun, m: PerfMetric): number {
   const net = networkOf(m.network);
-  const own = run.sent.filter((p) => networkOf(p.network) === net);
-  const candidates = own.length ? own : run.sent;
-  return candidates.some((p) => nearInTime(p.at, m.published_at) && sameOpening(p.text, m.text));
+  const own = run.sent.map((p, i) => ({ p, i })).filter(({ p }) => networkOf(p.network) === net);
+  const candidates = own.length ? own : run.sent.map((p, i) => ({ p, i }));
+  const hit = candidates.find(({ p }) => nearInTime(p.at, m.published_at) && sameOpening(p.text, m.text));
+  return hit ? hit.i : -1;
 }
 
 export type PerfCell = {
@@ -147,22 +159,37 @@ export function strategyPerformance(allRuns: readonly PerfRun[], metrics: readon
   // Only runs with a post that actually went out. A Metricool draft, a post
   // still in the future or an approval that never sent is not "published",
   // and counting it made the unmeasured share look like a sync problem.
-  const runs = allRuns.filter((r) => r.sent.length > 0);
+  const candidates = allRuns.filter((r) => r.sent.length > 0);
   const claimed = new Set<number>();
   const perRun = new Map<string, { impressions: number; engagement: number; measured: boolean }>();
   // Newest runs first: a recent post is the more likely owner of a recent metric.
-  const ordered = [...runs].sort((a, b) => String(b.scheduled_for).localeCompare(String(a.scheduled_for)));
+  const ordered = [...candidates].sort((a, b) => String(b.scheduled_for).localeCompare(String(a.scheduled_for)));
   for (const run of ordered) {
     const acc = { impressions: 0, engagement: 0, measured: false };
+    // ONE metric row per sent post. The same post can be stored twice (a
+    // key that changed between syncs, a network spelled two ways); every
+    // copy is claimed so no other run can take it, but only the one with
+    // the most engagement — the freshest numbers — is counted.
+    const best = new Map<number, PerfMetric>();
     metrics.forEach((m, i) => {
-      if (claimed.has(i) || !metricMatchesRun(run, m)) return;
+      if (claimed.has(i)) return;
+      const post = postForMetric(run, m);
+      if (post < 0) return;
       claimed.add(i);
+      const cur = best.get(post);
+      if (!cur || (Number(m.engagement) || 0) > (Number(cur.engagement) || 0)) best.set(post, m);
+    });
+    for (const m of best.values()) {
       acc.measured = true;
       acc.impressions += Number(m.impressions) || 0;
       acc.engagement += Number(m.engagement) || 0;
-    });
+    }
     perRun.set(run.id, acc);
   }
+  // Published: a post that is live (approved, and its time has passed), or
+  // one Metricool has numbers for — a draft approved in Metricool's own queue
+  // went out even though nothing told this app.
+  const runs = candidates.filter((r) => r.sent.some((p) => p.live !== false) || perRun.get(r.id)?.measured);
 
   const pillars = new Map<string, PillarPerformance>(
     FREQUENCY_PILLARS.map((f) => [f.id, { id: f.id, name: f.name, group: f.group, best: null, ...emptyCell() }]),
@@ -218,4 +245,16 @@ export function isLivePost(row: { status?: string | null; publication_date?: str
   if (String(row.status || '') !== 'approved') return false;
   const t = new Date(String(row.publication_date || '')).getTime();
   return Number.isFinite(t) && t <= now;
+}
+
+/**
+ * How a `posts` row takes part: 'live' (see isLivePost), 'pending' — a
+ * Metricool draft whose time has passed, which counts only if Metricool has
+ * numbers for it — or null (still to come, or any other status).
+ */
+export function sentRowState(row: { status?: string | null; publication_date?: string | null }, now: number = Date.now()): 'live' | 'pending' | null {
+  if (isLivePost(row, now)) return 'live';
+  if (String(row.status || '') !== 'pending_review') return null;
+  const t = new Date(String(row.publication_date || '')).getTime();
+  return Number.isFinite(t) && t <= now ? 'pending' : null;
 }

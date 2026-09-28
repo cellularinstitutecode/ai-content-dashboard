@@ -96,11 +96,17 @@ export async function GET(req: NextRequest) {
   const draftIds = rows.map((r: { draft_id: string | null }) => r.draft_id).filter(Boolean) as string[];
 
   const names: Record<string, string> = {};
+  // The channels each template sends to. The card needs them: a run that
+  // writes the weekly article cannot be approved as a draft (see
+  // app/AutopilotQueue.tsx), because nothing here could publish the
+  // WordPress draft that leaves behind.
+  const providersOf: Record<string, string[]> = {};
   if (templateIds.length) {
     const { data: ts } = await db
       .from('schedule_templates').select('id, name, providers').in('id', templateIds).eq('user_id', user.id);
     for (const t of ts || []) {
       names[(t as { id: string }).id] = (t as { name?: string }).name || 'Untitled template';
+      providersOf[(t as { id: string }).id] = ((t as { providers?: string[] | null }).providers || []).map(String);
     }
   }
   const packs: Record<string, unknown> = {};
@@ -142,6 +148,7 @@ export async function GET(req: NextRequest) {
     runs: rows.map((r: Record<string, unknown>) => ({
       ...r,
       template_name: names[String(r.template_id)] || 'Template',
+      template_providers: providersOf[String(r.template_id)] || [],
       pack: r.draft_id ? packs[String(r.draft_id)] ?? null : null,
       recent_angles: (history[String(r.template_id)] || []).filter(
         (h) => h.query !== (r.angle as { query?: string } | null)?.query

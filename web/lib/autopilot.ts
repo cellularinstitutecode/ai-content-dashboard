@@ -1818,7 +1818,12 @@ export async function advanceRuns(opts: {
           // approveRun claims ready_for_review -> approved conditionally, so a
           // reviewer pressing Approve at this same moment does not produce two
           // posts: one of the two claims wins and the other stops.
-          if (autoSchedules()) {
+          //
+          // Never for a run a person asked for by id: "Ask for changes" and
+          // "Prepare now" call this with runId, and the reviewer is waiting to
+          // read what comes back. Sending it before they see it would publish
+          // a redraft nobody approved.
+          if (autoSchedules() && !opts.runId) {
             // Sending is the longest step there is — WordPress, then one
             // Metricool post per network — and it runs inside this tick's
             // budget with nothing to stop it mid-way. With too little time left

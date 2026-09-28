@@ -27,10 +27,21 @@ test('the performance route reads only stored rows, and only this account\'s', (
     assert.match(route.slice(at, at + 400), /\.eq\('user_id', user\.id\)/, table + ' is scoped to the caller');
   }
   assert.match(route, /\.eq\('state', 'approved'\)/);
-  assert.match(route, /isLivePost\(row, now\)/, 'only posts that actually went out');
+  assert.match(route, /sentRowState\(row, now\)/, 'only posts that went out, or drafts Metricool has numbers for');
   assert.doesNotMatch(route, /from\('drafts'\)/, 'the pack can be edited after approval; the sent text cannot');
   assert.match(route, /String\(st\?\.seeded \|\| ''\) === 'weekly-strategy'/);
   assert.match(route, /checkRateLimit\(user\.id, 'strategy-performance'\)/);
   assert.match(route, /isAllowedEmail\(user\.email\)/);
   assert.match(src('app/templates/page.tsx'), /<StrategyPerformance \/>/);
+});
+
+test('autoschedule never sends a run a person asked for by id', () => {
+  const engine = src('lib/autopilot.ts');
+  assert.match(engine, /if \(autoSchedules\(\) && !opts\.runId\)/);
+});
+
+test('an article run is not offered "Approve as draft"', () => {
+  const queue = src('app/AutopilotQueue.tsx');
+  assert.match(queue, /\(r\.template_providers \|\| \[\]\)\.includes\('blog'\) \?/);
+  assert.match(src('app/api/autopilot/runs/route.ts'), /template_providers: providersOf\[/);
 });
