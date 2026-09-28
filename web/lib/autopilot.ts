@@ -62,7 +62,7 @@ import { professionalTitle } from '@/lib/post-title';
 import { publishArticle, wordpressConfig, wordpressConfigured } from '@/lib/wordpress';
 import { ensureDraftImage, type PackImage } from '@/lib/images';
 import { imageUnshippable } from '@/lib/image-verdict';
-import { channelCopy, doisIn, knownBadCitation, perNetworkPlan } from '@/lib/approve-plan';
+import { channelCopy, citationsIn, knownBadCitation, perNetworkPlan } from '@/lib/approve-plan';
 import { ARTICLE_LINK_PLACEHOLDER, PROMO_DELAY_MINUTES, articleLogNote, articleUrl, promoLink, readArticleLog, withArticleLink } from '@/lib/article-promo';
 import { verifyDoi } from '@/lib/citation';
 import { findEvidence } from '@/lib/evidence';
@@ -2171,19 +2171,30 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // badge" to tell the reviewer — and the planner card never showed that
   // badge, so a made-up study could go out on a person's Approve. Refused
   // here instead. A DOI the reviewer has since edited in is checked now.
-  const stamp = (pack as ContentPack & { _compliance?: { citation?: { status?: string | null; doi?: string | null } | null } })._compliance;
+  const stamp = (pack as ContentPack & { _compliance?: { citation?: { status?: string | null; doi?: string | null; title?: string | null } | null } })._compliance;
   const badDoi = knownBadCitation(stamp, sends);
   if (badDoi) {
     const why = 'Not sent: Crossref has no record of the study cited in the REF line (DOI ' + badDoi + '). Replace the citation with a real study, then approve again. Nothing was sent.';
     await releaseClaim(db, run, 'approve-refused', why);
     return { ok: false, note: why };
   }
+  // Every DOI is checked now, the stamped one included: the title in the REF
+  // line must match the paper the DOI resolves to, and older stamps never
+  // compared titles. An unreachable Crossref still passes.
   const stampedDoi = String(stamp?.citation?.doi || '').toLowerCase();
-  for (const doi of doisIn(sends)) {
-    if (doi === stampedDoi) continue;
-    const checked = await verifyDoi(doi);
+  for (const { doi, title } of citationsIn(sends)) {
+    let checked = await verifyDoi(doi, { expectedTitle: title });
+    if (checked.status === 'unavailable' && doi === stampedDoi && stamp?.citation?.status === 'mismatch') {
+      checked = { ...checked, status: 'mismatch', title: stamp.citation.title ?? null };
+    }
     if (checked.status === 'not_found') {
       const why = 'Not sent: Crossref has no record of the study cited in the REF line (DOI ' + doi + '). Replace the citation with a real study, then approve again. Nothing was sent.';
+      await releaseClaim(db, run, 'approve-refused', why);
+      return { ok: false, note: why };
+    }
+    if (checked.status === 'mismatch') {
+      const why = 'Not sent: the DOI in the REF line points to a different paper: ' + (checked.title ? '"' + checked.title + '"' : 'not the study it names') +
+        ' (DOI ' + doi + '). Replace the citation with the study the post means, then approve again. Nothing was sent.';
       await releaseClaim(db, run, 'approve-refused', why);
       return { ok: false, note: why };
     }

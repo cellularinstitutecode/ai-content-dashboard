@@ -4,7 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { verifyDoi, citationLabel } from './citation.ts';
+import { verifyDoi, citationLabel, refTitle, titlesDisagree } from './citation.ts';
 
 let server: http.Server;
 let base = '';
@@ -15,6 +15,18 @@ before(async () => {
     if (url.includes('10.3390%2Fnu13072421') || url.includes('10.3390/nu13072421')) {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ message: { title: ['Beneficial Outcomes of Omega-6 and Omega-3'], issued: { 'date-parts': [[2021, 7, 15]] } } }));
+    }
+    if (url.includes('10.3390%2Fnu10040478')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ message: { title: ['Vitamin D Deficiency and Antenatal and Postpartum Depression: A Systematic Review'], issued: { 'date-parts': [[2018]] } } }));
+    }
+    if (url.includes('10.1503%2Fcmaj.051351')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ message: { title: ['Health benefits of physical activity: the evidence'], issued: { 'date-parts': [[2006, 3, 14]] } } }));
+    }
+    if (url.includes('10.1787%2Fhealth_glance-2023-en')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ message: { title: ['Health at a Glance 2023: OECD Indicators'], issued: { 'date-parts': [[2023, 11, 7]] } } }));
     }
     if (url.includes('10.9999')) { res.writeHead(404); return res.end('Resource not found.'); }
     res.writeHead(500); res.end('boom');
@@ -51,4 +63,41 @@ test('no DOI and an unreachable Crossref are reported honestly, never as invalid
   const down = await verifyDoi('10.3390/nu13072421', { timeoutMs: 1500 });
   assert.equal(down.status, 'unavailable');
   process.env.CROSSREF_API_BASE = base;
+});
+
+// --- the DOI must be the paper the REF line names -----------------------------
+
+const WRONG_REF = 'REF: Smith, J., et al. (2018). "Evidence-based criteria in the nutritional context." Nutrients, 10(4), 478. DOI: 10.3390/nu10040478';
+const RIGHT_REF = 'REF: Warburton DER et al. (2006). Health benefits of physical activity: the evidence. CMAJ. DOI: 10.1503/cmaj.051351';
+
+test('the title is read from both REF forms', () => {
+  assert.equal(refTitle(WRONG_REF), 'Evidence-based criteria in the nutritional context');
+  assert.equal(refTitle(RIGHT_REF), 'Health benefits of physical activity: the evidence');
+  assert.equal(refTitle('REF: DOI 10.1000/x'), null);
+});
+
+test('a DOI that resolves to a different paper is a mismatch, and says which paper', async () => {
+  const c = await verifyDoi('10.3390/nu10040478', { expectedTitle: refTitle(WRONG_REF) });
+  assert.equal(c.status, 'mismatch');
+  assert.equal(c.title, 'Vitamin D Deficiency and Antenatal and Postpartum Depression: A Systematic Review');
+  assert.equal(citationLabel(c), 'The DOI in the REF line points to a different paper: "Vitamin D Deficiency and Antenatal and Postpartum Depression: A Systematic Review"');
+});
+
+test('a DOI whose paper matches the quoted title passes', async () => {
+  const c = await verifyDoi('10.1503/cmaj.051351', { expectedTitle: refTitle(RIGHT_REF) });
+  assert.equal(c.status, 'verified');
+  assert.equal(c.year, 2006);
+});
+
+test('a non-PubMed source Crossref knows (OECD) passes', async () => {
+  const c = await verifyDoi('10.1787/health_glance-2023-en', { expectedTitle: 'Health at a Glance 2023' });
+  assert.equal(c.status, 'verified');
+});
+
+test('titles are compared on their words, loosely, and only when there is enough to compare', () => {
+  assert.equal(titlesDisagree('Health benefits of physical activity', 'Health Benefits of Physical Activity: The Evidence'), false);
+  assert.equal(titlesDisagree('Nutritional context and evidence-based criteria', 'Evidence-based criteria in the nutrition context'), false);
+  assert.equal(titlesDisagree('Evidence-based criteria in the nutritional context', 'Vitamin D Deficiency and Antenatal and Postpartum Depression: A Systematic Review'), true);
+  assert.equal(titlesDisagree('Sleep', 'Vitamin D Deficiency and Antenatal and Postpartum Depression'), false, 'too little to judge');
+  assert.equal(titlesDisagree('<i>In vivo</i> effects of sleep restriction on glucose', 'In vivo effects of sleep restriction on glucose tolerance'), false);
 });
