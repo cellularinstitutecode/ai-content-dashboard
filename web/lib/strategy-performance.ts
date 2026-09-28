@@ -10,9 +10,11 @@
 // THE JOIN IS BY TEXT, deliberately and visibly. Metricool's analytics id is
 // not the scheduler id stored on `posts`, so there is no key to join on; the
 // one thing both sides share is the caption. A metric row is matched to a
-// run when it is on one of the run's networks, was published within a few
-// days of the run's slot, and its caption opens the same way as the copy the
-// run wrote for that network. The keyword_performance view already does the
+// run when its caption opens the same way as a post the run SENT (the `posts`
+// row approveRun wrote for that network — the exact text, and the time
+// Metricool was given, which follows a reschedule) and it was published
+// within a few days of that time. The draft's pack is not used: it can still
+// be edited after approval, and the sent text cannot. The keyword_performance view already does the
 // same kind of join (supabase/autopilot.sql). Every result says how many posts
 // it could and could not measure, so a thin sample is never read as a verdict.
 //
@@ -20,14 +22,17 @@
 import { FREQUENCY_PILLARS, BLOG_SLOT_KEY, slotByKey, frequencyPillarById, type MixGroup } from './content-strategy.ts';
 import { FORMATS, type PostFormat } from './strategy-variety.ts';
 
+/** One network's post as it went out: a `posts` row. */
+export type SentPost = { network: string; text: string; at: string };
+
 export type PerfRun = {
   id: string;
   /** The template's strategy.slot. */
   slot: string;
   scheduled_for: string;
   angle?: { query?: string | null; format?: string | null } | null;
-  /** The copy the run published, per network (the draft pack's channel fields). */
-  texts: Record<string, string>;
+  /** The live posts the run sent, one per network. A run with none is not counted. */
+  sent: SentPost[];
 };
 
 export type PerfMetric = {
@@ -65,20 +70,33 @@ function networkOf(n: string): string {
   return s;
 }
 
-/** Does this metric row look like this run's post? */
-export function metricMatchesRun(run: PerfRun, m: PerfMetric): boolean {
-  const net = networkOf(m.network);
-  const copy = run.texts[net];
-  if (!copy) return false;
-  if (m.published_at) {
-    const dt = new Date(m.published_at).getTime() - new Date(run.scheduled_for).getTime();
-    if (!Number.isFinite(dt) || dt < -MATCH_WINDOW_MS || dt > MATCH_WINDOW_MS) return false;
-  }
+function sameOpening(copy: string, text: string | null): boolean {
   const a = comparable(copy).slice(0, PREFIX);
-  const b = comparable(m.text).slice(0, PREFIX);
+  const b = comparable(text).slice(0, PREFIX);
   const n = Math.min(a.length, b.length);
   if (n < MIN_MATCH) return false;
   return a.slice(0, n) === b.slice(0, n);
+}
+
+function nearInTime(sentAt: string, publishedAt: string | null): boolean {
+  if (!publishedAt) return true;
+  const dt = new Date(publishedAt).getTime() - new Date(sentAt).getTime();
+  return Number.isFinite(dt) && dt >= -MATCH_WINDOW_MS && dt <= MATCH_WINDOW_MS;
+}
+
+/**
+ * Does this metric row look like one of this run's posts?
+ *
+ * The post for the metric's network when the run sent one there. When the
+ * metric's network is not one the run sent to — including 'unknown', which is
+ * what the sync stores when Metricool's row names no network — any of the
+ * run's posts may match; the caption and the date must still agree.
+ */
+export function metricMatchesRun(run: PerfRun, m: PerfMetric): boolean {
+  const net = networkOf(m.network);
+  const own = run.sent.filter((p) => networkOf(p.network) === net);
+  const candidates = own.length ? own : run.sent;
+  return candidates.some((p) => nearInTime(p.at, m.published_at) && sameOpening(p.text, m.text));
 }
 
 export type PerfCell = {
@@ -125,7 +143,11 @@ function finish<T extends PerfCell>(c: T): T {
  * article totals. A metric row is claimed by at most one run, so two slots
  * that opened alike cannot both count the same post.
  */
-export function strategyPerformance(runs: readonly PerfRun[], metrics: readonly PerfMetric[]): StrategyPerformance {
+export function strategyPerformance(allRuns: readonly PerfRun[], metrics: readonly PerfMetric[]): StrategyPerformance {
+  // Only runs with a post that actually went out. A Metricool draft, a post
+  // still in the future or an approval that never sent is not "published",
+  // and counting it made the unmeasured share look like a sync problem.
+  const runs = allRuns.filter((r) => r.sent.length > 0);
   const claimed = new Set<number>();
   const perRun = new Map<string, { impressions: number; engagement: number; measured: boolean }>();
   // Newest runs first: a recent post is the more likely owner of a recent metric.
@@ -187,13 +209,13 @@ export function strategyPerformance(runs: readonly PerfRun[], metrics: readonly 
   };
 }
 
-/** The channel copy a draft pack holds, keyed by network. */
-export function textsOfPack(pack: unknown): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (!pack || typeof pack !== 'object') return out;
-  const p = pack as Record<string, unknown>;
-  for (const k of ['instagram', 'facebook', 'linkedin']) {
-    if (typeof p[k] === 'string' && (p[k] as string).trim()) out[k] = p[k] as string;
-  }
-  return out;
+/**
+ * Which `posts` rows count as a post that went out: approved (the one status
+ * /api/posts treats as live — a plain Approve leaves 'pending_review', a
+ * Metricool draft that may never publish) and due by now.
+ */
+export function isLivePost(row: { status?: string | null; publication_date?: string | null }, now: number = Date.now()): boolean {
+  if (String(row.status || '') !== 'approved') return false;
+  const t = new Date(String(row.publication_date || '')).getTime();
+  return Number.isFinite(t) && t <= now;
 }

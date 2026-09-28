@@ -81,3 +81,20 @@ test('nextOccurrence says why when it cannot preview', () => {
   assert.equal(nextOccurrence({ weekdays: [1], strategy: {} }), null, 'not a strategy slot');
   assert.equal(slotLabel('wed-2'), 'Wednesday · Sleep and rest');
 });
+
+test('only slots the engine rotates are measured or previewed: a slot key without the seed mark is not', () => {
+  const mon1 = seeded().find((r) => r.strategy.slot === 'mon-1')!;
+  const unseeded = { ...mon1, strategy: { ...mon1.strategy, seeded: undefined } };
+  assert.equal(nextOccurrence(unseeded, new Date('2026-10-04T17:00:00Z')), null);
+  const mix = plannedMix([...seeded().filter((r) => r.strategy.slot !== 'mon-1'), unseeded]);
+  assert.deepEqual(mix.missing, ['mon-1']);
+});
+
+test('nextOccurrence follows the zone it is given', () => {
+  const mon1 = seeded().find((r) => r.strategy.slot === 'mon-1')!;
+  const now = new Date('2026-10-04T17:00:00Z');
+  const cancun = nextOccurrence(mon1, now, 'America/Cancun');
+  const madrid = nextOccurrence(mon1, now, 'Europe/Madrid');
+  assert.equal(cancun && cancun.at, '2026-10-05T14:00:00.000Z');
+  assert.equal(madrid && madrid.at, '2026-10-05T07:00:00.000Z', '09:00 in the configured zone');
+});

@@ -1,34 +1,59 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { comparable, metricMatchesRun, strategyPerformance, textsOfPack, type PerfMetric, type PerfRun } from './strategy-performance.ts';
+import { comparable, isLivePost, metricMatchesRun, strategyPerformance, type PerfMetric, type PerfRun } from './strategy-performance.ts';
 
-const SLEEP = 'Eight hours in bed is not the same as rest. Quality matters more than length for most of us.\n\nSave this for tonight.\nREF: Smith (2020). DOI: 10.1/x';
+const SLEEP = 'Eight hours in bed is not the same as rest. Quality matters more than length for most of us.\n\nSave this for tonight.\nREF: Smith (2020). DOI: 10.1/x\nAVISO DE PUBLICIDAD';
 const MOVE = 'A short walk after dinner is one of the simplest habits to keep, and it adds up over a week.\n\nShare this.';
 
-const run = (id: string, slot: string, when: string, texts: Record<string, string>, angle: Record<string, string> = {}): PerfRun =>
-  ({ id, slot, scheduled_for: when, texts, angle });
-const metric = (network: string, text: string, published_at: string, engagement: number, impressions = 100): PerfMetric =>
+/** A run and the posts it sent: [network, text, at]. */
+const run = (id: string, slot: string, when: string, sent: [string, string, string?][], angle: Record<string, string> = {}): PerfRun =>
+  ({ id, slot, scheduled_for: when, angle, sent: sent.map(([network, text, at]) => ({ network, text, at: at || when })) });
+const metric = (network: string, text: string, published_at: string | null, engagement: number, impressions = 100): PerfMetric =>
   ({ network, text, published_at, engagement, impressions });
 
 test('a caption is compared as plain words, without links, hashtags or accents', () => {
   assert.equal(comparable('¡Cancún, #travel https://x.y/z  now!'), 'cancun now');
 });
 
-test('a metric matches the run that wrote that caption, on that network, near its slot', () => {
-  const r = run('r1', 'wed-2', '2026-10-07T23:00:00Z', { instagram: SLEEP, facebook: SLEEP });
+test('a metric matches the post the run sent on that network, near when it went out', () => {
+  const r = run('r1', 'wed-2', '2026-10-07T23:00:00Z', [['instagram', SLEEP], ['facebook', SLEEP]]);
   assert.ok(metricMatchesRun(r, metric('Instagram', SLEEP.replace('\n\n', ' ') + ' #sleep', '2026-10-07T23:05:00Z', 40)));
-  assert.ok(!metricMatchesRun(r, metric('linkedin', SLEEP, '2026-10-07T23:05:00Z', 40)), 'the run did not post to LinkedIn');
   assert.ok(!metricMatchesRun(r, metric('instagram', SLEEP, '2026-11-20T23:05:00Z', 40)), 'weeks later is another post');
   assert.ok(!metricMatchesRun(r, metric('instagram', MOVE, '2026-10-07T23:05:00Z', 40)));
   assert.ok(!metricMatchesRun(r, metric('instagram', 'Eight hours', '2026-10-07T23:05:00Z', 40)), 'too little to compare is not a match');
 });
 
-test('numbers are summed per run and counted in every row its slot belongs to', () => {
+test('the window follows the post, not the slot: a reschedule a week later still matches', () => {
+  const r = run('r1', 'wed-2', '2026-10-07T23:00:00Z', [['instagram', SLEEP, '2026-10-15T23:00:00Z']]);
+  assert.ok(metricMatchesRun(r, metric('instagram', SLEEP, '2026-10-15T23:01:00Z', 5)));
+  assert.ok(!metricMatchesRun(r, metric('instagram', SLEEP, '2026-10-07T23:01:00Z', 5)), 'the old slot time is not when it went out');
+});
+
+test('a metric that names no network (or one the run did not use) can still match on caption and date', () => {
+  const r = run('r1', 'wed-2', '2026-10-07T23:00:00Z', [['instagram', SLEEP]]);
+  assert.ok(metricMatchesRun(r, metric('unknown', SLEEP, '2026-10-07T23:05:00Z', 3)));
+  assert.ok(metricMatchesRun(r, metric('tiktok', SLEEP, '2026-10-07T23:05:00Z', 3)));
+  assert.ok(!metricMatchesRun(r, metric('unknown', MOVE, '2026-10-07T23:05:00Z', 3)));
+  // When the run did post to that network, only that post's text counts.
+  const two = run('r2', 'wed-2', '2026-10-07T23:00:00Z', [['instagram', SLEEP], ['facebook', MOVE]]);
+  assert.ok(!metricMatchesRun(two, metric('facebook', SLEEP, '2026-10-07T23:05:00Z', 3)));
+});
+
+test('only approved posts that are due count as live', () => {
+  const now = new Date('2026-10-10T00:00:00Z').getTime();
+  assert.ok(isLivePost({ status: 'approved', publication_date: '2026-10-09T14:00:00Z' }, now));
+  assert.ok(!isLivePost({ status: 'pending_review', publication_date: '2026-10-09T14:00:00Z' }, now), 'a Metricool draft');
+  assert.ok(!isLivePost({ status: 'approved', publication_date: '2026-10-11T14:00:00Z' }, now), 'still to come');
+  assert.ok(!isLivePost({ status: 'approved', publication_date: null }, now));
+});
+
+test('numbers are summed per run and counted in every row its slot belongs to; unsent runs are not counted', () => {
   const runs = [
     // mon-1 is Diagnosis (assessment-prevention) with follow-up integrated.
-    run('a', 'mon-1', '2026-10-05T14:00:00Z', { instagram: SLEEP, facebook: SLEEP }, { query: 'Angle A', format: 'checklist' }),
-    run('b', 'sat-1', '2026-10-10T14:00:00Z', { instagram: MOVE }, { query: 'Angle B', format: 'explainer' }),
-    run('c', 'mon-1', '2026-10-12T14:00:00Z', { instagram: 'Never measured, a caption long enough to compare with anything at all.' }, { query: 'Angle C', format: 'checklist' }),
+    run('a', 'mon-1', '2026-10-05T14:00:00Z', [['instagram', SLEEP], ['facebook', SLEEP]], { query: 'Angle A', format: 'checklist' }),
+    run('b', 'sat-1', '2026-10-10T14:00:00Z', [['instagram', MOVE]], { query: 'Angle B', format: 'explainer' }),
+    run('c', 'mon-1', '2026-10-12T14:00:00Z', [['instagram', 'Never measured, a caption long enough to compare with anything at all.']], { query: 'Angle C', format: 'checklist' }),
+    run('draft-only', 'mon-1', '2026-10-19T14:00:00Z', [], { query: 'Angle D', format: 'checklist' }),
   ];
   const metrics = [
     metric('instagram', SLEEP, '2026-10-05T14:01:00Z', 30, 500),
@@ -38,7 +63,7 @@ test('numbers are summed per run and counted in every row its slot belongs to', 
   ];
   const perf = strategyPerformance(runs, metrics);
   const diag = perf.pillars.find((p) => p.id === 'assessment-prevention')!;
-  assert.equal(diag.posts, 2);
+  assert.equal(diag.posts, 2, 'the run that sent nothing is not "published"');
   assert.equal(diag.measured, 1);
   assert.equal(diag.engagement, 40);
   assert.equal(diag.avgEngagement, 40);
@@ -53,17 +78,16 @@ test('numbers are summed per run and counted in every row its slot belongs to', 
 
 test('one metric row is never counted for two runs', () => {
   const runs = [
-    run('old', 'wed-2', '2026-10-07T23:00:00Z', { instagram: SLEEP }),
-    run('new', 'sun-1', '2026-10-08T14:00:00Z', { instagram: SLEEP }),
+    run('old', 'wed-2', '2026-10-07T23:00:00Z', [['instagram', SLEEP]]),
+    run('new', 'sun-1', '2026-10-08T14:00:00Z', [['instagram', SLEEP]]),
   ];
   const perf = strategyPerformance(runs, [metric('instagram', SLEEP, '2026-10-08T14:01:00Z', 12)]);
   assert.equal(perf.totals.metricsMatched, 1);
   assert.equal(perf.totals.measured, 1);
 });
 
-test('the article is its own line, and textsOfPack reads only channel copy', () => {
-  const perf = strategyPerformance([run('blog', 'mon-blog', '2026-10-05T16:00:00Z', { facebook: MOVE })], [metric('facebook', MOVE, '2026-10-05T16:10:00Z', 7)]);
+test('the article is its own line, measured by its promos', () => {
+  const perf = strategyPerformance([run('blog', 'mon-blog', '2026-10-05T16:00:00Z', [['facebook', MOVE, '2026-10-05T16:10:00Z']])], [metric('facebook', MOVE, '2026-10-05T16:11:00Z', 7)]);
   assert.equal(perf.article.measured, 1);
   assert.equal(perf.article.engagement, 7);
-  assert.deepEqual(textsOfPack({ instagram: 'a', facebook: '', blog: 'b', _image: {} }), { instagram: 'a' });
 });

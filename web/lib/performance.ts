@@ -11,6 +11,7 @@
 // as "no signal yet".
 import 'server-only';
 import { createHash } from 'crypto';
+import { metricDate, metricNetwork } from '@/lib/metric-fields';
 
 // Same override as lib/metricool.ts, so the end-to-end harness can point the
 // analytics read at a local mock. Unset in production.
@@ -75,9 +76,11 @@ export function normalizeMetrics(payload: any): NormalizedMetric[] {
 
   return list
     .map((row: Record<string, any>) => {
-      const network = String(pick(row, ['network', 'provider', 'platform']) ?? 'unknown');
+      const network = metricNetwork(row);
       const text = (pick(row, ['text', 'content', 'message', 'caption']) ?? null) as string | null;
-      const publishedAt = (pick(row, ['publicationDate', 'publishedAt', 'date', 'dateTime']) ?? null) as string | null;
+      // Always an ISO string or null (lib/metric-fields.ts): an object here
+      // failed the whole upsert into published_at.
+      const publishedAt = metricDate(pick(row, ['publicationDate', 'publishedAt', 'date', 'dateTime']));
       const rawId = pick(row, ['id', 'postId', 'externalId']);
       const externalId = rawId != null && String(rawId).trim()
         ? String(rawId)

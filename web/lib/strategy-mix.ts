@@ -84,11 +84,21 @@ function isOn(t: MixTemplate): boolean {
   return t.active !== false;
 }
 
+/**
+ * The engine's own test (isStrategySlot, lib/strategy-voice.ts): seeded by
+ * "Load the weekly strategy", with a slot key. A template that only carries a
+ * slot key is not dealt the rotation, so it must not be shown as if it were.
+ */
+function strategySlotOf(t: MixTemplate): string {
+  if (String(t.strategy?.seeded || '') !== 'weekly-strategy') return '';
+  return String(t.strategy?.slot || '').trim().toLowerCase();
+}
+
 /** How many active slot-days each document slot has in the planner. */
 function slotDays(templates: readonly MixTemplate[]): Map<string, { on: number; any: boolean }> {
   const out = new Map<string, { on: number; any: boolean }>();
   for (const t of templates) {
-    const key = String(t.strategy?.slot || '').trim().toLowerCase();
+    const key = strategySlotOf(t);
     if (!key) continue;
     const cur = out.get(key) || { on: 0, any: false };
     cur.any = true;
@@ -170,7 +180,7 @@ export type NextOccurrence =
  * Null: not a strategy slot, or no day to run on.
  */
 export function nextOccurrence(t: MixTemplate, now: Date = new Date(), tz: string = SCHEDULE_TZ): NextOccurrence {
-  const key = String(t.strategy?.slot || '').trim().toLowerCase();
+  const key = strategySlotOf(t);
   if (!key) return null;
   const at = upcomingSlots([...(t.weekdays || [])], String(t.time_of_day || '09:00'), 8, tz, now)[0];
   if (!at) return null;

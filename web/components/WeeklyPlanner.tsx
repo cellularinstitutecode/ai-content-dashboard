@@ -11,8 +11,9 @@
 // Monday theme never reads as last Monday's post. Several slots on one day are
 // fine — a social post at 9 and a blog at 14, say.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { nextOccurrence, plannedMix, slotLabel, type NextOccurrence } from '@/lib/strategy-mix';
+import { fmtScheduleSlot, scheduleTz } from '@/lib/schedule-clock';
 
 export type PlannerTemplate = {
   id?: string;
@@ -93,13 +94,24 @@ export default function WeeklyPlanner({
   // Phase 4: is the week still the strategy, and what is each slot about to
   // write? Only once the strategy is loaded — a hand-built planner has no
   // frequency table to be measured against.
-  const hasStrategy = templates.some((t) => Boolean(t.strategy?.slot));
+  const hasStrategy = templates.some((t) => isSeededSlot(t) && Boolean(t.strategy?.slot));
   const mix = useMemo(() => (hasStrategy ? plannedMix(templates) : null), [templates, hasStrategy]);
+  // Re-read every ten minutes, so a tab left open does not keep showing a
+  // slot that has already run as "next".
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 10 * 60 * 1000);
+    return () => window.clearInterval(id);
+  }, []);
   const nexts = useMemo(() => {
+    // The clinic's configured zone (stamped on the page by app/layout.tsx), not
+    // the browser's and not a hard-coded one: the week — and so the angle —
+    // turns over at the clinic's midnight, exactly as the engine counts it.
+    const tz = scheduleTz();
     const out = new Map<string, NextOccurrence>();
-    for (const t of templates) if (t.id && t.strategy?.slot) out.set(t.id, nextOccurrence(t));
+    for (const t of templates) if (t.id && isSeededSlot(t) && t.strategy?.slot) out.set(t.id, nextOccurrence(t, new Date(now), tz));
     return out;
-  }, [templates]);
+  }, [templates, now]);
 
   function startNew(day: number) {
     setError(null);
@@ -257,7 +269,7 @@ export default function WeeklyPlanner({
                     const isNext = Boolean(n && n.angle && n.angle === a);
                     return (
                       <li key={i} style={isNext ? { fontWeight: 600, color: '#0071e3' } : undefined}>
-                        {a}{isNext ? ' — next' : ''}
+                        {a}{isNext ? ' — planned next' : ''}
                       </li>
                     );
                   })}
@@ -396,13 +408,6 @@ function MixPanel({ mix }: { mix: ReturnType<typeof plannedMix> }) {
   );
 }
 
-const nextFmt = (iso: string) => {
-  try {
-    return new Date(iso).toLocaleString('en-US', { timeZone: 'America/Cancun', weekday: 'short', month: 'short', day: 'numeric' });
-  } catch {
-    return iso.slice(0, 10);
-  }
-};
 
 /** What a strategy slot writes next — the rotation's own deal. */
 function NextLine({ next }: { next: NextOccurrence }) {
@@ -411,11 +416,11 @@ function NextLine({ next }: { next: NextOccurrence }) {
     const why = next.reason === 'edited'
       ? 'its angle list was edited, so it rotates its own list'
       : next.reason === 'before-start' ? 'the rotation has not started yet' : 'not a strategy slot';
-    return <div style={{ fontSize: 10, opacity: .55, marginTop: 4 }}>Next {nextFmt(next.at)}: {why}.</div>;
+    return <div style={{ fontSize: 10, opacity: .55, marginTop: 4 }}>Next {fmtScheduleSlot(next.at)}: {why}.</div>;
   }
   return (
     <div style={{ fontSize: 10, marginTop: 4, lineHeight: 1.35 }} title={'Angle ' + next.position + ' of ' + next.of + ' in this slot\'s rotation. The engine may swap it in the first weeks if a recent post already covered it.'}>
-      <span style={{ opacity: .55 }}>Next {nextFmt(next.at)}:</span>{' '}
+      <span style={{ opacity: .55 }}>Planned for {fmtScheduleSlot(next.at)}:</span>{' '}
       <span style={{ color: '#1d1d1f' }}>{next.angle}</span>
       {next.format && <span style={{ color: '#6e3fd1' }}> · {next.format} · for {next.audience}</span>}
     </div>
