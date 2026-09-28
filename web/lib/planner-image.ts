@@ -661,6 +661,25 @@ export function scienceAllowed(text: unknown): boolean {
 }
 
 /**
+ * The lifestyle themes. Their picture is daily life and the consultation,
+ * never a laboratory: a lab technician on a sleep post and cells on a stress
+ * post both passed the check.
+ */
+const LIFESTYLE_PILLARS = new Set([
+  'nutrition', 'practical-nutrition', 'supplementation', 'movement', 'active-living',
+  'sleep', 'stress', 'sleep-stress', 'recovery', 'recovery-cancun', 'cancun',
+]);
+
+export function isLifestylePillar(pillarId: unknown): boolean {
+  return LIFESTYLE_PILLARS.has(String(pillarId || ''));
+}
+
+/** May a science (lab or microscope) frame be offered? Never for a lifestyle theme. */
+export function scienceOffered(pillarId: unknown, text: unknown): boolean {
+  return !isLifestylePillar(pillarId) && scienceAllowed(text);
+}
+
+/**
  * The family for one step of the rotation. Slot 0 is always a consultation;
  * later slots follow the pillar's order, and a science slot falls back to the
  * still life whenever the post never mentions biology.
@@ -674,9 +693,9 @@ export function familyAt(p: Pick<PlannerImage, 'pillarId' | 'science'>, sceneInd
   const step = Math.abs(Math.round(sceneIndex)) % PLAN_LENGTH;
   if (step === 0) return 'consult';
   const order = PILLAR_FAMILIES[p.pillarId] || DEFAULT_FAMILIES;
-  // The third take is the science slot whenever the post's body has earned it —
-  // in ANY pillar, because a sleep post about tissue repair and a nutrition post
-  // about protein synthesis are both biology. The pillar table fills the rest.
+  // The third take is the science slot whenever the post has earned it
+  // (`science`, which scienceOffered never sets for a lifestyle theme). The
+  // pillar table fills the rest.
   if (step === 2) return p.science ? 'science' : order[1 % order.length];
   // The fourth take comes back to the room. Two consultations in every four is
   // the ~50% the research asked for, and it means a reroll past the science or
@@ -765,6 +784,12 @@ export function onTopicCheck(p: PlannerImage): string {
     'Also a DEFECT: an anatomical model or medical teaching prop — a plastic brain, heart, spine, skeleton, skull, torso or mannequin — ' +
     'an anatomical chart, poster, diagram or illustration, or a pill, supplement, vitamin or medicine bottle, a blister pack or loose ' +
     'tablets. Set "onTopic": false when any of these fails.';
+  // Lifestyle themes: no laboratory, and the brand's own style is preferred.
+  const lab = isLifestylePillar(p.pillarId)
+    ? 'Also a DEFECT for this lifestyle theme: a laboratory scene — a microscope, cells or a microscope field, pipettes, test tubes, ' +
+      'petri dishes, vials or sample tubes, a lab bench, or a technician in a lab coat. The preferred picture is a bright, warm-beige ' +
+      'consultation where the physician and patient talk about the topic, with the topic visible and room for a short title only. '
+    : '';
   if (p.shotFamily === 'science') {
     return 'ON-TOPIC (this one is a DEFECT, not an opinion): the image must be a believable REAL laboratory photograph — either a genuine ' +
       'microscope field of cells in culture, or a researcher working at a lab bench. A DEFECT: rendered or illustrated cells, glowing or ' +
@@ -774,8 +799,8 @@ export function onTopicCheck(p: PlannerImage): string {
   if (p.shotFamily === 'active') {
     return 'ON-TOPIC (this one is a DEFECT, not an opinion): the image must show a real person outdoors in daylight, moving easily and ' +
       'living normally — not a clinic, not a treatment, not a medical setting. A DEFECT: any clinical room, equipment, uniform or ' +
-      'procedure in frame, and any triumphant pose — raised arms, leaping, fists in the air. ' + tail;
+      'procedure in frame, and any triumphant pose — raised arms, leaping, fists in the air. ' + lab + tail;
   }
   return `ON-TOPIC (this one is a DEFECT, not an opinion): the image must clearly show ${p.dynamic ? p.dynamic.mustShow : p.mustShow}. ` +
-    'A generic reception desk, front desk or waiting room does NOT count. ' + tail;
+    'A generic reception desk, front desk or waiting room does NOT count. ' + lab + tail;
 }

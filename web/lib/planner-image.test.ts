@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PILLARS } from './content-strategy.ts';
 import { BLOG_ANGLES } from './strategy-seed.ts';
-import { PILLAR_SCENES, PLAN_LENGTH, SHOTS, SHOT_COUNT, TITLES, cleanTopic, familyAt, plannerImageFor, plannerPromptLines, onTopicCheck, scienceAllowed, scienceScore, shotFor, titleFor } from './planner-image.ts';
+import { PILLAR_SCENES, PLAN_LENGTH, SHOTS, SHOT_COUNT, TITLES, cleanTopic, familyAt, isLifestylePillar, plannerImageFor, plannerPromptLines, onTopicCheck, scienceAllowed, scienceOffered, scienceScore, shotFor, titleFor } from './planner-image.ts';
 
 const pack = (template_name: string, query: string) => ({ _autopilot: { template_name, angle: { query, seedTopic: query } } });
 
@@ -269,4 +269,30 @@ test('the stamped pillar wins over the template name', async () => {
   assert.equal(img?.pillarId, 'nutrition', 'a renamed slot keeps its picture');
   const legacy = plannerImageFor({ _autopilot: { template_name: 'Sleep', angle: { query: 'What happens in the body while we sleep' } } });
   assert.equal(legacy?.pillarId, 'sleep');
+});
+
+test('a lifestyle theme flags a laboratory scene as off-topic and prefers the warm consultation', () => {
+  for (const [name, query] of [['Sleep', 'The relationship between sleep and recovery'], ['Sleep, stress, and rest', 'How stress can influence recovery'], ['Nutrition', 'The role of protein in recovery']]) {
+    const p = plannerImageFor(pack(name, query))!;
+    assert.ok(isLifestylePillar(p.pillarId), p.pillarId);
+    for (const family of ['consult', 'still', 'active'] as const) {
+      const check = onTopicCheck({ ...p, shotFamily: family });
+      assert.match(check, /DEFECT for this lifestyle theme: a laboratory scene — a microscope, cells or a microscope field, pipettes/, family);
+      assert.match(check, /bright, warm-beige consultation/, family);
+      assert.match(check, /"onTopic": false/, family);
+    }
+  }
+  // A medical theme keeps its science frame, and no lab rule.
+  const dx = plannerImageFor(pack('Diagnosis and assessment', 'What a first evaluation includes'))!;
+  assert.equal(isLifestylePillar(dx.pillarId), false);
+  assert.doesNotMatch(onTopicCheck({ ...dx, shotFamily: 'consult' }), /laboratory scene/);
+});
+
+test('a lifestyle post never earns a science frame, however much biology it mentions', () => {
+  const text = 'Sleep is when tissue repair happens and inflammation settles.';
+  assert.equal(scienceAllowed(text), true);
+  for (const id of ['sleep-stress', 'sleep', 'stress', 'nutrition', 'supplementation', 'movement', 'recovery', 'active-living', 'cancun']) {
+    assert.equal(scienceOffered(id, text), false, id);
+  }
+  assert.equal(scienceOffered('protocols', text), true);
 });
