@@ -2,8 +2,9 @@
 // GET → how each pillar and caption shape of the weekly strategy is doing.
 //
 // Reads only this account's own rows: the strategy templates, their approved
-// runs of the last LOOK_BACK_DAYS, the drafts those runs published, and the
-// Metricool numbers the daily sync stored in post_metrics. No Metricool call —
+// runs of the last LOOK_BACK_DAYS, the live `posts` rows those runs sent (the
+// exact text and time each network got), and the Metricool numbers the daily
+// sync stored in post_metrics. No Metricool call —
 // the page can open as often as it likes without spending the shared account.
 // The matching and the sums are lib/strategy-performance.ts.
 import { NextResponse } from 'next/server';
@@ -12,7 +13,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { reportError } from '@/lib/report';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { strategyPerformance, textsOfPack, type PerfMetric, type PerfRun } from '@/lib/strategy-performance';
+import { isLivePost, strategyPerformance, type PerfMetric, type PerfRun, type SentPost } from '@/lib/strategy-performance';
 
 export const runtime = 'nodejs';
 
@@ -45,8 +46,11 @@ export async function GET() {
     if (tErr) throw tErr;
     const slotOf = new Map<string, string>();
     for (const t of templates || []) {
-      const slot = String((t as { strategy?: { slot?: string } }).strategy?.slot || '').trim().toLowerCase();
-      if (slot) slotOf.set(String((t as { id: string }).id), slot);
+      // The engine's own test for a strategy slot (isStrategySlot): seeded by
+      // "Load the weekly strategy", with a slot key.
+      const st = (t as { strategy?: { slot?: string; seeded?: string } }).strategy;
+      const slot = String(st?.slot || '').trim().toLowerCase();
+      if (slot && String(st?.seeded || '') === 'weekly-strategy') slotOf.set(String((t as { id: string }).id), slot);
     }
     if (!slotOf.size) return NextResponse.json({ loaded: false, days: LOOK_BACK_DAYS });
 
@@ -61,13 +65,27 @@ export async function GET() {
       .limit(400);
     if (rErr) throw rErr;
 
+    // What each run actually sent: one `posts` row per network, carrying the
+    // text that went out and the time Metricool was given. Only live ones —
+    // approved and due — so a Metricool draft or a post still to come is not
+    // counted as published.
     const draftIds = [...new Set((runs || []).map((r) => (r as { draft_id?: string | null }).draft_id).filter(Boolean) as string[])];
-    const packs = new Map<string, unknown>();
+    const sentBy = new Map<string, SentPost[]>();
+    const now = Date.now();
     for (let i = 0; i < draftIds.length; i += 100) {
-      const { data: ds, error: dErr } = await db
-        .from('drafts').select('id, pack').in('id', draftIds.slice(i, i + 100)).eq('user_id', user.id);
-      if (dErr) throw dErr;
-      for (const d of ds || []) packs.set(String((d as { id: string }).id), (d as { pack: unknown }).pack);
+      const { data: ps, error: pErr } = await db
+        .from('posts')
+        .select('draft_id, providers, text, publication_date, status')
+        .in('draft_id', draftIds.slice(i, i + 100))
+        .eq('user_id', user.id);
+      if (pErr) throw pErr;
+      for (const p of ps || []) {
+        const row = p as { draft_id: string; providers?: string[] | null; text?: string | null; publication_date?: string | null; status?: string | null };
+        if (!isLivePost(row, now)) continue;
+        const list = sentBy.get(row.draft_id) || [];
+        list.push({ network: String(row.providers?.[0] || ''), text: String(row.text || ''), at: String(row.publication_date) });
+        sentBy.set(row.draft_id, list);
+      }
     }
 
     const perfRuns: PerfRun[] = (runs || []).map((r) => {
@@ -77,7 +95,7 @@ export async function GET() {
         slot: slotOf.get(String(row.template_id)) || '',
         scheduled_for: row.scheduled_for,
         angle: row.angle ?? null,
-        texts: row.draft_id ? textsOfPack(packs.get(row.draft_id)) : {},
+        sent: row.draft_id ? sentBy.get(row.draft_id) || [] : [],
       };
     });
 

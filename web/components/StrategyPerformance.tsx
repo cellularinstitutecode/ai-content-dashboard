@@ -83,20 +83,20 @@ export default function StrategyPerformance() {
     <section style={cardStyle} aria-label="Strategy performance">
       <h2 style={{ margin: 0, fontSize: 17 }}>How the strategy is doing</h2>
       <p style={{ margin: '4px 0 0', fontSize: 13, opacity: .65 }}>
-        Metricool&apos;s numbers for strategy posts approved in the last {data?.days ?? 90} days, by pillar and caption shape.
-        A post is measured once the daily sync has its numbers and its caption can be matched to the post the slot wrote.
+        Metricool&apos;s numbers for strategy posts published in the last {data?.days ?? 90} days, by pillar and caption shape.
+        A post counts once it is approved and its time has passed — posts still in Metricool&apos;s review queue or yet to go out are not counted.
       </p>
       {err && <div role="alert" style={{ color: '#d70015', fontSize: 13, marginTop: 10 }}>{err}</div>}
       {data && data.loaded && (
         data.totals.posts === 0 ? (
           <div style={{ fontSize: 13, opacity: .7, marginTop: 14 }}>
-            Nothing approved from the strategy yet. The first numbers appear the day after its first posts go out.
+            No strategy posts have gone out yet. The first numbers appear the morning after its first posts publish.
           </div>
         ) : (
           <>
             <div style={{ fontSize: 12, opacity: .7, marginTop: 10 }}>
               {data.totals.measured} of {data.totals.posts} published posts measured.
-              {data.totals.measured < data.totals.posts && ' The rest are too recent for the daily sync, or their published caption no longer matches what was written.'}
+              {data.totals.measured < data.totals.posts && ' The rest are not in Metricool\'s daily numbers yet (they sync each morning), or their caption was changed in Metricool after it was sent.'}
             </div>
             <div style={{ overflowX: 'auto', marginTop: 12 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
