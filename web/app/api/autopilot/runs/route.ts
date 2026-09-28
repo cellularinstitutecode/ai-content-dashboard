@@ -224,7 +224,12 @@ export async function POST(req: NextRequest) {
   if (action === 'regenerate') {
     const note = typeof body.note === 'string' ? body.note : '';
     const ok = await regenerateRun(id, user.id, note);
-    if (!ok) return NextResponse.json({ error: 'run cannot be regenerated' }, { status: 400 });
+    if (!ok) {
+      return NextResponse.json({
+        error: 'run cannot be regenerated',
+        message: 'This post cannot be redrafted. If its time has already passed, use "Approve for next free slot" or skip it.',
+      }, { status: 400 });
+    }
     // Redraft immediately so the reviewer gets the new version in one click.
     const result = await advanceRuns({ scopeUserId: user.id, runId: id, budgetMs: 45_000, maxRuns: 1 });
     // Same rule as run_now: regenerateRun succeeded, but if the redraft then

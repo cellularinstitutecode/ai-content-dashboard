@@ -572,7 +572,7 @@ export default function AutopilotQueue() {
                       DOI Crossref had never heard of could be approved with
                       nobody told. A not-found citation is also refused at
                       Approve (lib/approve-plan.ts). */}
-                  {r.pack?._compliance?.citation && r.pack._compliance.citation.status !== 'verified' && (
+                  {r.pack?._compliance?.citation && r.pack._compliance.citation.status !== 'verified' && r.pack._compliance.citation.status !== 'not_required' && (
                     <div className={'border-b border-line px-5 py-2.5 text-[12px] ' + (r.pack._compliance.citation.status === 'not_found' || r.pack._compliance.citation.status === 'no_doi' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}>
                       {r.pack._compliance.citation.status === 'not_found' ? '✗ ' : '⚠ '}
                       {citationLabel(r.pack._compliance.citation)}
@@ -759,7 +759,10 @@ export default function AutopilotQueue() {
                         </button>
                       </>
                     )}
-                    <button
+                    {/* Not on a missed card: redrafting restarts the pipeline for
+                        a time that has already gone, and the run would expire
+                        into a failure. Re-date it or skip it instead. */}
+                    {!r.missed && <button
                       type="button"
                       onClick={() => {
                         const feedback = window.prompt('What should change? The engine redrafts and must address your note.', '');
@@ -769,7 +772,7 @@ export default function AutopilotQueue() {
                       className="rounded-full px-4 py-1.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
                     >
                       {busyId === r.id ? 'Redrafting…' : 'Ask for changes'}
-                    </button>
+                    </button>}
                     <button
                       type="button"
                       onClick={() => act(r.id, 'skip')}

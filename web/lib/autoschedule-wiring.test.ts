@@ -16,7 +16,9 @@ test('nothing auto-sends unless the setting says so', () => {
   // fact that the engine asks it before doing anything.
   assert.equal(autoSchedules({}), false);
   const autopilot = src('lib/autopilot.ts');
-  assert.match(autopilot, /if \(autoSchedules\(\)\) await autoSchedule\(db, run, template\)/);
+  assert.match(autopilot, /if \(autoSchedules\(\)\) \{[\s\S]{0,700}?await autoSchedule\(db, run, template\)/);
+  // And never with too little of the tick left to finish sending.
+  assert.match(autopilot, /if \(deadline - Date\.now\(\) < AUTOSCHEDULE_MIN_MS\) \{\s*await hold\(/);
 });
 
 test('the engine approves only at the point where a run is finished', () => {

@@ -34,14 +34,14 @@ test('moving Tuesday 09:00 to 10:00 retires the old runs, keeps what is already 
   assert.deepEqual(plan.supersede.sort(), ['drafted-old', 'ready-old'], 'work kept, never sent');
 });
 
-test('a paused template drops its planned runs instead of letting them expire as failures', () => {
+test('a paused template retires its runs instead of letting them expire as failures', () => {
   const runs = [
     { id: 'p', state: 'planned', scheduled_for: TUE_0900 },
     { id: 'd', state: 'drafted', scheduled_for: TUE_0900 },
   ];
   const plan = reconcilePlan(runs, { weekdays: [2], time_of_day: '09:00', active: false }, NOW, TZ);
   assert.deepEqual(plan.remove, ['p']);
-  assert.deepEqual(plan.supersede, [], 'a written post is kept in case the slot comes back');
+  assert.deepEqual(plan.supersede, ['d'], 'a started post is retired rather than left to expire into a red card');
 });
 
 test('wiring: every save reconciles, and neither advance nor approve acts on a moved slot', () => {
@@ -56,4 +56,14 @@ test('wiring: every save reconciles, and neither advance nor approve acts on a m
   assert.match(approve, /!slotMatches\(run\.scheduled_for, tpl\.weekdays, tpl\.time_of_day, SCHEDULE_TZ\)/);
   // And a retired run does not move the rotation on.
   assert.match(ap, /\.neq\('state', 'superseded'\)\s*\.lt\('scheduled_for', run\.scheduled_for\)/);
+});
+
+test('a slot moved away and back gets its post again', () => {
+  // The superseded 09:00 run keeps its (template, time) key; planRuns skips a
+  // key that exists, so without this the day simply had no post.
+  const runs = [{ id: 'old', state: 'superseded', scheduled_for: TUE_0900 }, { id: 'ten', state: 'planned', scheduled_for: TUE_1000 }];
+  const plan = reconcilePlan(runs, { weekdays: [2], time_of_day: '09:00', active: true }, NOW, TZ);
+  assert.deepEqual(plan.remove.sort(), ['old', 'ten']);
+  const paused = reconcilePlan([{ id: 'old', state: 'superseded', scheduled_for: TUE_0900 }], { weekdays: [2], time_of_day: '09:00', active: false }, NOW, TZ);
+  assert.deepEqual(paused.remove, [], 'nothing is revived while the slot is paused');
 });

@@ -22,7 +22,8 @@
 // phrasing flags; and dosing means a dose — mg, mcg, IU, or "take N capsules" —
 // not a food quantity.
 //
-// Pure: imports only ./compliance.ts, which has no imports.
+// Pure: imports only ./compliance.ts (and, through it, ./health-claim.ts) —
+// no package imports, so the test runner reads this file directly.
 import { stripComplianceLines } from './compliance.ts';
 
 export type SafetyFlag = {

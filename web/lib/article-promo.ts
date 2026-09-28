@@ -60,13 +60,23 @@ export function articleLogNote(published: PublishedArticle, url: string): string
  * log — so a retry after a promo failure promotes it instead of publishing a
  * second one.
  */
-export function readArticleLog(log: readonly { step?: string; note?: string }[] | null | undefined): { id: number; url: string } | null {
+export function readArticleLog(log: readonly { step?: string; note?: string }[] | null | undefined): { id: number; url: string; status: string } | null {
   for (const entry of [...(log || [])].reverse()) {
     if (entry?.step !== 'article') continue;
-    const m = /id (\d+)[^)]*\):\s*(\S+)/.exec(String(entry.note || ''));
-    if (m) return { id: Number(m[1]), url: m[2] };
+    const m = /id (\d+)(?:,\s*([a-z]+))?[^)]*\):\s*(\S+)/.exec(String(entry.note || ''));
+    if (m) return { id: Number(m[1]), status: m[2] || 'published', url: m[3] };
   }
   return null;
+}
+
+/**
+ * The link a promo may carry. A WordPress DRAFT has only a `?p=` URL the
+ * public cannot open, and nothing publishes it when the promo is later
+ * approved — so a promo for a draft article carries no link at all rather
+ * than one that leads to a login page.
+ */
+export function promoLink(status: string | null | undefined, url: string): string {
+  return String(status || '').toLowerCase() === 'draft' ? '' : url;
 }
 
 /**

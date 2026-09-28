@@ -63,7 +63,7 @@ import { publishArticle, wordpressConfig, wordpressConfigured } from '@/lib/word
 import { ensureDraftImage, type PackImage } from '@/lib/images';
 import { imageUnshippable } from '@/lib/image-verdict';
 import { channelCopy, doisIn, knownBadCitation, perNetworkPlan } from '@/lib/approve-plan';
-import { ARTICLE_LINK_PLACEHOLDER, PROMO_DELAY_MINUTES, articleLogNote, articleUrl, readArticleLog, withArticleLink } from '@/lib/article-promo';
+import { ARTICLE_LINK_PLACEHOLDER, PROMO_DELAY_MINUTES, articleLogNote, articleUrl, promoLink, readArticleLog, withArticleLink } from '@/lib/article-promo';
 import { verifyDoi } from '@/lib/citation';
 import { findEvidence } from '@/lib/evidence';
 import { evidenceBriefFrom, type EvidenceItem } from '@/lib/evidence-brief';
@@ -77,7 +77,7 @@ import { autoSchedules } from '@/lib/autopilot-mode';
 import { usableLeadHours } from '@/lib/lead-window';
 import { weeklyPaceVerdict, weeklyCeiling, paceNote, ROLLING_WINDOW_DAYS, PACE_SCAN_LIMIT, NOT_PUBLISHING } from '@/lib/weekly-pace';
 import { videoVerdict, pendingRefusal, type PackLike } from '@/lib/video-required';
-import { isMissed, MISSED_RETIRE_DAYS } from '@/lib/review-queue';
+import { isMissed, MISSED_MARGIN_MS, MISSED_RETIRE_DAYS } from '@/lib/review-queue';
 import { nextFreeSlot } from '@/lib/missed-slot';
 import { RECONCILABLE_STATES, reconcilePlan, slotMatches } from '@/lib/run-reconcile';
 
@@ -151,6 +151,9 @@ export type RunRow = {
 };
 
 const ACTIVE_STATES = ['planned', 'researched', 'drafted'] as const;
+
+/** Time a tick must have left to send a finished post itself (autoschedule only). */
+const AUTOSCHEDULE_MIN_MS = 60_000;
 // MAX_ATTEMPTS is two, not three. `advanceRuns` takes at most one attempt per
 // run per tick, inside an eligibility window that is only ever a couple of ticks
 // wide - so with a limit of 3 a broken run could never reach `failed`, never
@@ -1061,8 +1064,15 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
       });
       const retryScore = scorePack(retry, template.providers || [], angle, { strategySlot });
       if (retryScore.total > score.total) {
-        (retry as ContentPack & { _autopilot?: unknown })._autopilot =
-          (pack as ContentPack & { _autopilot?: unknown })._autopilot;
+        // Everything the first draft had that is not copy comes with it: the
+        // provenance, the papers, and — above all — the picture. Dropping
+        // `_image` made approval (or the queue) generate a second, different
+        // one, and a promotion flag now triggers this rewrite often.
+        const prior = pack as unknown as Record<string, unknown>;
+        const next = retry as unknown as Record<string, unknown>;
+        for (const k of ['_autopilot', '_image', '_imageOptions', '_semrush'] as const) {
+          if (prior[k] !== undefined) next[k] = prior[k];
+        }
         if (keptEvidence?.length) (retry as ContentPack & { _evidence?: EvidenceItem[] })._evidence = keptEvidence;
         const { error: saveError } = await db.from('drafts').update({ pack: retry })
           .eq('id', run.draft_id).eq('user_id', run.user_id);
@@ -1189,7 +1199,11 @@ export async function rescueStrandedApprovals(scopeUserId?: string): Promise<num
       .from('template_runs')
       .update({
         state: 'ready_for_review',
-        log: logLine(row as unknown as RunRow, 'rescued', 'Approval stopped part-way through and left nothing published, so this is back in your queue. Approve it again.'),
+        log: logLine(row as unknown as RunRow, 'rescued', readArticleLog(row.log)
+          // The article went to WordPress before the stop; approving again
+          // reuses it (lib/article-promo.ts) and only sends the promos.
+          ? 'Approval stopped part-way through: the article is on WordPress, but its promo posts were not sent. This is back in your queue — approve it again to send them; the article will not be published twice.'
+          : 'Approval stopped part-way through and left nothing published, so this is back in your queue. Approve it again.'),
       })
       .eq('id', row.id)
       .eq('state', 'approved')
@@ -1242,15 +1256,17 @@ export async function reconcileTemplateRuns(userId: string, templateId: string):
       .select('id, template_id, user_id, state, scheduled_for, angle, log, attempts, regens, brief, score, draft_id')
       .eq('template_id', templateId)
       .eq('user_id', userId)
-      .in('state', [...RECONCILABLE_STATES])
+      .in('state', [...RECONCILABLE_STATES, 'superseded'])
       .gt('scheduled_for', new Date().toISOString());
     if (runsError) { reportError('autopilot:reconcile-runs', runsError, { templateId }); return out; }
     const rows = (runs || []) as RunRow[];
     const plan = reconcilePlan(rows, t as { weekdays?: number[]; time_of_day?: string; active?: boolean });
     if (plan.remove.length) {
-      // Planned runs have nothing spent on them: no research, no draft.
+      // Planned runs have nothing spent on them: no research, no draft. And a
+      // superseded run back at the template's time is cleared so its slot can
+      // be planned again (lib/run-reconcile.ts).
       const { data: gone, error: delError } = await db
-        .from('template_runs').delete().in('id', plan.remove).eq('state', 'planned').select('id');
+        .from('template_runs').delete().in('id', plan.remove).in('state', ['planned', 'superseded']).select('id');
       if (delError) reportError('autopilot:reconcile-delete', delError, { templateId });
       out.removed = Array.isArray(gone) ? gone.length : 0;
     }
@@ -1711,7 +1727,18 @@ export async function advanceRuns(opts: {
           // approveRun claims ready_for_review -> approved conditionally, so a
           // reviewer pressing Approve at this same moment does not produce two
           // posts: one of the two claims wins and the other stops.
-          if (autoSchedules()) await autoSchedule(db, run, template);
+          if (autoSchedules()) {
+            // Sending is the longest step there is — WordPress, then one
+            // Metricool post per network — and it runs inside this tick's
+            // budget with nothing to stop it mid-way. With too little time left
+            // a platform kill would strand the run half-sent, so it is held for
+            // a person instead (a held run is never lost; it waits in the queue).
+            if (deadline - Date.now() < AUTOSCHEDULE_MIN_MS) {
+              await hold(db, run, 'Held for you: this post was finished late in a run of the engine, with too little time left to send it safely. Nothing was sent. Approve it yourself.');
+            } else {
+              await autoSchedule(db, run, template);
+            }
+          }
           break;
         }
       } catch (e) {
@@ -2196,8 +2223,10 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   if (article) {
     const prior = readArticleLog(run.log);
     let link = '';
+    let articleStatus = '';
     if (prior) {
       link = prior.url;
+      articleStatus = prior.status;
       articleNote = 'The article was already on WordPress from the previous attempt (' + link + '), so it was not published again.';
     } else {
       const published = await publishArticle({
@@ -2217,6 +2246,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
         note = published.message + ' Nothing was sent anywhere; the run is back in your queue.';
       } else {
         link = articleUrl(published, wordpressConfig()?.baseUrl || '');
+        articleStatus = published.status;
         run.log = logLine(run, 'article', articleLogNote(published, link));
         const { error: articleLogError } = await db.from('template_runs').update({ log: run.log }).eq('id', run.id);
         if (articleLogError) reportError('autopilot:approve-article-log', articleLogError, { runId: run.id });
@@ -2228,7 +2258,10 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
       const withLink = perNetworkPlan(pack as unknown as Record<string, unknown>, mcProviders, {
         aviso,
         refPolicy,
-        transform: (_network, text) => withArticleLink(text, link),
+        // No link while the article is a WordPress draft: its ?p= URL leads
+        // the public to a login page, and approving the promo later does not
+        // publish the article.
+        transform: (_network, text) => withArticleLink(text, promoLink(articleStatus, link)),
       });
       if (!withLink.ok) {
         // Not reachable in practice — the stand-in link above is at least as
@@ -2333,7 +2366,10 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
         // onward; an entry that never went to Metricool has no business here.
         providers: [x.network],
         text: x.text,
-        publication_date: run.scheduled_for,
+        // The time Metricool was actually given: an article's promos go out ten
+        // minutes after it, and a later reschedule or approve from the posts
+        // queue re-sends this value.
+        publication_date: promoAt,
         metricool_post_id: x.postId,
         // 'approved' — not 'scheduled' — is the one word /api/posts treats as
         // live. See modeOf() there: 'scheduled' is also the column default and
@@ -2380,7 +2416,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     const insertedIds = ((inserted || []) as { id?: string }[]).map((r) => String(r?.id || ''));
     for (let i = 0; i < sent.length; i++) {
       await recordApproval({
-        publishDate: run.scheduled_for,
+        publishDate: promoAt,
         networks: [sent[i].network],
         caption: sent[i].text,
         mediaUrl: clip?.url || packImage?.url || '',
@@ -2438,6 +2474,11 @@ export async function regenerateRun(runId: string, userId: string, note?: string
   const run = r as RunRow | null;
   if (!run || !run.angle) return false;
   if (!['ready_for_review', 'drafted', 'failed'].includes(run.state)) return false;
+  // A slot that has already passed cannot be redrafted into anything: the
+  // pipeline restarts at research, the tick never reaches a run more than a
+  // day past its time, and expiry marks it failed — so the button turned a
+  // missed post into a red card. Such a post is re-dated or skipped instead.
+  if (Date.parse(run.scheduled_for) < Date.now() + MISSED_MARGIN_MS) return false;
   const angle: Angle = { ...run.angle, reviewerNote: (note || '').trim().slice(0, 500) || run.angle.reviewerNote };
   // Claim the state we READ, exactly as approveRun does. Without the predicate
   // this was a read-then-blind-write: two open tabs, one approving and one

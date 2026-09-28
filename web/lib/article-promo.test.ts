@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ARTICLE_LINK_PLACEHOLDER, articleLogNote, articleUrl, readArticleLog, withArticleLink } from './article-promo.ts';
+import { ARTICLE_LINK_PLACEHOLDER, articleLogNote, articleUrl, promoLink, readArticleLog, withArticleLink } from './article-promo.ts';
 
 const REF = 'REF: Smith, A. (2020). "Evaluation." J Med. DOI: 10.1000/x';
 const AVISO = 'AVISO DE PUBLICIDAD: 2623022002A00090';
@@ -32,11 +32,19 @@ test('a published article is read back from the run log, so a retry does not pub
   const note = articleLogNote({ id: 42, status: 'future' }, 'https://clinic.example/?p=42');
   assert.ok(note.length < 400, 'fits the log column');
   const log = [{ step: 'research', note: 'x' }, { step: 'article', note }, { step: 'approve-failed', note: 'Metricool down' }];
-  assert.deepEqual(readArticleLog(log), { id: 42, url: 'https://clinic.example/?p=42' });
+  assert.deepEqual(readArticleLog(log), { id: 42, status: 'future', url: 'https://clinic.example/?p=42' });
   assert.equal(readArticleLog([{ step: 'sent', note }]), null);
   assert.equal(readArticleLog(null), null);
 });
 
 test('the stand-in link used for the length check is at least as long as a real one', () => {
   assert.ok(ARTICLE_LINK_PLACEHOLDER.length >= 90);
+});
+
+test('a promo for a draft article carries no link — the public cannot open a draft', () => {
+  assert.equal(promoLink('draft', 'https://clinic.example/?p=9'), '');
+  assert.equal(promoLink('future', 'https://clinic.example/a/'), 'https://clinic.example/a/');
+  const note = articleLogNote({ id: 9, status: 'draft' }, 'https://clinic.example/?p=9');
+  assert.equal(readArticleLog([{ step: 'article', note }])!.status, 'draft', 'a retry knows the article it reuses is still a draft');
+  assert.doesNotMatch(withArticleLink('Read our new guide.\n\nREF: x', ''), /Read the full article/);
 });

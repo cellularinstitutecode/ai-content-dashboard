@@ -98,3 +98,10 @@ test('wiring: the queue route reads its buckets separately and keeps failures to
   assert.doesNotMatch(route, /\.slice\(0, limit\)/, 'the old merge-and-cut is what hid every ready post');
   assert.match(route, /redate: body\?\.redate === true/);
 });
+
+test('wiring: a missed post cannot be sent back for a redraft', () => {
+  const ap = src('lib/autopilot.ts');
+  const regen = ap.slice(ap.indexOf('export async function regenerateRun'), ap.indexOf('export async function skipRun'));
+  assert.match(regen, /if \(Date\.parse\(run\.scheduled_for\) < Date\.now\(\) \+ MISSED_MARGIN_MS\) return false;/);
+  assert.match(src('app/AutopilotQueue.tsx'), /\{!r\.missed && <button/);
+});

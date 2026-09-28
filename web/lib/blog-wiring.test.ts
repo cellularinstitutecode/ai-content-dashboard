@@ -75,7 +75,7 @@ test('the article is published BEFORE its promos, and the promos carry its link'
   const publishAt = approve.indexOf('const published = await publishArticle({');
   const sendAt = approve.indexOf('await metricoolSchedulePost(');
   assert.ok(publishAt > 0 && sendAt > publishAt, 'WordPress first, Metricool second');
-  assert.match(approve, /transform: \(_network, text\) => withArticleLink\(text, link\)/, 'the promo is rebuilt around the real link');
+  assert.match(approve, /transform: \(_network, text\) => withArticleLink\(text, promoLink\(articleStatus, link\)\)/, 'the promo is rebuilt around the real link — none while the article is a draft');
   assert.match(approve, /publicationDate: promoAt/, 'and goes out after the article');
   // A published article is written to the run before anything else, and a
   // retry reuses it instead of publishing a second article.

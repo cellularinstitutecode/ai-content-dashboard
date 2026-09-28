@@ -15,7 +15,8 @@
 // So anything that sounds like one counts: a body word, an outcome verb, a
 // therapy, a condition, or "studies show".
 //
-// Pure: imports only ./compliance.ts, which has none.
+// Pure: imports only ./compliance.ts, which imports this file back. The cycle is
+// safe: each uses the other only inside function bodies, never at load time.
 import { stripComplianceLines } from './compliance.ts';
 
 const HEALTH_CLAIM = new RegExp(

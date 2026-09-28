@@ -14,10 +14,16 @@
 // it yet (planned), and otherwise marked 'superseded' — kept, with its draft,
 // but never advanced, approved, or counted in the rotation.
 //
-// A paused template is the same question with a simpler answer: its planned
-// runs will never advance, and used to expire into red "failed" cards under
-// Needs attention. Planned ones are removed; anything already written is kept
-// in case it is switched back on.
+// A paused template is the same question with a simpler answer: its runs will
+// never advance, and used to expire into red "failed" cards under Needs
+// attention. Planned ones are removed and anything half-prepared is superseded
+// (its draft stays in the library); a finished post waiting for review stays.
+//
+// AND BACK AGAIN. A superseded run keeps its (template, time) key, and
+// planRuns skips a key that exists — so a slot moved from 09:00 to 10:00 and
+// then back to 09:00 could never get its 09:00 run again, and that day simply
+// had no post. A superseded run whose time is the template's again is removed,
+// so the slot is planned fresh.
 //
 // Pure: imports only ./timezone.ts, so the test runner reads this file directly.
 import { SCHEDULE_TZ, wallClockInTz } from './timezone.ts';
@@ -66,12 +72,19 @@ export function reconcilePlan(
   const supersede: string[] = [];
   const paused = template.active === false;
   for (const r of runs) {
-    if (!r || !(RECONCILABLE_STATES as readonly string[]).includes(r.state)) continue;
+    if (!r) continue;
     const t = new Date(r.scheduled_for).getTime();
     if (!Number.isFinite(t) || t <= now) continue;
+    if (r.state === 'superseded') {
+      if (!paused && slotMatches(r.scheduled_for, template.weekdays, template.time_of_day, tz)) remove.push(r.id);
+      continue;
+    }
+    if (!(RECONCILABLE_STATES as readonly string[]).includes(r.state)) continue;
     if (r.angle && r.angle.redatedFrom) continue;
     if (paused) {
+      // A finished post waiting for review stays: a person may still want it.
       if (r.state === 'planned') remove.push(r.id);
+      else if (r.state !== 'ready_for_review') supersede.push(r.id);
       continue;
     }
     if (slotMatches(r.scheduled_for, template.weekdays, template.time_of_day, tz)) continue;
