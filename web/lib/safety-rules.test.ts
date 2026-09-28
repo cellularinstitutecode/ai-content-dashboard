@@ -61,3 +61,12 @@ test('reviewPack dedupes across fields', () => {
   const flags = reviewPack({ instagram: 'It cures everything.', facebook: 'A guaranteed cure.', _image: { url: 'x' } });
   assert.deepEqual(flags.map((f) => f.code), ['cure_claim']);
 });
+
+test('a myth stated as a belief is not the post\'s own claim; the same words as a claim still are', () => {
+  const codes = (t: string) => scanContent(t).map((f) => f.code);
+  assert.ok(!codes('Myth: this supplement cures fatigue.\nFact: fatigue has many causes.').includes('cure_claim'));
+  assert.ok(!codes('Many people think a good night cures everything. It helps, but it is one part.').includes('cure_claim'));
+  assert.ok(codes('This supplement cures fatigue.').includes('cure_claim'));
+  // Only the sentence that reports the belief: the next one is the post talking.
+  assert.ok(codes('Myth: rest is lazy. This supplement cures fatigue.').includes('cure_claim'));
+});

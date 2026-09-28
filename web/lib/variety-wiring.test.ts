@@ -26,3 +26,15 @@ test('stepScore checks openings against what was published and rewrites a repeat
 test('the review card shows the format and reader', () => {
   assert.match(src('app/AutopilotQueue.tsx'), /varietyLabels\(r\.angle\)/);
 });
+
+test('the draft being scored is excluded by id, not by its line', () => {
+  assert.match(autopilot, /recentOpenings\(run\.user_id, undefined, \{ excludeDraftId: run\.draft_id \}\)/);
+  assert.doesNotMatch(autopilot, /recentOpeners\.splice/);
+  assert.match(src('lib/recent-openers.ts'), /select\('id, pack'\)/);
+});
+
+test('the tick holds a repeated opening, and scoring is given the dealt closing', () => {
+  assert.match(autopilot, /openingRepeat: Boolean\(run\.score\?\.openingRepeat\)/);
+  assert.match(autopilot, /closing: angle\.closing \}/);
+  assert.match(src('app/AutopilotQueue.tsx'), /r\.score\?\.openingRepeat &&/);
+});

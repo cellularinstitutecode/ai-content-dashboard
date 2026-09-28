@@ -145,3 +145,48 @@ export function repeatsOpening(
   }
   return worst;
 }
+
+/**
+ * Pull the opening line out of whichever variant a pack carries.
+ *
+ * `tiktok` first: prepareVideo stores the COMPOSED caption there — the one
+ * composeCaption assembled and the one writeRowBack puts in column E — whereas
+ * `instagram` is the writer's raw output before the REF, the AVISO and the
+ * hashtags were sorted out. The rest are fallbacks so an older pack shape
+ * still yields something.
+ */
+export function openingOfPack(pack: unknown): string {
+  if (!pack || typeof pack !== 'object') return '';
+  const p = pack as Record<string, unknown>;
+  for (const key of ['tiktok', 'instagram', 'facebook', 'linkedin']) {
+    const v = p[key];
+    if (typeof v === 'string' && v.trim()) {
+      const line = openingLineOf(v);
+      if (line) return line;
+    }
+  }
+  return '';
+}
+
+/**
+ * The opening lines of these draft rows, newest first, de-duplicated.
+ *
+ * `excludeId` drops one draft BEFORE de-duplicating: the draft being scored is
+ * among the recent ones by then, and removing its line afterwards removed the
+ * only copy of an identical line another post had already opened with — so an
+ * exact repeat, the worst kind, scored clean.
+ */
+export function openingsFrom(rows: readonly { id?: unknown; pack?: unknown }[], excludeId?: string | null): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const row of rows) {
+    if (excludeId && row.id != null && String(row.id) === excludeId) continue;
+    const line = openingOfPack(row.pack);
+    if (!line) continue;
+    const key = line.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(line);
+  }
+  return out;
+}

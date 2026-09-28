@@ -148,7 +148,7 @@ export function strategyTopicPrompt(opts: {
   if (opts.dayTheme) parts.push('The day\'s theme is "' + opts.dayTheme + '"; let the post sit inside it.');
   // "Each time a pillar returns, the angle, question, format, or audience
   // should change." The angle is dealt by the rotation; these are the rest.
-  if (opts.audienceBrief) parts.push('Write it for ' + opts.audienceBrief + ' — speak to their situation, without assuming anything about their health.');
+  if (opts.audienceBrief) parts.push('Write it for ' + opts.audienceBrief + ' — speak to their situation, and make no assumptions about their diagnosis or their results.');
   if (opts.formatBrief) parts.push(opts.formatBrief);
   if (opts.previousOpening) {
     parts.push('This angle has been published before, opening with: "' + opts.previousOpening.slice(0, 200) +
@@ -229,6 +229,14 @@ const PROMO_PATTERNS: { re: RegExp; label: string; negatable?: boolean; sentence
   {
     re: /\b(one of )?our patients? (said|says|told|tells|shared|shares|felt|reported|put it)\b|\bas (a|one) (of our )?patients? (put it|said|told us|shared)\b|\bpatients (often |frequently |regularly )?(tell|say to) us\b|\bone (of our )?patients? (said|told|shared|put it|described)\b/i,
     label: 'patient testimonial',
+  },
+  // The everyday-scenario shape (lib/strategy-variety.ts) is a hypothetical,
+  // never a result: "someone who… felt better after" is a testimonial with
+  // the name taken off.
+  {
+    re: /\b(someone|a person|a patient|a friend|a woman|a man)\b[^.!?\n]{0,100}\b(felt|feels|was|were|got|gets|became|is now|was now|ended up)\s+(?:(?:so |much |a lot |finally |far )+)?(better(?=\s*(?:[.,!;:)]|$|\s+(?:after|within|in (?:a|one|two|three|just)|by the end|than (?:before|ever))))|cured|healed|pain[- ]free|transformed|back to normal|like new|symptom[- ]free)\b/i,
+    label: 'scenario outcome',
+    negatable: true,
   },
   // The Cancún positioning note: specific advantages, never superiority.
   {

@@ -11,6 +11,7 @@ import type { ContentPack } from './ai.ts';
 import { reviewPack, type SafetyFlag } from './safety-rules.ts';
 import { promotionFlags, SOFT_CTA_RE } from './strategy-voice.ts';
 import { openingLineOf, repeatsOpening } from './opening-line.ts';
+import { closingCritique, closingPresent } from './strategy-variety.ts';
 
 export type RunScore = {
   total: number; // 0-100
@@ -55,7 +56,7 @@ export function scorePack(
   pack: ContentPack,
   providers: string[],
   angle: ScoreAngle,
-  opts: { strategySlot?: boolean; recentOpenings?: readonly string[] } = {},
+  opts: { strategySlot?: boolean; recentOpenings?: readonly string[]; closing?: string | null } = {},
 ): RunScore {
   const texts = (providers.length ? providers : ['instagram']).map((p) => channelText(pack, p));
   const joined = texts.join('\n').toLowerCase();
@@ -100,9 +101,16 @@ export function scorePack(
   // post ending "Book your HBOT session today" collected the full fifteen for
   // exactly the sales close its rules forbid. A booking close is now a
   // promotion flag below instead.
-  breakdown.cta = (opts.strategySlot ? SOFT_CTA_RE.test(joined) : CTA_RE.test(joined)) ? 15 : 0;
+  // Phase 3 deals each strategy post its closing (lib/strategy-variety.ts); a
+  // post that was dealt one is measured on that one, at its end.
+  const dealtClosing = opts.strategySlot ? closingCritique(opts.closing) : null;
+  breakdown.cta = (
+    dealtClosing
+      ? texts.some((t) => closingPresent(t, opts.closing))
+      : opts.strategySlot ? SOFT_CTA_RE.test(joined) : CTA_RE.test(joined)
+  ) ? 15 : 0;
   if (!breakdown.cta) {
-    critique.push(opts.strategySlot
+    critique.push(dealtClosing ? dealtClosing : opts.strategySlot
       ? 'Close with a gentle, useful next step (save this, share it, talk it through with your physician) — not a sales pitch.'
       : 'Close with a clear, compliant call to action.');
   }
@@ -129,7 +137,10 @@ export function scorePack(
   // one of the recent posts costs points and forces the rewrite (stepScore).
   // The same guard the video captions have had (lib/opening-line.ts).
   let openingRepeat = false;
-  if (opts.strategySlot && opts.recentOpenings?.length) {
+  // Not the weekly article: its first text is the blog, whose first line is a
+  // headline, and headlines are not what the social openings are made of.
+  const article = (providers[0] || '').toLowerCase() === 'blog';
+  if (opts.strategySlot && !article && opts.recentOpenings?.length) {
     const opening = openingLineOf(texts[0] || '');
     const repeat = repeatsOpening(opening, opts.recentOpenings);
     if (repeat) {

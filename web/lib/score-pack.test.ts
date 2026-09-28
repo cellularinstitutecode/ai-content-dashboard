@@ -55,3 +55,20 @@ test('Phase 3: a strategy post opening like one already published loses points a
   const other = scorePack({ instagram: text } as never, ['instagram'], angle, { recentOpenings: ['Eight hours in bed is not the same as rest, and sleep quality matters more than length for most of us.'] });
   assert.equal(other.openingRepeat, undefined);
 });
+
+test('Phase 3: a dealt closing is scored on its own words, and the critique names it', () => {
+  const angle = { query: 'sleep quality' };
+  const txt = 'Sleep quality matters for everyone reading this post today, truly it does, and here is why.\nWhich part of your evening could be calmer?' + REF;
+  const ok = scorePack({ instagram: txt } as never, ['instagram'], angle, { strategySlot: true, closing: 'reflect' });
+  assert.equal(ok.breakdown.cta, 15);
+  const saved = scorePack({ instagram: body('Sleep quality matters for everyone reading this post today, truly it does, and here is why.') } as never, ['instagram'], angle, { strategySlot: true, closing: 'reflect' });
+  assert.equal(saved.breakdown.cta, 0, 'it was dealt a question back, not "save this"');
+  assert.ok(saved.critique.some((c) => /question back to the reader/.test(c)));
+  assert.ok(!saved.critique.some((c) => /save this, share it/.test(c)), 'not steered back to the old line');
+});
+
+test('Phase 3: the weekly article\'s headline is not checked against the social openings', () => {
+  const head = 'Eight hours in bed is not the same as rest';
+  const s = scorePack({ blog: head + '\n\nLong article body about sleep quality and rest, well over eighty characters in length.', facebook: 'x', linkedin: 'y' } as never, ['blog', 'facebook', 'linkedin'], { query: 'sleep' }, { strategySlot: true, recentOpenings: [head] });
+  assert.equal(s.openingRepeat, undefined);
+});

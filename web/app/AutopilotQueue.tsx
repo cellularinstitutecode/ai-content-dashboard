@@ -63,6 +63,7 @@ type RunScore = {
   safetyFlags: { code: string; message: string }[];
   critique: string[];
   promotionFlags?: string[];
+  openingRepeat?: boolean;
 };
 
 type PackImage = {
@@ -604,6 +605,11 @@ export default function AutopilotQueue() {
                   {Boolean(r.score?.promotionFlags?.length) && (
                     <div className="border-b border-line bg-amber-50 px-5 py-2.5 text-[12px] text-amber-800">
                       ⚠ Reads as promotion: {r.score!.promotionFlags!.join(', ')}. The strategy asks for guidance, not a sales pitch — edit it or ask for changes.
+                    </div>
+                  )}
+                  {r.score?.openingRepeat && (
+                    <div className="border-b border-line bg-amber-50 px-5 py-2.5 text-[12px] text-amber-800">
+                      ⚠ Opens the same way as a recent post. Give it a fresh first line — edit it or ask for changes.
                     </div>
                   )}
 

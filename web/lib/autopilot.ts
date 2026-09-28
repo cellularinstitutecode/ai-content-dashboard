@@ -93,7 +93,7 @@ import { normalizeStrategy, type StrategyMode, type TemplateStrategy } from '@/l
 import { rulesForSlot, slotContext } from '@/lib/content-strategy';
 import { angleFor, siblingAngles } from '@/lib/strategy-rotation';
 import { varietyBriefs, varietyFor, varietyLabels, type Variety } from '@/lib/strategy-variety';
-import { openingLineOf } from '@/lib/opening-line';
+import { openingOfPack } from '@/lib/opening-line';
 import { recentOpenings } from '@/lib/recent-openers';
 import { BLOG_ANGLES } from '@/lib/strategy-seed';
 import { scorePack, type RunScore } from '@/lib/score-pack';
@@ -450,7 +450,10 @@ async function previousOpeningFor(run: RunRow, query: string): Promise<string> {
     const { data: prior, error } = await db
       .from('template_runs')
       .select('draft_id')
-      .eq('template_id', run.template_id)
+      // By account, not template: a reloaded weekly strategy recreates its
+      // template rows, and the memory should survive that. The angle text is
+      // specific enough to the slot that wrote it.
+      .eq('user_id', run.user_id)
       .eq('state', 'approved')
       .eq('angle->>query', query)
       .lt('scheduled_for', run.scheduled_for)
@@ -461,7 +464,7 @@ async function previousOpeningFor(run: RunRow, query: string): Promise<string> {
     if (error || !draftId) return '';
     const { data: d } = await db.from('drafts').select('pack').eq('id', draftId).eq('user_id', run.user_id).maybeSingle();
     const pack = (d as { pack?: Record<string, unknown> } | null)?.pack || {};
-    return openingLineOf(String(pack.instagram || pack.facebook || '')).slice(0, 200);
+    return openingOfPack(pack).slice(0, 200);
   } catch (err) {
     reportError('autopilot:previous-opening', err, { runId: run.id });
     return '';
@@ -681,6 +684,13 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
           ? 'In 2-3 short sentences, give editorial direction for an EDUCATIONAL ' + (strategy.format || 'social') +
             ' post for a clinic\'s weekly "' + template.name + '" theme, on the angle "' + angle.query +
             '". It must teach something practical and must not promote any treatment or ask readers to book. ' +
+            // The dealt shape, reader and closing (lib/strategy-variety.ts):
+            // the direction is read after them, so it must not undo them.
+            (varietyBriefs(storedVariety(angle))
+              ? 'It is written for ' + varietyBriefs(storedVariety(angle))!.audience + '. ' +
+                varietyBriefs(storedVariety(angle))!.format + ' ' +
+                varietyBriefs(storedVariety(angle))!.closing + ' Work within that shape, reader and closing; do not change them. '
+              : '') +
             'What should the writer emphasize and avoid? Plain text only.'
           : 'In 2-3 short sentences, give editorial direction for a ' +
             (strategy.format || 'social') + ' post targeting the search "' + angle.query +
@@ -1098,19 +1108,12 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
   const strategySlot = isStrategySlot(strategy);
   // The openings of the recent posts, minus this draft's own (it is among the
   // recent drafts by now): a repeat is another post starting the same way.
-  let recentOpeners: string[] = [];
-  if (strategySlot) {
-    recentOpeners = await recentOpenings(run.user_id);
-    // Read in the order recentOpenings reads a pack, and matched the way it
-    // de-duplicates (case-insensitively), so it is this draft's line that goes.
-    const p = pack as unknown as Record<string, unknown>;
-    const own = ['tiktok', 'instagram', 'facebook', 'linkedin']
-      .map((k) => (typeof p[k] === 'string' ? openingLineOf(p[k] as string) : ''))
-      .find(Boolean)?.toLowerCase();
-    const i = own ? recentOpeners.findIndex((l) => l.toLowerCase() === own) : -1;
-    if (i >= 0) recentOpeners.splice(i, 1);
-  }
-  let score = scorePack(pack, template.providers || [], angle, { strategySlot, recentOpenings: recentOpeners });
+  // Excluded by id, before de-duplicating — removing its line afterwards also
+  // removed an identical line another post had opened with.
+  const recentOpeners = strategySlot
+    ? await recentOpenings(run.user_id, undefined, { excludeDraftId: run.draft_id })
+    : [];
+  let score = scorePack(pack, template.providers || [], angle, { strategySlot, recentOpenings: recentOpeners, closing: angle.closing });
   let regens = run.regens;
 
   // Self-critique: one bounded regeneration when below threshold — or, for a
@@ -1148,7 +1151,7 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
         brand,
         ...(strategySlot ? { keywordHint: '', citationPolicy, evidenceHint: keptEvidence?.length ? evidenceBriefFrom(keptEvidence) : undefined, audience: audienceOf(angle) } : {}),
       });
-      const retryScore = scorePack(retry, template.providers || [], angle, { strategySlot, recentOpenings: recentOpeners });
+      const retryScore = scorePack(retry, template.providers || [], angle, { strategySlot, recentOpenings: recentOpeners, closing: angle.closing });
       if (retryScore.total > score.total) {
         // Everything the first draft had that is not copy comes with it: the
         // provenance, the papers, and — above all — the picture. Dropping
@@ -1200,7 +1203,8 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
       'Scored ' + score.total + '/100 (' +
         Object.entries(score.breakdown).map(([k, v]) => k + ' ' + v).join(', ') + ')' +
         (score.safetyFlags.length ? ' — ' + score.safetyFlags.length + ' safety flag(s) for review' : '') +
-        (score.promotionFlags?.length ? ' — reads as promotion: ' + score.promotionFlags.join(', ') : '')
+        (score.promotionFlags?.length ? ' — reads as promotion: ' + score.promotionFlags.join(', ') : '') +
+        (score.openingRepeat ? ' — opening repeats a recent post' : '')
     ),
   };
 }
@@ -1518,6 +1522,7 @@ async function autoSchedule(
       threshold: SCORE_THRESHOLD,
       safetyFlags: run.score?.safetyFlags?.length ?? 0,
       promotionFlags: run.score?.promotionFlags?.length ?? 0,
+      openingRepeat: Boolean(run.score?.openingRepeat),
       networks: template.providers || [],
       hasMedia: hasImage || (!isStrategySlot(template.strategy) && Boolean(run.angle?.media?.url)),
       // The judge's verdict on a strategy post's citation (stepScore). Null for

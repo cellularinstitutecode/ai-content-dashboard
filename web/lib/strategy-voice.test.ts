@@ -162,7 +162,7 @@ test('Phase 3: the dealt format, reader and closing reach the writer, and a retu
     closingBrief: 'Close with one short question back to the reader.',
     previousOpening: 'Eight hours is not the same as rest.',
   });
-  assert.match(p, /Write it for a patient back home after treatment — speak to their situation, without assuming anything about their health\./);
+  assert.match(p, /Write it for a patient back home after treatment — speak to their situation, and make no assumptions about their diagnosis or their results\./);
   assert.match(p, /Shape: myth vs fact/);
   assert.match(p, /For this post: Close with one short question back to the reader\./);
   assert.match(p, /published before, opening with: "Eight hours is not the same as rest\."/);
@@ -180,4 +180,17 @@ test('Phase 3: the new gentle closings count as a soft next step', () => {
   for (const s of ['What does your evening look like?', 'How do you wind down?', 'Try this tonight.', 'Try it this week.']) {
     assert.match(s, SOFT_CTA_RE, s);
   }
+});
+
+test('Phase 3: myth vs fact — the stated myth is not an outcome promise, the post\'s own promise still is', () => {
+  assert.ok(!promotionFlags('Myth: everyone will respond the same way.\nFact: every body is different.').includes('outcome promise'));
+  assert.ok(promotionFlags('Everyone will respond the same way.').includes('outcome promise'));
+});
+
+test('Phase 3: an everyday scenario may not end in a result', () => {
+  assert.ok(promotionFlags('Picture someone who started walking after dinner and felt so much better within a week.').includes('scenario outcome'));
+  assert.ok(!promotionFlags('Picture someone who started walking after dinner. A short walk can be a calm end to the day.').includes('scenario outcome'));
+  assert.ok(!promotionFlags('Someone who rests well is not guaranteed to feel better.').includes('scenario outcome'));
+  assert.ok(!promotionFlags('Someone who got better sleep by dimming the lights still has busy mornings.').includes('scenario outcome'), 'better sleep is a habit, not a result');
+  assert.ok(promotionFlags('Someone who tried it was pain-free in two weeks.').includes('scenario outcome'));
 });

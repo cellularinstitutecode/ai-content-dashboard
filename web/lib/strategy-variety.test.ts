@@ -7,6 +7,10 @@ import {
   CLOSINGS,
   FORMATS,
   PILLAR_AUDIENCES,
+  PILLAR_CLOSING_EXCLUDE,
+  PILLAR_FORMAT_EXCLUDE,
+  closingCritique,
+  closingPresent,
   dealtVariety,
   varietyBriefs,
   varietyFor,
@@ -98,8 +102,49 @@ test('briefs and labels', () => {
   assert.match(b.format, /checklist/);
   assert.match(b.audience, /United States or Canada/);
   assert.match(b.closing, /share/);
-  assert.deepEqual(varietyLabels(v), { format: 'Checklist', audience: 'Travelling in' });
+  assert.deepEqual(varietyLabels(v), { format: 'Checklist', audience: 'Travelling' });
   assert.equal(varietyLabels(null), null);
   assert.equal(varietyLabels({ format: 'carousel', audience: 'general' }), null, 'an unknown stored value shows nothing');
   assert.equal(varietyBriefs(null), null);
+});
+
+test('shapes and closings that do not fit a pillar are never dealt to it', () => {
+  for (let w = 0; w < WEEKS; w++) {
+    for (const slot of WEEK) {
+      const key = slotKey(slot);
+      if (key === BLOG_SLOT_KEY) continue;
+      const v = varietyFor(key, w)!;
+      assert.ok(!(PILLAR_FORMAT_EXCLUDE[slot.pillarId] || []).includes(v.format), key + ' ' + v.format + ' week ' + w);
+      assert.ok(!(PILLAR_CLOSING_EXCLUDE[slot.pillarId] || []).includes(v.closing), key + ' ' + v.closing + ' week ' + w);
+      if (v.format === 'try-this') assert.notEqual(v.closing, 'try', key + ' try twice, week ' + w);
+    }
+  }
+  // The ones the audit named, spelled out.
+  assert.deepEqual([...PILLAR_FORMAT_EXCLUDE.cancun].sort(), ['myth-fact', 'scenario', 'try-this']);
+  assert.ok(PILLAR_CLOSING_EXCLUDE['recovery-cancun'].includes('ask-physician'));
+  assert.ok(PILLAR_CLOSING_EXCLUDE.cancun.includes('try'));
+  assert.ok(PILLAR_FORMAT_EXCLUDE.supplementation.includes('try-this'));
+});
+
+test('"over 40" is kept to the pillars the document ties age to', () => {
+  for (const [pillar, list] of Object.entries(PILLAR_AUDIENCES)) {
+    if (list.includes('over-40')) assert.ok(['active-living', 'movement', 'prevention'].includes(pillar), pillar);
+  }
+  assert.ok(!PILLAR_AUDIENCES.cancun.includes('considering'), 'a destination post is not a funnel');
+});
+
+test('a closing counts only at the end of the post, in its own words', () => {
+  const REF = '\nREF: Smith, A. (2020). Sleep. DOI: 10.1000/x\n#sleep #rest';
+  assert.ok(closingPresent('Rest matters.\nGive it a try tonight.' + REF, 'try'));
+  assert.ok(closingPresent('Rest matters.\nWhich of these do you already do?' + REF, 'reflect'));
+  assert.ok(closingPresent('Rest matters.\nIt is worth checking with your physician first.' + REF, 'ask-physician'));
+  assert.ok(closingPresent('Rest matters.\nSend this to someone who needs it.' + REF, 'share'));
+  assert.ok(closingPresent('Rest matters.\nSave this for tonight.' + REF, 'save'));
+  // A question at the TOP is not a question back.
+  const qa = 'How do you know if you slept well?\nLine two.\nLine three.\nLine four.\nDeep sleep is when repair happens.' + REF;
+  assert.ok(!closingPresent(qa, 'reflect'));
+  assert.ok(!closingPresent('Rest matters.\nSave this for tonight.' + REF, 'reflect'));
+  assert.ok(!closingPresent('x', 'nope'));
+  assert.match(closingCritique('reflect')!, /question back to the reader/);
+  assert.equal(closingCritique(null), null);
 });

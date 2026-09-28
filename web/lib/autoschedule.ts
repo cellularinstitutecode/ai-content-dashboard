@@ -47,13 +47,15 @@ export type AutoScheduleInput = {
   hasMedia?: boolean;
   /** `claimSupport.status`, when the judge ran. */
   claimSupport?: ClaimSupportStatus | null;
+  /** Weekly-strategy posts: the first line repeats a recent post's (scorePack). */
+  openingRepeat?: boolean | null;
 };
 
 export type AutoScheduleVerdict =
   | { ok: true }
   | {
       ok: false;
-      reason: 'citation' | 'score' | 'safety' | 'promotion' | 'media' | 'claim' | 'networks';
+      reason: 'citation' | 'score' | 'safety' | 'promotion' | 'opening' | 'media' | 'claim' | 'networks';
       message: string;
     };
 
@@ -136,6 +138,17 @@ export function autoScheduleVerdict(input: AutoScheduleInput): AutoScheduleVerdi
       ok: false,
       reason: 'promotion',
       message: 'Held for you because this educational post still reads as promotion in ' + promo + (promo === 1 ? ' place' : ' places') + '. The strategy asks for guidance, not a sales pitch.',
+    };
+  }
+
+  // 4c. "Repeat the content pillar, not the wording." The rewrite is kept only
+  //     when it scores higher, so a repeated opening can survive it with a
+  //     good score; the 15 points it costs never held anything on their own.
+  if (input.openingRepeat) {
+    return {
+      ok: false,
+      reason: 'opening',
+      message: 'Held for you because this post opens the same way as a recent one. A fresh first line keeps the feed from reading as a template.',
     };
   }
 
