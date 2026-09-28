@@ -35,6 +35,15 @@ function packTitleOf(pack: unknown): string | null {
   return typeof t === 'string' && t.trim() ? t.trim() : null;
 }
 
+/** The draft's hero image, for the publishing list's preview. */
+function packImageOf(pack: unknown): string | null {
+  const img = (pack && typeof pack === 'object' ? (pack as Record<string, unknown>)._image : null) as
+    | { url?: unknown }
+    | null;
+  const u = img && typeof img === 'object' ? img.url : null;
+  return typeof u === 'string' && u.trim() ? u.trim() : null;
+}
+
 /** The primary keyword the research settled on for this draft, if any. */
 function packKeywordOf(pack: unknown): string | null {
   const stamp = (pack && typeof pack === 'object' ? (pack as Record<string, unknown>)._semrush : null) as
@@ -261,6 +270,7 @@ export async function GET() {
       // the title on YouTube and TikTok.
       packTitle: packTitleOf(packs[String(p.draft_id || '')] ?? null),
       packKeyword: packKeywordOf(packs[String(p.draft_id || '')] ?? null),
+      imageUrl: packImageOf(packs[String(p.draft_id || '')] ?? null),
     })),
     ...(packsUnavailable ? { packsUnavailable: true } : {}),
   });
