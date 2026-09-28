@@ -89,7 +89,7 @@ export default function CalendarPage() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
-  // Past-due list: which posts are ticked for bulk delete, which one is open
+  // Publishing list: which posts are ticked for bulk delete, which one is open
   // in the preview, and the running bulk delete's progress.
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [previewId, setPreviewId] = useState<string | null>(null);
@@ -473,7 +473,11 @@ export default function CalendarPage() {
   async function removePicked() {
     const ids = pickedIds;
     if (!ids.length || bulk) return;
-    if (!window.confirm('Delete ' + ids.length + ' post' + (ids.length === 1 ? '' : 's') + '? They are removed from Metricool too. This cannot be undone.')) return;
+    // Approved posts are live in Metricool's queue — deleting them cancels a
+    // publication, which is a different decision from clearing stale drafts.
+    const live = posts.filter((p) => ids.includes(String(p.id)) && !isAwaitingApproval(p.status)).length;
+    const warn = live ? '\n\n' + live + ' of them ' + (live === 1 ? 'is' : 'are') + ' already approved and will NOT publish.' : '';
+    if (!window.confirm('Delete ' + ids.length + ' post' + (ids.length === 1 ? '' : 's') + '? They are removed from Metricool too. This cannot be undone.' + warn)) return;
     setErr(null);
     setBulk({ done: 0, total: ids.length });
     const failed: string[] = [];
@@ -485,7 +489,12 @@ export default function CalendarPage() {
         try {
           const r = await fetch('/api/posts?id=' + encodeURIComponent(id), { method: 'DELETE', headers: { 'x-chi-progress': 'quiet' } });
           // Already gone counts as deleted.
-          if (!r.ok && r.status !== 404) {
+          if (r.status === 429) {
+            // Hourly cap reached: every remaining request would be refused
+            // too, so stop and leave the rest ticked for later.
+            failed.push(id, ...queue.splice(0));
+            if (!firstReason) firstReason = 'The hourly limit for post changes was reached. Try the rest again in a while.';
+          } else if (!r.ok && r.status !== 404) {
             failed.push(id);
             if (!firstReason) firstReason = await friendlyErrorFromResponse(r, 'We could not delete that post.');
           }
@@ -506,6 +515,13 @@ export default function CalendarPage() {
   }
 
   const previewPost = previewId ? posts.find((p) => String(p.id) === previewId) || null : null;
+  // Escape closes the preview, as it would any dialog.
+  useEffect(() => {
+    if (!previewId) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPreviewId(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [previewId]);
 
   return (
     <main className="min-h-screen bg-canvas text-ink">
@@ -809,7 +825,7 @@ export default function CalendarPage() {
             <div className="flex flex-wrap items-center gap-2 border-t border-black/5 bg-canvas px-5 py-3">
               {listedIds.includes(String(previewPost.id)) && (
                 <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-ink/70">
-                  <input type="checkbox" checked={picked.has(String(previewPost.id))} onChange={() => togglePick(String(previewPost.id))} className="h-3.5 w-3.5 accent-rose-600" />
+                  <input type="checkbox" checked={picked.has(String(previewPost.id))} onChange={() => togglePick(String(previewPost.id))} disabled={Boolean(bulk)} className="h-3.5 w-3.5 accent-rose-600" />
                   Select for bulk delete
                 </label>
               )}
@@ -825,7 +841,7 @@ export default function CalendarPage() {
               ) : (
                 <button type="button" disabled={saving === previewPost.id} onClick={() => { const d = previewPost.publication_date ? new Date(new Date(previewPost.publication_date).getTime() + 86400000) : null; if (d) void reschedule(String(previewPost.id), d); }} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">+1 day</button>
               )}
-              <button type="button" disabled={saving === previewPost.id} onClick={() => void removePost(previewPost)} className="rounded-full px-3 py-1 text-[12px] font-medium text-red-600 ring-1 ring-red-200 hover:bg-red-50 disabled:opacity-50">Delete</button>
+              <button type="button" disabled={saving === previewPost.id || Boolean(bulk)} onClick={() => void removePost(previewPost)} className="rounded-full px-3 py-1 text-[12px] font-medium text-red-600 ring-1 ring-red-200 hover:bg-red-50 disabled:opacity-50">Delete</button>
             </div>
           </div>
         </div>
