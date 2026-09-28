@@ -18,6 +18,7 @@
 // always publish is simply pressed several times on the person's behalf.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
+import { fetchPosts } from '@/components/refreshBus';
 import { mapLimit } from '@/lib/map-limit';
 import { isAwaitingApproval, postStatusMeta, APPROVED_STATUS } from '@/lib/post-mode';
 import { sheetRowLabel, sheetRowTitle, sheetRowUrl } from '@/lib/sheet-link';
@@ -59,7 +60,7 @@ export default function PreparedBoard({ videoLinks, recentKeys }: {
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch('/api/posts');
+      const r = await fetchPosts();
       if (!r.ok) { setError(await friendlyErrorFromResponse(r, 'We could not load the publishing queue.')); return; }
       const j = await r.json().catch(() => ({}));
       setPosts(Array.isArray(j?.posts) ? (j.posts as Post[]) : []);

@@ -56,9 +56,15 @@ const POLICIES: Record<string, Policy> = {
   // link. Cheap in time, permanent in effect — nothing in this app deletes one.
   'media-copy': { limit: 40, windowSec: 3600 },
   // Routes that reach the shared Metricool account. Each was uncapped: `posts`
-  // is the one that APPROVES into the live queue and DELETES, and the two
-  // read paths are called on every dashboard render.
+  // is the one that APPROVES into the live queue and DELETES.
   posts: { limit: 120, windowSec: 3600 },
+  // Reading the publishing list. It is a read of the account's own rows (and
+  // a Sheets tab id cached for an hour) — no Metricool, no Drive — but four
+  // screens read it and re-read it on every 'posts' refresh signal. Counted in
+  // the write bucket above it ran out within a working hour, and the calendar,
+  // the dashboard queue and the sources board all went blank for up to an
+  // hour. Its own ceiling: still a stop for a runaway loop.
+  'posts-read': { limit: 1200, windowSec: 3600 },
   'metricool-read': { limit: 120, windowSec: 3600 },
   'metricool-sync': { limit: 12, windowSec: 3600 },
   // Named by sources/route.ts but absent from this table, so both silently took

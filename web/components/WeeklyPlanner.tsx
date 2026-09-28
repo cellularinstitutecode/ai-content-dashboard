@@ -172,7 +172,7 @@ export default function WeeklyPlanner({
         <div>
           <h2 style={{ margin: 0, fontSize: 17 }}>Weekly planner</h2>
           <p style={{ margin: '4px 0 0', fontSize: 13, opacity: .65 }}>
-            A theme for each day of the week. Every occurrence is researched and written fresh — a new angle, keyword and citation each time — so a Monday post never reads like last Monday&apos;s. Add as many slots to a day as you like.
+            A theme for each day of the week. Every occurrence is researched and written fresh. Weekly-strategy slots also rotate their angle, caption shape and reader each time, so a Monday post does not read like last Monday&apos;s. Add as many slots to a day as you like.
           </p>
         </div>
         {onLoadStrategy && (
@@ -231,7 +231,7 @@ export default function WeeklyPlanner({
             <div style={{ fontSize: 12, marginTop: 12, background: '#fff', border: '1px solid rgba(0,0,0,0.08)', borderRadius: 8, padding: 10 }}>
               <div style={{ fontWeight: 600 }}>{draft.rotating.name}</div>
               <div style={{ opacity: .65, marginTop: 3 }}>
-                From the weekly strategy: {draft.rotating.angles} angles, one a week, so this slot does not repeat itself for {draft.rotating.angles} weeks. The rotation is kept as it is — change the time or channels below. {draft.seeded ? 'Its format is set by the strategy. ' : ''}To move it to another day, remove it and add it on that day.
+                From the weekly strategy: {draft.rotating.angles} angles, one a week, so this slot does not repeat itself for {draft.rotating.angles} weeks. The rotation is kept as it is — change the time or channels below. {draft.seeded ? 'Its post type is set by the strategy, and each week it gets a new caption shape and reader. ' : ''}To move it to another day, remove it and add it on that day.
               </div>
               {/* The angles themselves. Until now the panel said "5 angles" and
                   showed none, so nobody could check what a slot would write. */}

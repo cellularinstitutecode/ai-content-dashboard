@@ -145,3 +145,10 @@ test('a post that needs no citation is not held for lacking one', () => {
   const v = autoScheduleVerdict({ ...GOOD, claimSupport: 'unsupported' });
   assert.equal(!v.ok && v.reason, 'claim', 'the judge saying no still holds');
 });
+
+test('a strategy post that opens like a recent one does not go, whatever it scored', () => {
+  const v = autoScheduleVerdict({ ...GOOD, score: 85, openingRepeat: true });
+  assert.equal(v.ok === false && v.reason, 'opening');
+  assert.match(holdNote(v), /opens the same way as a recent one/);
+  assert.deepEqual(autoScheduleVerdict({ ...GOOD, openingRepeat: false }), { ok: true });
+});

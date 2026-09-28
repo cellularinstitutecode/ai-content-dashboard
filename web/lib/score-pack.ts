@@ -10,6 +10,8 @@
 import type { ContentPack } from './ai.ts';
 import { reviewPack, type SafetyFlag } from './safety-rules.ts';
 import { promotionFlags, SOFT_CTA_RE } from './strategy-voice.ts';
+import { openingLineOf, repeatsOpening } from './opening-line.ts';
+import { closingCritique, closingPresent } from './strategy-variety.ts';
 
 export type RunScore = {
   total: number; // 0-100
@@ -18,6 +20,8 @@ export type RunScore = {
   critique: string[];
   /** Weekly-strategy posts only: the promotional habits found (lib/strategy-voice.ts). */
   promotionFlags?: string[];
+  /** Weekly-strategy posts only: the opening repeats one the clinic already published. */
+  openingRepeat?: boolean;
 };
 
 /** Enough of an angle to score against. */
@@ -48,7 +52,12 @@ export function channelText(pack: ContentPack, provider: string): string {
   return String(p[key] || p.instagram || p.blog || '');
 }
 
-export function scorePack(pack: ContentPack, providers: string[], angle: ScoreAngle, opts: { strategySlot?: boolean } = {}): RunScore {
+export function scorePack(
+  pack: ContentPack,
+  providers: string[],
+  angle: ScoreAngle,
+  opts: { strategySlot?: boolean; recentOpenings?: readonly string[]; closing?: string | null } = {},
+): RunScore {
   const texts = (providers.length ? providers : ['instagram']).map((p) => channelText(pack, p));
   const joined = texts.join('\n').toLowerCase();
   const critique: string[] = [];
@@ -92,9 +101,16 @@ export function scorePack(pack: ContentPack, providers: string[], angle: ScoreAn
   // post ending "Book your HBOT session today" collected the full fifteen for
   // exactly the sales close its rules forbid. A booking close is now a
   // promotion flag below instead.
-  breakdown.cta = (opts.strategySlot ? SOFT_CTA_RE.test(joined) : CTA_RE.test(joined)) ? 15 : 0;
+  // Phase 3 deals each strategy post its closing (lib/strategy-variety.ts); a
+  // post that was dealt one is measured on that one, at its end.
+  const dealtClosing = opts.strategySlot ? closingCritique(opts.closing) : null;
+  breakdown.cta = (
+    dealtClosing
+      ? texts.some((t) => closingPresent(t, opts.closing))
+      : opts.strategySlot ? SOFT_CTA_RE.test(joined) : CTA_RE.test(joined)
+  ) ? 15 : 0;
   if (!breakdown.cta) {
-    critique.push(opts.strategySlot
+    critique.push(dealtClosing ? dealtClosing : opts.strategySlot
       ? 'Close with a gentle, useful next step (save this, share it, talk it through with your physician) — not a sales pitch.'
       : 'Close with a clear, compliant call to action.');
   }
@@ -116,6 +132,27 @@ export function scorePack(pack: ContentPack, providers: string[], angle: ScoreAn
     if (promo.length) critique.push('This is an educational post, not an advert — remove: ' + promo.join(', ') + '.');
   }
 
+  // "Repeat the content pillar, not the wording." Fourteen posts a week from
+  // one writer drift toward the same first words; an opening that repeats
+  // one of the recent posts costs points and forces the rewrite (stepScore).
+  // The same guard the video captions have had (lib/opening-line.ts).
+  let openingRepeat = false;
+  // Not the weekly article: its first text is the blog, whose first line is a
+  // headline, and headlines are not what the social openings are made of.
+  const article = (providers[0] || '').toLowerCase() === 'blog';
+  if (opts.strategySlot && !article && opts.recentOpenings?.length) {
+    const opening = openingLineOf(texts[0] || '');
+    const repeat = repeatsOpening(opening, opts.recentOpenings);
+    if (repeat) {
+      openingRepeat = true;
+      breakdown.opening = -15;
+      critique.push('The opening line repeats a recent post — start this post a different way, with a different first sentence.');
+    }
+  }
+
   const total = Math.max(0, Object.values(breakdown).reduce((s, v) => s + v, 0));
-  return promo ? { total, breakdown, safetyFlags, critique, promotionFlags: promo } : { total, breakdown, safetyFlags, critique };
+  const out: RunScore = { total, breakdown, safetyFlags, critique };
+  if (promo) out.promotionFlags = promo;
+  if (openingRepeat) out.openingRepeat = true;
+  return out;
 }

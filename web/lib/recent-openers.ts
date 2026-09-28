@@ -15,7 +15,7 @@
 import 'server-only';
 
 import { openingLookBack } from '@/lib/cadence';
-import { openingLineOf } from '@/lib/opening-line';
+import { openingsFrom } from '@/lib/opening-line';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
@@ -34,45 +34,26 @@ import { reportError } from '@/lib/report';
  */
 const LOOK_BACK = openingLookBack();
 
-type DraftRow = { pack?: unknown };
-
-/**
- * Pull the opening line out of whichever variant a pack carries.
- *
- * `tiktok` first: prepareVideo stores the COMPOSED caption there — the one
- * composeCaption assembled and the one writeRowBack puts in column E — whereas
- * `instagram` is the writer's raw output before the REF, the AVISO and the
- * hashtags were sorted out. Their first sentences agree today, and reading the
- * field that is actually published is the one that stays right if they ever
- * stop agreeing. The rest are fallbacks so an older pack shape still yields
- * something.
- */
-function openingFrom(pack: unknown): string {
-  if (!pack || typeof pack !== 'object') return '';
-  const p = pack as Record<string, unknown>;
-  for (const key of ['tiktok', 'instagram', 'facebook', 'linkedin']) {
-    const v = p[key];
-    if (typeof v === 'string' && v.trim()) {
-      const line = openingLineOf(v);
-      if (line) return line;
-    }
-  }
-  return '';
-}
-
 /**
  * The last few opening lines this account has published, newest first.
  *
  * Deduplicated: if three posts already open the same way, showing the writer
  * that sentence three times spends tokens to say one thing, and makes the
  * repeated shape look like the house style rather than the thing to avoid.
+ *
+ * `excludeDraftId`: the draft being scored, which is among the recent ones by
+ * then. It is dropped before de-duplicating (lib/opening-line.ts openingsFrom).
  */
-export async function recentOpenings(userId: string, limit = LOOK_BACK): Promise<string[]> {
+export async function recentOpenings(
+  userId: string,
+  limit = LOOK_BACK,
+  opts: { excludeDraftId?: string | null } = {},
+): Promise<string[]> {
   if (!userId) return [];
   try {
     const { data, error } = await supabaseAdmin()
       .from('drafts')
-      .select('pack')
+      .select('id, pack')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(limit);
@@ -82,17 +63,7 @@ export async function recentOpenings(userId: string, limit = LOOK_BACK): Promise
     // writer would be told nothing is off limits.
     if (error) { reportError('recent-openings', error); return []; }
 
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const row of (data || []) as DraftRow[]) {
-      const line = openingFrom(row.pack);
-      if (!line) continue;
-      const key = line.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(line);
-    }
-    return out;
+    return openingsFrom((data || []) as { id?: unknown; pack?: unknown }[], opts.excludeDraftId);
   } catch (e) {
     reportError('recent-openings', e);
     return [];

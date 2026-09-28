@@ -69,3 +69,20 @@ export function fetchDrafts(limit: number, offset = 0): Promise<any> {
   inFlight.set(url, p);
   return p;
 }
+
+// fetchPosts: the same, for the publishing list.
+//
+// Four screens read /api/posts and every one of them re-reads it on each
+// 'posts' refresh signal — and the dashboard reads it itself right before it
+// announces, so its own listener asked again at once. Concurrent reads now
+// share one request. Each caller gets its own clone of the Response, so it can
+// still check the status and read the body exactly as it did with fetch().
+export function fetchPosts(): Promise<Response> {
+  const url = '/api/posts';
+  let shared = inFlight.get(url) as Promise<Response> | undefined;
+  if (!shared) {
+    shared = fetch(url).finally(() => { inFlight.delete(url); });
+    inFlight.set(url, shared);
+  }
+  return shared.then((r) => r.clone());
+}

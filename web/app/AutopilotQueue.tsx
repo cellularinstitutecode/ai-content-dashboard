@@ -16,6 +16,7 @@ import { MAX_ATTEMPTS } from '@/lib/planner-constants';
 import { plannerImageFor } from '@/lib/planner-image';
 import { imageUnshippable } from '@/lib/image-verdict';
 import { citationLabel, type CitationCheck } from '@/lib/citation';
+import { varietyLabels } from '@/lib/strategy-variety';
 import { claimSupportNote, type ClaimSupportStamp } from '@/lib/claim-support';
 
 // The visible pipeline an engine run walks through. The tick call does all of
@@ -51,6 +52,9 @@ type Angle = {
   strategistNote?: string;
   provenPerformer?: boolean;
   media?: { url: string; title: string } | null;
+  // Weekly-strategy occurrences: the shape and reader dealt for this week.
+  format?: string;
+  audience?: string;
 };
 
 type RunScore = {
@@ -59,6 +63,7 @@ type RunScore = {
   safetyFlags: { code: string; message: string }[];
   critique: string[];
   promotionFlags?: string[];
+  openingRepeat?: boolean;
 };
 
 type PackImage = {
@@ -212,15 +217,24 @@ function FailedRun({ run, busy, onRetry, onDismiss }: { run: Run; busy: boolean;
 export default function AutopilotQueue() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  // Per-card work sets. Each card owns its own busy/image state, so one card
+  // generating images or redrafting never locks the others — several posts
+  // can be edited at the same time.
+  const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const [engineBusy, setEngineBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [openChannel, setOpenChannel] = useState<Record<string, string>>({});
   const [imagingIds, setImagingIds] = useState<Set<string>>(new Set());
-  const [regenId, setRegenId] = useState<string | null>(null);
+  const [regenIds, setRegenIds] = useState<Set<string>>(new Set());
   // "Show me a few": how many propositions are still being made for this run.
-  const [optionsLeft, setOptionsLeft] = useState<{ id: string; left: number } | null>(null);
+  const [optionsIds, setOptionsIds] = useState<Set<string>>(new Set());
+  const addTo = (set: typeof setBusyIds, id: string) => set((prev) => new Set(prev).add(id));
+  const dropFrom = (set: typeof setBusyIds, id: string) => set((prev) => { const next = new Set(prev); next.delete(id); return next; });
+  // Progress scopes for one card: its image block and the card as a whole.
+  // Scoped per run so the loader covers that section only, not the panel.
+  const imgScope = (id: string) => 'autopilot-img:' + id;
+  const runScope = (id: string) => 'autopilot-run:' + id;
   const [lightbox, setLightbox] = useState<{ url: string; alt: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Draft ids we already asked an image for this session — avoids re-requesting
@@ -294,13 +308,13 @@ export default function AutopilotQueue() {
   }, [runs, load]);
 
   async function act(id: string, action: 'approve' | 'skip' | 'run_now' | 'regenerate', extraNote?: string, schedule = false, redate = false) {
-    setBusyId(id);
+    addTo(setBusyIds, id);
     setErr(null);
     setNote(null);
     try {
       const r = await fetch('/api/autopilot/runs', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'x-chi-progress-scope': runScope(id) },
         body: JSON.stringify({ id, action, note: extraNote, schedule, redate }),
       });
       const j = await r.json().catch(() => ({}));
@@ -310,7 +324,7 @@ export default function AutopilotQueue() {
       // token `not_advanced` and threw away the sentence written for them.
       if (!r.ok) throw new Error(j?.message || j?.error || 'Action failed (' + r.status + ')');
       if (j?.note) setNote(String(j.note));
-      await load();
+      await load({ quiet: true });
       // Interconnection: approving queues a Metricool draft (posts row) and
       // every action can touch drafts — update the rest of the dashboard.
       // 'autopilot' was declared as a scope but nothing ever announced it, so
@@ -320,7 +334,7 @@ export default function AutopilotQueue() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Action failed');
     } finally {
-      setBusyId(null);
+      dropFrom(setBusyIds, id);
     }
   }
 
@@ -335,17 +349,17 @@ export default function AutopilotQueue() {
    * card until somebody picks one.
    */
   async function proposeImages(r: Run, count = 3) {
-    if (!r.draft_id || regenId || optionsLeft) return;
+    if (!r.draft_id || regenIds.has(r.id) || optionsIds.has(r.id)) return;
     setErr(null);
     // ONE request for the whole set: the three pictures are generated in
     // parallel on the server and written once. Three separate requests took
     // five minutes end to end and wrote the draft back three times, so a set
     // could half-apply; this takes about as long as the slowest single take.
-    setOptionsLeft({ id: r.id, left: count });
+    addTo(setOptionsIds, r.id);
     try {
       const res = await fetch('/api/drafts/image', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'autopilot' },
+        headers: { 'content-type': 'application/json', 'x-chi-progress-scope': imgScope(r.id) },
         body: JSON.stringify({ id: r.draft_id, options: count }),
       });
       const j = await res.json().catch(() => ({}));
@@ -357,8 +371,8 @@ export default function AutopilotQueue() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Image generation failed');
     }
-    setOptionsLeft(null);
-    await load();
+    dropFrom(setOptionsIds, r.id);
+    await load({ quiet: true });
     announce('images', 'drafts', 'autopilot');
   }
 
@@ -369,12 +383,12 @@ export default function AutopilotQueue() {
     try {
       const res = await fetch('/api/drafts/image', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'x-chi-progress-scope': imgScope(r.id) },
         body: JSON.stringify({ id: r.draft_id, choose: url }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j?.error || 'Could not choose that image');
-      await load();
+      await load({ quiet: true });
       announce('images', 'drafts', 'autopilot');
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Could not choose that image');
@@ -382,23 +396,23 @@ export default function AutopilotQueue() {
   }
 
   async function regenImage(r: Run) {
-    if (!r.draft_id || regenId) return;
-    setRegenId(r.id);
+    if (!r.draft_id || regenIds.has(r.id) || optionsIds.has(r.id)) return;
+    addTo(setRegenIds, r.id);
     setErr(null);
     try {
       const res = await fetch('/api/drafts/image', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'autopilot' },
+        headers: { 'content-type': 'application/json', 'x-chi-progress-scope': imgScope(r.id) },
         body: JSON.stringify({ id: r.draft_id, regenerate: true }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j?.error || 'Image regeneration failed');
-      await load();
+      await load({ quiet: true });
       announce('images', 'drafts', 'autopilot'); // fresh hero image → Image Studio + library update live
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Image regeneration failed');
     } finally {
-      setRegenId(null);
+      dropFrom(setRegenIds, r.id);
     }
   }
 
@@ -505,11 +519,17 @@ export default function AutopilotQueue() {
               const channels = CHANNEL_KEYS.filter((k) => r.pack && typeof r.pack[k] === 'string' && r.pack[k].trim());
               const open = openChannel[r.id] || channels[0] || 'instagram';
               return (
-                <article key={r.id} className="overflow-hidden rounded-2xl ring-1 ring-line">
+                <article key={r.id} className="relative overflow-hidden rounded-2xl ring-1 ring-line">
+                  <PanelLoader scope={runScope(r.id)} rounded="rounded-2xl" />
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-subtle/40 px-5 py-3">
                     <div className="flex flex-wrap items-center gap-2 text-[13px]">
                       <span className={'rounded-full px-2.5 py-0.5 text-[11px] font-semibold ' + meta.cls}>{meta.label}</span>
                       <span className="font-semibold text-ink">{r.angle?.query || 'Draft'}</span>
+                      {varietyLabels(r.angle) && (
+                        <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-700" title="This week's format and reader, from the weekly strategy's rotation">
+                          {varietyLabels(r.angle)!.format} · for {varietyLabels(r.angle)!.audience}
+                        </span>
+                      )}
                       {r.angle?.volume != null && (
                         <span className="text-[12px] text-ink-muted">
                           {r.angle.volume}/mo{r.angle.difficulty != null ? ' · KD ' + r.angle.difficulty : ''}
@@ -597,16 +617,22 @@ export default function AutopilotQueue() {
                       ⚠ Reads as promotion: {r.score!.promotionFlags!.join(', ')}. The strategy asks for guidance, not a sales pitch — edit it or ask for changes.
                     </div>
                   )}
+                  {r.score?.openingRepeat && (
+                    <div className="border-b border-line bg-amber-50 px-5 py-2.5 text-[12px] text-amber-800">
+                      ⚠ Opens the same way as a recent post. Give it a fresh first line — edit it or ask for changes.
+                    </div>
+                  )}
 
                   {r.pack?._image?.url ? (
-                    <div className="border-b border-line px-5 py-4">
+                    <div className="relative border-b border-line px-5 py-4">
+                      <PanelLoader scope={imgScope(r.id)} rounded="rounded-none" />
                       <button
                         type="button"
                         onClick={() => setLightbox({ url: r.pack!._image!.url, alt: r.pack!._image!.alt || 'AI hero image' })}
                         className="group/img relative block w-full overflow-hidden rounded-xl ring-1 ring-line"
                         title="Click to view full size"
                       >
-                        {regenId === r.id && (
+                        {regenIds.has(r.id) && (
                           <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-white/70 text-[13px] font-medium text-ink backdrop-blur-sm">
                             <span className="h-4 w-4 animate-spin rounded-full border-2 border-line border-t-accent" />
                             Generating a new proposition…
@@ -643,19 +669,19 @@ export default function AutopilotQueue() {
                         <button
                           type="button"
                           onClick={() => regenImage(r)}
-                          disabled={regenId === r.id || busyId === r.id}
+                          disabled={regenIds.has(r.id) || optionsIds.has(r.id) || busyIds.has(r.id)}
                           className="ml-auto rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
                         >
-                          {regenId === r.id ? 'Regenerating…' : '↻ New image'}
+                          {regenIds.has(r.id) ? 'Regenerating…' : '↻ New image'}
                         </button>
                         <button
                           type="button"
                           onClick={() => proposeImages(r)}
-                          disabled={Boolean(regenId) || Boolean(optionsLeft) || busyId === r.id}
+                          disabled={regenIds.has(r.id) || optionsIds.has(r.id) || busyIds.has(r.id)}
                           title="Generates three propositions side by side. Your current picture stays as it is until you pick one."
                           className="rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
                         >
-                          {optionsLeft?.id === r.id ? 'Making ' + optionsLeft.left + ' options…' : '⁝⁝ Show me 3 options'}
+                          {optionsIds.has(r.id) ? 'Making 3 options…' : '⁝⁝ Show me 3 options'}
                         </button>
                       </div>
                       {(r.pack?._imageOptions?.length || 0) > 0 && (
@@ -678,7 +704,7 @@ export default function AutopilotQueue() {
                         </div>
                       )}
                     </div>
-                  ) : imagingIds.has(r.id) || regenId === r.id ? (
+                  ) : imagingIds.has(r.id) || regenIds.has(r.id) ? (
                     <div className="flex items-center gap-2 border-b border-line px-5 py-3 text-[12px] text-ink-muted">
                       <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-accent" />
                       Generating hero image…
@@ -689,7 +715,7 @@ export default function AutopilotQueue() {
                       <button
                         type="button"
                         onClick={() => regenImage(r)}
-                        disabled={Boolean(regenId) || busyId === r.id}
+                        disabled={regenIds.has(r.id) || busyIds.has(r.id)}
                         className="rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
                       >
                         Generate image
@@ -731,10 +757,10 @@ export default function AutopilotQueue() {
                           if (!window.confirm('This post was due ' + fmtSlot(r.scheduled_for) + ' and that time has passed.\n\nSchedule it at the next free slot (clinic posting hours, clear of anything else going out)?')) return;
                           void act(r.id, 'approve', undefined, true, true);
                         }}
-                        disabled={busyId === r.id}
+                        disabled={busyIds.has(r.id)}
                         className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
                       >
-                        {busyId === r.id ? 'Working…' : 'Approve for next free slot'}
+                        {busyIds.has(r.id) ? 'Working…' : 'Approve for next free slot'}
                       </button>
                     ) : (
                       <>
@@ -744,15 +770,15 @@ export default function AutopilotQueue() {
                             if (!window.confirm('Approve and schedule this post?\n\nIt will be published at ' + fmtSlot(r.scheduled_for) + ' (clinic time). Metricool does the publishing; you will not need to open it.')) return;
                             void act(r.id, 'approve', undefined, true);
                           }}
-                          disabled={busyId === r.id}
+                          disabled={busyIds.has(r.id)}
                           className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
                         >
-                          {busyId === r.id ? 'Working…' : 'Approve & schedule'}
+                          {busyIds.has(r.id) ? 'Working…' : 'Approve & schedule'}
                         </button>
                         <button
                           type="button"
                           onClick={() => act(r.id, 'approve')}
-                          disabled={busyId === r.id}
+                          disabled={busyIds.has(r.id)}
                           className="rounded-full px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:text-ink disabled:opacity-50"
                         >
                           Approve as draft
@@ -768,18 +794,18 @@ export default function AutopilotQueue() {
                         const feedback = window.prompt('What should change? The engine redrafts and must address your note.', '');
                         if (feedback !== null) void act(r.id, 'regenerate', feedback);
                       }}
-                      disabled={busyId === r.id}
+                      disabled={busyIds.has(r.id)}
                       className="rounded-full px-4 py-1.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
                     >
-                      {busyId === r.id ? 'Redrafting…' : 'Ask for changes'}
+                      {busyIds.has(r.id) ? 'Redrafting…' : 'Ask for changes'}
                     </button>}
                     <button
                       type="button"
                       onClick={() => act(r.id, 'skip')}
-                      disabled={busyId === r.id}
+                      disabled={busyIds.has(r.id)}
                       className="rounded-full px-4 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
                     >
-                      {busyId === r.id ? 'Working…' : 'Skip this one'}
+                      {busyIds.has(r.id) ? 'Working…' : 'Skip this one'}
                     </button>
                     <span className="ml-auto text-[11px] text-ink-muted">You approve every post — nothing goes out on its own.</span>
                   </div>
@@ -803,10 +829,10 @@ export default function AutopilotQueue() {
                 <button
                   type="button"
                   onClick={() => act(r.id, 'run_now')}
-                  disabled={busyId === r.id}
+                  disabled={busyIds.has(r.id)}
                   className="rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-white disabled:opacity-50"
                 >
-                  {busyId === r.id ? 'Preparing…' : 'Prepare now'}
+                  {busyIds.has(r.id) ? 'Preparing…' : 'Prepare now'}
                 </button>
               </div>
             ))}
@@ -816,7 +842,7 @@ export default function AutopilotQueue() {
         {failed.length > 0 && (
           <div className="mt-6 space-y-2">
             <div className="text-[12px] font-semibold uppercase tracking-wide text-ink-muted">Needs attention</div>
-            {failed.map((r) => <FailedRun key={r.id} run={r} busy={busyId === r.id} onRetry={() => act(r.id, 'run_now')} onDismiss={() => act(r.id, 'skip')} />)}
+            {failed.map((r) => <FailedRun key={r.id} run={r} busy={busyIds.has(r.id)} onRetry={() => act(r.id, 'run_now')} onDismiss={() => act(r.id, 'skip')} />)}
           </div>
         )}
       </div>

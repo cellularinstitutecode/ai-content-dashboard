@@ -9,7 +9,7 @@ import ImageStudio from "./ImageStudio";
 import CollapsibleSection from "@/components/CollapsibleSection";
 import SystemStatus from "@/components/SystemStatus";
 import ProcessTracker, { makeSteps, stepActive, stepError, stepSkip, stepsDone, type ProcessStep } from "@/components/ProcessTracker";
-import { announce, onRefresh, fetchDrafts } from "@/components/refreshBus";
+import { announce, onRefresh, fetchDrafts, fetchPosts } from "@/components/refreshBus";
 import { tightestLimit, networkLabel, parseVideoUrl, draftLabel, PUBLISH_NETWORKS, DEFAULT_VIDEO_NETWORKS, mediaProblem } from "@/lib/composer";
 import { filterQueue, matchesQueueSearch } from "@/lib/queue-search";
 import MediaPicker from "@/components/MediaPicker";
@@ -851,7 +851,7 @@ setDrafts((prev: any) => append ? [...(Array.isArray(prev) ? prev : []), ...rows
 async function refreshPosts() {
 setPostsLoading(true);
 try {
-const r = await fetch('/api/posts');
+const r = await fetchPosts();
 if (!r.ok) { setLoadError(await friendlyErrorFromResponse(r, 'We could not load your publishing queue.')); return; }
 const j = await r.json().catch(() => null);
 const rows = (j && Array.isArray(j.posts)) ? j.posts : toArray(j);

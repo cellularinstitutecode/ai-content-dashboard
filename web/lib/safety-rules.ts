@@ -37,11 +37,27 @@ const NEGATORS = new Set([
   "doesn't", 'nor', 'neither', 'nothing', 'none',
 ]);
 
-/** True when one of the three words before `index` in `text` negates what follows. */
+/**
+ * A sentence that reports a belief rather than making a claim: "Myth: this
+ * cures fatigue", "Many people think everyone will respond the same way". The
+ * myth-vs-fact shape (lib/strategy-variety.ts) opens with exactly that, and
+ * the fact that follows is what sets it straight — so the belief it states is
+ * no more the post's claim than "this is not a cure" is.
+ */
+const REPORTED_BELIEF =
+  /^\s*(?:["“'‘]?\s*)?(?:(?:a |the )?(?:common |popular |persistent )?(?:myth|misconception|belief)\b|(?:many|some|most|lots of) (?:people )?(?:think|believe|assume|say|hear)\b|it'?s (?:often|commonly|widely) (?:said|believed|thought)\b|you (?:may|might) have heard\b|people often (?:think|believe|say|assume)\b)/i;
+
+/**
+ * True when one of the three words before `index` in `text` negates what
+ * follows, or the sentence it sits in reports a belief (REPORTED_BELIEF).
+ */
 export function negatedAt(text: string, index: number): boolean {
   const before = text.slice(Math.max(0, index - 48), index).toLowerCase().replace(/[’]/g, "'");
   const words = before.split(/[^a-z']+/).filter(Boolean).slice(-3);
-  return words.some((w) => NEGATORS.has(w));
+  if (words.some((w) => NEGATORS.has(w))) return true;
+  const head = text.slice(0, index);
+  const start = Math.max(head.lastIndexOf('.'), head.lastIndexOf('!'), head.lastIndexOf('?'), head.lastIndexOf('\n')) + 1;
+  return REPORTED_BELIEF.test(text.slice(start, index).replace(/[’]/g, "'"));
 }
 
 type Rule = { code: string; message: string; res: RegExp[]; negatable?: boolean };

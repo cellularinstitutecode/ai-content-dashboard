@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { openingLineOf, repeatsOpening, signatureOf, stemOf, similarity } from './opening-line.ts';
+import { openingLineOf, openingsFrom, repeatsOpening, signatureOf, stemOf, similarity } from './opening-line.ts';
 
 test('the opening line is the first sentence, not the whole caption', () => {
   const copy = 'Ozone runs through a dialyser at 42 degrees. Then it returns.\n\nSecond paragraph.\n\nREF: Smith 2020\n\n#cellularinstitute';
@@ -74,4 +74,17 @@ test('the stem is raw and the overlap is filtered, and both are needed', () => {
   const line = 'Safety in regenerative medicine starts long before a therapy reaches the patient.';
   assert.deepEqual(signatureOf(line), ['safety', 'reaches'], 'filtered: almost nothing left');
   assert.deepEqual(stemOf(line).slice(0, 5), ['safety', 'in', 'regenerative', 'medicine', 'starts']);
+});
+
+test('openingsFrom drops the excluded draft BEFORE de-duplicating, so an exact repeat survives', () => {
+  const line = 'Eight hours in bed is not the same as rest.';
+  const rows = [
+    { id: 'this-draft', pack: { instagram: line + ' More.' } },
+    { id: 'monday', pack: { instagram: line + ' Other.' } },
+    { id: 'older', pack: { facebook: 'Protein at breakfast keeps energy steady.' } },
+  ];
+  const out = openingsFrom(rows, 'this-draft');
+  assert.equal(out.length, 2);
+  assert.ok(repeatsOpening(openingLineOf(line + ' More.'), out), 'Monday\'s identical line is still there to catch it');
+  assert.equal(openingsFrom(rows).length, 2, 'without an exclusion, the two identical lines are one');
 });

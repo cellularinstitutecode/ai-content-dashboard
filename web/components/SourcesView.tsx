@@ -18,6 +18,7 @@ import type { Route } from 'next';
 import PageNav from '@/components/PageNav';
 import { useWorkspace } from '@/components/workspace';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
+import { fetchPosts } from '@/components/refreshBus';
 import { metricoolPlannerUrl } from '@/lib/metricool-links';
 import VideoRegister from '@/components/VideoRegister';
 import PreparedBoard from '@/components/PreparedBoard';
@@ -954,7 +955,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     // queue duplicates of drafts that already exist.
     let grouped = new Map<string, { id: string; videoPending?: boolean | null }[]>();
     try {
-      const r = await fetch('/api/posts');
+      const r = await fetchPosts();
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
         setBatch({});
