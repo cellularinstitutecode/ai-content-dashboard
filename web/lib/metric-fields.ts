@@ -45,7 +45,15 @@ export function metricNetwork(row: Record<string, unknown> | null | undefined): 
   return 'unknown';
 }
 
-/** What an id-less row's synthetic id hashes: unchanged, so re-syncs keep the same key. */
+/**
+ * What an id-less row's synthetic id hashes: unchanged, so re-syncs keep the
+ * same key — except an object date ({ dateTime, timezone }), which joined as
+ * "[object Object]" and so dropped the date from the key. No stored row has
+ * that key (an object date failed the whole upsert until the stored column
+ * was normalised), and two posts sharing a caption would otherwise collide
+ * inside one upsert and fail the entire sync.
+ */
 export function syntheticBasis(network: string, rawDate: unknown, text: string | null): string {
-  return [network, rawDate ?? '', (text ?? '').slice(0, 200)].join('|');
+  const date = rawDate && typeof rawDate === 'object' ? metricDate(rawDate) ?? '' : rawDate ?? '';
+  return [network, date, (text ?? '').slice(0, 200)].join('|');
 }

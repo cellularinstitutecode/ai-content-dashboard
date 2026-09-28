@@ -38,8 +38,16 @@ test('the network is stored exactly as before — raw, and never from `type`', (
 });
 
 test('an id-less row hashes the same basis as before, whatever shape its date has', () => {
-  for (const date of ['2026-10-05 09:00:00', '2026-10-05T14:00:00Z', { dateTime: '2026-10-05T09:00:00', timezone: 'America/Cancun' }, undefined, null]) {
+  for (const date of ['2026-10-05 09:00:00', '2026-10-05T14:00:00Z', 1791208800, undefined, null]) {
     const text = 'Eight hours in bed is not the same as rest.';
     assert.equal(syntheticBasis('Instagram', date, text), OLD_BASIS('Instagram', date ?? null, text), JSON.stringify(date));
   }
+});
+
+test('an object date is part of the key, so two posts sharing a caption do not collide', () => {
+  const text = 'Save this for tonight.';
+  const a = syntheticBasis('instagram', { dateTime: '2026-10-05T09:00:00Z' }, text);
+  const b = syntheticBasis('instagram', { dateTime: '2026-10-12T09:00:00Z' }, text);
+  assert.notEqual(a, b);
+  assert.ok(!a.includes('[object Object]'));
 });

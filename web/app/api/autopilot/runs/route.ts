@@ -12,6 +12,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { advanceRuns, approveRun, regenerateRun, skipRun } from '@/lib/autopilot';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { bucketRuns, DEFAULT_LIMITS, FAILED_WINDOW_DAYS } from '@/lib/review-queue';
+import { wantsBlog } from '@/lib/metricool-networks';
 
 export const runtime = 'nodejs';
 // 300, not 60. The approve path runs ensureDraftImage — which lib/images.ts
@@ -149,6 +150,9 @@ export async function GET(req: NextRequest) {
       ...r,
       template_name: names[String(r.template_id)] || 'Template',
       template_providers: providersOf[String(r.template_id)] || [],
+      // The approve step's own rule (wantsBlog trims and lower-cases), so the
+      // card and the server agree on which runs write the WordPress article.
+      writes_article: wantsBlog(providersOf[String(r.template_id)] || []),
       pack: r.draft_id ? packs[String(r.draft_id)] ?? null : null,
       recent_angles: (history[String(r.template_id)] || []).filter(
         (h) => h.query !== (r.angle as { query?: string } | null)?.query

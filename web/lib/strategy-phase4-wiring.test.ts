@@ -42,6 +42,13 @@ test('autoschedule never sends a run a person asked for by id', () => {
 
 test('an article run is not offered "Approve as draft"', () => {
   const queue = src('app/AutopilotQueue.tsx');
-  assert.match(queue, /\(r\.template_providers \|\| \[\]\)\.includes\('blog'\) \?/);
-  assert.match(src('app/api/autopilot/runs/route.ts'), /template_providers: providersOf\[/);
+  assert.match(queue, /\{r\.writes_article \? \(/);
+  assert.match(src('app/api/autopilot/runs/route.ts'), /writes_article: wantsBlog\(/, 'the approve step\'s own rule');
+});
+
+test('a redraft a reviewer asked for is never autoscheduled, however it finished', () => {
+  const engine = src('lib/autopilot.ts');
+  assert.match(engine, /reviewRequestedAt: new Date\(\)\.toISOString\(\)/, 'Ask for changes stamps the run');
+  const auto = engine.slice(engine.indexOf('async function autoSchedule('));
+  assert.match(auto.slice(0, 2500), /reviewRequestedAt\) \{\s*await hold\(/, 'autoSchedule holds it');
 });
