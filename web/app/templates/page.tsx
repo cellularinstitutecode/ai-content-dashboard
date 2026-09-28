@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import PageNav from '@/components/PageNav';
 import WeeklyPlanner, { type PlannerTemplate } from '@/components/WeeklyPlanner';
+import StrategyPerformance from '@/components/StrategyPerformance';
 import { announce, onRefresh } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
 
@@ -340,6 +341,8 @@ export default function TemplatesPage() {
           onLoadStrategy={loadStrategy}
           loadingStrategy={strategyBusy}
         />
+
+        <StrategyPerformance />
 
         <section style={card}>
           <h2 style={{ marginTop: 0, marginBottom: 20, fontSize: 17 }}>New template</h2>

@@ -12,6 +12,7 @@
 // fine — a social post at 9 and a blog at 14, say.
 
 import { useMemo, useState } from 'react';
+import { nextOccurrence, plannedMix, slotLabel, type NextOccurrence } from '@/lib/strategy-mix';
 
 export type PlannerTemplate = {
   id?: string;
@@ -87,6 +88,17 @@ export default function WeeklyPlanner({
     }
     for (const list of map.values()) list.sort((a, b) => String(a.time_of_day || '').localeCompare(String(b.time_of_day || '')));
     return map;
+  }, [templates]);
+
+  // Phase 4: is the week still the strategy, and what is each slot about to
+  // write? Only once the strategy is loaded — a hand-built planner has no
+  // frequency table to be measured against.
+  const hasStrategy = templates.some((t) => Boolean(t.strategy?.slot));
+  const mix = useMemo(() => (hasStrategy ? plannedMix(templates) : null), [templates, hasStrategy]);
+  const nexts = useMemo(() => {
+    const out = new Map<string, NextOccurrence>();
+    for (const t of templates) if (t.id && t.strategy?.slot) out.set(t.id, nextOccurrence(t));
+    return out;
   }, [templates]);
 
   function startNew(day: number) {
@@ -187,6 +199,8 @@ export default function WeeklyPlanner({
         )}
       </div>
 
+      {mix && <MixPanel mix={mix} />}
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(150px, 1fr))', gap: 10, marginTop: 18, overflowX: 'auto' }}>
         {DAYS.map((label, i) => {
           const day = DAY_INDEX[i];
@@ -207,6 +221,7 @@ export default function WeeklyPlanner({
                         : ' · fresh angle weekly') : ' · fixed text'}
                     </div>
                     <div style={{ fontSize: 10, opacity: .6, marginTop: 2 }}>{(t.providers || []).join(', ') || 'no channels'}</div>
+                    {t.id && t.active !== false && <NextLine next={nexts.get(t.id) ?? null} />}
                     <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
                       <button type="button" style={{ ...ghost, padding: '3px 8px', fontSize: 11 }} onClick={() => startEdit(day, t)}>Edit</button>
                       <button type="button" style={{ ...ghost, padding: '3px 8px', fontSize: 11 }} onClick={() => void onToggle(t, t.active === false)}>{t.active === false ? 'Turn on' : 'Pause'}</button>
@@ -237,7 +252,15 @@ export default function WeeklyPlanner({
                   showed none, so nobody could check what a slot would write. */}
               {draft.rotating.list && draft.rotating.list.length > 0 && (
                 <ol style={{ margin: '8px 0 0', paddingLeft: 18, lineHeight: 1.5 }}>
-                  {draft.rotating.list.map((a, i) => <li key={i}>{a}</li>)}
+                  {draft.rotating.list.map((a, i) => {
+                    const n = draft.id ? nexts.get(draft.id) : null;
+                    const isNext = Boolean(n && n.angle && n.angle === a);
+                    return (
+                      <li key={i} style={isNext ? { fontWeight: 600, color: '#0071e3' } : undefined}>
+                        {a}{isNext ? ' — next' : ''}
+                      </li>
+                    );
+                  })}
                 </ol>
               )}
               <div style={{ opacity: .65, marginTop: 6 }}>
@@ -287,5 +310,114 @@ export default function WeeklyPlanner({
         </div>
       )}
     </section>
+  );
+}
+
+const GROUP_LABEL: Record<string, string> = {
+  medical: 'Medical',
+  lifestyle: 'Healthy lifestyle',
+  recovery: 'Recovery',
+  cancun: 'Cancún',
+};
+
+const STATUS_STYLE: Record<string, React.CSSProperties> = {
+  ok: { color: '#248a3d' },
+  under: { color: '#b25000', fontWeight: 600 },
+  over: { color: '#b25000', fontWeight: 600 },
+};
+
+/** The frequency table, as the planner stands now. */
+function MixPanel({ mix }: { mix: ReturnType<typeof plannedMix> }) {
+  const off = mix.rows.filter((r) => r.status !== 'ok');
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ marginTop: 16, background: '#f5f5f7', borderRadius: 10, padding: 12, fontSize: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <div>
+          <span style={{ fontWeight: 700 }}>Strategy mix this week</span>
+          <span style={{ marginLeft: 8, ...(off.length || mix.missing.length || mix.paused.length ? STATUS_STYLE.under : STATUS_STYLE.ok) }}>
+            {off.length || mix.missing.length || mix.paused.length
+              ? '⚠ ' + [
+                  off.length ? off.length + (off.length === 1 ? ' pillar' : ' pillars') + ' off the document\'s frequency' : '',
+                  mix.paused.length ? mix.paused.length + ' paused' : '',
+                  mix.missing.length ? mix.missing.length + ' missing' : '',
+                ].filter(Boolean).join(' · ')
+              : '✓ Matches the document\'s frequency table'}
+          </span>
+        </div>
+        <button type="button" style={{ ...ghost, padding: '3px 10px', fontSize: 11 }} onClick={() => setOpen(!open)} aria-expanded={open}>
+          {open ? 'Hide details' : 'Show details'}
+        </button>
+      </div>
+      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 8 }}>
+        {Object.entries(mix.groups).map(([g, v]) => (
+          <div key={g} title={'Recommended mix: ' + v.recommended + ' · the document\'s day map: ' + v.dayMap}>
+            <span style={{ opacity: .65 }}>{GROUP_LABEL[g] || g}</span>{' '}
+            <strong>{v.planned}</strong>
+            <span style={{ opacity: .55 }}> / {v.recommended === v.dayMap ? v.recommended : v.recommended + '–' + v.dayMap}</span>
+          </div>
+        ))}
+        <div><span style={{ opacity: .65 }}>Weekly article</span> <strong style={mix.article === 'on' ? STATUS_STYLE.ok : STATUS_STYLE.under}>{mix.article === 'on' ? 'on' : mix.article}</strong></div>
+      </div>
+      {open && (
+        <div style={{ marginTop: 10 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ textAlign: 'left', opacity: .6 }}>
+                <th style={{ padding: '4px 6px', fontWeight: 600 }}>Pillar</th>
+                <th style={{ padding: '4px 6px', fontWeight: 600 }}>Document</th>
+                <th style={{ padding: '4px 6px', fontWeight: 600 }}>Planned</th>
+              </tr>
+            </thead>
+            <tbody>
+              {mix.rows.map((r) => (
+                <tr key={r.id} style={{ borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+                  <td style={{ padding: '4px 6px' }}>{r.name}</td>
+                  <td style={{ padding: '4px 6px', opacity: .7 }}>{r.frequency}</td>
+                  <td style={{ padding: '4px 6px', ...STATUS_STYLE[r.status] }}>
+                    {r.planned}{r.status === 'under' ? ' — below' : r.status === 'over' ? ' — above' : ''}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {(mix.paused.length > 0 || mix.missing.length > 0) && (
+            <div style={{ marginTop: 8, opacity: .8 }}>
+              {mix.paused.length > 0 && <div>Paused: {mix.paused.map(slotLabel).join(', ')}.</div>}
+              {mix.missing.length > 0 && <div>Missing: {mix.missing.map(slotLabel).join(', ')}. &ldquo;Load the weekly strategy&rdquo; puts them back without touching the rest.</div>}
+            </div>
+          )}
+          <div style={{ marginTop: 8, opacity: .55 }}>
+            Group totals count each slot&apos;s main pillar. The document recommends 5 lifestyle posts but its day map schedules 7 (Saturday&apos;s two), so both numbers are shown.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const nextFmt = (iso: string) => {
+  try {
+    return new Date(iso).toLocaleString('en-US', { timeZone: 'America/Cancun', weekday: 'short', month: 'short', day: 'numeric' });
+  } catch {
+    return iso.slice(0, 10);
+  }
+};
+
+/** What a strategy slot writes next — the rotation's own deal. */
+function NextLine({ next }: { next: NextOccurrence }) {
+  if (!next) return null;
+  if (next.angle === null) {
+    const why = next.reason === 'edited'
+      ? 'its angle list was edited, so it rotates its own list'
+      : next.reason === 'before-start' ? 'the rotation has not started yet' : 'not a strategy slot';
+    return <div style={{ fontSize: 10, opacity: .55, marginTop: 4 }}>Next {nextFmt(next.at)}: {why}.</div>;
+  }
+  return (
+    <div style={{ fontSize: 10, marginTop: 4, lineHeight: 1.35 }} title={'Angle ' + next.position + ' of ' + next.of + ' in this slot\'s rotation. The engine may swap it in the first weeks if a recent post already covered it.'}>
+      <span style={{ opacity: .55 }}>Next {nextFmt(next.at)}:</span>{' '}
+      <span style={{ color: '#1d1d1f' }}>{next.angle}</span>
+      {next.format && <span style={{ color: '#6e3fd1' }}> · {next.format} · for {next.audience}</span>}
+    </div>
   );
 }

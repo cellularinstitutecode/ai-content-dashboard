@@ -65,6 +65,8 @@ const POLICIES: Record<string, Policy> = {
   // the dashboard queue and the sources board all went blank for up to an
   // hour. Its own ceiling: still a stop for a runaway loop.
   'posts-read': { limit: 1200, windowSec: 3600 },
+  // The strategy's per-pillar performance (Phase 4). Database reads only.
+  'strategy-performance': { limit: 240, windowSec: 3600 },
   'metricool-read': { limit: 120, windowSec: 3600 },
   'metricool-sync': { limit: 12, windowSec: 3600 },
   // Named by sources/route.ts but absent from this table, so both silently took
