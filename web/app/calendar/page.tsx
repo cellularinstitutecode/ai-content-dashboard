@@ -25,6 +25,11 @@ type Post = {
   videoPending?: boolean;
   /** Set by GET /api/posts: which row of which tab this copy was written from. */
   source?: PostSource | null;
+  /** Set by GET /api/posts: the video attached to this post, if any. */
+  mediaUrl?: string | null;
+  /** Set by GET /api/posts: the linked draft's hero image, if any. */
+  imageUrl?: string | null;
+  packTitle?: string | null;
 };
 
 function toArray(x: any): any[] {
@@ -84,6 +89,11 @@ export default function CalendarPage() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
+  // Past-due list: which posts are ticked for bulk delete, which one is open
+  // in the preview, and the running bulk delete's progress.
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
 
   // Click-a-day scheduling panel state
   const [scheduleDay, setScheduleDay] = useState<Date | null>(null);
@@ -440,6 +450,58 @@ export default function CalendarPage() {
     }
   }
 
+  // Ticks only ever refer to posts still in the past-due list — a post that was
+  // moved, approved or deleted elsewhere drops out of the selection by itself.
+  const overdueIds = useMemo(() => overdueList.map((p) => String(p.id || '')).filter(Boolean), [overdueList]);
+  const pickedIds = overdueIds.filter((id) => picked.has(id));
+  const allPicked = overdueIds.length > 0 && pickedIds.length === overdueIds.length;
+  function togglePick(id: string) {
+    setPicked((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  }
+  function toggleAll() {
+    setPicked(allPicked ? new Set() : new Set(overdueIds));
+  }
+
+  // Deletes the ticked past-due posts through the same DELETE the single
+  // button uses (Metricool first, then our row), two at a time, and reports
+  // exactly which ones failed rather than stopping at the first problem.
+  async function removePicked() {
+    const ids = pickedIds;
+    if (!ids.length || bulk) return;
+    if (!window.confirm('Delete ' + ids.length + ' past post' + (ids.length === 1 ? '' : 's') + '? They are removed from Metricool too. This cannot be undone.')) return;
+    setErr(null);
+    setBulk({ done: 0, total: ids.length });
+    const failed: string[] = [];
+    let firstReason = '';
+    const queue = [...ids];
+    const worker = async () => {
+      while (queue.length) {
+        const id = queue.shift() as string;
+        try {
+          const r = await fetch('/api/posts?id=' + encodeURIComponent(id), { method: 'DELETE', headers: { 'x-chi-progress': 'quiet' } });
+          // Already gone counts as deleted.
+          if (!r.ok && r.status !== 404) {
+            failed.push(id);
+            if (!firstReason) firstReason = await friendlyErrorFromResponse(r, 'We could not delete that post.');
+          }
+        } catch (e) {
+          failed.push(id);
+          if (!firstReason) firstReason = friendlyError(e, 'We could not delete that post.');
+        }
+        setBulk((b) => (b ? { ...b, done: b.done + 1 } : b));
+      }
+    };
+    await Promise.all([worker(), worker()]);
+    setPicked(new Set(failed));
+    if (previewId && !failed.includes(previewId) && ids.includes(previewId)) setPreviewId(null);
+    if (failed.length) setErr((ids.length - failed.length) + ' of ' + ids.length + ' deleted. ' + failed.length + ' could not be (still ticked): ' + firstReason);
+    setBulk(null);
+    await refresh();
+    announce('posts', 'stats', 'insights');
+  }
+
+  const previewPost = previewId ? posts.find((p) => String(p.id) === previewId) || null : null;
+
   return (
     <main className="min-h-screen bg-canvas text-ink">
       <header className="flex items-center justify-between border-b border-black/5 bg-surface px-8 py-5">
@@ -576,20 +638,56 @@ export default function CalendarPage() {
           {overdueList.length > 0 && (
             <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50/70 p-3 text-[12px]">
               <div className="mb-1 font-semibold text-rose-800">{overdueList.length} past {overdueList.length === 1 ? 'its' : 'their'} time, still waiting</div>
-              <p className="mb-2 text-[11px] text-rose-800/80">These were never approved, so they did not go out. Move each to tomorrow at the same time, or delete it.</p>
-              <ul className="space-y-1.5">
+              <p className="mb-2 text-[11px] text-rose-800/80">These were never approved, so they did not go out. Click one to preview it. Tick the ones you don&apos;t need and delete them together, or move one to tomorrow.</p>
+              {/* Bulk bar: select all + delete selected. The list below scrolls
+                  on its own, so this stays in reach. */}
+              <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-rose-100/90 px-2 py-1.5 backdrop-blur">
+                <label className="flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-rose-900">
+                  <input type="checkbox" checked={allPicked} onChange={toggleAll} disabled={Boolean(bulk)} className="h-3.5 w-3.5 accent-rose-600" aria-label="Select all past posts" />
+                  {allPicked ? 'Clear all' : 'Select all'}
+                </label>
+                <span className="text-[11px] text-rose-900/70">{pickedIds.length} selected</span>
+                <span className="flex-1" />
+                {pickedIds.length > 0 && !bulk && (
+                  <button type="button" onClick={() => setPicked(new Set())} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-rose-900/70 hover:bg-rose-200/60">Clear</button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void removePicked()}
+                  disabled={pickedIds.length === 0 || Boolean(bulk)}
+                  className="rounded-full bg-red-600 px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-40"
+                >
+                  {bulk ? 'Deleting ' + bulk.done + ' / ' + bulk.total + '…' : 'Delete selected' + (pickedIds.length ? ' (' + pickedIds.length + ')' : '')}
+                </button>
+              </div>
+              <ul className="max-h-[45vh] space-y-1.5 overflow-y-auto pr-1">
                 {overdueList.map((p) => {
+                  const id = String(p.id || '');
                   const d = p.publication_date ? new Date(p.publication_date) : null;
+                  const on = picked.has(id);
                   return (
-                    <li key={p.id} className="rounded-lg bg-surface/80 p-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-semibold text-ink">{d ? d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : '—'} · {timeLabel(p.publication_date)}</span>
-                        <span className="text-[10px] text-ink/50">{(p.providers || []).map((n) => networkLabel(n)).join(', ')}</span>
-                      </div>
-                      <div className="mt-0.5 line-clamp-1 text-ink/70" title={p.text || ''}>{p.text || 'Untitled post'}</div>
-                      <div className="mt-1 flex gap-1.5">
-                        <button type="button" disabled={saving === p.id} onClick={() => { const t = new Date(today.getTime() + 86400000); void reschedule(String(p.id), t); }} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Move to tomorrow</button>
-                        <button type="button" disabled={saving === p.id} onClick={() => void removePost(p)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-red-600 hover:bg-red-50">Delete</button>
+                    <li key={p.id} className={'flex gap-2 rounded-lg p-2 ring-1 transition ' + (on ? 'bg-red-50 ring-red-300' : 'bg-surface/80 ring-transparent')}>
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={() => togglePick(id)}
+                        disabled={Boolean(bulk)}
+                        className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-rose-600"
+                        aria-label="Select this post"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <button type="button" onClick={() => setPreviewId(id)} className="block w-full text-left" title="Preview this post">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold text-ink">{d ? d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : '—'} · {timeLabel(p.publication_date)}</span>
+                            <span className="text-[10px] text-ink/50">{(p.providers || []).map((n) => networkLabel(n)).join(', ')}</span>
+                          </div>
+                          <div className="mt-0.5 line-clamp-1 text-ink/70">{p.text || 'Untitled post'}</div>
+                        </button>
+                        <div className="mt-1 flex gap-1.5">
+                          <button type="button" onClick={() => setPreviewId(id)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Preview</button>
+                          <button type="button" disabled={saving === p.id || Boolean(bulk)} onClick={() => { const t = new Date(today.getTime() + 86400000); void reschedule(id, t); }} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Move to tomorrow</button>
+                          <button type="button" disabled={saving === p.id || Boolean(bulk)} onClick={() => void removePost(p)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-50">Delete</button>
+                        </div>
                       </div>
                     </li>
                   );
@@ -654,6 +752,49 @@ export default function CalendarPage() {
         </div>
       </aside>
       </div>
+
+      {previewPost && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setPreviewId(null)}>
+          <div className="relative flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-surface shadow-2xl ring-1 ring-black/10" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Post preview">
+            <div className="flex items-start justify-between gap-3 border-b border-black/5 px-5 py-4">
+              <div className="min-w-0">
+                <h3 className="truncate text-base font-semibold text-ink">{previewPost.packTitle || 'Post preview'}</h3>
+                <p className="mt-0.5 text-[12px] text-ink/50">
+                  {previewPost.publication_date ? new Date(previewPost.publication_date).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) + ' · ' + timeLabel(previewPost.publication_date) : '—'}
+                  {' · '}{(previewPost.providers || []).map((n) => networkLabel(n)).join(', ')}
+                </p>
+              </div>
+              <button type="button" onClick={() => setPreviewId(null)} className="rounded-full px-2 text-lg leading-none text-ink/50 hover:bg-black/5" aria-label="Close preview">×</button>
+            </div>
+            <div className="overflow-y-auto px-5 py-4">
+              {previewPost.mediaUrl ? (
+                <video src={previewPost.mediaUrl} controls preload="metadata" className="mb-3 max-h-72 w-full rounded-xl bg-black" />
+              ) : previewPost.imageUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={previewPost.imageUrl} alt="Post image" className="mb-3 max-h-72 w-full rounded-xl object-contain ring-1 ring-black/5" />
+              ) : null}
+              <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-ink">{previewPost.text || 'Untitled post'}</div>
+              {sheetRowUrl(previewPost.source) && (
+                <a href={sheetRowUrl(previewPost.source) as string} target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1 text-[12px] font-medium text-accent hover:underline">
+                  <span aria-hidden>{'\u{1F4C4}'}</span> {sheetRowLabel(previewPost.source)} {'\u2197'}
+                </a>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2 border-t border-black/5 bg-canvas px-5 py-3">
+              {overdueIds.includes(String(previewPost.id)) && (
+                <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-ink/70">
+                  <input type="checkbox" checked={picked.has(String(previewPost.id))} onChange={() => togglePick(String(previewPost.id))} className="h-3.5 w-3.5 accent-rose-600" />
+                  Select for bulk delete
+                </label>
+              )}
+              <span className="flex-1" />
+              <button type="button" onClick={() => { jumpTo(previewPost); setPreviewId(null); }} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Show on calendar</button>
+              <button type="button" disabled={saving === previewPost.id} onClick={() => { const t = new Date(today.getTime() + 86400000); void reschedule(String(previewPost.id), t); setPreviewId(null); }} className="rounded-full bg-accent px-3 py-1 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Move to tomorrow</button>
+              <button type="button" disabled={saving === previewPost.id} onClick={() => void removePost(previewPost)} className="rounded-full px-3 py-1 text-[12px] font-medium text-red-600 ring-1 ring-red-200 hover:bg-red-50 disabled:opacity-50">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {scheduleDay && (
         <div
