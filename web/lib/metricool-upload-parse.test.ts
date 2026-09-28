@@ -27,6 +27,8 @@ import {
   bareEtag,
   completionBody,
   directUploadEnabled,
+  imageContentType,
+  imageUploadEligible,
   isMetricoolCopyId,
   isMetricoolHostedUrl,
   metricoolCopyId,
@@ -487,4 +489,31 @@ test('the copy maker tries the upload only when the bucket would not take the fi
   assert.match(lib, /where: 'metricool'/, 'and records where the bytes went');
   // A failed upload is a NOTE on the refusal, never a thrown error.
   assert.match(lib, /directUpload = \{ available: false, note: direct\.message \}/);
+});
+
+// --- images through the same transaction --------------------------------------
+
+test('only a plain https image link is uploaded as an image; Drive and videos never', () => {
+  assert.equal(imageUploadEligible('https://proj.supabase.co/storage/v1/object/public/content-images/packs/a.png'), true);
+  assert.equal(imageUploadEligible('https://proj.supabase.co/storage/v1/object/public/content-images/packs/a.JPG?v=2'), true);
+  assert.equal(imageUploadEligible('http://proj.supabase.co/a.png'), false, 'https only');
+  assert.equal(imageUploadEligible('https://x.test/clip.mp4'), false);
+  assert.equal(imageUploadEligible('https://drive.usercontent.google.com/download?id=1AbC_dEfGhIjKlMnOpQrStUvWxYz012345&export=download'), false);
+  assert.equal(imageUploadEligible('https://static.metricool.com/image/1/a.png'), false, 'already there');
+  assert.equal(imageUploadEligible(''), false);
+});
+
+test('the declared content type is the image the server said it was', () => {
+  assert.equal(imageContentType('image/png'), 'image/png');
+  assert.equal(imageContentType('image/JPG; charset=binary'), 'image/jpeg');
+  assert.equal(imageContentType('video/mp4'), null);
+  assert.equal(imageContentType('text/html'), null);
+  assert.equal(imageContentType(null), null);
+});
+
+test('lib/metricool.ts uploads only a non-video that the normalise did not take', () => {
+  const lib = src('lib/metricool.ts');
+  assert.match(lib, /return isVideo \? failed : await uploadImageInstead\(failed\);/);
+  assert.match(lib, /if \(imageUploadEligible\(src\)\)/);
+  assert.match(lib, /throw new MediaNotNormalisedError\(failure\?\.message \|\| undefined\);/);
 });

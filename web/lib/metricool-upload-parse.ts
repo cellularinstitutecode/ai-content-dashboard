@@ -28,7 +28,8 @@
 // unexpected reply in types.
 //
 // Pure: `./x.ts` imports only, so the test runner reads this file directly.
-import { describeShape } from './metricool-normalize-parse.ts';
+import { describeShape, looksLikeImageUrl } from './metricool-normalize-parse.ts';
+import { isDriveUrl } from './drive-url.ts';
 
 // --- hosts Metricool already trusts ------------------------------------------
 
@@ -77,6 +78,41 @@ export function isMetricoolHostedUrl(url: string | null | undefined): boolean {
 export function directUploadEnabled(env: Record<string, string | undefined> = process.env): boolean {
   const raw = String(env.METRICOOL_DIRECT_UPLOAD ?? '').trim().toLowerCase();
   return !(raw === 'off' || raw === 'false' || raw === '0' || raw === 'no');
+}
+
+// --- images, through the same transaction ---------------------------------------
+//
+// The AI hero is a PNG on a public Supabase URL, and the image normalise
+// endpoint can hand that link back or refuse it. The upload transaction takes a
+// contentType, so an image goes up the way a video does: one declared slice.
+
+/** The largest image uploaded this way: under one 25 MB slice, read into memory. */
+export const IMAGE_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+
+/** Content types an image upload may declare. */
+const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+
+/**
+ * May this URL be uploaded into Metricool as an image?
+ *
+ * A plain https link to an image file only. A Drive link never — Drive videos
+ * keep their own route and their own refusal — and a Metricool-hosted URL
+ * needs nothing.
+ */
+export function imageUploadEligible(url: string | null | undefined): boolean {
+  const raw = String(url || '').trim();
+  let u: URL;
+  try { u = new URL(raw); } catch { return false; }
+  if (u.protocol !== 'https:') return false;
+  if (isDriveUrl(raw) || isMetricoolHostedUrl(raw)) return false;
+  return looksLikeImageUrl(raw);
+}
+
+/** The image content type the server declared, or null when it is not an image this route takes. */
+export function imageContentType(header: string | null | undefined): string | null {
+  const t = String(header || '').split(';')[0].trim().toLowerCase();
+  const norm = t === 'image/jpg' ? 'image/jpeg' : t;
+  return IMAGE_TYPES.includes(norm) ? norm : null;
 }
 
 // --- the copy-id marker --------------------------------------------------------
