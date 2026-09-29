@@ -43,8 +43,8 @@ export type LibraryHeroResult = {
   decision: GradeDecision;
 };
 
-/** The stored photo's bytes, from the app's own public bucket. */
-async function fetchPhoto(url: string): Promise<{ bytes: Buffer; contentType: string; ext: string }> {
+/** The stored photo's bytes, from the app's own public bucket. Also what a retitle (lib/retitle.ts) reads the clean photo with. */
+export async function fetchPhoto(url: string): Promise<{ bytes: Buffer; contentType: string; ext: string }> {
   // Fetched on the server, so only from the app's own bucket: a request must
   // not be able to point this at any address it likes.
   if (!ownBucketUrl(url, process.env.NEXT_PUBLIC_SUPABASE_URL, IMAGE_BUCKET)) throw new Error('that photo is not one the dashboard stored');
@@ -148,11 +148,17 @@ export async function libraryHero(opts: {
     let url = photoUrl;
     let titled: PackImage['titled'];
     const title = opts.title ? coverTitleFor(opts.pack, opts.topic) : '';
-    if (title) {
+    // Words the team set on the previous picture stay theirs on this one.
+    const custom = (opts.pack as { _image?: { titled?: { custom?: unknown } } })._image?.titled?.custom === true;
+    if (opts.title && !title) {
+      // The team turned the title off on this draft (lib/cover-edit.ts): the
+      // graded photo is the hero, and the record keeps saying so.
+      titled = { title: '', photoUrl, family: 'none', custom: true };
+    } else if (title) {
       try {
         const cover = await renderTitleCover({ title, photo: { bytes, contentType }, headTopPct: verification?.headTopPct ?? null });
         url = await storeBytes(cover.png, 'image/png', 'png', nameHint + '-cover');
-        titled = { title, photoUrl, family: cover.family };
+        titled = { title, photoUrl, family: cover.family, ...(custom ? { custom: true } : {}) };
       } catch (err) {
         reportError('library-hero:title-cover', err, { title });
         notes.push('the title could not be set on the photo, so it was used without one');

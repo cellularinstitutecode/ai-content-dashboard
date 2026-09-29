@@ -17,6 +17,11 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { plannerImageFor } from '@/lib/planner-image';
 import type { BrandContext } from '@/lib/ai';
 import { imageUnshippable } from '@/lib/image-verdict';
+import { cleanCoverTitle, notesOf, retitleDecision, takesOf } from '@/lib/cover-edit';
+import { coverTitleFor } from '@/lib/library-cover';
+import { retitleImage } from '@/lib/retitle';
+import { suggestCoverTitles } from '@/lib/title-suggest';
+import { briefSource } from '@/lib/image-brief';
 
 export const runtime = 'nodejs';
 // THE ARITHMETIC, as with the schedule route.
@@ -27,6 +32,30 @@ export const runtime = 'nodejs';
 // bodyless 504, and the rungs below it never ran at all. At `quality: high` a
 // generation is slower still, which would have made that the ordinary case.
 export const maxDuration = 300;
+
+/**
+ * GET ?id= → the draft's current picture and the title its cover would carry,
+ * for the Edit image panel (components/ImageEditPanel.tsx) to open pre-filled.
+ * Reads only; spends nothing.
+ */
+export async function GET(req: NextRequest) {
+  const sb = await supabaseServer();
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const id = String(req.nextUrl.searchParams.get('id') || '').trim();
+  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
+  const { data: d } = await sb.from('drafts').select('id, topic, pack').eq('id', id).eq('user_id', user.id).maybeSingle();
+  if (!d) return NextResponse.json({ error: 'draft not found' }, { status: 404 });
+  const pack = (d as { pack?: Record<string, unknown> }).pack || {};
+  const image = (pack as { _image?: PackImage })._image ?? null;
+  const planner = plannerImageFor(pack);
+  return NextResponse.json({
+    image,
+    title: coverTitleFor(pack, (d as { topic?: string }).topic || ''),
+    plannerTitle: planner?.title ?? null,
+    retitle: retitleDecision(image),
+  });
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -63,6 +92,16 @@ export async function POST(req: NextRequest) {
     // half-apply; this takes about as long as the slowest single picture.
     const wantSet = Math.min(3, Math.max(0, Math.round(Number(body?.options) || 0)));
     const choose = typeof body?.choose === 'string' ? body.choose.trim() : '';
+    // THE EDIT IMAGE PANEL (components/ImageEditPanel.tsx) — none of these
+    // spends an image credit.
+    //   retitle: "<words>"   re-render the cover from the kept clean photograph
+    //                        with these words (lib/retitle.ts); "" takes the
+    //                        title off and the clean photo becomes the hero.
+    //   suggestTitles: true  three other short titles from the text model.
+    //   saveNotes: "<notes>" keep the notes for the next take without making one.
+    const retitle = typeof body?.retitle === 'string' ? body.retitle : body?.noTitle === true ? '' : null;
+    const suggestTitles = body?.suggestTitles === true;
+    const saveNotes = typeof body?.saveNotes === 'string' ? body.saveNotes.trim().slice(0, 600) : null;
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
 
     // A PHOTO, OR A DIRECTION — because "press New image and hope" was the only
@@ -74,7 +113,12 @@ export async function POST(req: NextRequest) {
     //              too AI" because it is not.
     //   dataUrl    a file dropped on the panel, stored in the same bucket the
     //              generated ones live in.
-    const direction = typeof body?.prompt === 'string' ? body.prompt.trim().slice(0, 600) : '';
+    const direction = typeof body?.prompt === 'string' ? body.prompt.trim().slice(0, 600)
+      : typeof body?.direction === 'string' ? body.direction.trim().slice(0, 600) : '';
+    // Notes given with THIS request replace the stored ones (an empty string
+    // clears them); a request without any reuses what the last take was made
+    // with, so "New image" and "Show me 3 options" keep the team's notes.
+    const directionGiven = typeof body?.prompt === 'string' || typeof body?.direction === 'string';
     const useUrl = typeof body?.useUrl === 'string' ? body.useUrl.trim() : '';
     if (brandPhotoUrl && !/^https:\/\/\S+$/i.test(brandPhotoUrl)) {
       return NextResponse.json({ error: 'bad_image', message: 'That library photo address is not one a network can fetch.' }, { status: 400 });
@@ -104,13 +148,19 @@ export async function POST(req: NextRequest) {
       ? ((pack as { _imageOptions?: PackImage[] })._imageOptions as PackImage[])
       : [];
 
+    const topic = String((d as { topic?: string }).topic || 'regenerative medicine');
+    // The notes the next take will be made with (see `directionGiven`).
+    const effectiveDirection = directionGiven ? direction : notesOf(existing);
+
     // PICK ONE. No generation: the chosen proposition simply becomes the hero.
     if (choose) {
-      const picked = [...options, ...(existing ? [existing] : [])].find((o) => o?.url === choose);
-      if (!picked) return NextResponse.json({ error: 'not_an_option', message: 'That image is not one of this draft\'s propositions.' }, { status: 400 });
+      const found = [...options, ...(existing ? [existing] : [])].find((o) => o?.url === choose);
+      if (!found) return NextResponse.json({ error: 'not_an_option', message: 'That image is not one of this draft\'s propositions.' }, { status: 400 });
       const { data: freshRow } = await sb.from('drafts').select('pack').eq('id', id).eq('user_id', user.id).maybeSingle();
       const currentPack = (freshRow as { pack?: Record<string, unknown> } | null)?.pack ?? pack;
       const prior = (currentPack as { _image?: PackImage })._image;
+      // The draft's generation count stays with the draft, whichever take is up.
+      const picked: PackImage = { ...found, takes: Math.max(takesOf(found), takesOf(prior)) };
       // The one being replaced joins the propositions, so nothing is lost.
       const keep = [...options, ...(prior && prior.url !== choose ? [prior] : [])]
         .filter((o, i, all) => o?.url && o.url !== choose && all.findIndex((x) => x.url === o.url) === i)
@@ -120,6 +170,20 @@ export async function POST(req: NextRequest) {
         .eq('id', id).eq('user_id', user.id);
       if (setErr) return NextResponse.json({ error: setErr.message }, { status: 500 });
       return NextResponse.json({ image: picked, options: keep });
+    }
+
+    // OTHER WORDS FOR THE COVER: a text call, never an image one.
+    if (suggestTitles) {
+      const planner = plannerImageFor(pack);
+      const current = existing?.titled ? existing.titled.title : coverTitleFor(pack, topic);
+      const titles = await suggestCoverTitles({
+        angle: planner?.subject || topic,
+        pillarName: planner?.pillarName || null,
+        copy: briefSource(pack),
+        current,
+        avoid: planner ? [planner.title] : [],
+      });
+      return NextResponse.json({ titles, current });
     }
     // Brand profile keeps the image on-brand (optional, fail-soft).
     const loadBrand = async (): Promise<BrandContext | undefined> => {
@@ -137,7 +201,31 @@ export async function POST(req: NextRequest) {
       if (setErr) throw new Error(setErr.message);
       await removeSuperseded(currentPack, nextPack);
     };
-    const topic = String((d as { topic?: string }).topic || 'regenerative medicine');
+    // NEW WORDS ON THE SAME PICTURE (or none). The clean photograph behind the
+    // cover is fetched back and re-rendered with lib/title-cover.ts — no image
+    // model, no credits. A picture from before covers existed has no clean
+    // photograph, and the panel's button already says so (lib/cover-edit.ts).
+    if (retitle != null) {
+      const decision = retitleDecision(existing);
+      if (!decision.ok || !existing) return NextResponse.json({ error: 'cannot_retitle', message: decision.ok ? 'There is no picture on this draft yet.' : decision.reason }, { status: 400 });
+      try {
+        const made = await retitleImage(existing, cleanCoverTitle(retitle), topic);
+        await setHero(made);
+        return NextResponse.json({ image: made, retitled: true });
+      } catch (e) {
+        reportError('drafts-image:retitle', e, { id });
+        return NextResponse.json({ error: 'retitle_failed', message: 'The title could not be set on this picture: ' + (e instanceof Error ? e.message : 'unknown error') }, { status: 502 });
+      }
+    }
+
+    // KEEP THE NOTES for the next take, without making one.
+    if (saveNotes != null) {
+      if (!existing) return NextResponse.json({ error: 'no_image', message: 'Make a picture first; the notes are kept with it.' }, { status: 400 });
+      const kept: PackImage = { ...existing };
+      if (saveNotes) kept.direction = saveNotes; else delete kept.direction;
+      try { await setHero(kept); } catch (e) { return NextResponse.json({ error: e instanceof Error ? e.message : 'draft update failed' }, { status: 500 }); }
+      return NextResponse.json({ image: kept, saved: true });
+    }
 
     // A LIBRARY PHOTO WITH THE BRAND FILTER AND THE TITLE. The photo itself
     // becomes the hero: measured and graded toward the house palette, checked
@@ -247,7 +335,9 @@ export async function POST(req: NextRequest) {
       topic,
       pack,
       brand,
-      direction,
+      direction: effectiveDirection,
+      // The title the team set (or turned off) stays on every new take.
+      title: existing?.titled?.custom ? existing.titled.title : null,
       // Fresh generations start at variant 0; each regenerate (explicit, or
       // forced by a text-flagged stored image) advances to the next
       // composition (hero shot → macro lab → lifestyle → still-life → …).
@@ -308,6 +398,9 @@ export async function POST(req: NextRequest) {
           .slice(-5)
       : [];
     const nextHero = proposing ? (priorImage ?? image) : image;
+    // The draft's generation count rides on whichever picture is the hero now.
+    const takes = Math.max(takesOf(priorImage), takesOf(existing)) + madeNow.length;
+    nextHero.takes = takes;
     // Owner update passes RLS via the session client.
     const nextPack = { ...currentPack, _image: nextHero, ...(nextOptions.length ? { _imageOptions: nextOptions } : { _imageOptions: [] }) };
     const { error } = await sb

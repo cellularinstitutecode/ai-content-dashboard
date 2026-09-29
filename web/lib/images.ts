@@ -20,6 +20,7 @@ import { cleanTopic, familyAt, onTopicCheck, plannerImageFor, plannerPromptLines
 import { renderTitleCover } from '@/lib/title-cover';
 import { briefSource, briefSystemPrompt, briefUserPrompt, parseSceneBrief, type SceneBrief } from '@/lib/image-brief';
 import { COVER_MIN_HEAD_TOP_PCT, photographVerdict, type LibraryProvenance } from './library-cover.ts';
+import { cleanCoverTitle, notesOf, takesOf } from './cover-edit.ts';
 import { setStoredFontReader } from '@/lib/brand-card';
 import { readStoredFonts } from '@/lib/brand-fonts';
 
@@ -90,7 +91,21 @@ export type PackImage = {
    * deliberate, so the text rule does not apply to them. Weekly-planner
    * covers, and library photos set with "Use library photo with brand filter".
    */
-  titled?: { title: string; photoUrl: string; family: string };
+  titled?: {
+    title: string;
+    photoUrl: string;
+    family: string;
+    /** True once a person set the words (or turned them off: title '') in the Edit image panel; regenerations keep them. */
+    custom?: boolean;
+  };
+  /**
+   * The team's notes for the picture, as last used ("two women at a table, no
+   * lab coat"). Shown again in the Edit image panel and reused by "New image"
+   * and "Show me 3 options" until cleared (lib/cover-edit.ts).
+   */
+  direction?: string;
+  /** How many image generations this draft has had, across takes; the panel asks before a credit once it is 3+. */
+  takes?: number;
   /** Older takes only: the library photo an AI image was styled after. That path is gone. */
   styledAfter?: string;
   /** Library photos: was the brand's colour filter applied (lib/library-cover.ts)? */
@@ -662,6 +677,8 @@ export async function generatePackImage(opts: {
   slot?: number | null;
   /** How long the caller can wait: no retry starts that cannot finish in it. */
   budgetMs?: number | null;
+  /** Planner covers: the words to set instead of the planner's own ('' = no title). Null keeps the planner's. */
+  title?: string | null;
 }): Promise<PackImage> {
   // Record how this went before handing the result (or the failure) on, so
   // /api/health can say whether images WORK rather than whether a key is set.
@@ -692,14 +709,23 @@ async function generateBestPackImage(opts: {
    */
   slot?: number | null;
   budgetMs?: number | null;
+  title?: string | null;
 }): Promise<PackImage> {
   // Weekly-planner drafts rotate through their pillar's own scenes and are
   // checked for being on topic; every other draft is unchanged.
   const plannerBase = plannerImageFor(opts.pack);
+  const direction = String(opts.direction || '').trim();
   // Read the post once: does its own body talk about biology? Only then may a
   // microscopy or lab frame be offered for it — and never on a lifestyle theme.
+  // A title the team set (or turned off) outlives the take it was set on; the
+  // notes they wrote travel with the brief so the checker judges against them.
   const planner = plannerBase
-    ? { ...plannerBase, science: scienceOffered(plannerBase.pillarId, briefSource(opts.pack, 6000) || opts.topic) }
+    ? {
+        ...plannerBase,
+        ...(opts.title != null ? { title: cleanCoverTitle(opts.title) } : {}),
+        ...(direction ? { direction } : {}),
+        science: scienceOffered(plannerBase.pillarId, briefSource(opts.pack, 6000) || opts.topic),
+      }
     : null;
   const sceneCount = planner ? SHOT_COUNT : STYLE_VARIANTS.length;
   const baseVariant = Math.abs(Math.round(opts.variant ?? 0)) % sceneCount;
@@ -732,7 +758,7 @@ async function generateBestPackImage(opts: {
     // vision checker asks the right question of it.
     const family = planner ? familyAt(planner, opts.slot ?? variant) : null;
     const objectLed = family === 'consult' || family === 'still';
-    const brief = planner && objectLed && !String(opts.direction || '').trim() ? await sceneBriefFor(planner, opts.pack, variant) : null;
+    const brief = planner && objectLed && !direction ? await sceneBriefFor(planner, opts.pack, variant) : null;
     const plannerNow = planner ? { ...planner, ...(family ? { shotFamily: family } : {}), ...(brief ? { dynamic: brief } : {}) } : null;
     const prompt = buildImagePrompt({ ...opts, variant, planner: plannerNow });
     // A retry that fails must not destroy an already-paid-for candidate. This
@@ -776,30 +802,38 @@ async function generateBestPackImage(opts: {
   }
 
   const nameHint = cleanTopic(opts.topic) || opts.topic;
+  // The clean photograph is stored FIRST and kept as `titled.photoUrl`: it is
+  // what a free retitle re-renders from (lib/cover-edit.ts retitleDecision).
   const photoUrl = await storeImage(best.img, nameHint);
   let url = photoUrl;
   let titled: PackImage['titled'];
+  const custom = opts.title != null;
   // Planner drafts: set the title on the verified photograph. Best-effort — if
   // the renderer fails, the clean photograph ships on its own rather than
   // nothing, and the failure is reported.
-  if (planner) {
+  if (planner && planner.title) {
     try {
       const cover = await renderTitleCover({ title: planner.title, photo: { bytes: best.img.bytes, contentType: best.img.contentType }, headTopPct: best.verification.headTopPct });
       url = await storeBytes(cover.png, 'image/png', 'png', nameHint + '-cover');
-      titled = { title: planner.title, photoUrl, family: cover.family };
+      titled = { title: planner.title, photoUrl, family: cover.family, ...(custom ? { custom: true } : {}) };
     } catch (err) {
       reportError('images:title-cover', err, { title: planner.title });
     }
+  } else if (planner) {
+    // The team turned the title off: the clean photograph is the hero, and the
+    // record says so, so nothing tries to give it a cover later.
+    titled = { title: '', photoUrl, family: 'none', custom: true };
   }
   return {
     url,
     ...(titled ? { titled } : {}),
     prompt: best.prompt,
-    alt: `${planner ? (titled ? planner.title + ' — ' : '') + subject : opts.topic} — illustrative image for ${opts.brand?.name || 'Cellular Institute'}`,
+    alt: `${planner ? (titled?.title ? titled.title + ' — ' : '') + subject : opts.topic} — illustrative image for ${opts.brand?.name || 'Cellular Institute'}`,
     model: best.img.model,
     createdAt: new Date().toISOString(),
     variant: best.variant,
     verification: best.verification,
+    ...(direction ? { direction } : {}),
   };
 }
 
@@ -846,13 +880,17 @@ export async function ensureDraftImage(draftId: string, ownerId: string, opts: {
     if (bp) brand = bp as BrandContext;
   } catch (err) { /* optional */ reportError('images:draft-stamp', err); }
 
-  const image = await generatePackImage({
+  const made = await generatePackImage({
     topic: String(row.topic || 'regenerative medicine'),
     pack,
     brand,
     variant: existingHasText || (opts.force && existing?.url) ? (existing?.variant ?? 0) + 1 : 0,
     budgetMs: opts.budgetMs ?? null,
+    // The team's notes and their title (or "no title") outlive the take.
+    direction: notesOf(existing) || null,
+    title: existing?.titled?.custom ? existing.titled.title : null,
   });
+  const image: PackImage = { ...made, takes: takesOf(existing) + 1 };
   // Same re-read as /api/drafts/image: the pack read before generation is
   // 30-60s stale, and a redraft in that window would otherwise be silently
   // reverted by this write. Merge `_image` into whatever is there NOW.

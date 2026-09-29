@@ -89,8 +89,12 @@ export function headTopAfterPad(headTopPct: number, pad: number): number {
   return Math.round(((headTopPct / 100 + pad) / (1 + pad)) * 1000) / 10;
 }
 
-/** The words set on the cover: the planner's own title, else the post's topic, short. */
+/** The words set on the cover: a title the team set on the current picture, else the planner's own, else the post's topic, short. */
 export function coverTitleFor(pack: unknown, topic: unknown): string {
+  const titled = (pack && typeof pack === 'object' ? (pack as { _image?: { titled?: { title?: unknown; custom?: unknown } } })._image?.titled : null) || null;
+  // A title somebody typed in the Edit image panel outlives the picture it was
+  // typed on — including "no title", which is '' here and honoured.
+  if (titled && titled.custom === true) return String(titled.title ?? '').trim();
   const planner = plannerImageFor(pack);
   if (planner?.title) return planner.title;
   const t = cleanTopic(topic).replace(/\s+/g, ' ').trim();
