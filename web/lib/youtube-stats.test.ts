@@ -60,7 +60,7 @@ test('the route asks Metricool for exactly these, as its own MCP server does', (
   assert.match(route, /network: 'youtube'/);
   assert.match(route, /metric: 'views'/);
   assert.match(route, /checkRateLimit\(auth\.userId, 'metricool-read'\)/);
-  assert.equal(YT_ACCOUNT_METRICS.length, 5);
+  assert.deepEqual([...YT_ACCOUNT_METRICS], ['yttotalSubscribers', 'ytsubscribersGained', 'ytsubscribersLost'], 'videos and revenue are no longer fetched');
 });
 
 test('the main page shows the YouTube card', () => {
@@ -68,5 +68,13 @@ test('the main page shows the YouTube card', () => {
   assert.match(page, /\{!isDraft && <YouTubeStats \/>\}/);
   const card = readFileSync(new URL('../components/YouTubeStats.tsx', import.meta.url), 'utf8');
   assert.match(card, /fetch\('\/api\/metricool\/youtube'\)/);
-  for (const label of ['Subscribers', 'Video views', 'Revenue', 'Videos']) assert.match(card, new RegExp('label="' + label + '"'));
+  // Subscribers and views only, as the team asked.
+  for (const label of ['Subscribers', 'Video views']) assert.match(card, new RegExp('label="' + label + '"'));
+  for (const label of ['Revenue', 'Videos']) assert.doesNotMatch(card, new RegExp('label="' + label + '"'));
+});
+
+test('"How your recent posts did" is gone from the main page', () => {
+  const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(page, />How your recent posts did</);
+  assert.doesNotMatch(page, /No recent post data yet\. Numbers appear here/);
 });

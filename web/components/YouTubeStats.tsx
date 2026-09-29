@@ -1,10 +1,9 @@
 'use client';
 
 // components/YouTubeStats.tsx
-// The YouTube channel's community numbers on the dashboard's main page — the
-// four tiles Metricool's Community · Growth panel shows (subscribers, video
-// views, revenue, videos) for the last 30 days, plus the net subscriber
-// change. Read from GET /api/metricool/youtube; a figure Metricool did not
+// The YouTube channel's community numbers on the dashboard's main page:
+// subscribers (with the net change) and video views for the last 30 days, from
+// Metricool's Community · Growth data. Read from GET /api/metricool/youtube; a figure Metricool did not
 // return shows as "—", never as a made-up zero.
 
 import { useEffect, useState } from 'react';
@@ -61,17 +60,11 @@ export default function YouTubeStats() {
       ) : err ? (
         <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-900 ring-1 ring-amber-200/60">{err}</p>
       ) : (
-        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        // Subscribers and views only, as the team asked.
+        <div className="mt-4 grid grid-cols-2 gap-3">
           <Tile label="Subscribers" value={fmt(stats?.subscribers)} sub={changeText} tone="bg-indigo-50 text-indigo-900 ring-indigo-100" />
           <Tile label="Video views" value={fmt(stats?.views)} tone="bg-emerald-50 text-emerald-900 ring-emerald-100" />
-          <Tile label="Revenue" value={stats?.revenue == null ? '—' : fmt(stats.revenue, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })} tone="bg-rose-50 text-rose-900 ring-rose-100" />
-          <Tile label="Videos" value={fmt(stats?.videos)} tone="bg-amber-50 text-amber-900 ring-amber-100" />
         </div>
-      )}
-      {!loading && !err && stats && (stats.gained != null || stats.lost != null) && (
-        <p className="mt-3 text-[12px] text-ink-muted">
-          {fmt(stats.gained)} subscribers gained · {fmt(stats.lost)} lost
-        </p>
       )}
     </section>
   );
