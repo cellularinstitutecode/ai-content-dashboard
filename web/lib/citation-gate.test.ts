@@ -21,6 +21,9 @@ test('the judge saying no is the one status that refuses a send', () => {
 test('the stamp is read off the pack, however it was cased', () => {
   assert.equal(claimSupportOf({ _claimSupport: { status: 'Unsupported', doi: '10.1/x' } }), 'unsupported');
   assert.equal(claimSupportOf({ _claimSupport: null }), null);
+  // The video pipeline's spelling, which the gate used to miss entirely.
+  assert.equal(claimSupportOf({ kind: 'video', claimSupport: { status: 'unsupported', doi: '10.1/x' } }), 'unsupported');
+  assert.equal(claimSupportOf({ _claimSupport: { status: 'supported' }, claimSupport: { status: 'unsupported' } }), 'supported');
   assert.equal(claimSupportOf({}), null);
   assert.equal(claimSupportOf(null), null);
   assert.equal(claimSupportOf('text'), null);
@@ -93,4 +96,25 @@ test('off-subject search hits are dropped before the writer sees them', () => {
   const evidence = src('lib/evidence.ts');
   assert.match(evidence, /filterRelevant\(await fromPubmed\(/);
   assert.match(evidence, /filterRelevant\(await fromCrossref\(/);
+});
+
+test('"Verify / fix" on a calendar post runs the ladder and carries the result to Metricool', () => {
+  const page = src('app/calendar/page.tsx');
+  // The button sits to the left of "Show on calendar", and nothing else moved.
+  assert.match(page, /Verify \/ fix'\}<\/button>\s*<button[\s\S]{0,400}?>Show on calendar<\/button>/);
+  assert.match(page, /action: 'fix_citation'/);
+  const route = src('app/api/posts/route.ts');
+  assert.match(route, /'fix_citation'\]\.includes\(action\)/, 'the route accepts the action');
+  assert.match(route, /fixPostCitation\(\{ text: String\(existing\.text \|\| ''\), pack: draftPack/);
+  // A swapped citation reaches the post row, the draft, and Metricool's copy.
+  assert.match(route, /from\('posts'\)\.update\(\{ text: fix\.text \}\)/);
+  assert.match(route, /\(existing as \{ text\?: string \| null \}\)\.text = fix\.text;/);
+  // ...and never approves: the action leaves `mode` and `nextStatus` alone.
+  const branch = route.slice(route.indexOf("} else if (action === 'fix_citation') {"), route.indexOf("} else if (action === 'attach_video') {"));
+  assert.doesNotMatch(branch, /mode = 'scheduled'|nextStatus =/);
+  const fix = src('lib/post-citation-fix.ts');
+  // Verified before swapped, never redrafted, and 'unsupported' when nothing backs the copy.
+  assert.match(fix, /verifyDoi\(backing\.doi, \{ expectedTitle: backing\.title \}\)/);
+  assert.doesNotMatch(fix, /generateContentPack|generateVideoCopy|from '@\/lib\/video-copy'/, 'the words stay the clinic\'s; only the citation is ours');
+  assert.match(fix, /stampOn\('unsupported'/);
 });
