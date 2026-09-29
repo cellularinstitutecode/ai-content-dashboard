@@ -12,7 +12,7 @@
 import 'server-only';
 
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -22,20 +22,18 @@ import { resolveFfmpeg } from '@/lib/audio-extract';
 const run = promisify(execFile);
 
 /**
- * Scale a picture down to `width` and re-encode as JPEG.
+ * Scale a picture on disk (`src`) down to `width` and re-encode as JPEG.
  *
  * Returns null when ffmpeg is unavailable or refuses the file — every caller
  * falls back to the original bytes, which is exactly the behaviour they had
  * before this existed.
  */
-export async function smallJpeg(bytes: Buffer, ext = 'png', width = 768): Promise<Buffer | null> {
+export async function smallJpeg(src: string, width = 768): Promise<Buffer | null> {
   const bin = await resolveFfmpeg();
   if (!bin.ok) return null;
   const dir = await mkdtemp(path.join(tmpdir(), 'small-'));
-  const src = path.join(dir, `in.${ext}`);
   const out = path.join(dir, 'out.jpg');
   try {
-    await writeFile(src, bytes);
     await run(
       bin.path,
       ['-v', 'error', '-y', '-i', src, '-vf', `scale='min(${width},iw)':-2`, '-q:v', '4', out],
