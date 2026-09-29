@@ -1,6 +1,7 @@
 import { reportError, redact } from '@/lib/report';
 import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
 import { refPolicyOf, type RefPolicy } from '@/lib/compliance';
+import { claimSupportOf } from '@/lib/citation-gate';
 import { apiBase as metricoolApiBase, normalizeMediaList } from '@/lib/metricool';
 import { mediaHandoverMessage, normalizeFailure, ourLinkNote } from '@/lib/media-normalize-reason';
 import { verifyPlayableMp4 } from '@/lib/media-verify';
@@ -118,13 +119,16 @@ export async function POST(req: NextRequest) {
   // Ownership, checked once here so the draft's pack can be read for the
   // YouTube/TikTok presets below; the row link further down reuses the answer.
   let ownedDraftIdEarly: string | null = null;
-  // The REF policy the draft was written under (lib/compliance.ts refPolicyOf).
+  // The REF policy the draft was written under (lib/compliance.ts refPolicyOf),
+  // and the judge's verdict on its citation (lib/citation-gate.ts).
   let draftRefPolicy: RefPolicy = 'required';
+  let draftClaimSupport: string | null = null;
   if (draftId) {
     const { data: ownDraftEarly } = await sb.from('drafts').select('id, pack').eq('id', draftId).eq('user_id', user.id).maybeSingle()
       .then((x) => x, () => ({ data: null }));
     ownedDraftIdEarly = ownDraftEarly ? draftId : null;
     draftRefPolicy = refPolicyOf((ownDraftEarly as { pack?: unknown } | null)?.pack);
+    draftClaimSupport = claimSupportOf((ownDraftEarly as { pack?: unknown } | null)?.pack);
   }
   if (!when) return NextResponse.json({ error: 'publishAt must be a valid datetime' }, { status: 400 });
   // Metricool refuses a past date, but only when a person opens the draft and
@@ -146,7 +150,7 @@ export async function POST(req: NextRequest) {
 
   // Instagram / Facebook copy must carry the advertising notice and a
   // scientific reference before it goes anywhere near the account.
-  const gate = await complianceGate(user.id, text, network, { refPolicy: draftRefPolicy });
+  const gate = await complianceGate(user.id, text, network, { refPolicy: draftRefPolicy, claimSupport: draftClaimSupport });
   if (!gate.ok) return NextResponse.json(gateRefusal(gate), { status: 422 });
 
   // AND THE MEDIA REQUIREMENT, on the server.

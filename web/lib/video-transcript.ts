@@ -18,6 +18,7 @@ import { parseDriveFileId } from '@/lib/drive-url';
 import { fetchYouTubeTranscript } from '@/lib/youtube-transcript';
 import { transcribeDriveMedia, type MediaFailure } from '@/lib/media-transcript';
 import { cacheTranscript, cachedTranscript } from '@/lib/transcript-cache';
+import { looksLikeSpeech } from '@/lib/citation-gate';
 
 /** `sheet`: no transcript at all — the draft carries copy a person already wrote in the sheet. */
 export type TranscriptOrigin = 'pasted' | 'youtube' | 'drive' | 'sheet';
@@ -88,7 +89,7 @@ async function transcribeOrRecall(fileId: string, deadlineAt?: number): Promise<
 export async function resolveTranscript(input: TranscriptInput): Promise<ResolvedTranscript> {
   const pasted = String(input.pasted || '').replace(/\s+/g, ' ').trim();
   if (pasted) {
-    if (pasted.length < MIN_CHARS) {
+    if (pasted.length < MIN_CHARS || !looksLikeSpeech(pasted)) {
       return { ok: false, reason: 'transcript_too_short', message: 'That transcript is too short to write from.', title: null, needsPaste: true };
     }
     // Typed by a person: there is no expensive half to lose.
@@ -124,7 +125,11 @@ export async function resolveTranscript(input: TranscriptInput): Promise<Resolve
     const t = await transcribeOrRecall(fileId, input.deadlineAt);
     if (t.ok) {
       const text = t.text.trim();
-      if (text.length < MIN_CHARS) {
+      // Length is not speech: "[Music] [Music] Thank you." is over forty
+      // characters and says nothing, and a writer handed it wrote a post
+      // about the transcript having no content — which then published,
+      // because it carried a REF line (the September audit).
+      if (text.length < MIN_CHARS || !looksLikeSpeech(text)) {
         return { ok: false, reason: 'transcript_too_short', message: 'Only a few words could be heard in that video.', title: t.name, needsPaste: true };
       }
       return { ok: true, text, origin: 'drive', language: t.language, title: stripExtension(t.name), videoId: fileId, banked: t.banked };

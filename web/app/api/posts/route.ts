@@ -1,6 +1,7 @@
 // web/app/api/posts/route.ts
 import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
 import { refPolicyOf } from '@/lib/compliance';
+import { claimSupportOf } from '@/lib/citation-gate';
 import { videoVerdict, pendingRefusal, videoSourceOf, type PackLike } from '@/lib/video-required';
 import { ensureShareableVideo } from '@/lib/media-library';
 import { recordApproval } from '@/lib/approval-log';
@@ -607,7 +608,9 @@ export async function PATCH(req: Request) {
     // defect, in the same shape, as the one fixed in templates/apply.
     // Under the policy the draft was written with: a weekly-strategy
     // destination post needs a REF only when its text makes a health claim.
-    const gate = await complianceGate(user.id, String(existing.text || ''), metricoolNetworks(existing.providers), { refPolicy: refPolicyOf(draftPack) });
+    // And under the judge's verdict on its citation: a REF line the judge
+    // said backs nothing in the post is refused here, not flagged.
+    const gate = await complianceGate(user.id, String(existing.text || ''), metricoolNetworks(existing.providers), { refPolicy: refPolicyOf(draftPack), claimSupport: claimSupportOf(draftPack) });
     if (!gate.ok) return NextResponse.json(gateRefusal(gate), { status: 422 });
 
     // And the video rule, at the same door rather than in a mechanism of its

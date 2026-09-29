@@ -53,6 +53,10 @@ const TERMINAL = new Set([
   'empty',
   'named_a_person',
   'no_citation',
+  // The judge read the papers found and none backs the copy, twice over.
+  'unsupported_citation',
+  // The recording carried no usable speech: the writer wrote about that instead.
+  'empty_transcript',
 ]);
 
 /**

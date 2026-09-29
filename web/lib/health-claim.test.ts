@@ -61,8 +61,8 @@ test('only the weekly strategy\'s destination slots are relaxed', () => {
 });
 
 test('wiring: every gate that re-checks stored copy reads the draft\'s policy', () => {
-  assert.match(src('app/api/posts/route.ts'), /complianceGate\(user\.id, String\(existing\.text \|\| ''\), metricoolNetworks\(existing\.providers\), \{ refPolicy: refPolicyOf\(draftPack\) \}\)/);
-  assert.match(src('app/api/metricool/schedule/route.ts'), /complianceGate\(user\.id, text, network, \{ refPolicy: draftRefPolicy \}\)/);
+  assert.match(src('app/api/posts/route.ts'), /complianceGate\(user\.id, String\(existing\.text \|\| ''\), metricoolNetworks\(existing\.providers\), \{ refPolicy: refPolicyOf\(draftPack\), claimSupport: claimSupportOf\(draftPack\) \}\)/);
+  assert.match(src('app/api/metricool/schedule/route.ts'), /complianceGate\(user\.id, text, network, \{ refPolicy: draftRefPolicy, claimSupport: draftClaimSupport \}\)/);
   const ap = src('lib/autopilot.ts');
   assert.match(ap, /refPolicy,\n/, 'approveRun plans each network under the template\'s policy');
   assert.match(ap, /claimSupport: \(pack\?\._claimSupport as \{ status\?: string \} \| undefined\)\?\.status \?\? null/, 'the judge\'s verdict reaches autoschedule');
