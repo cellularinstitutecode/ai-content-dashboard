@@ -212,6 +212,9 @@ const [approvingId, setApprovingId] = useState<string | null>(null);
 // approvingId because attaching is NOT approving — the post stays exactly
 // where it is in the queue, waiting for a person.
 const [attachingId, setAttachingId] = useState<string | null>(null);
+/** Recent Drafts: the ones ticked for "Delete selected". */
+const [pickedDrafts, setPickedDrafts] = useState<Set<string>>(() => new Set());
+const [bulkDeleting, setBulkDeleting] = useState(false);
 /**
  * The pack as the writer returned it — each channel's own words.
  *
@@ -1132,8 +1135,36 @@ try {
 const r = await fetch('/api/drafts?id=' + encodeURIComponent(id), { method: 'DELETE' });
 if (!r.ok) { setActionMsg(await friendlyErrorFromResponse(r, 'We could not delete that draft.')); return; }
 setActionMsg(null);
+setPickedDrafts((prev) => { if (!prev.has(id)) return prev; const next = new Set(prev); next.delete(id); return next; });
 announce('drafts', 'stats', 'images');
 } catch (e) { setActionMsg(friendlyError(e, 'We could not delete that draft.')); }
+}
+
+function togglePickedDraft(id: string) {
+if (!id) return;
+setPickedDrafts((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+}
+
+/** Every ticked draft, in one request; the list reloads with whatever is left. */
+async function deleteSelectedDrafts() {
+const ids = Array.from(pickedDrafts).filter(Boolean);
+if (!ids.length || bulkDeleting) return;
+if (typeof window !== 'undefined' && !window.confirm('Delete ' + ids.length + (ids.length === 1 ? ' draft' : ' drafts') + '? This cannot be undone.')) return;
+setBulkDeleting(true);
+try {
+const r = await fetch('/api/drafts?ids=' + encodeURIComponent(ids.join(',')), { method: 'DELETE' });
+const j = await r.json().catch(() => ({}));
+if (!r.ok) { setActionMsg(await friendlyErrorFromResponse(r, 'We could not delete those drafts.')); return; }
+const failed: { id: string; error: string }[] = Array.isArray(j?.failed) ? j.failed : [];
+const deleted: string[] = Array.isArray(j?.deleted) ? j.deleted : ids;
+// Only what the server could not delete stays ticked, so a second press retries exactly those.
+setPickedDrafts(new Set(failed.map((f) => String(f.id))));
+setActionMsg(failed.length
+? 'Deleted ' + deleted.length + ' of ' + ids.length + ' drafts. ' + failed.length + ' could not be deleted — they are still selected; try again in a moment.'
+: null);
+announce('drafts', 'stats', 'images');
+} catch (e) { setActionMsg(friendlyError(e, 'We could not delete those drafts.')); }
+finally { setBulkDeleting(false); }
 }
 
 function cleanCaption(s: string): string {
@@ -2680,6 +2711,32 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 {/* Recent Drafts */}
 <section id="section-library" className={"rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7" + (isDraft ? " 2xl:col-span-2" : "")}>
 <h2 className="mb-4 text-headline font-semibold">Recent Drafts</h2>
+{/* Several at once: tick the drafts, then one Delete. The per-row Delete stays. */}
+{safeDrafts.length > 0 && (() => {
+const listed = safeDrafts.map((d: any) => String((d && (d.id || d._id)) || '')).filter(Boolean);
+const pickedHere = listed.filter((id) => pickedDrafts.has(id));
+const allPicked = listed.length > 0 && pickedHere.length === listed.length;
+return (
+<div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl bg-subtle/60 px-3 py-2 ring-1 ring-line">
+<label className="flex cursor-pointer items-center gap-2 text-[12px] font-medium text-ink">
+<input type="checkbox" aria-label="Select all drafts shown" checked={allPicked} disabled={bulkDeleting}
+onChange={() => setPickedDrafts((prev) => { const next = new Set(prev); if (allPicked) listed.forEach((id) => next.delete(id)); else listed.forEach((id) => next.add(id)); return next; })}
+className="h-4 w-4 accent-rose-600" />
+{allPicked ? 'All ' + listed.length + ' shown selected' : pickedHere.length ? pickedHere.length + ' selected' : 'Select all shown'}
+</label>
+{pickedHere.length > 0 && (
+<>
+<button type="button" onClick={() => void deleteSelectedDrafts()} disabled={bulkDeleting}
+className="rounded-lg bg-red-600 px-3 py-1 text-[12px] font-semibold text-white transition hover:opacity-90 disabled:opacity-50">
+{bulkDeleting ? 'Deleting…' : 'Delete selected (' + pickedHere.length + ')'}
+</button>
+<button type="button" onClick={() => setPickedDrafts(new Set())} disabled={bulkDeleting}
+className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white disabled:opacity-50">Clear</button>
+</>
+)}
+</div>
+);
+})()}
 {/* Clips from Opus — long-form to Shorts */}
 {(() => {
 const opusClips = safeDrafts.filter((d: any) => d?.pack?.kind === 'clip');
@@ -2752,7 +2809,10 @@ className="group overflow-hidden rounded-2xl text-left ring-1 ring-line/60 trans
 const title = draftLabel(d && (d.title || d.topic || d.name));
 const body = (d && (d.body || d.instagram || d.text || d.content)) || '';
 return (
-<li onClick={() => openDraft(d)} role="button" tabIndex={0} key={(d && (d.id || d._id)) || i} className="cursor-pointer rounded-xl transition hover:bg-subtle/60 flex items-start gap-4 py-4">
+<li onClick={() => openDraft(d)} role="button" tabIndex={0} key={(d && (d.id || d._id)) || i} className={"cursor-pointer rounded-xl transition hover:bg-subtle/60 flex items-start gap-4 py-4" + (pickedDrafts.has(String((d && (d.id || d._id)) || '')) ? " bg-rose-50/60" : "")}>
+<input type="checkbox" aria-label="Select this draft" checked={pickedDrafts.has(String((d && (d.id || d._id)) || ''))} disabled={bulkDeleting}
+onClick={(e) => e.stopPropagation()} onChange={() => togglePickedDraft(String((d && (d.id || d._id)) || ''))}
+className="mt-3 h-4 w-4 shrink-0 cursor-pointer accent-rose-600" />
 {d?.pack?.kind === 'clip' && d?.pack?.thumb ? (
 <div className="mb-2 overflow-hidden rounded-lg ring-1 ring-black/10">
 {/* eslint-disable-next-line @next/next/no-img-element */}
