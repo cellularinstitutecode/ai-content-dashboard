@@ -33,6 +33,12 @@ const BIG_FILE_MAX_BYTES = 64 * 1024 * 1024;
 import { reportError } from '@/lib/report';
 import { checkRateLimit } from '@/lib/rate-limit';
 
+// import_image downloads a Drive photo of up to 64 MB and scales it down with
+// ffmpeg (up to 45 s) before storing it. Without its own ceiling this route ran
+// under the platform default, which a big camera export could outlast — the
+// caption and palette routes, which do the same work, already set 300.
+export const maxDuration = 300;
+
 const CACHE_MS = 60_000;
 const cache = new Map<string, { at: number; value: unknown }>();
 

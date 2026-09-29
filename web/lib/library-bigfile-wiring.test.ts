@@ -49,4 +49,6 @@ test('import_image opts in too: it scales the picture down before storing it', (
   // And still refuses to store a big original the downscaler could not shrink.
   assert.match(imports, /!fit\.resized && fit\.bytes\.length > DRIVE_FILE_MAX_BYTES/);
   assert.doesNotMatch(imports, /larger than 25 MB/);
+  // And has the time to do it, like the caption and palette routes.
+  assert.match(imports, /export const maxDuration = 300;/);
 });
