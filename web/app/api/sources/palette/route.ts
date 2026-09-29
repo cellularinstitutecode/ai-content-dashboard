@@ -7,12 +7,11 @@
 // Read-only. Nothing is written, nothing is imported, no photograph is changed.
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
-import { downloadDriveFile, listFolderImages, sourcesConfigured } from '@/lib/google-sources';
-
-// The camera exports in the folder run 30-45 MB. Both of these routes scale the
-// picture down before they look at it, so the only thing the ceiling has to do
-// here is refuse something pathological.
-const BIG_FILE_MAX_BYTES = 64 * 1024 * 1024;
+import { LIBRARY_IMAGE_MAX_BYTES, downloadDriveFileToDisk, listFolderImages, sourcesConfigured } from '@/lib/google-sources';
+// The camera exports in the folder run 30-45 MB, some far more. Both of these
+// routes stream the file to disk and scale it down there before they look at
+// it, so the 200 MB ceiling (LIBRARY_IMAGE_MAX_BYTES) only refuses what the
+// function's disk cannot hold.
 import { measureImage } from '@/lib/palette-measure';
 import { BRAND_TARGET, gradeFor } from '@/lib/palette';
 import { reportError } from '@/lib/report';
@@ -35,9 +34,8 @@ export async function GET(req: NextRequest) {
     const rows: Array<Record<string, unknown>> = [];
     for (const f of slice) {
       try {
-        const file = await downloadDriveFile(f.id, BIG_FILE_MAX_BYTES);
-        const ext = /png$/i.test(file.contentType) ? 'png' : /webp$/i.test(file.contentType) ? 'webp' : 'jpg';
-        const stats = await measureImage(file.bytes, ext);
+        const file = await downloadDriveFileToDisk(f.id, LIBRARY_IMAGE_MAX_BYTES);
+        const stats = await measureImage(file.path).finally(file.cleanup);
         if (!stats) { rows.push({ id: f.id, name: f.name, verdict: 'unreadable' }); continue; }
         const g = gradeFor(stats);
         rows.push({ id: f.id, name: f.name, stats, verdict: g.verdict, reason: g.reason, distance: g.distance, filters: g.filters });

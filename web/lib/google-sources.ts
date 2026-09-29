@@ -21,6 +21,13 @@
 // language; missing cells are missing, not errors.
 import 'server-only';
 import { randomUUID } from 'crypto';
+import { createWriteStream } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
 // The auth client alone, not `googleapis`: every call in this file is plain
 // REST over fetch, and importing the googleapis index bundles every Google
@@ -760,7 +767,7 @@ export async function uploadFolderImage(
 /**
  * Download a VIDEO or AUDIO file from Drive, for transcription.
  *
- * Separate from downloadDriveFile above, which is the Image Library's path and
+ * Separate from downloadDriveFileToDisk below, which is the Image Library's path and
  * refuses anything that is not an image.
  *
  * The cap is on the SOURCE file, and it is about scratch space rather than the
@@ -900,30 +907,76 @@ export async function downloadDriveMedia(fileId: string, maxBytes = MEDIA_MAX_BY
   return { ok: true, media: { bytes, contentType: meta.mimeType, name: meta.name, sizeBytes: bytes.byteLength } };
 }
 
-export const DRIVE_FILE_MAX_BYTES = 25 * 1024 * 1024;
+/**
+ * The ceiling for a Library photo that is scaled down before it is used
+ * (import_image, the captioner, the palette probe). The file is streamed to
+ * the function's temporary disk, never held in memory whole, and the platform
+ * gives that disk about 512 MB, so 200 MB leaves room for ffmpeg's output.
+ */
+export const LIBRARY_IMAGE_MAX_BYTES = 200 * 1024 * 1024;
+
+export type DiskImage = {
+  /** The downloaded file, named with an extension ffmpeg recognises. */
+  path: string;
+  size: number;
+  contentType: string;
+  /** jpg, png, webp or gif, from the declared type. */
+  ext: string;
+  name: string;
+  /** Delete the file and its folder. Always call it (finally). */
+  cleanup: () => Promise<void>;
+};
+
+/** The extension a Drive image is written with, from its declared type. */
+export function imageExt(contentType: string): string {
+  const t = String(contentType || '').toLowerCase();
+  return /png$/.test(t) ? 'png' : /webp$/.test(t) ? 'webp' : /gif$/.test(t) ? 'gif' : 'jpg';
+}
 
 /**
- * Read one Drive file.
+ * Read one Drive image straight to a temporary file.
  *
- * `maxBytes` is a guard against pulling something absurd into a serverless
- * function, not a statement about what the app can handle. Callers that scale
- * the picture down before they use it - the captioner and the palette probe -
- * raise it, because the folder's best photography is 30-45 MB camera exports
- * and the default silently made those files invisible.
+ * The old reader held the whole body in memory, which was fine at 25 MB and
+ * not at 200: the bytes sat in memory AND on disk while ffmpeg worked on
+ * them. Here the body is piped to disk as it arrives, counted as it
+ * goes (Drive omits the size for some files, so the metadata check is not
+ * enough), and the transfer is bounded by one timer for the whole body.
  */
-export async function downloadDriveFile(
-  fileId: string,
-  maxBytes: number = DRIVE_FILE_MAX_BYTES,
-): Promise<{ bytes: Buffer; contentType: string; name: string }> {
+export async function downloadDriveFileToDisk(fileId: string, maxBytes: number = LIBRARY_IMAGE_MAX_BYTES): Promise<DiskImage> {
   const metaRes = await gfetch(DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?fields=' + encodeURIComponent('id,name,mimeType,size') + '&supportsAllDrives=true');
   const meta = await json<{ name: string; mimeType: string; size?: string }>(metaRes, 'file metadata');
   if (!/^image\//.test(meta.mimeType || '')) throw new GoogleSourceError(415, 'not an image');
-  if (meta.size && Number(meta.size) > maxBytes)
-    throw new GoogleSourceError(413, 'image larger than ' + Math.round(maxBytes / 1048576) + ' MB');
-  const res = await gfetch(DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true', {}, 60000);
-  if (!res.ok) throw new GoogleSourceError(res.status, 'file download failed: HTTP ' + res.status);
-  const bytes = Buffer.from(await res.arrayBuffer());
-  return { bytes, contentType: meta.mimeType, name: meta.name };
+  const tooBig = () => new GoogleSourceError(413, 'image larger than ' + Math.round(maxBytes / 1048576) + ' MB');
+  if (meta.size && Number(meta.size) > maxBytes) throw tooBig();
+
+  const ext = imageExt(meta.mimeType);
+  const dir = await mkdtemp(path.join(tmpdir(), 'chi-drive-'));
+  const cleanup = () => rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  const file = path.join(dir, 'in.' + ext);
+  // A minute, plus half a second per MB expected, capped so ffmpeg still has
+  // time inside the route's five minutes: 160 s for a 200 MB file.
+  const expected = Number(meta.size) || maxBytes;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), Math.min(160_000, 60_000 + Math.ceil(expected / 1048576) * 500));
+  try {
+    const res = await gfetch(DRIVE_BASE() + '/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true', { signal: ctl.signal });
+    if (!res.ok || !res.body) throw new GoogleSourceError(res.status || 502, 'file download failed: HTTP ' + res.status);
+    let size = 0;
+    const counter = new Transform({
+      transform(chunk: Buffer, _enc, done) {
+        size += chunk.length;
+        done(size > maxBytes ? tooBig() : null, chunk);
+      },
+    });
+    await pipeline(Readable.fromWeb(res.body as unknown as NodeReadableStream<Uint8Array>), counter, createWriteStream(file));
+    return { path: file, size, contentType: meta.mimeType, ext, name: meta.name, cleanup };
+  } catch (e) {
+    await cleanup();
+    if (ctl.signal.aborted && !(e instanceof GoogleSourceError)) throw new GoogleSourceError(504, 'file download timed out');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

@@ -16,7 +16,8 @@ test('the picture is scaled down before its pixels are counted', () => {
 
 test('measuring never throws — an unreadable file is null, not an exception', () => {
   assert.match(measure, /catch \{\s*return null;/);
-  assert.match(measure, /finally \{/, 'the temp directory is always cleaned up');
+  // It measures the file the route downloaded; the route deletes that file.
+  assert.match(route, /measureImage\(file\.path\)\.finally\(file\.cleanup\)/, 'the downloaded file is always cleaned up');
 });
 
 test('the triage route is read-only', () => {

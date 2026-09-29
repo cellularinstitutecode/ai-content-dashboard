@@ -8,14 +8,14 @@
 // Read-only. Nothing is imported, stored or changed; the captions come back in
 // the response for a person to look at before any of this is wired into
 // picture-picking.
+import { readFile } from 'node:fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
-import { downloadDriveFile, listFolderImages, sourcesConfigured } from '@/lib/google-sources';
-
-// The camera exports in the folder run 30-45 MB. Both of these routes scale the
-// picture down before they look at it, so the only thing the ceiling has to do
-// here is refuse something pathological.
-const BIG_FILE_MAX_BYTES = 64 * 1024 * 1024;
+import { LIBRARY_IMAGE_MAX_BYTES, downloadDriveFileToDisk, listFolderImages, sourcesConfigured } from '@/lib/google-sources';
+// The camera exports in the folder run 30-45 MB, some far more. Both of these
+// routes stream the file to disk and scale it down there before they look at
+// it, so the 200 MB ceiling (LIBRARY_IMAGE_MAX_BYTES) only refuses what the
+// function's disk cannot hold.
 import { PILLARS } from '@/lib/content-strategy';
 import { captionSystemPrompt, coverSafe, inventory, parseCaption, pillarsFor, type Caption } from '@/lib/library-caption';
 import { smallJpeg } from '@/lib/image-small';
@@ -81,17 +81,21 @@ export async function GET(req: NextRequest) {
     const caps: Caption[] = [];
     for (const f of slice) {
       try {
-        const file = await downloadDriveFile(f.id, BIG_FILE_MAX_BYTES);
-        const ext = /png$/i.test(file.contentType) ? 'png' : /webp$/i.test(file.contentType) ? 'webp' : 'jpg';
-        // A 30 MB camera export is far more than the model needs and more than
-        // the request will carry, so it is scaled first rather than skipped —
-        // those files are the best photography in the folder.
-        const small = file.bytes.length > 2 * 1024 * 1024 ? await smallJpeg(file.bytes, ext) : null;
-        if (!small && file.bytes.length > 12 * 1024 * 1024) {
-          rows.push({ id: f.id, name: f.name, skipped: 'too_large', mb: Math.round(file.bytes.length / 1048576) });
-          continue;
+        const file = await downloadDriveFileToDisk(f.id, LIBRARY_IMAGE_MAX_BYTES);
+        let c: Caption | null;
+        try {
+          // A 30 MB camera export is far more than the model needs and more than
+          // the request will carry, so it is scaled first rather than skipped —
+          // those files are the best photography in the folder.
+          const small = file.size > 2 * 1024 * 1024 ? await smallJpeg(file.path) : null;
+          if (!small && file.size > 12 * 1024 * 1024) {
+            rows.push({ id: f.id, name: f.name, skipped: 'too_large', mb: Math.round(file.size / 1048576) });
+            continue;
+          }
+          c = await captionOne(small ?? (await readFile(file.path)), small ? 'image/jpeg' : file.contentType, key);
+        } finally {
+          await file.cleanup();
         }
-        const c = await captionOne(small ?? file.bytes, small ? 'image/jpeg' : file.contentType, key);
         if (!c) { rows.push({ id: f.id, name: f.name, skipped: 'unreadable' }); continue; }
         caps.push(c);
         const safe = coverSafe(c);

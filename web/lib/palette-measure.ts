@@ -9,9 +9,6 @@
 import 'server-only';
 
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { resolveFfmpeg } from '@/lib/audio-extract';
@@ -19,14 +16,11 @@ import { statsFromRgb, type PaletteStats } from './palette.ts';
 
 const run = promisify(execFile);
 
-/** Measure one picture. Null when ffmpeg is unavailable or refuses the file. */
-export async function measureImage(bytes: Buffer, ext = 'png'): Promise<PaletteStats | null> {
+/** Measure one picture on disk. Null when ffmpeg is unavailable or refuses the file. */
+export async function measureImage(src: string): Promise<PaletteStats | null> {
   const bin = await resolveFfmpeg();
   if (!bin.ok) return null;
-  const dir = await mkdtemp(path.join(tmpdir(), 'palette-'));
-  const src = path.join(dir, `in.${ext}`);
   try {
-    await writeFile(src, bytes);
     const { stdout } = await run(
       bin.path,
       ['-v', 'error', '-i', src, '-vf', 'scale=64:-1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
@@ -38,7 +32,5 @@ export async function measureImage(bytes: Buffer, ext = 'png'): Promise<PaletteS
     return buf?.length ? statsFromRgb(new Uint8Array(buf)) : null;
   } catch {
     return null;
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
