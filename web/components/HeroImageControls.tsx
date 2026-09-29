@@ -17,8 +17,10 @@
 import { useState } from 'react';
 import { PanelLoader } from '@/components/LoadingScreen';
 import { friendlyError, friendlyImageError } from '@/lib/friendly-error';
+import ImportingLabel from '@/components/ImportingLabel';
+import { sizeLabel, tileNote, tooLargeToImport } from '@/lib/library-import';
 
-type DriveImage = { id: string; name: string; thumbUrl?: string; viewUrl?: string };
+type DriveImage = { id: string; name: string; thumbUrl?: string; viewUrl?: string; size?: number | null };
 type Mode = 'use' | 'style';
 
 export default function HeroImageControls({
@@ -38,6 +40,8 @@ export default function HeroImageControls({
   onChanged: (image: { url: string }) => Promise<void> | void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
+  /** The library photo being copied in, before the draft is changed with it. */
+  const [copying, setCopying] = useState<string | null>(null);
   const [status, setStatus] = useState<{ text: string; bad: boolean } | null>(null);
   const [mode, setMode] = useState<Mode | null>(null);
   const [images, setImages] = useState<DriveImage[] | null>(null);
@@ -84,6 +88,7 @@ export default function HeroImageControls({
     if (!mode) return;
     if (beforeChange && !beforeChange()) return;
     setBusy(img.id);
+    setCopying(img.id);
     setStatus(null);
     let url = '';
     try {
@@ -99,6 +104,8 @@ export default function HeroImageControls({
       setStatus({ text: friendlyError(e, 'That photo could not be copied from the library.'), bad: true });
       setBusy(null);
       return;
+    } finally {
+      setCopying(null);
     }
     if (mode === 'use') await send({ useUrl: url, alt: img.name }, img.id, 'That photo could not be attached.', true);
     else await send({ styleFromUrl: url }, img.id, 'The styled image could not be made.', true);
@@ -130,12 +137,12 @@ export default function HeroImageControls({
           {images && images.length > 0 && (
             <div className="mt-2 grid max-h-52 grid-cols-4 gap-1.5 overflow-y-auto pr-1">
               {images.map((img) => (
-                <button key={img.id} type="button" disabled={Boolean(busy)} onClick={() => void pick(img)} title={img.name} className="overflow-hidden rounded-lg ring-1 ring-black/10 transition hover:ring-accent disabled:opacity-50">
+                <button key={img.id} type="button" disabled={Boolean(busy) || tooLargeToImport(img.size)} onClick={() => void pick(img)} title={img.name + (sizeLabel(img.size) ? ' · ' + sizeLabel(img.size) : '')} className="overflow-hidden rounded-lg ring-1 ring-black/10 transition hover:ring-accent disabled:opacity-50">
                   {img.thumbUrl
                     // eslint-disable-next-line @next/next/no-img-element
                     ? <img src={img.thumbUrl} alt={img.name} className="h-16 w-full object-cover" />
                     : <span className="block p-2 text-[10px] text-ink/60">{img.name}</span>}
-                  <span className="block truncate px-1 py-0.5 text-[9px] text-ink/50">{busy === img.id ? 'Working…' : img.name}</span>
+                  <span className="block truncate px-1 py-0.5 text-[9px] text-ink/50">{copying === img.id ? <ImportingLabel verb="Copying" size={img.size} /> : busy === img.id ? 'Working…' : tileNote(img.size) || img.name}</span>
                 </button>
               ))}
             </div>

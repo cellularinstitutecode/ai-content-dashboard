@@ -32,6 +32,8 @@ import { parseFromRow, rowsBetween, rowsFrom } from '@/lib/rows-from';
 import { attachPlanFor, pendingPosts, postsByRow } from '@/lib/attach-plan';
 import { preparedByRow, rowKeyOf, type PreparedRow } from '@/lib/prepared-rows';
 import { ZOOM_MAX, ZOOM_MIN, frameGeometry, readStoredZoom, zoomIn, zoomLabel, zoomOut, zoomStorageKey } from '@/lib/sheet-zoom';
+import ImportingLabel from '@/components/ImportingLabel';
+import { tooLargeToImport } from '@/lib/library-import';
 
 /** How a batched row is getting on, in words rather than a spinner. */
 const BATCH_LABEL: Record<string, string> = {
@@ -1757,7 +1759,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                       <figcaption style={{ padding: 10, fontSize: 11 }}>
                         <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={img.name}>{img.name}</div>
                         <div style={{ opacity: .55, marginTop: 2 }}>{img.modifiedTime.slice(0, 10)}{img.size ? ' · ' + (img.size / 1024 / 1024).toFixed(1) + ' MB' : ''}</div>
-                        <button type="button" style={{ ...btn, marginTop: 8, width: '100%' }} disabled={busy === img.id} onClick={() => importImage(img)}>{busy === img.id ? 'Copying…' : 'Use as hero image'}</button>
+                        <button type="button" style={{ ...btn, marginTop: 8, width: '100%' }} disabled={busy === img.id || tooLargeToImport(img.size)} title={tooLargeToImport(img.size) ? 'Photos over 200 MB cannot be copied in. Export a smaller copy in Drive.' : undefined} onClick={() => importImage(img)}>{busy === img.id ? <ImportingLabel verb="Copying" size={img.size} /> : tooLargeToImport(img.size) ? 'Too large (max 200 MB)' : 'Use as hero image'}</button>
                       </figcaption>
                     </figure>
                   ))}
