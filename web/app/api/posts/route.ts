@@ -723,60 +723,72 @@ export async function PATCH(req: Request) {
       });
     } catch (e) {
       reportError(action === 'reschedule' ? 'posts:metricool-reschedule' : action === 'sync_media' ? 'posts:metricool-sync-media' : action === 'fix_citation' ? 'posts:metricool-fix-citation' : 'posts:metricool-approve', e);
+      const said = redact(e instanceof Error ? e.message : String(e)).slice(0, 300);
+      // A 404 means Metricool no longer has the post at all — deleted there, or
+      // gone from its scheduler — and every later approve or move would meet
+      // the same 404: the row was stranded, with "Approve" on its chip and no
+      // way through. So a post whose slot is still ahead is SENT AGAIN, in the
+      // queue this action wants it in: for review on a move or a fix, live on
+      // an approve — a person is looking at the post and has pressed Approve,
+      // which is exactly the decision that puts a post in the live queue.
+      const gone = /^Metricool 404\b/.test(e instanceof Error ? e.message : String(e));
+      let resent = false;
+      if (gone && new Date(nextDate).getTime() > Date.now()) {
+        try {
+          const created = await metricoolSchedulePost({
+            text: String(existing.text || ''),
+            providers: rowNetworks,
+            publicationDate: nextDate,
+            media: media.map((url) => ({ url })),
+            youtubeData,
+            tiktokData,
+          }, mode);
+          const newId = readPostId(created);
+          if (newId) {
+            const { error: relinkError } = await sb.from('posts').update({ metricool_post_id: newId }).eq('id', id).eq('user_id', user.id);
+            if (relinkError) reportError('posts:metricool-resend-link', relinkError, { id, newId });
+            (existing as { metricool_post_id?: string | null }).metricool_post_id = newId;
+            resent = true;
+          }
+        } catch (again) {
+          reportError('posts:metricool-resend', again, { id });
+        }
+      }
       if (action === 'fix_citation') {
         // The citation IS saved — on the post and on the draft — so this is not
         // a failure of the button; it is Metricool's copy that is behind. Said
         // so, with a 200, and the preview reloads the corrected text.
-        //
-        // A 404 means Metricool no longer has the post at all (deleted there,
-        // or gone from its scheduler), and every later approve or move would
-        // meet the same 404 — the row was stranded. A post still waiting for
-        // review with its slot ahead is simply sent again, as a new draft for
-        // review, and the row is pointed at it.
-        const said = redact(e instanceof Error ? e.message : String(e)).slice(0, 300);
-        const gone = /^Metricool 404\b/.test(e instanceof Error ? e.message : String(e));
-        if (gone && mode === 'review' && new Date(nextDate).getTime() > Date.now()) {
-          try {
-            const created = await metricoolSchedulePost({
-              text: String(existing.text || ''),
-              providers: rowNetworks,
-              publicationDate: nextDate,
-              media: media.map((url) => ({ url })),
-              youtubeData,
-              tiktokData,
-            }, 'review');
-            const newId = readPostId(created);
-            if (newId) {
-              await sb.from('posts').update({ metricool_post_id: newId }).eq('id', id).eq('user_id', user.id);
-              return NextResponse.json({
-                fixed: true, status: 'swapped', text: existing.text,
-                note: citationNote + ' Metricool no longer had this post, so it was sent again for review with the new citation.',
-              });
-            }
-          } catch (again) {
-            reportError('posts:metricool-fix-resend', again, { id });
-          }
-        }
         return NextResponse.json({
-          fixed: true, status: 'swapped', text: existing.text, metricool: gone ? 'not_found' : 'refused',
-          note: citationNote + (gone
-            ? ' Metricool no longer has this post (it answered 404: it was deleted or published there), so its copy could not be updated. The new citation is saved here.'
-            : ' The new citation is saved here, but Metricool did not take it; it goes with the post the next time it is approved or moved. Metricool said: ' + said),
+          fixed: true, status: 'swapped', text: existing.text, ...(resent ? { resent: true } : { metricool: gone ? 'not_found' : 'refused' }),
+          note: citationNote + (resent
+            ? ' Metricool no longer had this post, so it was sent again for review with the new citation.'
+            : gone
+              ? ' Metricool no longer has this post (it answered 404: it was deleted or published there), so its copy could not be updated. The new citation is saved here.'
+              : ' The new citation is saved here, but Metricool did not take it; it goes with the post the next time it is approved or moved. Metricool said: ' + said),
         });
       }
-      return NextResponse.json(
-        {
-          error: 'metricool_update_failed',
-          message: action === 'reschedule'
-            ? 'We could not move this post in Metricool, so it has been left where it was. Open it in Metricool to change the time there.'
-            : action === 'sync_media'
-              ? 'The new picture is saved here, but Metricool did not take it. It goes with the post the next time it is approved or moved.'
-              : 'Metricool did not accept the approval, so the post is still waiting for review. Nothing was scheduled. '
-                // Metricool's own answer, on screen instead of only in the server log.
-                + 'Metricool said: ' + redact(e instanceof Error ? e.message : String(e)).slice(0, 300),
-        },
-        { status: 502 },
-      );
+      if (!resent) {
+        return NextResponse.json(
+          {
+            error: 'metricool_update_failed',
+            message: gone
+              ? 'Metricool no longer has this post (it answered 404: it was deleted or published there)'
+                + (new Date(nextDate).getTime() > Date.now()
+                  ? ', and sending it again did not work just now. Try again in a moment.'
+                  : ', and its date has passed, so it cannot be sent again as it is. Move it to a future date first, then try again.')
+              : action === 'reschedule'
+                ? 'We could not move this post in Metricool, so it has been left where it was. Open it in Metricool to change the time there.'
+                : action === 'sync_media'
+                  ? 'The new picture is saved here, but Metricool did not take it. It goes with the post the next time it is approved or moved.'
+                  : 'Metricool did not accept the approval, so the post is still waiting for review. Nothing was scheduled. '
+                    // Metricool's own answer, on screen instead of only in the server log.
+                    + 'Metricool said: ' + said,
+          },
+          { status: 502 },
+        );
+      }
+      // Re-sent: the post is in Metricool again, in the queue this action wanted.
+      // Carry on below exactly as if the replace had succeeded.
     }
   }
 

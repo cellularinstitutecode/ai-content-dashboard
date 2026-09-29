@@ -121,14 +121,17 @@ test('"Verify / fix" on a calendar post runs the ladder and carries the result t
 
 test('a citation Metricool did not take is still a fix, and a post Metricool lost is sent again', () => {
   const route = src('app/api/posts/route.ts');
-  const block = route.slice(route.indexOf("if (action === 'fix_citation') {\n        // The citation IS saved"), route.indexOf('return NextResponse.json(\n        {\n          error: \'metricool_update_failed\''));
+  const block = route.slice(route.indexOf("if (action === 'fix_citation') {\n        // The citation IS saved"), route.indexOf("if (!resent) {"));
   // Never a 502 for a change that was saved: the preview must reload the new REF line.
   assert.doesNotMatch(block, /status: 502/);
   assert.match(block, /fixed: true, status: 'swapped'/);
-  // A 404 on a post still waiting for review, with its slot ahead, is re-sent as a review draft.
-  assert.match(block, /gone && mode === 'review' && new Date\(nextDate\)\.getTime\(\) > Date\.now\(\)/);
-  assert.match(block, /metricoolSchedulePost\(\{[\s\S]{0,400}\}, 'review'\)/);
-  assert.match(block, /update\(\{ metricool_post_id: newId \}\)/);
+  // A 404 with the slot ahead is re-sent, in the queue the action wanted: review on a fix, live on an Approve.
+  const resend = route.slice(route.indexOf("const gone = /^Metricool 404"), route.indexOf("if (action === 'fix_citation') {\n        // The citation IS saved"));
+  assert.match(resend, /gone && new Date\(nextDate\)\.getTime\(\) > Date\.now\(\)/);
+  assert.match(resend, /metricoolSchedulePost\(\{[\s\S]{0,400}\}, mode\)/);
+  assert.match(resend, /update\(\{ metricool_post_id: newId \}\)/);
+  // An Approve that re-sent the post carries on to mark it approved rather than reporting an error.
+  assert.match(route, /if \(!resent\) \{\s*return NextResponse\.json\(\s*\{\s*error: 'metricool_update_failed'/);
   // The client reloads on any fixed answer, Metricool's copy aside.
   const page = src('app/calendar/page.tsx');
   assert.match(page, /if \(j\?\.fixed\) \{[\s\S]{0,200}await refresh\(\)/);
