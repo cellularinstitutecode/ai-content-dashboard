@@ -53,7 +53,7 @@ export async function fitImage(bytes: Buffer, contentType: string, ext: string):
   const output = path.join(dir, 'out.' + decision.ext);
   try {
     await writeFile(input, bytes);
-    await run(ffmpeg.path, FFMPEG_FIT_ARGS(input, output, decision.codec), { timeout: 20_000, maxBuffer: 1024 * 1024 });
+    await run(ffmpeg.path, FFMPEG_FIT_ARGS(input, output, decision.codec), { timeout: 45_000, maxBuffer: 1024 * 1024 });
     const out = await readFile(output);
     // A result that is not smaller is not worth the re-encode; keep the original.
     if (!out.length || out.length >= bytes.length) return original;

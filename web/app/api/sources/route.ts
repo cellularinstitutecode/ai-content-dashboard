@@ -14,6 +14,7 @@ import {
   SOURCE_IDS,
   VIDEO_EDITABLE,
   downloadDriveFile,
+  DRIVE_FILE_MAX_BYTES,
   listFolderImages,
   readCalendar,
   readRowCells,
@@ -26,6 +27,9 @@ import {
 } from '@/lib/google-sources';
 import { storeBytes } from '@/lib/images';
 import { fitImage } from '@/lib/image-downscale';
+// The camera exports in the folder run 30-45 MB. import_image scales the
+// picture down before it stores it, so the ceiling only refuses the absurd.
+const BIG_FILE_MAX_BYTES = 64 * 1024 * 1024;
 import { reportError } from '@/lib/report';
 import { checkRateLimit } from '@/lib/rate-limit';
 
@@ -272,17 +276,25 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'invalid_request' }, { status: 400 });
   }
   try {
-    const file = await downloadDriveFile(body.fileId);
+    // The folder's camera exports run 30-45 MB, and the picture is scaled down
+    // below before it is stored, so the ceiling here only refuses the absurd
+    // (same as the caption and palette routes).
+    const file = await downloadDriveFile(body.fileId, BIG_FILE_MAX_BYTES);
     const ext = file.contentType === 'image/png' ? 'png' : file.contentType === 'image/webp' ? 'webp' : file.contentType === 'image/gif' ? 'gif' : 'jpg';
     // Stored at the size it will be shown at, not the size the camera made it.
     // A 25 MB original was kept in the public bucket for good; every network
     // re-encodes to a couple of megapixels on arrival anyway.
     const fit = await fitImage(file.bytes, file.contentType, ext);
+    if (!fit.resized && fit.bytes.length > DRIVE_FILE_MAX_BYTES) {
+      // The downscaler is what makes a big export usable; without it the
+      // original would go to the bucket whole, or be refused there.
+      return NextResponse.json({ error: 'unusable_file', message: 'That photo is ' + (fit.bytes.length / 1048576).toFixed(0) + ' MB and could not be scaled down here. Try a smaller export of it.' }, { status: 422 });
+    }
     const url = await storeBytes(fit.bytes, fit.contentType, fit.ext, file.name.replace(/\.[a-z0-9]+$/i, ''));
     return NextResponse.json({ url, name: file.name, resized: fit.resized });
   } catch (e) {
     if (e instanceof GoogleSourceError && (e.status === 413 || e.status === 415)) {
-      return NextResponse.json({ error: 'unusable_file', message: e.status === 413 ? 'That image is larger than 25 MB.' : 'That file is not an image.' }, { status: 422 });
+      return NextResponse.json({ error: 'unusable_file', message: e.status === 413 ? 'That image is larger than ' + Math.round(BIG_FILE_MAX_BYTES / 1048576) + ' MB.' : 'That file is not an image.' }, { status: 422 });
     }
     return failure(e, 'import_image');
   }
