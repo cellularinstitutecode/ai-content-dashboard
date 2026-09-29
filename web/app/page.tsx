@@ -2264,22 +2264,7 @@ return (
 </div>
 );
 })()}
-<div className="mt-6 border-t border-line pt-5">
-<label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">How your recent posts did</label>
-{(() => {
-const posts = insights && Array.isArray(insights.posts) ? insights.posts : [];
-if (!insights) return <div className="mt-2 rounded-2xl bg-subtle p-4 text-center text-[12px] text-ink-faint ring-1 ring-line">Tap Refresh to load recent performance.</div>;
-if (posts.length === 0) return <div className="mt-2 rounded-2xl bg-subtle p-4 text-center text-[12px] text-ink-faint ring-1 ring-line">No recent post data yet. Numbers appear here once your channels have activity.</div>;
-const num = (p: any) => Number((p && (p.engagement || p.interactions || p.likes || p.impressions)) || 0);
-const total = posts.reduce((s: number, p: any) => s + num(p), 0);
-return (
-<div className="mt-2 grid grid-cols-2 gap-2">
-<div className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[20px] font-semibold text-ink">{posts.length}</div><div className="text-[12px] text-ink-muted">Posts (last 28 days)</div></div>
-<div className="rounded-2xl bg-white p-3 ring-1 ring-line"><div className="text-[20px] font-semibold text-ink">{total.toLocaleString()}</div><div className="text-[12px] text-ink-muted">Total interactions</div></div>
-</div>
-);
-})()}
-</div>
+{/* "How your recent posts did" was removed at the team's request. */}
 <div className="mt-6 border-t border-line pt-5">
 <div className="flex flex-wrap items-center justify-between gap-2">
 <label className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Your publishing queue</label>

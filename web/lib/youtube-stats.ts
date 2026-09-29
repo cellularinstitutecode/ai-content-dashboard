@@ -18,8 +18,11 @@
 export type Point = { date: string; value: number };
 
 /** The account metrics read from /stats/timeline, in the order the tiles show them. */
-export const YT_ACCOUNT_METRICS = ['yttotalSubscribers', 'ytsubscribersGained', 'ytsubscribersLost', 'ytVideos', 'ytestimatedRevenue'] as const;
-export type YtAccountMetric = (typeof YT_ACCOUNT_METRICS)[number];
+// Subscribers, and gained/lost for the net change. Videos and revenue
+// (ytVideos, ytestimatedRevenue) were dropped from the card at the team's
+// request, so they are no longer fetched.
+export const YT_ACCOUNT_METRICS = ['yttotalSubscribers', 'ytsubscribersGained', 'ytsubscribersLost'] as const;
+export type YtAccountMetric = (typeof YT_ACCOUNT_METRICS)[number] | 'ytVideos' | 'ytestimatedRevenue';
 
 function num(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
