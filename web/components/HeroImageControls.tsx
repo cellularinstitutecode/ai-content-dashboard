@@ -1,29 +1,37 @@
 'use client';
 
 // components/HeroImageControls.tsx
-// The "Image" section of the Publishing list's preview: three ways to change
+// The "Image" section of the Publishing list's preview: the ways to change
 // the picture on a draft, all through the endpoints the Dashboard already uses.
+// The free ones come first; the one that spends a credit is last and says so.
 //
-//   New AI image        POST /api/drafts/image { regenerate }  (the "↻ New image")
 //   Choose from library import_image (the Image Library's "Use as hero image")
 //                       then { useUrl } — the photo with the brand's colour
 //                       filter, no title, no generation
 //   Library + brand     import_image, then { brandPhotoUrl } — the SAME photo
 //                       with the brand filter and the post's title on it
 //                       (lib/library-hero.ts). No AI image is made.
+//   Edit image          the panel, open by default (components/ImageEditPanel.tsx):
+//                       the title re-set on the same picture for free, other
+//                       titles suggested, and notes for the next take.
+//   New AI image        POST /api/drafts/image { regenerate }  (the "↻ New image")
 //
 // Every generated take goes through the same verification as any other. What
 // happens AFTER the draft changed (reload, sync the Metricool post) belongs to
 // the caller.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PanelLoader } from '@/components/LoadingScreen';
+import ImageEditPanel, { okToSpend, type ImageAction } from '@/components/ImageEditPanel';
 import { friendlyError, friendlyImageError } from '@/lib/friendly-error';
 import ImportingLabel from '@/components/ImportingLabel';
+import { creditLabel, type EditableImage } from '@/lib/cover-edit';
 import { sizeLabel, tileNote, tooLargeToImport } from '@/lib/library-import';
 
 type DriveImage = { id: string; name: string; thumbUrl?: string; viewUrl?: string; size?: number | null };
 type Mode = 'use' | 'brand';
+/** What GET /api/drafts/image returns for the panel. */
+type PictureState = { image: EditableImage | null; title: string };
 
 export default function HeroImageControls({
   draftId,
@@ -48,11 +56,27 @@ export default function HeroImageControls({
   const [mode, setMode] = useState<Mode | null>(null);
   const [images, setImages] = useState<DriveImage[] | null>(null);
   const [loadingLib, setLoadingLib] = useState(false);
+  /** The picture as the server has it, for the Edit image panel. */
+  const [picture, setPicture] = useState<PictureState | null>(null);
   const scope = 'publishing-img:' + (draftId || 'none');
 
-  async function send(body: Record<string, unknown>, label: string, fallback: string, confirmed = false) {
+  // The panel opens pre-filled with the cover's own words and the last notes,
+  // which only the draft knows — the preview has a draft id and a URL.
+  useEffect(() => {
+    if (!draftId) return;
+    let live = true;
+    fetch('/api/drafts/image?id=' + encodeURIComponent(draftId))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (live && j) setPicture({ image: j.image ?? null, title: String(j.title || '') }); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, [draftId]);
+
+  async function send(body: Record<string, unknown>, label: string, fallback: string, opts: { confirmed?: boolean; credits?: number } = {}) {
     if (!draftId) { setStatus({ text: 'This post has no draft behind it, so its picture cannot be changed here.', bad: true }); return; }
-    if (!confirmed && beforeChange && !beforeChange()) return;
+    // A credit is asked about only on a draft that has already had a few takes.
+    if (opts.credits && !okToSpend(picture?.image, opts.credits)) return;
+    if (!opts.confirmed && beforeChange && !beforeChange()) return;
     setBusy(label);
     setStatus(null);
     try {
@@ -64,15 +88,23 @@ export default function HeroImageControls({
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j?.image?.url) throw new Error(friendlyImageError(j, fallback, { provider: 'openai' }));
       setMode(null);
-      await onChanged(j.image);
+      setPicture((p) => ({ image: j.image, title: p?.title ?? '' }));
+      // Saving notes changes nothing the post shows, so nothing is re-sent.
+      if (!j.saved) await onChanged(j.image);
       // The server says when the filter ran at its limit, or could not run.
       const notes = Array.isArray(j?.notes) ? j.notes.map(String).filter(Boolean) : [];
-      setStatus({ text: 'Picture updated.' + (notes.length ? ' Note: ' + notes.join(' ') + '.' : ''), bad: false });
+      setStatus({ text: (j.saved ? 'Notes saved for the next picture.' : j.retitled ? 'Title updated — same picture, no credits spent.' : 'Picture updated.') + (notes.length ? ' Note: ' + notes.join(' ') + '.' : ''), bad: false });
     } catch (e) {
       setStatus({ text: friendlyImageError(e, fallback, { provider: 'openai' }), bad: true });
     } finally {
       setBusy(null);
     }
+  }
+
+  /** The Edit image panel's requests. Saving notes changes no picture, so the caller's confirm is skipped for it. */
+  function fromPanel(body: Record<string, unknown>, meta: ImageAction) {
+    // okToSpend was already asked by the panel for its own credit button.
+    return send(body, meta.label, meta.fallback, { credits: 0, confirmed: meta.label === 'save-notes' });
   }
 
   function openLibrary(m: Mode) {
@@ -111,8 +143,8 @@ export default function HeroImageControls({
     } finally {
       setCopying(null);
     }
-    if (mode === 'use') await send({ useUrl: url, alt: img.name, libraryFileId: img.id }, img.id, 'That photo could not be attached.', true);
-    else await send({ brandPhotoUrl: url, alt: img.name, libraryFileId: img.id }, img.id, 'That photo could not be prepared.', true);
+    if (mode === 'use') await send({ useUrl: url, alt: img.name, libraryFileId: img.id }, img.id, 'That photo could not be attached.', { confirmed: true });
+    else await send({ brandPhotoUrl: url, alt: img.name, libraryFileId: img.id }, img.id, 'That photo could not be prepared.', { confirmed: true });
   }
 
   const chip = 'rounded-full px-3 py-1 text-[12px] font-medium ring-1 transition disabled:opacity-50 ';
@@ -121,13 +153,11 @@ export default function HeroImageControls({
   return (
     <section className="relative mb-3 rounded-xl bg-canvas p-3 ring-1 ring-black/5" aria-label="Image">
       <PanelLoader scope={scope} rounded="rounded-xl" />
+      {/* FREE FIRST: a real photograph, either way, spends nothing. */}
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="mr-1 text-[12px] font-semibold text-ink">Image</span>
-        <button type="button" disabled={Boolean(busy)} onClick={() => void send({ regenerate: true }, 'ai', 'The new image could not be made.')} className={chip + 'bg-surface text-ink/70 ring-black/10 hover:bg-black/5'} title="A fresh AI picture, verified before it replaces this one">
-          {busy === 'ai' ? 'Making…' : hasImage ? '↻ New AI image' : 'Make an AI image'}
-        </button>
-        <button type="button" disabled={Boolean(busy)} onClick={() => openLibrary('use')} className={chip + on('use')} title="A real photo from the team's Drive folder, with the brand's colour filter">📁 Choose from Image Library</button>
-        <button type="button" disabled={Boolean(busy)} onClick={() => openLibrary('brand')} className={chip + on('brand')} title="The library photo itself, with the brand's colour filter and the post title — no AI">🎨 Use library photo with brand filter</button>
+        <button type="button" disabled={Boolean(busy)} onClick={() => openLibrary('use')} className={chip + on('use')} title="A real photo from the team's Drive folder, with the brand's colour filter — no credits">📁 Choose from Image Library</button>
+        <button type="button" disabled={Boolean(busy)} onClick={() => openLibrary('brand')} className={chip + on('brand')} title="The library photo itself, with the brand's colour filter and the post title — no AI, no credits">🎨 Use library photo with brand filter</button>
       </div>
       {note && <p className="mt-1.5 text-[11px] text-ink/50">{note}</p>}
 
@@ -153,6 +183,25 @@ export default function HeroImageControls({
           )}
         </div>
       )}
+
+      {/* THE PANEL, open by default. Keyed by the picture, so a new take starts the fields afresh. */}
+      {draftId && (
+        <ImageEditPanel
+          key={picture?.image?.url || 'none'}
+          draftId={draftId}
+          image={picture?.image ?? null}
+          plannerTitle={picture?.title ?? ''}
+          busy={Boolean(busy)}
+          onAction={fromPanel}
+        />
+      )}
+
+      {/* SPENDS A CREDIT: last, and labelled. */}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <button type="button" disabled={Boolean(busy)} onClick={() => void send({ regenerate: true }, 'ai', 'The new image could not be made.', { credits: 1 })} className={chip + 'bg-surface text-ink/70 ring-black/10 hover:bg-black/5'} title="A fresh AI picture, verified before it replaces this one. It follows the notes above, if any. Spends one image credit.">
+          {busy === 'ai' ? 'Making…' : (hasImage ? '↻ New AI image ' : 'Make an AI image ') + creditLabel(1)}
+        </button>
+      </div>
 
       {status && <p role="status" className={'mt-2 text-[11px] font-medium ' + (status.bad ? 'text-red-600' : 'text-emerald-700')}>{status.text}</p>}
     </section>

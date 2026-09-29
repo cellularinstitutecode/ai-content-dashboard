@@ -62,6 +62,12 @@ export type PlannerImage = {
    * names" is the wrong question to ask of a microscopy frame.
    */
   shotFamily?: ShotFamily;
+  /**
+   * The team's notes for this take ("two women at a table, warmer light").
+   * Stamped by lib/images.ts so the on-topic check judges the picture against
+   * what was asked for, not only the pillar's fixed cue.
+   */
+  direction?: string;
 };
 
 /**
@@ -335,25 +341,72 @@ export function titleFor(angle: unknown, pillarName: string): string {
   return TITLE_BY_KEY.get(key(cleanTopic(angle))) || `The Importance of ${pillarName}`;
 }
 
+/** Longer than this is a sentence, not a cover title (same ceiling as lib/library-cover.ts). */
+export const MAX_COVER_TITLE = 60;
+
+/**
+ * The framings a repeated title steps through, so the second post on an angle
+ * — or a second unlisted angle of the same pillar, which shares the fallback —
+ * does not wear the same cover as the first. Short and claim-free, like the
+ * table above; each works on any noun phrase.
+ */
+export const TITLE_FRAMINGS: ((t: string) => string)[] = [
+  (t) => `A Closer Look at ${t}`,
+  (t) => `${t}, Revisited`,
+  (t) => `More on ${t}`,
+  (t) => `${t} in Practice`,
+  (t) => `Notes on ${t}`,
+];
+
+/**
+ * The title for the `seq`-th occurrence of the same cover title: the written
+ * one first (seq 0), then a different framing each time round. A framing that
+ * runs past the cover's width falls back to the next shorter one.
+ */
+export function variedTitle(base: string, seq: number): string {
+  const t = String(base || '').trim();
+  const n = Math.max(0, Math.round(Number(seq) || 0));
+  if (!t || n === 0) return t;
+  const order = TITLE_FRAMINGS.slice((n - 1) % TITLE_FRAMINGS.length).concat(TITLE_FRAMINGS.slice(0, (n - 1) % TITLE_FRAMINGS.length));
+  for (const frame of order) {
+    const out = frame(t);
+    if (out.length <= MAX_COVER_TITLE) return out;
+  }
+  return t;
+}
+
+/**
+ * How many earlier occurrences already wore this angle's cover title. Counted
+ * by TITLE, not by angle: two unlisted angles of one pillar both fall back to
+ * "The Importance of <pillar>", and that repeat is the one the team noticed.
+ */
+export function titleSeq(angle: unknown, pillarName: string, history: readonly ({ query?: unknown } | null | undefined)[]): number {
+  const mine = titleFor(angle, pillarName);
+  return history.filter((h) => h && titleFor(h.query, pillarName) === mine).length;
+}
+
 /**
  * The picture brief for a draft, read from its `_autopilot` provenance.
  * Null when the draft did not come from a weekly-strategy slot.
  */
 export function plannerImageFor(pack: unknown): PlannerImage | null {
   const auto = (pack && typeof pack === 'object' ? (pack as Record<string, unknown>)._autopilot : null) as
-    | { template_name?: unknown; slot?: unknown; pillar_id?: unknown; angle?: { query?: unknown; seedTopic?: unknown } }
+    | { template_name?: unknown; slot?: unknown; pillar_id?: unknown; title_seq?: unknown; angle?: { query?: unknown; seedTopic?: unknown; titleSeq?: unknown } }
     | null
     | undefined;
   if (!auto || typeof auto !== 'object') return null;
   const name = key(auto.template_name);
   const subject = cleanTopic(auto.angle?.query || auto.angle?.seedTopic);
   if (!name || !subject) return null;
+  // Which occurrence of this cover title the post is (lib/autopilot.ts stamps
+  // it from the template's approved history); 0 or missing keeps titleFor.
+  const seq = Math.max(0, Math.round(Number(auto.title_seq ?? auto.angle?.titleSeq) || 0));
   if (name === key(BLOG_SLOT.name) || key(auto.slot) === 'mon-blog') {
     // The article's angles are borrowed from the medical pillars; picture it as
     // the pillar it came from.
     const pillar = PILLARS.find((p) => p.angles.some((a) => key(a) === key(subject)));
     const set = (pillar && PILLAR_SCENES[pillar.id]) || PILLAR_SCENES.diagnosis;
-    return { pillarId: 'article', pillarName: BLOG_SLOT.name, subject, title: titleFor(subject, pillar?.name || 'Evaluation'), ...set, size: '1024x1536' };
+    return { pillarId: 'article', pillarName: BLOG_SLOT.name, subject, title: variedTitle(titleFor(subject, pillar?.name || 'Evaluation'), seq), ...set, size: '1024x1536' };
   }
   // The stamped pillar first: it survives a rename. The name is the fallback
   // for drafts written before the stamp existed.
@@ -361,7 +414,7 @@ export function plannerImageFor(pack: unknown): PlannerImage | null {
   if (!pillar) return null;
   const set = PILLAR_SCENES[pillar.id];
   if (!set) return null;
-  return { pillarId: pillar.id, pillarName: pillar.name, subject, title: titleFor(subject, pillar.name), ...set, size: '1024x1536' };
+  return { pillarId: pillar.id, pillarName: pillar.name, subject, title: variedTitle(titleFor(subject, pillar.name), seq), ...set, size: '1024x1536' };
 }
 
 /** The lines the image prompt carries for a planner draft (the photograph only — the title is set later). */
@@ -755,9 +808,11 @@ export function plannerPromptLines(p: PlannerImage, sceneIndex: number, directio
   const action = d ? d.scene.replace(/^(the )?(physician|clinician) (is )?/i, '').replace(/\.$/, '') : fb.action;
   const windowView = CANCUN.has(pid) ? 'a turquoise Caribbean sea, white sand and palm trees' : 'green trees and soft hills';
   // The shot rotates with the post itself, not only with rerolls — one fixed
-  // composition made every week's picture look like the last one.
-  const seed = seedOf(p.title + p.pillarName) + Math.abs(Math.round(sceneIndex));
-  const shot = shotFor(seedOf(p.title + p.pillarName), sceneIndex, family || familyAt(p, sceneIndex));
+  // composition made every week's picture look like the last one. A cover
+  // with its title turned off is seeded from the subject instead.
+  const label = p.title || p.subject;
+  const seed = seedOf(label + p.pillarName) + Math.abs(Math.round(sceneIndex));
+  const shot = shotFor(seedOf(label + p.pillarName), sceneIndex, family || familyAt(p, sceneIndex));
   const cast: Cast = {
     clinician: CLINICIANS[seed % CLINICIANS.length],
     patient: PATIENTS[(seed + 2) % PATIENTS.length],
@@ -766,8 +821,8 @@ export function plannerPromptLines(p: PlannerImage, sceneIndex: number, directio
   const objectLed = shot.family === 'consult' || shot.family === 'still';
   return [
     objectLed
-      ? `Subject: a photograph for an educational post titled "${p.title}" (the weekly "${p.pillarName}" theme, on "${p.subject}"). It must clearly show ${d ? d.mustShow : p.mustShow}.`
-      : `Subject: a photograph for an educational post titled "${p.title}" (the weekly "${p.pillarName}" theme, on "${p.subject}"). The frame below is the subject — do not add the objects the post names to it.`,
+      ? `Subject: a photograph for an educational post titled "${label}" (the weekly "${p.pillarName}" theme, on "${p.subject}"). It must clearly show ${d ? d.mustShow : p.mustShow}.`
+      : `Subject: a photograph for an educational post titled "${label}" (the weekly "${p.pillarName}" theme, on "${p.subject}"). The frame below is the subject — do not add the objects the post names to it.`,
     objectLed && d?.quote ? `It illustrates this line from the post: "${d.quote}" — everything in frame comes from that.` : '',
     dir ? `Direction from the team (follow this closely, within the frame below): ${dir}` : '',
     ...shot.lines(ctx),
@@ -790,6 +845,16 @@ export function onTopicCheck(p: PlannerImage): string {
       'petri dishes, vials or sample tubes, a lab bench, or a technician in a lab coat. The preferred picture is a bright, warm-beige ' +
       'consultation where the physician and patient talk about the topic, with the topic visible and room for a short title only. '
     : '';
+  // The team wrote what they want: the picture is on topic when it does THAT
+  // and still plausibly belongs to the post. Without this a note like "no lab
+  // coat, show fresh vegetables" was checked against the pillar's fixed cue
+  // and refused for following the note.
+  const dir = String(p.direction || '').trim();
+  if (dir) {
+    return `ON-TOPIC (this one is a DEFECT, not an opinion): the team asked for this picture in their own words — "${dir.slice(0, 300)}" — ` +
+      `and the image must follow that; it is on topic when it does, provided it still plausibly illustrates "${p.subject}". ` +
+      'A generic reception desk, front desk or waiting room does NOT count. ' + tail;
+  }
   if (p.shotFamily === 'science') {
     return 'ON-TOPIC (this one is a DEFECT, not an opinion): the image must be a believable REAL laboratory photograph — either a genuine ' +
       'microscope field of cells in culture, or a researcher working at a lab bench. A DEFECT: rendered or illustrated cells, glowing or ' +

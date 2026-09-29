@@ -74,6 +74,7 @@ import { NETWORKS_NEEDING_MEDIA, mediaProblem } from '@/lib/composer';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
 import { ANGLE_HISTORY, chooseAngle, type AngleType, type PastAngle } from '@/lib/angle-rotation';
+import { titleSeq } from '@/lib/planner-image';
 import { autoScheduleVerdict, holdNote } from '@/lib/autoschedule';
 import { autoSchedules } from '@/lib/autopilot-mode';
 import { usableLeadHours } from '@/lib/lead-window';
@@ -138,6 +139,8 @@ export type Angle = {
   /** The FIX button's progress and result, which the card polls (lib/fix-plan.ts fixView). */
   fix?: FixStatus;
   previousOpening?: string; // weekly-strategy slots: how this angle opened the last time it was published
+  /** Weekly-strategy slots: how many approved occurrences already wore this angle's cover title (lib/planner-image.ts titleSeq). */
+  titleSeq?: number;
 };
 
 export type { RunScore } from '@/lib/score-pack';
@@ -682,6 +685,9 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
       dealtWeek: dealt ? dealt.week : undefined,
       ...(variety ? { format: variety.format, audience: variety.audience, closing: variety.closing } : {}),
       ...(previousOpening ? { previousOpening } : {}),
+      // How many approved occurrences already wore this angle's cover title:
+      // the picture varies the title from the second one on (lib/planner-image.ts).
+      titleSeq: titleSeq(seedTopic, pillarName, angleHistory),
     };
   }
 
@@ -940,6 +946,10 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
     // The slot's identity, so the picture can find its pillar even after the
     // template is renamed (lib/planner-image.ts plannerImageFor).
     ...(isStrategySlot(strategy) ? { slot: strategy.slot || null, pillar_id: pillarForStrategy(strategy, template.name)?.id || null } : {}),
+    // Which occurrence of this cover title the post is (decided at research,
+    // where the history is), so a repeat of an angle — or of the pillar
+    // fallback — wears a different title (lib/planner-image.ts).
+    ...(angle.titleSeq ? { title_seq: angle.titleSeq } : {}),
     scheduled_for: run.scheduled_for,
     angle,
   };

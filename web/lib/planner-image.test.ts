@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { PILLARS } from './content-strategy.ts';
 import { BLOG_ANGLES } from './strategy-seed.ts';
-import { PILLAR_SCENES, PLAN_LENGTH, SHOTS, SHOT_COUNT, TITLES, cleanTopic, familyAt, isLifestylePillar, plannerImageFor, plannerPromptLines, onTopicCheck, scienceAllowed, scienceOffered, scienceScore, shotFor, titleFor } from './planner-image.ts';
+import { MAX_COVER_TITLE, PILLAR_SCENES, PLAN_LENGTH, SHOTS, SHOT_COUNT, TITLES, TITLE_FRAMINGS, cleanTopic, familyAt, isLifestylePillar, plannerImageFor, plannerPromptLines, onTopicCheck, scienceAllowed, scienceOffered, scienceScore, shotFor, titleFor, titleSeq, variedTitle } from './planner-image.ts';
 
 const pack = (template_name: string, query: string) => ({ _autopilot: { template_name, angle: { query, seedTopic: query } } });
 
@@ -89,6 +90,87 @@ test('a brief written from the post replaces the fixed scene and the on-topic cu
   assert.match(lines, /post titled "Hydration and Cellular Health"/);
   assert.doesNotMatch(lines, /oranges/);
   assert.match(onTopicCheck(p), /water being poured/);
+});
+
+// --- THE SAME TITLE AGAIN ------------------------------------------------------------
+//
+// "It's been giving me the same titles." The second post on an angle — or a
+// second unlisted angle of a pillar, which shares the fallback — wore the same
+// cover as the first. The occurrence is counted at research and the title
+// varies from the second one on; the first keeps the written one.
+
+test('the first occurrence keeps the written title; later ones wear a different framing each time', () => {
+  assert.equal(variedTitle('Protein and Recovery', 0), 'Protein and Recovery');
+  const seen = new Set<string>();
+  for (let i = 1; i <= TITLE_FRAMINGS.length; i++) {
+    const t = variedTitle('Protein and Recovery', i);
+    assert.notEqual(t, 'Protein and Recovery', 'occurrence ' + i);
+    assert.match(t, /Protein and Recovery/, 'the words are still the angle’s');
+    assert.ok(t.length <= MAX_COVER_TITLE, t);
+    seen.add(t);
+  }
+  assert.equal(seen.size, TITLE_FRAMINGS.length, 'every framing is different');
+  assert.equal(variedTitle('', 2), '');
+  // A framing that would run past the cover is skipped for a shorter one.
+  const long = 'Compare Evaluations, Not Just Treatments and Everything Else';
+  assert.ok(variedTitle(long, 1).length <= MAX_COVER_TITLE);
+});
+
+test('the occurrence is counted by cover title, so the pillar fallback repeats are caught too', () => {
+  const history = [
+    { query: 'The role of protein in recovery' },
+    { query: 'Nutrition and inflammation' },
+    { query: '[Autopilot] The role of protein in recovery' },
+    null,
+    { query: 'an unlisted angle' },
+  ];
+  assert.equal(titleSeq('The role of protein in recovery', 'Nutrition', history), 2);
+  assert.equal(titleSeq('Hydration and cellular health', 'Nutrition', history), 0);
+  // Two different unlisted angles share "The Importance of Nutrition".
+  assert.equal(titleSeq('another unlisted angle', 'Nutrition', history), 1);
+  assert.equal(titleSeq('x', 'Nutrition', []), 0);
+});
+
+test('a planner draft stamped as a repeat is pictured with the varied title, wherever the stamp sits', () => {
+  const first = plannerImageFor(pack('Nutrition', 'The role of protein in recovery'))!;
+  assert.equal(first.title, 'Protein and Recovery');
+  const again = plannerImageFor({ _autopilot: { template_name: 'Nutrition', title_seq: 1, angle: { query: 'The role of protein in recovery' } } })!;
+  assert.equal(again.title, variedTitle('Protein and Recovery', 1));
+  const onAngle = plannerImageFor({ _autopilot: { template_name: 'Nutrition', angle: { query: 'The role of protein in recovery', titleSeq: 2 } } })!;
+  assert.equal(onAngle.title, variedTitle('Protein and Recovery', 2));
+  assert.notEqual(again.title, onAngle.title);
+  // Same for the article, which borrows the pillar's title.
+  const art = plannerImageFor({ _autopilot: { template_name: 'Weekly article', title_seq: 1, angle: { query: 'How follow-ups at 1, 3, 6, and 12 months support continuity of care' } } })!;
+  assert.equal(art.title, variedTitle('Follow-Up at 1, 3, 6 and 12 Months', 1));
+});
+
+test('the engine stamps the occurrence at research, where the template’s history is', () => {
+  const src = readFileSync(new URL('../lib/autopilot.ts', import.meta.url), 'utf8');
+  assert.match(src, /titleSeq: titleSeq\(seedTopic, pillarName, angleHistory\)/);
+  assert.match(src, /title_seq: angle\.titleSeq/);
+});
+
+// --- NOTES AFTER THE PICTURE EXISTS ---------------------------------------------------
+
+test('the team’s notes reach the prompt and the on-topic check judges against them', () => {
+  const base = plannerImageFor(pack('Nutrition', 'The role of protein in recovery'))!;
+  const p = { ...base, direction: 'two women at a table, no lab coat, warmer light, show fresh vegetables' };
+  const lines = plannerPromptLines(p, 0, p.direction).join(' ');
+  assert.match(lines, /Direction from the team \(follow this closely[^)]*\): two women at a table, no lab coat/);
+  const check = onTopicCheck(p);
+  assert.match(check, /the team asked for this picture in their own words — "two women at a table/);
+  assert.match(check, /still plausibly illustrates "The role of protein in recovery"/);
+  assert.doesNotMatch(check, /must clearly show healthy food/, 'the pillar’s fixed cue no longer fails a picture that followed the notes');
+  assert.match(check, /anatomical model/, 'the banned-prop and title-band defects still stand');
+  // Without notes, the check is as before.
+  assert.match(onTopicCheck(base), /must clearly show healthy food/);
+});
+
+test('a cover with its title turned off is still briefed from its subject', () => {
+  const p = { ...plannerImageFor(pack('Sleep', 'Sleep and recovery'))!, title: '' };
+  const lines = plannerPromptLines(p, 0).join(' ');
+  assert.match(lines, /post titled "Sleep and recovery"/);
+  assert.match(lines, /TITLE SPACE/);
 });
 
 test('teaching props are a blocking defect and are banned from the craft notes', () => {
