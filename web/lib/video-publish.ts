@@ -19,6 +19,7 @@ import 'server-only';
 
 import { complianceGate } from '@/lib/compliance-gate';
 import { claimSupportOf } from '@/lib/citation-gate';
+import { autoFixCitation } from '@/lib/citation-autofix';
 import { MediaNotNormalisedError, metricoolConfigured, metricoolSchedulePost, readPostId, type Provider } from '@/lib/metricool';
 import { publishMode } from '@/lib/publish-mode';
 import { preflightPost } from '@/lib/post-preflight';
@@ -79,7 +80,14 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
     return { network, ok: false, reason: 'not_configured', message: 'Metricool is not configured on this deployment.' };
   }
 
-  const gate = await complianceGate(input.userId, input.text, network, { claimSupport: claimSupportOf(input.pack) });
+  // "Verify / fix", by default (lib/citation-autofix.ts): the citation the
+  // video pipeline chose is checked against the copy once more here, and
+  // swapped for a study that backs it when the judge finds one. Fails open.
+  const fixed = await autoFixCitation({ userId: input.userId, draftId: input.draftId, text: input.text, pack: (input.pack as Record<string, unknown> | undefined) ?? null, budgetMs: 45_000 });
+  const text = fixed.text;
+  const pack = (fixed.pack ?? input.pack ?? null) as PackLike | null;
+
+  const gate = await complianceGate(input.userId, text, network, { claimSupport: claimSupportOf(pack) });
   if (!gate.ok) {
     // Deliberately not sent. Copy missing the AVISO line or the REF citation
     // must not go out at all, and now goes out by itself if it does.
@@ -92,8 +100,8 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
   // publishing time was taken on trust here however far in the past it was.
   const pre = preflightPost({
     network,
-    text: input.text,
-    pack: input.pack ?? null,
+    text: text,
+    pack,
     hasMedia: Boolean(String(input.mediaUrl || '').trim()),
     format: input.format,
     publicationDate: undefined,
@@ -103,7 +111,7 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
 
   try {
     const created = await metricoolSchedulePost({
-      text: input.text,
+      text: text,
       providers: [network as Provider],
       publicationDate: input.publicationDate,
       media: input.mediaUrl ? [{ url: input.mediaUrl }] : [],
@@ -113,7 +121,7 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
       youtubeData: network === 'youtube'
         ? youtubeDataFor({
             title: input.title,
-            body: input.text,
+            body: text,
             format: input.format,
             sheetYoutube: input.sheetYoutube,
             defaultPrivacy: process.env.YOUTUBE_DEFAULT_PRIVACY,
@@ -121,7 +129,7 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
         : null,
       // TikTok: public, comments/duet/stitch on — a direct publication rather
       // than Metricool's "finish on your phone" mode.
-      tiktokData: network === 'tiktok' ? tiktokDataFor({ title: input.title, body: input.text }) : null,
+      tiktokData: network === 'tiktok' ? tiktokDataFor({ title: input.title, body: text }) : null,
     }, publishMode());
     const metricoolPostId = readPostId(created);
 
@@ -142,7 +150,7 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
         user_id: input.userId,
         draft_id: input.draftId || null,
         providers: [network],
-        text: input.text,
+        text: text,
         publication_date: input.publicationDate,
         metricool_post_id: metricoolPostId,
         // The public Drive copy this post's video came from, so the copy can be removed

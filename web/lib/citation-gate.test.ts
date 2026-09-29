@@ -136,3 +136,38 @@ test('a citation Metricool did not take is still a fix, and a post Metricool los
   const page = src('app/calendar/page.tsx');
   assert.match(page, /if \(j\?\.fixed\) \{[\s\S]{0,200}await refresh\(\)/);
 });
+
+test('"Verify / fix" runs by default at every door; the button is the safety net', () => {
+  // A citation the judge has not accepted is repaired before the gate reads it,
+  // wherever a post is approved, sent for review, published from a video or
+  // approved by the Autopilot — and while the video copy is being prepared.
+  const posts = src('app/api/posts/route.ts');
+  const approve = posts.slice(posts.indexOf("if (action === 'approve' || action === 'publish_now') {\n    const fixed = await autoFixCitation("));
+  assert.ok(approve.length > 0, 'the approve door runs it');
+  assert.ok(approve.indexOf('await autoFixCitation(') < approve.indexOf('const gate = await complianceGate('), 'before the gate');
+  assert.match(approve, /update\(\{ text: fixed\.text \}\)/, 'and the swap reaches the row');
+
+  const schedule = src('app/api/metricool/schedule/route.ts');
+  assert.ok(schedule.indexOf('await autoFixCitation(') < schedule.indexOf('const gate = await complianceGate('), 'send-for-review, before the gate');
+  assert.match(schedule, /if \(fixed\.swapped\) text = fixed\.text;/);
+
+  const publish = src('lib/video-publish.ts');
+  assert.ok(publish.indexOf('await autoFixCitation(') < publish.indexOf('const gate = await complianceGate('), 'video publish, before the gate');
+  assert.doesNotMatch(publish.slice(publish.indexOf('const gate = await complianceGate(')), /input\.text/, 'everything after it sends the corrected text');
+
+  const ap = src('lib/autopilot.ts');
+  const door = ap.slice(ap.indexOf('export async function approveRun'));
+  assert.ok(door.indexOf('await autoFixCitation(') < door.indexOf('const plan = perNetworkPlan('), 'Autopilot approve, before the sends are planned');
+  const score = ap.slice(ap.indexOf('async function stepScore'), ap.indexOf('export async function approveRun'));
+  assert.match(score, /stamp\.status !== 'supported'[\s\S]{0,600}await autoFixCitation\(/, 'and at draft time, before the card is shown');
+
+  const prepare = src('lib/video-prepare.ts');
+  assert.match(prepare, /findBackingByClaims\(\{\s*text: tiktok,/, 'the video pipeline judges statement by statement too');
+
+  // The helper only ever checks a post that cites something, and fails open.
+  const auto = src('lib/citation-autofix.ts');
+  assert.match(auto, /if \(!cited\) return unchanged;/);
+  assert.match(auto, /catch \(err\) \{[\s\S]{0,200}return unchanged;/);
+  // The button is still there.
+  assert.match(src('app/calendar/page.tsx'), /'Verify \/ fix'/);
+});

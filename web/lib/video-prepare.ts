@@ -30,6 +30,7 @@ import { evidenceBriefFrom } from '@/lib/evidence-brief';
 import type { EvidenceItem } from '@/lib/evidence-parse';
 import { claimFrom, claimQuery, supportedItem, type ClaimSupportStamp, type SupportVerdict } from '@/lib/claim-support';
 import { refLineFrom, refLineFromEvidence } from '@/lib/citation-from-evidence';
+import { findBackingByClaims } from '@/lib/post-citation-fix';
 import { professionalTitle } from '@/lib/post-title';
 import { verifyDoi } from '@/lib/citation';
 import { serpLandscapeFrom } from '@/lib/serp-landscape';
@@ -718,6 +719,23 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
             verdict = retried;
           }
         }
+      }
+    }
+
+    // RUNG 2b — still nothing: the copy's own statements, one at a time.
+    //
+    // A caption that makes three points is not one claim, and a judge asked
+    // about it whole says null to every paper. This is what "Verify / fix"
+    // does when pressed; here it runs by itself, while there is time for it.
+    if (verdict.status === 'none' && claim && roomFor(canResearchClaim)) {
+      const byClaims = await findBackingByClaims({
+        text: tiktok,
+        candidates,
+        outOfTime: () => !roomFor(canCheckClaim),
+      });
+      if (byClaims.backing) {
+        candidates = byClaims.candidates;
+        verdict = { status: 'supported', index: candidates.findIndex((i) => String(i.doi || '').toLowerCase() === String(byClaims.backing!.doi || '').toLowerCase()) };
       }
     }
 
