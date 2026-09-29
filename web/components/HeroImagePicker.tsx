@@ -21,9 +21,11 @@
 //   Describe it   the prompt, prefilled from the post and yours to edit.
 import { useMemo, useRef, useState } from 'react';
 
+import ImportingLabel from '@/components/ImportingLabel';
 import { friendlyError } from '@/lib/friendly-error';
+import { sizeLabel, tileNote, tooLargeToImport } from '@/lib/library-import';
 
-type DriveImage = { id: string; name: string; thumbUrl?: string; viewUrl?: string };
+type DriveImage = { id: string; name: string; thumbUrl?: string; viewUrl?: string; size?: number | null };
 type Tab = 'library' | 'upload' | 'prompt';
 
 /** The longest edge we upload. Bigger than any feed shows, small enough to send. */
@@ -198,15 +200,15 @@ export default function HeroImagePicker({
               <button
                 key={img.id}
                 type="button"
-                disabled={Boolean(busy)}
+                disabled={Boolean(busy) || tooLargeToImport(img.size)}
                 onClick={() => void attachFromLibrary(img)}
-                title={img.name}
+                title={img.name + (sizeLabel(img.size) ? ' · ' + sizeLabel(img.size) : '')}
                 className="group overflow-hidden rounded-xl ring-1 ring-line transition hover:ring-accent disabled:opacity-50"
               >
                 {img.thumbUrl
                   ? <img src={img.thumbUrl} alt={img.name} className="h-20 w-full object-cover" />
                   : <span className="block p-3 text-[11px] text-ink-muted">{img.name}</span>}
-                <span className="block truncate px-1.5 py-1 text-[10px] text-ink-faint">{busy === img.id ? 'Attaching…' : img.name}</span>
+                <span className="block truncate px-1.5 py-1 text-[10px] text-ink-faint">{busy === img.id ? <ImportingLabel verb="Attaching" size={img.size} /> : tileNote(img.size) || img.name}</span>
               </button>
             ))}
           </div>

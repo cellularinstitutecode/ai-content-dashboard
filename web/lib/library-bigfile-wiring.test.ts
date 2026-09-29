@@ -59,6 +59,8 @@ test('the captioner still scales before it looks, and still refuses the absurd',
 
 test('import_image scales the picture down and refuses what it could not shrink', () => {
   assert.match(imports, /fitImage\(file\.path, file\.size/);
+  // The resizer's binary is fetched while the photo downloads, not after.
+  assert.ok(imports.indexOf('void resolveFfmpeg()') > 0 && imports.indexOf('void resolveFfmpeg()') < imports.indexOf('downloadDriveFileToDisk(body.fileId'));
   assert.match(imports, /if \(!fit\.bytes\)/);
   assert.match(imports, /'That image is larger than ' \+ Math\.round\(LIBRARY_IMAGE_MAX_BYTES/);
   assert.doesNotMatch(imports, /larger than (25|64) MB/);

@@ -27,6 +27,7 @@ import {
 } from '@/lib/google-sources';
 import { storeBytes } from '@/lib/images';
 import { fitImage } from '@/lib/image-downscale';
+import { resolveFfmpeg } from '@/lib/audio-extract';
 import { reportError } from '@/lib/report';
 import { checkRateLimit } from '@/lib/rate-limit';
 
@@ -283,6 +284,10 @@ export async function POST(req: NextRequest) {
     // file goes straight to disk and is scaled down there before it is
     // stored, so the ceiling (200 MB, the same as the caption and palette
     // routes) only refuses what the function's disk cannot hold.
+    // On a fresh instance the resizer's binary is fetched at first use
+    // (lib/audio-extract.ts). Start that now so it arrives while the photo
+    // does, rather than after it; on a warm instance this returns at once.
+    void resolveFfmpeg().catch(() => undefined);
     const file = await downloadDriveFileToDisk(body.fileId, LIBRARY_IMAGE_MAX_BYTES);
     try {
       // Stored at the size it will be shown at, not the size the camera made it.
