@@ -8,6 +8,7 @@ import { announce, fetchPosts, onRefresh } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
 import { PanelLoader } from '@/components/LoadingScreen';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
+import { metricoolPlannerUrl } from '@/lib/metricool-links';
 // The Approve button must agree with the API about what may go out.
 import { isAwaitingApproval, postStatusMeta } from '@/lib/post-mode';
 import { overduePosts, weeklyPlanByDay, type PlanTemplate } from '@/lib/calendar-plan';
@@ -751,8 +752,19 @@ export default function CalendarPage() {
             </button>
           </div>
           <h2 className="text-lg font-semibold">{monthLabel}</h2>
-          <div className="min-w-[90px] text-right text-xs text-ink/40">
-            {saving ? 'Saving…' : loading ? 'Loading…' : ''}
+          <div className="flex items-center gap-3">
+            <div className="min-w-[70px] text-right text-xs text-ink/40">
+              {saving ? 'Saving…' : loading ? 'Loading…' : ''}
+            </div>
+            <a
+              href={metricoolPlannerUrl()}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="What has been posted and what is waiting for approval, on Metricool's calendar"
+              className="inline-flex items-center gap-1 rounded-full border border-accent/40 px-3 py-1.5 text-[12px] font-medium text-accent transition hover:bg-accent/5"
+            >
+              {'\u{1F4C5}'} Metricool planner ↗
+            </a>
           </div>
         </div>
 

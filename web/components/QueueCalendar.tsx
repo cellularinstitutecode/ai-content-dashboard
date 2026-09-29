@@ -10,6 +10,7 @@
 
 import { gridKey, monthGrid, shiftMonth, type MonthCursor } from '@/lib/queue-calendar';
 import { isAwaitingApproval } from '@/lib/post-mode';
+import { metricoolPlannerUrl } from '@/lib/metricool-links';
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -27,6 +28,7 @@ export default function QueueCalendar<T extends Post>({
   onApprove,
   approvingId,
   matchIds,
+  plannerUrl,
 }: {
   cursor: MonthCursor;
   onCursor: (c: MonthCursor) => void;
@@ -40,6 +42,8 @@ export default function QueueCalendar<T extends Post>({
   approvingId: string | null;
   /** While a search is on, the posts it matches; the rest are dimmed. */
   matchIds: Set<string> | null;
+  /** Metricool's own calendar for this brand; the clinic's default when omitted. */
+  plannerUrl?: string;
 }) {
   const grid = monthGrid(cursor);
   const label = new Date(cursor.year, cursor.month, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
@@ -59,7 +63,18 @@ export default function QueueCalendar<T extends Post>({
           </button>
           <button type="button" className={btn} onClick={() => onCursor(shiftMonth(cursor, 1))}>Next &rsaquo;</button>
         </div>
-        <h3 className="text-[16px] font-semibold text-ink">{label}</h3>
+        <div className="flex items-center gap-3">
+          <h3 className="text-[16px] font-semibold text-ink">{label}</h3>
+          <a
+            href={plannerUrl || metricoolPlannerUrl()}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="What has been posted and what is waiting for approval, on Metricool's calendar"
+            className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-transparent px-3 py-1.5 text-[12px] font-medium text-accent transition hover:bg-accent/5"
+          >
+            {'\u{1F4C5}'} Metricool planner ↗
+          </a>
+        </div>
       </div>
 
       <div className="grid grid-cols-7 gap-1.5">

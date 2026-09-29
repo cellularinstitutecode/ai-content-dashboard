@@ -2374,6 +2374,7 @@ className="w-full rounded-full bg-white px-4 py-2 text-[12px] text-ink ring-1 ri
   onApprove={(p: any) => approvePost(p)}
   approvingId={approvingId}
   matchIds={queueMatchIds}
+  plannerUrl={metricoolPlannerUrl(activeBlogId)}
 />
 )}
 {safePosts.length > 0 && !queueSearching && (
