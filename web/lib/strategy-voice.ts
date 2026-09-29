@@ -19,13 +19,19 @@
 // Pure: `./x.ts` imports only, so the test runner reads this file directly.
 import { PILLARS, citationPolicyForSlot, pillarById, slotByKey, type CitationPolicy, type Pillar } from './content-strategy.ts';
 import { SEED_MARK } from './strategy-seed.ts';
+import { UPLOAD_MARK } from './strategy-upload.ts';
 import { negatedAt } from './safety-rules.ts';
 
 /**
  * Whether this template's posts must cite a study: the document slot's policy
- * for a seeded slot (lib/content-strategy.ts), 'required' for everything else.
+ * for a seeded slot (lib/content-strategy.ts), 'if-health-claim' for an
+ * uploaded strategy's slot, 'required' for everything else.
  */
 export function citationPolicyFor(strategy: { seeded?: unknown; slot?: unknown } | null | undefined): CitationPolicy {
+  // A slot from a dropped strategy document (lib/strategy-upload.ts) follows
+  // the same rule the team chose for the weekly strategy: a REF line only when
+  // the post makes a health claim.
+  if (String(strategy?.seeded || '') === UPLOAD_MARK) return 'if-health-claim';
   if (!isStrategySlot(strategy)) return 'required';
   return citationPolicyForSlot(String(strategy?.slot || ''));
 }
