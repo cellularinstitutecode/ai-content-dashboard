@@ -17,6 +17,8 @@ import SchedulePack from "@/components/SchedulePack";
 import HeroImagePicker from "@/components/HeroImagePicker";
 import HeroImageControls from "@/components/HeroImageControls";
 import YouTubeStats from "@/components/YouTubeStats";
+import QueueCalendar from "@/components/QueueCalendar";
+import { cursorOf, defaultDay, groupByDay, type MonthCursor } from "@/lib/queue-calendar";
 import StrategyDrop from "@/components/StrategyDrop";
 import { useWorkspace } from "@/components/workspace";
 import { appliesTo as complianceApplies, checkCompliance, complianceNetworksLabel, ensureAviso, DEFAULT_AVISO_NUMBER } from "@/lib/compliance";
@@ -30,7 +32,7 @@ import { sheetRowUrl, sheetRowLabel, sheetRowTitle } from '@/lib/sheet-link';
 import { semrushDraftNote } from '@/lib/semrush-reason';
 import { looksInternal, professionalTitle } from '@/lib/post-title';
 import { imageUnshippable } from '@/lib/image-verdict';
-import { fmtScheduleDateTime, scheduleTzLabel, schedulePresetValue, scheduleInputValue, scheduleInstantFromInput } from '@/lib/schedule-clock';
+import { fmtScheduleDateTime, fmtScheduleTime, scheduleDateKey, scheduleTzLabel, schedulePresetValue, scheduleInputValue, scheduleInstantFromInput } from '@/lib/schedule-clock';
 
 // The visible pipeline every manual generation walks through. Steps light up
 // as the real calls behind them start/finish so the viewer can follow the
@@ -603,7 +605,11 @@ const [selectMode, setSelectMode] = useState(false);
 const [queueQ, setQueueQ] = useState('');
 const [selectedPosts, setSelectedPosts] = useState<Set<string>>(new Set());
 const [bulkBusy, setBulkBusy] = useState(false);
-const [showAllQueue, setShowAllQueue] = useState(false);
+// The queue is a month now (components/QueueCalendar.tsx): the day picked on
+// it, and the month on screen. Both null until someone picks — the page then
+// opens on today, or the next day with something scheduled.
+const [queueDay, setQueueDay] = useState<string | null>(null);
+const [queueMonth, setQueueMonth] = useState<MonthCursor | null>(null);
 const [postsLoading, setPostsLoading] = useState(false);
 // The queue is showing posts, but it could not read the drafts behind them —
 // so it cannot know which are waiting on a video, and every "Pending video"
@@ -1555,6 +1561,17 @@ const safePosts = Array.isArray(posts) ? posts : [];
 // The queue as the search leaves it. Only what is SHOWN is filtered — the
 // selection, the counts and the duplicate scan all still read safePosts.
 const shownPosts = filterQueue(safePosts as any[], queueQ);
+// The month view of the queue (lib/queue-calendar.ts). Days are the schedule's
+// wall-clock days, as on the calendar page.
+const queueToday = scheduleDateKey(new Date().toISOString());
+const queueByDay = groupByDay(safePosts as any[], (p: any) => scheduleDateKey(p?.publication_date), (p: any) => Date.parse(p?.publication_date || '') || 0);
+const activeQueueDay = queueDay ?? defaultDay(queueByDay.keys(), queueToday);
+const activeQueueMonth = queueMonth ?? cursorOf(activeQueueDay) ?? cursorOf(queueToday) ?? { year: new Date().getFullYear(), month: new Date().getMonth() };
+// A search, or "Select several", lists every match; otherwise the list under
+// the month is the picked day's posts, with every button the queue had.
+const queueSearching = Boolean(queueQ.trim()) || selectMode;
+const listPosts: any[] = queueSearching ? shownPosts : (queueByDay.get(activeQueueDay) ?? []);
+const queueMatchIds = queueQ.trim() ? new Set(shownPosts.map((p: any) => String(p?.id || ''))) : null;
 const pendingReviewCount = safePosts.filter((p: any) => postStatusMeta(p?.status).label === 'Waiting for your approval').length;
 const activeType = CONTENT_TYPES.find(t => t.id === type)!;
 
@@ -2314,7 +2331,7 @@ return selectMode ? (
 {dupeCount > 0 && (
 <button type="button" disabled={bulkBusy} title="The same draft on the same network more than once. Keeps the earliest of each; removes the rest from Metricool too." className="rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 ring-1 ring-amber-200 hover:bg-amber-100 disabled:opacity-50" onClick={() => void removeDuplicates()}>{bulkBusy ? 'Removing…' : 'Remove ' + dupeCount + ' duplicate' + (dupeCount === 1 ? '' : 's')}</button>
 )}
-<button type="button" className="text-[11px] font-medium text-accent hover:underline" onClick={() => { setSelectMode(true); setShowAllQueue(true); }}>Select several…</button>
+<button type="button" className="text-[11px] font-medium text-accent hover:underline" onClick={() => setSelectMode(true)}>Select several…</button>
 </>
 );
 })()}
@@ -2344,15 +2361,36 @@ className="w-full rounded-full bg-white px-4 py-2 text-[12px] text-ink ring-1 ri
 <p className="mt-1 px-1 text-[11px] text-ink-faint">A number on its own finds that sheet row — 183 finds row 183, not every post mentioning it.</p>
 </div>
 )}
+{safePosts.length > 0 && (
+<QueueCalendar
+  cursor={activeQueueMonth}
+  onCursor={setQueueMonth}
+  byDay={queueByDay}
+  todayKey={queueToday}
+  selectedDay={activeQueueDay}
+  onSelectDay={(k) => { setQueueDay(k); const c = cursorOf(k); if (c) setQueueMonth(c); }}
+  timeOf={(p: any) => fmtScheduleTime(p?.publication_date)}
+  onPreview={(id) => setPreviewPostId(id)}
+  onApprove={(p: any) => approvePost(p)}
+  approvingId={approvingId}
+  matchIds={queueMatchIds}
+/>
+)}
+{safePosts.length > 0 && !queueSearching && (
+<h3 className="mt-5 text-[13px] font-semibold text-ink">
+{new Date(activeQueueDay + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
+<span className="ml-2 text-[12px] font-normal text-ink-faint">{listPosts.length ? listPosts.length + ' post' + (listPosts.length === 1 ? '' : 's') : 'Nothing scheduled this day — pick another day above'}</span>
+</h3>
+)}
 {safePosts.length > 0 && shownPosts.length === 0 && (
 <div className="mt-2 rounded-2xl bg-subtle p-4 text-center text-[12px] text-ink-faint ring-1 ring-line">Nothing in the queue matches “{queueQ.trim()}”. {safePosts.length} draft{safePosts.length === 1 ? '' : 's'} {safePosts.length === 1 ? 'is' : 'are'} waiting behind this search.</div>
 )}
-{shownPosts.length > 0 && (
+{listPosts.length > 0 && (
 <ul className="mt-2 space-y-2">
-{/* A search shows every match: finding row 183 and then hiding it behind
-    "show all" would be worse than not finding it. The six-row cap is for
-    the unfiltered, unselected queue only. */}
-{shownPosts.slice(0, (showAllQueue || selectMode || queueQ.trim()) ? shownPosts.length : 6).map((p: any, i: number) => {
+{/* The picked day's posts, or every match of a search or selection — never
+    capped: finding row 183 and then hiding it behind "show all" would be
+    worse than not finding it. */}
+{listPosts.map((p: any, i: number) => {
 const meta = postStatusMeta(p?.status);
 const tone = meta.tone === 'amber' ? 'bg-amber-50 text-amber-700 ring-amber-100' : meta.tone === 'green' ? 'bg-emerald-50 text-emerald-700 ring-emerald-100' : 'bg-blue-50 text-blue-700 ring-blue-100';
 const id = String(p?.id || '');
@@ -2428,14 +2466,6 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 );
 })}
 </ul>
-)}
-{/* Hidden while a search or select mode is on, because both already show
-    everything they match — a "show all 40" under a 3-result search reads
-    as though the search had failed. */}
-{shownPosts.length > 6 && !selectMode && !queueQ.trim() && (
-<button type="button" onClick={() => setShowAllQueue((v) => !v)} className="mt-2 text-[11px] font-medium text-accent hover:underline">
-{showAllQueue ? 'Show the first 6' : 'Show all ' + shownPosts.length}
-</button>
 )}
 </div>
 <div className="mt-6 flex flex-wrap gap-3 border-t border-line pt-5 text-[12px]">
