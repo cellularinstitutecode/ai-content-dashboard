@@ -116,6 +116,11 @@ test('the route reads the PDF with Claude, then inserts only — and the panel i
   assert.doesNotMatch(route, /\.update\(|\.delete\(|\.upsert\(/, 'additive: nothing existing is changed');
   const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /\{!isDraft && <StrategyDrop \/>\}/);
+  // The top panel on the overview: above the panels grid and every other panel.
+  const drop = page.indexOf('{!isDraft && <StrategyDrop />}');
+  assert.ok(drop < page.indexOf('<SystemStatus />'), 'above the status banner too');
+  assert.ok(drop < page.indexOf('<div className="2xl:grid 2xl:grid-cols-2'), 'before the panels grid');
+  assert.equal(page.split('<StrategyDrop').length, 2, 'mounted once');
   const templates = readFileSync(new URL('../app/templates/page.tsx', import.meta.url), 'utf8');
   assert.match(templates, /<StrategyDrop onCreated=/);
   assert.match(templates, /<WeeklyPlanner/, 'the built-in strategy loader stays');
