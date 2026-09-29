@@ -22,6 +22,7 @@
 import { useMemo, useRef, useState } from 'react';
 
 import ImportingLabel from '@/components/ImportingLabel';
+import { creditLabel } from '@/lib/cover-edit';
 import { friendlyError } from '@/lib/friendly-error';
 import { sizeLabel, tileNote, tooLargeToImport } from '@/lib/library-import';
 
@@ -250,7 +251,7 @@ export default function HeroImagePicker({
             disabled={busy === 'prompt' || !prompt.trim()}
             onClick={() => void send({ prompt, regenerate: true }, 'prompt')}
             className="mt-2 rounded-full bg-accent px-4 py-2 text-[13px] font-semibold text-white transition hover:bg-accent-hover disabled:opacity-40"
-          >{busy === 'prompt' ? 'Making it…' : 'Make this picture'}</button>
+          >{busy === 'prompt' ? 'Making it…' : 'Make this picture ' + creditLabel(1)}</button>
         </div>
       )}
 

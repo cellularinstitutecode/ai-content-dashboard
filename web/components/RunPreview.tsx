@@ -20,7 +20,10 @@ export type ReviewRunImage = {
   alt?: string;
   model?: string;
   verification?: { status?: 'approved' | 'flagged' | 'unchecked'; score?: number | null; issues?: string[]; textDetected?: boolean; bannedProp?: boolean };
-  titled?: { title: string; photoUrl: string };
+  titled?: { title: string; photoUrl: string; custom?: boolean };
+  /** The team's notes the last take was made with (lib/cover-edit.ts). */
+  direction?: string;
+  takes?: number;
   source?: string;
   /** Older takes only: an AI image styled after a library photo (that path is gone). */
   styledAfter?: string;

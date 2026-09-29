@@ -20,6 +20,8 @@ import { varietyLabels } from '@/lib/strategy-variety';
 import { claimSupportNote, type ClaimSupportStamp } from '@/lib/claim-support';
 import { fixPlan, fixRunning, fixStepsLabel, runFixInput, type FixStatus } from '@/lib/fix-plan';
 import FixStatusLine from '@/components/FixStatusLine';
+import ImageEditPanel, { okToSpend, type ImageAction } from '@/components/ImageEditPanel';
+import { creditLabel } from '@/lib/cover-edit';
 
 // The visible pipeline an engine run walks through. The tick call does all of
 // this server-side in one request; the tracker paces the display so the viewer
@@ -75,9 +77,13 @@ type PackImage = {
   alt?: string;
   model?: string;
   variant?: number;
-  verification?: { status?: 'approved' | 'flagged' | 'unchecked'; score?: number | null; issues?: string[]; textDetected?: boolean; bannedProp?: boolean };
+  verification?: { status?: 'approved' | 'flagged' | 'unchecked'; score?: number | null; issues?: string[]; textDetected?: boolean; bannedProp?: boolean; headTopPct?: number | null };
   /** Titled covers: the photo with its title set on top (lib/title-cover.ts). */
-  titled?: { title: string; photoUrl: string };
+  titled?: { title: string; photoUrl: string; custom?: boolean };
+  /** The team's notes the last take was made with (lib/cover-edit.ts). */
+  direction?: string;
+  /** Image generations on this draft so far. */
+  takes?: number;
   source?: string;
   /** A library photo that went through the brand's colour filter (lib/library-cover.ts). */
   brandGraded?: boolean;
@@ -381,6 +387,7 @@ export default function AutopilotQueue() {
    */
   async function proposeImages(r: Run, count = 3) {
     if (!r.draft_id || regenIds.has(r.id) || optionsIds.has(r.id)) return;
+    if (!okToSpend(r.pack?._image, count)) return;
     setErr(null);
     // ONE request for the whole set: the three pictures are generated in
     // parallel on the server and written once. Three separate requests took
@@ -427,6 +434,18 @@ export default function AutopilotQueue() {
   }
 
   async function regenImage(r: Run) {
+    // The panel is open by default, so a reroll asks first only on a draft
+    // that has already had a few takes (lib/cover-edit.ts).
+    if (r.pack?._image?.url && !okToSpend(r.pack._image, 1)) return;
+    await editImage(r, { regenerate: true }, { label: 'regenerate', credits: 1, fallback: 'Image regeneration failed' });
+  }
+
+  /**
+   * One request from the Edit image panel (or the reroll above): retitle, no
+   * title, notes, or a new take with notes. The free ones finish in seconds;
+   * the card shows the same "working" state either way.
+   */
+  async function editImage(r: Run, body: Record<string, unknown>, meta: ImageAction) {
     if (!r.draft_id || regenIds.has(r.id) || optionsIds.has(r.id)) return;
     addTo(setRegenIds, r.id);
     setErr(null);
@@ -434,14 +453,14 @@ export default function AutopilotQueue() {
       const res = await fetch('/api/drafts/image', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-chi-progress-scope': imgScope(r.id) },
-        body: JSON.stringify({ id: r.draft_id, regenerate: true }),
+        body: JSON.stringify({ id: r.draft_id, ...body }),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j?.error || 'Image regeneration failed');
+      if (!res.ok) throw new Error(j?.message || j?.error || meta.fallback);
       await load({ quiet: true });
       announce('images', 'drafts', 'autopilot'); // fresh hero image → Image Studio + library update live
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Image regeneration failed');
+      setErr(e instanceof Error ? e.message : meta.fallback);
     } finally {
       dropFrom(setRegenIds, r.id);
     }
@@ -697,7 +716,7 @@ export default function AutopilotQueue() {
                         {regenIds.has(r.id) && (
                           <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-white/70 text-[13px] font-medium text-ink backdrop-blur-sm">
                             <span className="h-4 w-4 animate-spin rounded-full border-2 border-line border-t-accent" />
-                            Generating a new proposition…
+                            Working on the picture…
                           </div>
                         )}
                         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -732,22 +751,37 @@ export default function AutopilotQueue() {
                               ? '🖼 Photo the team dropped in — attaches to the Metricool draft on approve.'
                               : '🖼 AI hero image (' + (r.pack._image.model || 'OpenAI') + ') — generated fresh from THIS article’s text; attaches to the Metricool draft on approve.'}
                         </p>
+                      </div>
+                      {/* EDIT IMAGE, open by default: the free changes (title, no title, notes) come before anything that spends a credit. */}
+                      {r.draft_id && (
+                        <ImageEditPanel
+                          key={r.pack._image.url}
+                          draftId={r.draft_id}
+                          image={r.pack._image}
+                          plannerTitle={plannerImageFor(r.pack)?.title ?? ''}
+                          busy={regenIds.has(r.id) || optionsIds.has(r.id) || busyIds.has(r.id)}
+                          onAction={(body, meta) => editImage(r, body, meta)}
+                        />
+                      )}
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <span className="text-[11px] text-ink-faint">These spend credits:</span>
                         <button
                           type="button"
                           onClick={() => regenImage(r)}
                           disabled={regenIds.has(r.id) || optionsIds.has(r.id) || busyIds.has(r.id)}
-                          className="ml-auto rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
+                          title="A fresh take, following the notes above if any. Spends one image credit."
+                          className="rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
                         >
-                          {regenIds.has(r.id) ? 'Regenerating…' : '↻ New image'}
+                          {regenIds.has(r.id) ? 'Working…' : '↻ New image ' + creditLabel(1)}
                         </button>
                         <button
                           type="button"
                           onClick={() => proposeImages(r)}
                           disabled={regenIds.has(r.id) || optionsIds.has(r.id) || busyIds.has(r.id)}
-                          title="Generates three propositions side by side. Your current picture stays as it is until you pick one."
+                          title="Generates three propositions side by side, following the notes above if any. Your current picture stays as it is until you pick one. Spends three image credits."
                           className="rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
                         >
-                          {optionsIds.has(r.id) ? 'Making 3 options…' : '⁝⁝ Show me 3 options'}
+                          {optionsIds.has(r.id) ? 'Making 3 options…' : '⁝⁝ Show me 3 options ' + creditLabel(3)}
                         </button>
                       </div>
                       {(r.pack?._imageOptions?.length || 0) > 0 && (
@@ -784,7 +818,7 @@ export default function AutopilotQueue() {
                         disabled={regenIds.has(r.id) || busyIds.has(r.id)}
                         className="rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
                       >
-                        Generate image
+                        {'Generate image ' + creditLabel(1)}
                       </button>
                     </div>
                   ) : null}
