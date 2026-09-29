@@ -76,9 +76,12 @@ type PackImage = {
   model?: string;
   variant?: number;
   verification?: { status?: 'approved' | 'flagged' | 'unchecked'; score?: number | null; issues?: string[]; textDetected?: boolean; bannedProp?: boolean };
-  /** Weekly-planner covers: the photo with its title set on top (lib/title-cover.ts). */
+  /** Titled covers: the photo with its title set on top (lib/title-cover.ts). */
   titled?: { title: string; photoUrl: string };
   source?: string;
+  /** A library photo that went through the brand's colour filter (lib/library-cover.ts). */
+  brandGraded?: boolean;
+  libraryName?: string;
 };
 
 /** A weekly-planner draft whose picture predates the title cover — it is refreshed once. */
@@ -321,7 +324,12 @@ export default function AutopilotQueue() {
   const fixingIds = runs.filter((r) => fixRunning(r.angle)).map((r) => r.id).join(',');
   const wasFixing = useRef('');
   useEffect(() => {
-    if (wasFixing.current && wasFixing.current !== fixingIds) announce('drafts', 'images');
+    if (wasFixing.current && wasFixing.current !== fixingIds) {
+      announce('drafts', 'images');
+      // The run's own stamp now says what FIX did (FixStatusLine); the panel
+      // banner saying it is working would be stale from here on.
+      setNote((n) => (n && /^FIX is working/.test(n) ? null : n));
+    }
     wasFixing.current = fixingIds;
     if (!fixingIds) return;
     const t = window.setInterval(() => { void load({ quiet: true }); }, 5000);
@@ -344,7 +352,9 @@ export default function AutopilotQueue() {
       // switched off…' } — so reading `error` alone showed a reviewer the bare
       // token `not_advanced` and threw away the sentence written for them.
       if (!r.ok) throw new Error(j?.message || j?.error || 'Action failed (' + r.status + ')');
-      if (j?.note) setNote(String(j.note));
+      // FIX's progress lives on the card (angle.fix); its "working on it" note
+      // would only sit in the banner after the card had already moved on.
+      if (j?.note && action !== 'fix') setNote(String(j.note));
       await load({ quiet: true });
       // Interconnection: approving queues a Metricool draft (posts row) and
       // every action can touch drafts — update the rest of the dashboard.
@@ -716,7 +726,11 @@ export default function AutopilotQueue() {
                           <span className="rounded-full bg-black/50 px-2 py-0.5 text-[10px] font-medium text-white" title="Generated before machine verification existed — reroll to get a verified image">review manually</span>
                         )}
                         <p className="text-[11px] text-ink-faint">
-                          🖼 AI hero image ({r.pack._image.model || 'OpenAI'}) — generated fresh from THIS article&apos;s text; attaches to the Metricool draft on approve.
+                          {r.pack._image.source === 'library'
+                            ? '📁 Library photo' + (r.pack._image.libraryName ? ' “' + r.pack._image.libraryName + '”' : '') + (r.pack._image.brandGraded ? ' with the brand filter' : '') + (r.pack._image.titled ? ' and the post title' : '') + ' — no AI; attaches to the Metricool draft on approve.'
+                            : r.pack._image.source === 'upload'
+                              ? '🖼 Photo the team dropped in — attaches to the Metricool draft on approve.'
+                              : '🖼 AI hero image (' + (r.pack._image.model || 'OpenAI') + ') — generated fresh from THIS article’s text; attaches to the Metricool draft on approve.'}
                         </p>
                         <button
                           type="button"

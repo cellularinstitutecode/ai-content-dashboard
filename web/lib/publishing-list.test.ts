@@ -113,5 +113,6 @@ test('changing a post’s picture re-sends it to Metricool through the existing 
   assert.match(controls, /regenerate: true/, 'New AI image is the Dashboard’s regenerate');
   assert.match(controls, /action: 'import_image'/, 'a library photo is copied the way "Use as hero image" copies it');
   assert.match(controls, /useUrl: url/);
-  assert.match(controls, /styleFromUrl: url/);
+  assert.match(controls, /brandPhotoUrl: url/, 'the same photo with the brand filter and the title — never an AI take');
+  assert.doesNotMatch(controls, /styleFromUrl/);
 });

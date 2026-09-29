@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { FIX_STALE_MS, fixNote, fixPlan, fixRedraftNote, fixRunning, fixStepsLabel, fixView, imageFlagged, needsFix, runFixInput, swapRefLine } from './fix-plan.ts';
+import { FIX_STALE_MS, FIX_STALLED_NOTE, fixImageMode, fixNote, fixPlan, fixRedraftNote, fixRunning, fixStale, fixStepsLabel, fixView, imageFlagged, needsFix, runFixInput, swapRefLine } from './fix-plan.ts';
 
 const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 
@@ -40,8 +40,27 @@ test('compliance, promotion and opening flags are a copy step; a flagged picture
   assert.deepEqual(fixPlan({ image: { url: 'x', verification: { status: 'approved', issues: ['banned prop in frame'] } } }).steps, ['image']);
   // A clinic photo is theirs; "review manually" (unchecked) is not a warning.
   assert.equal(imageFlagged({ url: 'x', source: 'library', verification: { status: 'flagged' } }), false);
+  assert.equal(imageFlagged({ url: 'x', source: 'upload', verification: { status: 'flagged', textDetected: true } }), false);
   assert.equal(imageFlagged({ url: 'x', verification: { status: 'unchecked' } }), false);
   assert.equal(imageFlagged({ url: '', verification: { status: 'flagged' } }), false);
+});
+
+test('a flagged picture: an AI take is regenerated; a brand-graded library photo is replaced by one, and the plan says so', () => {
+  // An older "styled after a library photo" take IS an AI image (no source).
+  const styled = { url: 'x', styledAfter: 'https://lib/photo.jpg', verification: { status: 'flagged', issues: ['off-topic — the picture does not show what this post is about'] } };
+  assert.equal(imageFlagged(styled), true);
+  assert.equal(fixImageMode(styled), 'ai');
+  // A library photo that went through the brand filter was checked like a cover.
+  const graded = { url: 'x', source: 'library', brandGraded: true, verification: { status: 'flagged', issues: ['a head reaches into the title area (top of head at 12% from the top)'] } };
+  assert.equal(imageFlagged(graded), true);
+  assert.equal(fixImageMode(graded), 'library-to-ai');
+  const plan = fixPlan({ image: graded });
+  assert.deepEqual(plan.steps, ['image']);
+  assert.match(plan.reasons[0], /FIX makes an AI image in its place; pick another library photo/);
+  assert.match(plan.reasons[0], /head reaches into the title area/, 'the checker\'s own words');
+  // Clean, or chosen as it is: nothing to do.
+  assert.equal(fixImageMode({ url: 'x', source: 'library', brandGraded: true, verification: { status: 'approved' } }), null);
+  assert.equal(fixImageMode({ url: 'x', source: 'library', verification: { status: 'flagged' } }), null);
 });
 
 test('the steps come in the order the repair runs, whatever order the flags came in', () => {
@@ -121,8 +140,18 @@ test('fixRun reuses the existing pipelines rather than its own', () => {
   const body = autopilot.slice(autopilot.indexOf('export async function fixRun('));
   assert.match(body, /await regenerateRun\(run\.id, userId, note, \{ noteLimit: 1400 \}\)/, 'the copy goes through "Ask for changes"');
   assert.match(body, /await advanceRuns\(\{ scopeUserId: userId, runId: run\.id/, 'and is redrafted right away');
-  assert.match(body, /await ensureDraftImage\(draftId, userId, \{ force: true \}\)/, 'the picture through the verified path');
-  assert.match(body, /if \(imageFlagged\(image\)\)/, 'and only when it is flagged');
+  assert.match(body, /await ensureDraftImage\(draftId, userId, \{ force: true, budgetMs: left\(\) - 20_000 \}\)/, 'the picture through the verified path, inside what is left of the budget');
+  assert.match(body, /const imageMode = fixImageMode\(image\);\s*if \(imageMode\)/, 'and only when it is flagged');
+  assert.match(body, /the flagged library photo was replaced by an AI image/, 'a graded library photo is replaced, and the note says so');
+  // The step in progress is stamped on the run as each one starts.
+  assert.match(body, /await onStep\('citation'\)/);
+  assert.match(body, /await onStep\('copy'\)/);
+  assert.match(body, /await onStep\('image'\)/);
+  assert.match(autopilot, /async function markFixStep\(/);
+  // The generation loop honours the budget it was handed.
+  const images = src('lib/images.ts');
+  assert.match(images, /if \(attempt > 0 && !fits\(\)\) break;/, 'no retry that cannot finish in time');
+  assert.match(images, /budgetMs: opts\.budgetMs \?\? null,/, 'ensureDraftImage passes it through');
   assert.match(body, /logLine\(run, 'fix'/, 'the run says what FIX changed');
   assert.match(body, /for \(let attempt = 0; attempt < FIX_REDRAFT_ATTEMPTS; attempt\+\+\)/);
   assert.match(autopilot, /const FIX_REDRAFT_ATTEMPTS = 2;/, 'up to two redrafts');
@@ -162,12 +191,35 @@ test('both review cards and the calendar row show FIX from the same plan', () =>
 
 test('FIX in the background: running, done, and a run that never finished', () => {
   const t0 = Date.parse('2026-09-29T08:00:00Z');
-  const running = { fix: { state: 'running' as const, startedAt: new Date(t0).toISOString() } };
-  assert.deepEqual(fixView(running, t0 + 45_000), { kind: 'running', elapsedSec: 45 });
+  const startedAt = new Date(t0).toISOString();
+  const running = { fix: { state: 'running' as const, startedAt } };
+  assert.deepEqual(fixView(running, t0 + 45_000), { kind: 'running', elapsedSec: 45, startedAt, step: null });
+  assert.deepEqual(fixView({ fix: { state: 'running' as const, startedAt, step: 'image' as const } }, t0 + 45_000), { kind: 'running', elapsedSec: 45, startedAt, step: 'image' });
   assert.equal(fixRunning(running, t0 + 45_000), true);
-  // The platform cut it off: it must not read as running forever.
+  // The platform cut it off: it must not read as running forever. Ten minutes
+  // — a live FIX has a budget a little over four and must never be called stuck.
+  assert.equal(FIX_STALE_MS, 10 * 60_000);
+  assert.equal(fixStale(running.fix, t0 + 4.5 * 60_000), false);
   assert.deepEqual(fixView(running, t0 + FIX_STALE_MS + 1), { kind: 'stalled' });
+  assert.equal(fixStale(running.fix, t0 + FIX_STALE_MS + 1), true);
+  assert.equal(fixStale({ state: 'done', startedAt }), false);
   assert.equal(fixRunning(running, t0 + FIX_STALE_MS + 1), false);
+  assert.match(FIX_STALLED_NOTE, /^FIX did not finish — press it again/);
+  // The tick closes such a stamp on the run itself, so every screen and the log agree.
+  const autopilot = src('lib/autopilot.ts');
+  const sweep = autopilot.slice(autopilot.indexOf('export async function expireStaleFixes('), autopilot.indexOf('export async function startFix('));
+  assert.match(sweep, /if \(!fixStale\(fix\)\) continue;/);
+  assert.match(sweep, /state: 'failed'/);
+  assert.match(sweep, /note: FIX_STALLED_NOTE/);
+  assert.match(src('app/api/autopilot/tick/route.ts'), /const staleFixes = await expireStaleFixes\(scopeUserId\);/);
+  const line = src('components/FixStatusLine.tsx');
+  assert.match(line, /\{FIX_STALLED_NOTE\}/, 'the card uses the same words');
+  assert.match(line, /started ' \+ started/, 'and says when it started');
+  assert.match(line, /now: the ' \+ view\.step/, 'and what it is on');
+  // The panel banner never keeps saying "working on it" after the run moved on.
+  const queue = src('app/AutopilotQueue.tsx');
+  assert.match(queue, /if \(j\?\.note && action !== 'fix'\) setNote/);
+  assert.match(queue, /setNote\(\(n\) => \(n && \/\^FIX is working\/\.test\(n\) \? null : n\)\);/);
   assert.deepEqual(
     fixView({ fix: { state: 'done', startedAt: '', note: 'Fixed: citation.', remaining: [] } }),
     { kind: 'done', note: 'Fixed: citation.', clean: true },

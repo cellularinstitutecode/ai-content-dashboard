@@ -2,13 +2,21 @@
 
 // components/FixStatusLine.tsx
 // What the FIX button is doing for a run, read from the run itself
-// (`angle.fix`, lib/fix-plan.ts fixView): "Fixing the citation and copy… 45 s"
-// while it works, the result when it is done, and a plain "did not finish"
-// when the platform cut it off, so the card never waits forever. FIX runs
-// after its request answers; the page polls the run while this says running.
+// (`angle.fix`, lib/fix-plan.ts fixView): "Fixing the citation and copy…
+// started 12:03 · now: the image · 45 s" while it works, the result when it
+// is done, and a plain "did not finish" when the platform cut it off, so the
+// card never waits forever. FIX runs after its request answers; the page
+// polls the run while this says running.
 
 import { useEffect, useState } from 'react';
-import { fixStepsLabel, fixView, type FixStatus, type FixStep } from '@/lib/fix-plan';
+import { FIX_STALLED_NOTE, fixStepsLabel, fixView, type FixStatus, type FixStep } from '@/lib/fix-plan';
+
+/** "12:03" in the viewer's clock, or nothing when the stamp cannot be read. */
+function clock(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  return new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
 export default function FixStatusLine({ angle, steps, className = '' }: {
   angle: { fix?: FixStatus | null } | null | undefined;
@@ -28,15 +36,17 @@ export default function FixStatusLine({ angle, steps, className = '' }: {
 
   const box = 'rounded-xl px-3 py-2 text-[12px] ring-1 ' + className + ' ';
   if (view.kind === 'running') {
-    const what = steps.length ? 'the ' + fixStepsLabel(steps) : 'this post';
+    const planned = angle?.fix?.steps?.length ? angle.fix.steps : steps;
+    const what = planned.length ? 'the ' + fixStepsLabel(planned) : 'this post';
+    const started = clock(view.startedAt);
     return (
       <div role="status" className={box + 'bg-sky-50 text-sky-900 ring-sky-100'}>
-        Fixing {what}… {view.elapsedSec} s. This usually takes one to four minutes. You can close this and keep working.
+        Fixing {what}…{started ? ' started ' + started + ' ·' : ''}{view.step ? ' now: the ' + view.step + ' ·' : ''} {view.elapsedSec} s. This usually takes one to four minutes. You can close this and keep working.
       </div>
     );
   }
   if (view.kind === 'stalled') {
-    return <div role="status" className={box + 'bg-amber-50 text-amber-900 ring-amber-200/60'}>The last FIX did not finish. What it completed is saved. Press FIX again for the rest.</div>;
+    return <div role="status" className={box + 'bg-amber-50 text-amber-900 ring-amber-200/60'}>{FIX_STALLED_NOTE}</div>;
   }
   return (
     <div role="status" className={box + (view.clean ? 'bg-emerald-50 text-emerald-700 ring-emerald-100' : 'bg-amber-50 text-amber-900 ring-amber-200/60')}>

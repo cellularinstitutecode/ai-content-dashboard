@@ -8,7 +8,7 @@
 // or is expensive to get wrong.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { generatePackImage, imagesEnabled, STYLE_VARIANTS } from '@/lib/images.ts';
+import { generatePackImage, imagesEnabled, STYLE_VARIANTS, verifyLibraryPhoto } from '@/lib/images.ts';
 import { __reset, __uploads } from '@/lib/supabase-admin';
 
 // A minimal valid PNG header — enough for the byte-sniffer to classify it.
@@ -203,4 +203,27 @@ test('IMAGE_GEN=off disables generation with a clear error and spends nothing', 
   assert.equal(imagesEnabled(), false);
   await assert.rejects(() => generatePackImage({ topic: 'x' }), /disabled/);
   assert.equal(calls.length, 0, 'no API call was made');
+});
+
+test('a library photo about to carry a title is checked for headroom, and read as a photograph', async () => {
+  script = [verifierSays('verify', { approved: false, textDetected: true, bannedProp: false, headTopPct: 12, score: 80, blocking: ['sign on the wall'], advisory: [] })];
+  const v = await verifyLibraryPhoto({ bytes: Buffer.from(PNG_B64, 'base64'), contentType: 'image/png' }, { subject: 'joint recovery' });
+  const sent = calls[0].body;
+  assert.match(sent.messages[0].content, /8\. HEADROOM: measure how far down/, 'the reviewer is asked where the highest head starts');
+  assert.doesNotMatch(sent.messages[0].content, /ON-TOPIC/, 'no planner: the subject is the clinic\'s own choice');
+  assert.match(sent.messages[1].content[0].text, /Verify this photograph now\./);
+  assert.equal(v.headTopPct, 12);
+  assert.equal(v.status, 'flagged', 'the head reaches into the title band');
+  assert.match(v.issues[0], /head reaches into the title area/);
+  assert.equal(v.textDetected, false, 'a real sign is a note, not a defect');
+  assert.ok(v.advisory.some((i) => /sign on the wall/.test(i)));
+  assert.equal(__uploads().length, 0, 'nothing is generated or stored by the check');
+});
+
+test('a clean library photo is approved, whatever the model says about signage', async () => {
+  script = [verifierSays('verify', { approved: true, textDetected: true, headTopPct: 55, score: 90, blocking: ['lettering on a mug'], advisory: [] })];
+  const v = await verifyLibraryPhoto({ bytes: Buffer.from(PNG_B64, 'base64'), contentType: 'image/png' }, { subject: 'sleep' });
+  assert.equal(v.status, 'approved');
+  assert.deepEqual(v.issues, []);
+  assert.equal(v.headTopPct, 55);
 });

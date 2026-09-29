@@ -6,7 +6,7 @@
 // Steps are idempotent and resumable, so overlapping or repeated ticks are safe.
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
-import { advanceRuns, expireStaleRuns, rescueStrandedApprovals, planRuns } from '@/lib/autopilot';
+import { advanceRuns, expireStaleFixes, expireStaleRuns, rescueStrandedApprovals, planRuns } from '@/lib/autopilot';
 import { reportError } from '@/lib/report';
 import { checkRateLimit } from '@/lib/rate-limit';
 
@@ -69,6 +69,9 @@ async function handle(req: NextRequest) {
     // the expensive work and released only by a thrown error, so a platform kill
     // leaves the run somewhere nothing else selects.
     const rescued = await rescueStrandedApprovals(scopeUserId);
+    // A FIX the platform cut off mid-way: its stamp is closed so the card and
+    // the run's log say it did not finish, rather than "working on it".
+    const staleFixes = await expireStaleFixes(scopeUserId);
     const remaining = 300_000 - (Date.now() - started);
     // 45s of headroom for the step in flight to finish and write back.
     //
@@ -88,7 +91,7 @@ async function handle(req: NextRequest) {
       budgetMs: advanceBudget,
       maxRuns: runId ? 1 : 4,
     });
-    return NextResponse.json({ ok: true, expired, rescued, ...planned, ...advancedResult });
+    return NextResponse.json({ ok: true, expired, rescued, staleFixes, ...planned, ...advancedResult });
   } catch (e) {
     reportError('autopilot:tick', e);
     return NextResponse.json(

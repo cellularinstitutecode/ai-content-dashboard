@@ -19,7 +19,7 @@
 import { cleanTopic, familyAt, onTopicCheck, plannerImageFor, plannerPromptLines, scienceOffered, SHOT_COUNT, type PlannerImage } from '@/lib/planner-image';
 import { renderTitleCover } from '@/lib/title-cover';
 import { briefSource, briefSystemPrompt, briefUserPrompt, parseSceneBrief, type SceneBrief } from '@/lib/image-brief';
-import { REFERENCE_DESCRIBE_SYSTEM, parseReferenceDescription } from '@/lib/image-reference';
+import { COVER_MIN_HEAD_TOP_PCT, photographVerdict, type LibraryProvenance } from './library-cover.ts';
 import { setStoredFontReader } from '@/lib/brand-card';
 import { readStoredFonts } from '@/lib/brand-fonts';
 
@@ -84,14 +84,23 @@ export type PackImage = {
   // approved text: its words are deliberate, so the text rule does not apply.
   source?: 'generated' | 'brand-card' | 'library' | 'upload';
   /**
-   * Weekly-planner covers only: `url` is the photograph WITH its title set by
+   * Titled covers: `url` is the photograph WITH its title set by
    * lib/title-cover.ts; `photoUrl` is the clean, verified photograph under it.
    * `verification` describes the photograph — the title's words are ours and
-   * deliberate, so the text rule does not apply to them.
+   * deliberate, so the text rule does not apply to them. Weekly-planner
+   * covers, and library photos set with "Use library photo with brand filter".
    */
   titled?: { title: string; photoUrl: string; family: string };
-  /** The library photo this take was styled after (lib/image-reference.ts), when it was. */
+  /** Older takes only: the library photo an AI image was styled after. That path is gone. */
   styledAfter?: string;
+  /** Library photos: was the brand's colour filter applied (lib/library-cover.ts)? */
+  brandGraded?: boolean;
+  /** The ffmpeg filters that were applied; empty when the photo was already in the palette. */
+  filters?: string[];
+  palette?: LibraryProvenance['palette'];
+  padded?: number;
+  libraryFileId?: string;
+  libraryName?: string;
 };
 
 const BUCKET = process.env.IMAGE_BUCKET || 'content-images';
@@ -120,7 +129,13 @@ const PLANNER_RETRY_BUDGET_MS = 100_000;
 const PLANNER_IMAGE_CALL_MS = 110_000;
 // The title band covers roughly the top quarter of the cover; the photo is
 // cropped from the top (lib/title-cover.ts), so heads must start below this.
-const PLANNER_MIN_HEAD_TOP_PCT = 30;
+// One number for planner covers and titled library photos.
+const PLANNER_MIN_HEAD_TOP_PCT = COVER_MIN_HEAD_TOP_PCT;
+// A retry that cannot finish before the caller's deadline is not started:
+// FIX runs inside a 300 s function, and a planner take (brief + generation +
+// check) needs about this long; the Images call itself is shortened to fit.
+const PLANNER_ATTEMPT_MS = 120_000;
+const ATTEMPT_MS = 60_000;
 
 // Kill switch: set IMAGE_GEN=off to disable image generation everywhere
 // without redeploying callers. Default is ON whenever OPENAI_API_KEY exists.
@@ -385,12 +400,24 @@ async function generateImageBytes(prompt: string, size: '1536x1024' | '1024x1024
 // verification must never take down image generation entirely.
 // ---------------------------------------------------------------------------
 
-const verifySystem = (rubric: string, planner?: PlannerImage | null) => planner
-  ? verifySystemBase(rubric).replace(
-      'Return STRICT JSON only: {"approved": boolean, "textDetected": boolean,',
-      '8. ' + onTopicCheck(planner) + '\n9. HEADROOM: measure how far down from the top edge the top of the highest person\'s head is, as a percentage of the image height (0 = top edge, 100 = bottom edge). Report it as "headTopPct".\nReturn STRICT JSON only: {"approved": boolean, "textDetected": boolean, "bannedProp": boolean, "onTopic": boolean, "headTopPct": number,'
-    )
-  : verifySystemBase(rubric);
+const HEADROOM_CHECK = 'HEADROOM: measure how far down from the top edge the top of the highest person\'s head is, as a percentage of the image height (0 = top edge, 100 = bottom edge). Report it as "headTopPct".';
+
+/**
+ * The reviewer's brief. A planner image adds the on-topic check and the
+ * headroom measurement; a titled library photo asks for the headroom alone
+ * (its subject is the clinic's own choice).
+ */
+const verifySystem = (rubric: string, planner?: PlannerImage | null, headroom = false) => {
+  const base = verifySystemBase(rubric);
+  const marker = 'Return STRICT JSON only: {"approved": boolean, "textDetected": boolean,';
+  if (planner) {
+    return base.replace(marker, '8. ' + onTopicCheck(planner) + '\n9. ' + HEADROOM_CHECK + '\nReturn STRICT JSON only: {"approved": boolean, "textDetected": boolean, "bannedProp": boolean, "onTopic": boolean, "headTopPct": number,');
+  }
+  if (headroom) {
+    return base.replace(marker, '8. ' + HEADROOM_CHECK + '\nReturn STRICT JSON only: {"approved": boolean, "textDetected": boolean, "bannedProp": boolean, "headTopPct": number,');
+  }
+  return base;
+};
 
 const verifySystemBase = (rubric: string) => `You are a strict visual QA reviewer for a premium regenerative medicine clinic's marketing images. Every image MUST be a pure CONTENT image — a photographic scene with ZERO written characters. You will be shown ONE AI-generated image plus its intended topic. Inspect it for generation defects and brand-safety problems:
 1. TEXT CHECK (the hard rule): scan the ENTIRE image, including backgrounds, signs, screens, labels, packaging, clothing and edges, for ANY visible text, words, letters, numbers, or garbled pseudo-typography (AI text artifacts) in ANY language or script — even partial, blurry, or decorative lettering counts. Any hit is an automatic fail.
@@ -441,46 +468,33 @@ async function sceneBriefFor(planner: PlannerImage, pack: Record<string, unknown
 }
 
 /**
- * Describe a reference photograph's STYLE with the vision model, for "AI image
- * styled after a library photo". The Images API path here takes no picture
- * input, so the look is carried over as words (lib/image-reference.ts).
- * Throws when the photo could not be read: a styled take that ignored its
- * reference would be worse than a plain refusal.
+ * The same reviewer, for a photograph the clinic chose from its library that
+ * is about to carry a title (lib/library-hero.ts). It is asked where the
+ * highest head starts, and — for a weekly-planner post — whether the picture
+ * shows the subject. Text or a prop in a REAL photo is a note, not a defect
+ * (lib/library-cover.ts photographVerdict). Never throws: an unreachable
+ * checker leaves the photo 'unchecked', as it does a generated one.
  */
-export async function describeReferencePhoto(url: string): Promise<string> {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new Error('OPENAI_API_KEY missing');
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25_000);
-  try {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-      body: JSON.stringify({
-        model: VISION_MODEL,
-        max_tokens: 200,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: REFERENCE_DESCRIBE_SYSTEM },
-          { role: 'user', content: [
-            { type: 'text', text: 'Describe the style of this reference photograph.' },
-            { type: 'image_url', image_url: { url } },
-          ] },
-        ],
-      }),
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error(`vision ${res.status}`);
-    const data = await res.json();
-    const described = parseReferenceDescription(String(data?.choices?.[0]?.message?.content ?? ''));
-    if (!described) throw new Error('vision returned no description');
-    return described;
-  } finally {
-    clearTimeout(timer);
-  }
+export async function verifyLibraryPhoto(
+  photo: { bytes: Buffer; contentType: string },
+  opts: { subject: string; brand?: BrandContext | null; planner?: PlannerImage | null },
+): Promise<ImageVerification> {
+  return verifyGeneratedImage(
+    { bytes: photo.bytes, contentType: photo.contentType, ext: '', model: 'library' },
+    opts.subject,
+    normalizeVisual(opts.brand?.visual),
+    opts.planner ?? null,
+    { headroom: true, photograph: true },
+  );
 }
 
-async function verifyGeneratedImage(img: GeneratedImage, topic: string, visual?: BrandVisual | null, planner?: PlannerImage | null): Promise<ImageVerification> {
+async function verifyGeneratedImage(
+  img: GeneratedImage,
+  topic: string,
+  visual?: BrandVisual | null,
+  planner?: PlannerImage | null,
+  mode: { headroom?: boolean; photograph?: boolean } = {},
+): Promise<ImageVerification> {
   const base: ImageVerification = {
     status: 'unchecked',
     score: null,
@@ -504,11 +518,11 @@ async function verifyGeneratedImage(img: GeneratedImage, topic: string, visual?:
         max_tokens: 300,
         response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: verifySystem(brandFitRubric(visual || normalizeVisual(null)), planner) },
+          { role: 'system', content: verifySystem(brandFitRubric(visual || normalizeVisual(null)), planner, mode.headroom) },
           {
             role: 'user',
             content: [
-              { type: 'text', text: `Topic: ${topic.slice(0, 300)}. Verify this AI-generated image now.` },
+              { type: 'text', text: `Topic: ${topic.slice(0, 300)}. Verify this ${mode.photograph ? 'photograph' : 'AI-generated image'} now.` },
               { type: 'image_url', image_url: { url: `data:${img.contentType};base64,${img.bytes.toString('base64')}` } },
             ],
           },
@@ -521,7 +535,11 @@ async function verifyGeneratedImage(img: GeneratedImage, topic: string, visual?:
     const raw = String(data?.choices?.[0]?.message?.content ?? '{}');
     // Defects flag; opinions are notes. The split (and the text hard rule)
     // lives in lib/image-verdict.ts where it is unit-tested.
-    const verdict = classifyVerdict(JSON.parse(raw), planner ? { requireOnTopic: true, minHeadTopPct: PLANNER_MIN_HEAD_TOP_PCT } : {});
+    const measured = classifyVerdict(JSON.parse(raw), {
+      ...(planner ? { requireOnTopic: true } : {}),
+      ...(planner || mode.headroom ? { minHeadTopPct: PLANNER_MIN_HEAD_TOP_PCT } : {}),
+    });
+    const verdict = mode.photograph ? photographVerdict(measured) : measured;
     return {
       status: verdict.status,
       score: verdict.score,
@@ -642,6 +660,8 @@ export async function generatePackImage(opts: {
   direction?: string | null;
   /** Weekly-planner drafts only: which slot of the post's picture plan to make. */
   slot?: number | null;
+  /** How long the caller can wait: no retry starts that cannot finish in it. */
+  budgetMs?: number | null;
 }): Promise<PackImage> {
   // Record how this went before handing the result (or the failure) on, so
   // /api/health can say whether images WORK rather than whether a key is set.
@@ -671,6 +691,7 @@ async function generateBestPackImage(opts: {
    * walked past the outcome and science slots.
    */
   slot?: number | null;
+  budgetMs?: number | null;
 }): Promise<PackImage> {
   // Weekly-planner drafts rotate through their pillar's own scenes and are
   // checked for being on topic; every other draft is unchanged.
@@ -684,10 +705,25 @@ async function generateBestPackImage(opts: {
   const baseVariant = Math.abs(Math.round(opts.variant ?? 0)) % sceneCount;
   const subject = planner ? planner.subject : opts.topic;
   const started = Date.now();
+  // The caller's deadline, when it gave one. FIX's image step used to start a
+  // second planner take with two minutes of its function left and be killed
+  // mid-generation — nothing stored, nothing written, the card "working on
+  // it" until it went stale. A retry now starts only when a whole attempt fits.
+  const deadline = opts.budgetMs && opts.budgetMs > 0 ? started + opts.budgetMs : null;
+  const attemptMs = planner ? PLANNER_ATTEMPT_MS : ATTEMPT_MS;
+  const fits = (): boolean => deadline == null || deadline - Date.now() >= attemptMs;
+  /** The Images call gets the usual allowance, or what is left of the deadline minus the check. */
+  const callMs = (): number => {
+    const usual = planner ? PLANNER_IMAGE_CALL_MS : 50_000;
+    if (deadline == null) return usual;
+    return Math.max(20_000, Math.min(usual, deadline - Date.now() - 30_000));
+  };
 
   let best: { img: GeneratedImage; prompt: string; variant: number; verification: ImageVerification } | null = null;
   let lastError: unknown = null;
   for (let attempt = 0; attempt < MAX_GEN_ATTEMPTS; attempt++) {
+    // The first attempt always runs; a retry only when it can finish in time.
+    if (attempt > 0 && !fits()) break;
     const variant = (baseVariant + attempt) % sceneCount;
     // Planner drafts: brief the scene from THIS post's text (no brief when the
     // team typed a direction — theirs wins). Falls back to the pillar's scenes.
@@ -707,7 +743,7 @@ async function generateBestPackImage(opts: {
     // approveRun that surfaced as a post shipping with no image at all.
     let img: GeneratedImage;
     try {
-      img = await generateImageBytes(prompt, planner?.size, planner ? PLANNER_IMAGE_CALL_MS : 50_000);
+      img = await generateImageBytes(prompt, planner?.size, callMs());
     } catch (e) {
       lastError = e;
       // With a usable candidate in hand, stop and store it. With nothing in
@@ -777,7 +813,9 @@ async function generateBestPackImage(opts: {
 // `force` is the FIX button's "↻ New image": the stored picture is replaced
 // with the next composition variant even when it is clean — used only when the
 // checker flagged it (lib/fix-plan.ts imageFlagged), never as a routine reroll.
-export async function ensureDraftImage(draftId: string, ownerId: string, opts: { force?: boolean } = {}): Promise<PackImage | null> {
+// `budgetMs` is how long the caller can wait (generatePackImage): FIX passes
+// what is left of its own budget so the step ends inside the function.
+export async function ensureDraftImage(draftId: string, ownerId: string, opts: { force?: boolean; budgetMs?: number | null } = {}): Promise<PackImage | null> {
   if (!imagesEnabled()) return null;
   const db = supabaseAdmin();
   const { data: d } = await db
@@ -813,6 +851,7 @@ export async function ensureDraftImage(draftId: string, ownerId: string, opts: {
     pack,
     brand,
     variant: existingHasText || (opts.force && existing?.url) ? (existing?.variant ?? 0) + 1 : 0,
+    budgetMs: opts.budgetMs ?? null,
   });
   // Same re-read as /api/drafts/image: the pack read before generation is
   // 30-60s stale, and a redraft in that window would otherwise be silently
