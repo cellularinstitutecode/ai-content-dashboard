@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fixNote, fixPlan, fixRedraftNote, fixStepsLabel, imageFlagged, needsFix, runFixInput, swapRefLine } from './fix-plan.ts';
+import { FIX_STALE_MS, fixNote, fixPlan, fixRedraftNote, fixRunning, fixStepsLabel, fixView, imageFlagged, needsFix, runFixInput, swapRefLine } from './fix-plan.ts';
 
 const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 
@@ -96,11 +96,24 @@ test('swapRefLine replaces the REF line in place and keeps the rest of the copy'
 
 // --- WHERE IT IS WIRED -------------------------------------------------------
 
-test('the route has a fix action, capped like regenerate, that runs fixRun', () => {
+test('the route starts FIX and answers at once; the work runs after the response', () => {
   const route = src('app/api/autopilot/runs/route.ts');
   assert.match(route, /if \(action === 'run_now' \|\| action === 'regenerate' \|\| action === 'fix'\) \{\s*const rl = await checkRateLimit\(user\.id, 'autopilot-action'\)/, 'the same rate-limit bucket');
-  assert.match(route, /if \(action === 'fix'\) \{[\s\S]{0,400}?await fixRun\(id, user\.id\)/);
-  assert.match(route, /import \{[^}]*fixRun[^}]*\} from '@\/lib\/autopilot'/);
+  // Held open, the request kept a loader over the card at 94% for minutes.
+  assert.match(route, /if \(action === 'fix'\) \{[\s\S]{0,800}?const started = await startFix\(id, user\.id\);[\s\S]{0,300}?after\(\(\) => fixRunInBackground\(id, user\.id\)\);/);
+  assert.match(route, /\{ status: 202 \}/);
+  assert.doesNotMatch(route, /await fixRun\(/, 'the request never waits on the repair');
+  assert.match(route, /import \{ NextRequest, NextResponse, after \} from 'next\/server';/);
+  assert.match(route, /export const maxDuration = 300;/, 'the background work runs inside this budget');
+
+  const autopilot = src('lib/autopilot.ts');
+  const start = autopilot.slice(autopilot.indexOf('export async function startFix('), autopilot.indexOf('export async function fixRunInBackground('));
+  assert.match(start, /if \(fixRunning\(run\.angle\)\) return/, 'a second press waits for the first');
+  assert.match(start, /\.eq\('state', 'ready_for_review'\)/);
+  const bg = autopilot.slice(autopilot.indexOf('export async function fixRunInBackground('));
+  // The result is written whatever happens, so the card never waits forever.
+  assert.match(bg, /try \{\s*result = await fixRun\(runId, userId\);\s*\} catch/);
+  assert.match(bg, /state: result\.ok \? 'done' : 'failed'/);
 });
 
 test('fixRun reuses the existing pipelines rather than its own', () => {
@@ -126,17 +139,43 @@ test('both review cards and the calendar row show FIX from the same plan', () =>
   const queue = src('app/AutopilotQueue.tsx');
   assert.match(queue, /fixPlan\(runFixInput\(r\)\)/);
   assert.match(queue, /act\(r\.id, 'fix'\)/);
-  assert.match(queue, /\{fixIds\.has\(r\.id\) \? 'Fixing…' : 'FIX'\}/);
+  assert.match(queue, /<FixStatusLine angle=\{r\.angle\}/, 'progress and result from the run');
+  assert.match(queue, /if \(!fixingIds\) return;\s*const t = window\.setInterval/, 'polled while it runs');
   assert.match(queue, /'run_now' \| 'regenerate' \| 'fix'/);
 
   const preview = src('components/RunPreview.tsx');
   assert.match(preview, /fixPlan\(runFixInput\(run\)\)/);
   assert.match(preview, /onClick=\{onFix\}/);
   assert.match(preview, /\{fixing \? 'Fixing…' : 'FIX'\}/);
+  assert.match(preview, /const fixing = fixRunning\(run\.angle\);/);
+  assert.match(preview, /<FixStatusLine angle=\{run\.angle\}/);
+  // The preview is never covered while FIX works: it can be read and closed.
+  assert.doesNotMatch(preview, /PanelLoader/);
 
   const page = src('app/calendar/page.tsx');
   assert.match(page, /'approve' \| 'skip' \| 'fix'/);
   assert.match(page, /needsFix\(runFixInput\(r\)\)/, 'the list row too');
   assert.match(page, /onFix=\{\(\) => fixRun\(previewRun\)\}/);
-  assert.match(page, /setFixNotes\(\(prev\) => \(\{ \.\.\.prev, \[run\.id\]: String\(j\.note\) \}\)\)/, 'the note is shown');
+  assert.match(page, /if \(!fixingIds\) return;\s*const t = window\.setInterval/, 'polled while it runs');
+  assert.doesNotMatch(page, /x-chi-progress-scope': 'calendar-run:/, 'no loader over the preview');
+});
+
+test('FIX in the background: running, done, and a run that never finished', () => {
+  const t0 = Date.parse('2026-09-29T08:00:00Z');
+  const running = { fix: { state: 'running' as const, startedAt: new Date(t0).toISOString() } };
+  assert.deepEqual(fixView(running, t0 + 45_000), { kind: 'running', elapsedSec: 45 });
+  assert.equal(fixRunning(running, t0 + 45_000), true);
+  // The platform cut it off: it must not read as running forever.
+  assert.deepEqual(fixView(running, t0 + FIX_STALE_MS + 1), { kind: 'stalled' });
+  assert.equal(fixRunning(running, t0 + FIX_STALE_MS + 1), false);
+  assert.deepEqual(
+    fixView({ fix: { state: 'done', startedAt: '', note: 'Fixed: citation.', remaining: [] } }),
+    { kind: 'done', note: 'Fixed: citation.', clean: true },
+  );
+  assert.deepEqual(
+    fixView({ fix: { state: 'done', startedAt: '', note: 'Fixed: copy. Still needs a look: the image.', remaining: ['the image'] } }),
+    { kind: 'done', note: 'Fixed: copy. Still needs a look: the image.', clean: false },
+  );
+  assert.equal(fixView(null), null);
+  assert.equal(fixView({}), null);
 });

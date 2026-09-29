@@ -69,7 +69,7 @@ import { findEvidence } from '@/lib/evidence';
 import { evidenceBriefFrom, type EvidenceItem } from '@/lib/evidence-brief';
 import { MAX_CANDIDATES, claimFrom, claimQuery, supportedItem, type ClaimSupportStamp, type SupportVerdict } from '@/lib/claim-support';
 import { pickCitation, refLineFrom } from '@/lib/citation-from-evidence';
-import { fixNote, fixPlan, fixRedraftNote, imageFlagged, runFixInput, swapRefLine } from '@/lib/fix-plan';
+import { fixNote, fixPlan, fixRedraftNote, fixRunning, imageFlagged, runFixInput, swapRefLine, type FixStatus } from '@/lib/fix-plan';
 import { NETWORKS_NEEDING_MEDIA, mediaProblem } from '@/lib/composer';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
@@ -135,6 +135,8 @@ export type Angle = {
   format?: string; // weekly-strategy slots: the caption's shape this week (lib/strategy-variety.ts)
   audience?: string; // weekly-strategy slots: who this week's post is written for
   closing?: string; // weekly-strategy slots: the gentle next step it ends on
+  /** The FIX button's progress and result, which the card polls (lib/fix-plan.ts fixView). */
+  fix?: FixStatus;
   previousOpening?: string; // weekly-strategy slots: how this angle opened the last time it was published
 };
 
@@ -2967,6 +2969,59 @@ export async function fixRun(runId: string, userId: string): Promise<FixResult> 
     .eq('id', run.id);
   if (logError) reportError('autopilot:fix-log', logError, { runId });
   return { ok: true, fixed, remaining, note };
+}
+
+/**
+ * Start FIX: mark the run as being fixed, so the card can show it and a
+ * second press is refused while it works. The route then runs
+ * fixRunInBackground after answering (next/server `after`).
+ */
+export async function startFix(runId: string, userId: string): Promise<{ ok: true } | { ok: false; note: string }> {
+  const db = supabaseAdmin();
+  const { data, error } = await db.from('template_runs').select('id, state, draft_id, angle').eq('id', runId).eq('user_id', userId).maybeSingle();
+  if (error) { reportError('autopilot:fix-start', error, { runId }); return { ok: false, note: 'Could not read that post just now. Nothing was changed; try again in a moment.' }; }
+  const run = data as { state: string; draft_id: string | null; angle: Angle | null } | null;
+  if (!run) return { ok: false, note: 'run not found' };
+  if (run.state !== 'ready_for_review') return { ok: false, note: 'This post is not waiting for review, so there is nothing to fix.' };
+  if (!run.draft_id) return { ok: false, note: 'This post has no draft to fix.' };
+  if (fixRunning(run.angle)) return { ok: false, note: 'FIX is already working on this post.' };
+  const fix: FixStatus = { state: 'running', startedAt: new Date().toISOString() };
+  const { data: claimed, error: claimError } = await db
+    .from('template_runs')
+    .update({ angle: { ...(run.angle || {}), fix } })
+    .eq('id', runId).eq('user_id', userId).eq('state', 'ready_for_review')
+    .select('id');
+  if (claimError) { reportError('autopilot:fix-start', claimError, { runId }); return { ok: false, note: 'FIX could not be started just now. Try again in a moment.' }; }
+  if (!Array.isArray(claimed) || !claimed.length) return { ok: false, note: 'This post changed while FIX was starting. Refresh and try again.' };
+  return { ok: true };
+}
+
+/**
+ * Run FIX and write its result onto the run (`angle.fix`), whatever happens.
+ * Called after the response, so nothing waits on it; the card polls the run.
+ */
+export async function fixRunInBackground(runId: string, userId: string): Promise<void> {
+  let result: FixResult;
+  try {
+    result = await fixRun(runId, userId);
+  } catch (err) {
+    reportError('autopilot:fix', err, { runId });
+    result = { ok: false, fixed: [], remaining: [], note: 'FIX stopped on an error; what it finished is saved. Press FIX again.' };
+  }
+  const db = supabaseAdmin();
+  // Re-read: the redraft rewrote the angle while FIX worked.
+  const { data, error } = await db.from('template_runs').select('angle').eq('id', runId).eq('user_id', userId).maybeSingle();
+  if (error) { reportError('autopilot:fix-record', error, { runId }); return; }
+  const angle = ((data as { angle?: Angle | null } | null)?.angle || {}) as Partial<Angle>;
+  const fix: FixStatus = {
+    state: result.ok ? 'done' : 'failed',
+    startedAt: angle.fix?.startedAt || new Date().toISOString(),
+    endedAt: new Date().toISOString(),
+    note: result.note,
+    remaining: result.remaining,
+  };
+  const { error: writeError } = await db.from('template_runs').update({ angle: { ...angle, fix } }).eq('id', runId).eq('user_id', userId);
+  if (writeError) reportError('autopilot:fix-record', writeError, { runId });
 }
 
 export async function skipRun(runId: string, userId: string): Promise<boolean> {

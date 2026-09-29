@@ -18,7 +18,8 @@ import { imageUnshippable } from '@/lib/image-verdict';
 import { citationLabel, type CitationCheck } from '@/lib/citation';
 import { varietyLabels } from '@/lib/strategy-variety';
 import { claimSupportNote, type ClaimSupportStamp } from '@/lib/claim-support';
-import { fixPlan, fixStepsLabel, runFixInput } from '@/lib/fix-plan';
+import { fixPlan, fixRunning, fixStepsLabel, runFixInput, type FixStatus } from '@/lib/fix-plan';
+import FixStatusLine from '@/components/FixStatusLine';
 
 // The visible pipeline an engine run walks through. The tick call does all of
 // this server-side in one request; the tracker paces the display so the viewer
@@ -56,6 +57,8 @@ type Angle = {
   // Weekly-strategy occurrences: the shape and reader dealt for this week.
   format?: string;
   audience?: string;
+  /** The FIX button's progress and result (lib/fix-plan.ts fixView). */
+  fix?: FixStatus | null;
 };
 
 type RunScore = {
@@ -232,8 +235,6 @@ export default function AutopilotQueue() {
   const [openChannel, setOpenChannel] = useState<Record<string, string>>({});
   const [imagingIds, setImagingIds] = useState<Set<string>>(new Set());
   const [regenIds, setRegenIds] = useState<Set<string>>(new Set());
-  // Cards whose warnings FIX is resolving right now.
-  const [fixIds, setFixIds] = useState<Set<string>>(new Set());
   // "Show me a few": how many propositions are still being made for this run.
   const [optionsIds, setOptionsIds] = useState<Set<string>>(new Set());
   const addTo = (set: typeof setBusyIds, id: string) => set((prev) => new Set(prev).add(id));
@@ -314,9 +315,21 @@ export default function AutopilotQueue() {
     return () => { cancelled = true; };
   }, [runs, load]);
 
+  // While a FIX works in the background, re-read the queue every few seconds
+  // so its progress and result show without a reload; when one finishes, the
+  // rest of the app hears about the changed draft.
+  const fixingIds = runs.filter((r) => fixRunning(r.angle)).map((r) => r.id).join(',');
+  const wasFixing = useRef('');
+  useEffect(() => {
+    if (wasFixing.current && wasFixing.current !== fixingIds) announce('drafts', 'images');
+    wasFixing.current = fixingIds;
+    if (!fixingIds) return;
+    const t = window.setInterval(() => { void load({ quiet: true }); }, 5000);
+    return () => window.clearInterval(t);
+  }, [fixingIds, load]);
+
   async function act(id: string, action: 'approve' | 'skip' | 'run_now' | 'regenerate' | 'fix', extraNote?: string, schedule = false, redate = false) {
     addTo(setBusyIds, id);
-    if (action === 'fix') addTo(setFixIds, id);
     setErr(null);
     setNote(null);
     try {
@@ -343,7 +356,6 @@ export default function AutopilotQueue() {
       setErr(e instanceof Error ? e.message : 'Action failed');
     } finally {
       dropFrom(setBusyIds, id);
-      if (action === 'fix') dropFrom(setFixIds, id);
     }
   }
 
@@ -638,24 +650,28 @@ export default function AutopilotQueue() {
                       re-checks (POST /api/autopilot/runs { action: 'fix' }). */}
                   {(() => {
                     const plan = fixPlan(runFixInput(r));
-                    if (!plan.steps.length) return null;
+                    const fixing = fixRunning(r.angle);
                     return (
-                      <div className="flex flex-wrap items-center gap-2 border-b border-line bg-amber-50/60 px-5 py-2.5 text-[12px] text-amber-900">
-                        <span className="min-w-0">
-                          {fixIds.has(r.id)
-                            ? 'Fixing the ' + fixStepsLabel(plan.steps) + ' — this can take a few minutes…'
-                            : 'Fix the ' + fixStepsLabel(plan.steps) + ' automatically, then re-check.'}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => act(r.id, 'fix')}
-                          disabled={busyIds.has(r.id) || regenIds.has(r.id) || optionsIds.has(r.id)}
-                          title={'Resolves: ' + plan.reasons.join('; ')}
-                          className="ml-auto rounded-full bg-accent px-4 py-1 text-[12px] font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50"
-                        >
-                          {fixIds.has(r.id) ? 'Fixing…' : 'FIX'}
-                        </button>
-                      </div>
+                      <>
+                        {plan.steps.length > 0 && !fixing && (
+                          <div className="flex flex-wrap items-center gap-2 border-b border-line bg-amber-50/60 px-5 py-2.5 text-[12px] text-amber-900">
+                            <span className="min-w-0">Fix the {fixStepsLabel(plan.steps)} automatically, then re-check.</span>
+                            <button
+                              type="button"
+                              onClick={() => act(r.id, 'fix')}
+                              disabled={busyIds.has(r.id) || regenIds.has(r.id) || optionsIds.has(r.id)}
+                              title={'Resolves: ' + plan.reasons.join('; ')}
+                              className="ml-auto rounded-full bg-accent px-4 py-1 text-[12px] font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50"
+                            >
+                              FIX
+                            </button>
+                          </div>
+                        )}
+                        {/* FIX runs in the background; its progress and result are on the run. */}
+                        <div className="border-b border-line px-5 py-2.5 empty:hidden">
+                          <FixStatusLine angle={r.angle} steps={plan.steps} className="block" />
+                        </div>
+                      </>
                     );
                   })()}
 
@@ -793,7 +809,7 @@ export default function AutopilotQueue() {
                           if (!window.confirm('This post was due ' + fmtSlot(r.scheduled_for) + ' and that time has passed.\n\nSchedule it at the next free slot (clinic posting hours, clear of anything else going out)?')) return;
                           void act(r.id, 'approve', undefined, true, true);
                         }}
-                        disabled={busyIds.has(r.id)}
+                        disabled={busyIds.has(r.id) || fixRunning(r.angle)}
                         className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
                       >
                         {busyIds.has(r.id) ? 'Working…' : 'Approve for next free slot'}
@@ -806,7 +822,7 @@ export default function AutopilotQueue() {
                             if (!window.confirm('Approve and schedule this post?\n\nIt will be published at ' + fmtSlot(r.scheduled_for) + ' (clinic time). Metricool does the publishing; you will not need to open it.')) return;
                             void act(r.id, 'approve', undefined, true);
                           }}
-                          disabled={busyIds.has(r.id)}
+                          disabled={busyIds.has(r.id) || fixRunning(r.angle)}
                           className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
                         >
                           {busyIds.has(r.id) ? 'Working…' : 'Approve & schedule'}
@@ -823,7 +839,7 @@ export default function AutopilotQueue() {
                           <button
                             type="button"
                             onClick={() => act(r.id, 'approve')}
-                            disabled={busyIds.has(r.id)}
+                            disabled={busyIds.has(r.id) || fixRunning(r.angle)}
                             className="rounded-full px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:text-ink disabled:opacity-50"
                           >
                             Approve as draft
@@ -840,7 +856,7 @@ export default function AutopilotQueue() {
                         const feedback = window.prompt('What should change? The engine redrafts and must address your note.', '');
                         if (feedback !== null) void act(r.id, 'regenerate', feedback);
                       }}
-                      disabled={busyIds.has(r.id)}
+                      disabled={busyIds.has(r.id) || fixRunning(r.angle)}
                       className="rounded-full px-4 py-1.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
                     >
                       {busyIds.has(r.id) ? 'Redrafting…' : 'Ask for changes'}
@@ -848,7 +864,7 @@ export default function AutopilotQueue() {
                     <button
                       type="button"
                       onClick={() => act(r.id, 'skip')}
-                      disabled={busyIds.has(r.id)}
+                      disabled={busyIds.has(r.id) || fixRunning(r.angle)}
                       className="rounded-full px-4 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle disabled:opacity-50"
                     >
                       {busyIds.has(r.id) ? 'Working…' : 'Skip this one'}
