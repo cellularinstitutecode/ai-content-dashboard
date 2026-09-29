@@ -6,7 +6,8 @@ import { readFileSync } from 'node:fs';
 
 import { MAX_ANGLES, MAX_SLOTS, UPLOAD_MARK, UPLOAD_SCHEMA, normalizeUpload, planUpload, ruleFor, timeOf, uploadRows, uploadSummary } from './strategy-upload.ts';
 import { normalizeStrategy } from './template-strategy.ts';
-import { citationPolicyFor, isStrategySlot } from './strategy-voice.ts';
+import { citationPolicyFor, isStrategySlot, uploadVarietyKey, usesStrategyVoice } from './strategy-voice.ts';
+import { attachableClip } from './clip-relevance.ts';
 
 // Trimmed from what the reader returns for the clinic's own document.
 const READ = {
@@ -74,7 +75,7 @@ test('rows are pillars templates the engine reads back unchanged, marked as uplo
     assert.equal(n.slot, undefined, 'never mistaken for one of the built-in strategy\'s slots');
   }
   assert.match(String(rows.find((r) => r.name === 'Personalized protocols')?.strategy.rule), /Never promise identical outcomes\. The strategy's editorial direction: Educational/);
-  assert.ok((ruleFor({ weekday: 1, time: '09:00', pillar: 'x', angles: [], format: 'social', providers: [], rule: 'r'.repeat(900) }, 'd') || '').length <= 800);
+  assert.ok((ruleFor({ weekday: 1, time: '09:00', pillar: 'x', theme: '', angles: [], format: 'social', providers: [], rule: 'r'.repeat(900) }, 'd') || '').length <= 800);
 });
 
 test('uploaded slots cite a study only when a post makes a health claim, and are not the built-in strategy', () => {
@@ -84,10 +85,55 @@ test('uploaded slots cite a study only when a post makes a health claim, and are
   assert.equal(citationPolicyFor({ seeded: undefined }), 'required', 'everything else unchanged');
 });
 
+test('every dropped strategy is written like the weekly strategy', () => {
+  const s = uploadRows(normalizeUpload(READ))[0].strategy;
+  assert.equal(usesStrategyVoice(s), true, 'uploaded slots get the strategy voice');
+  assert.equal(usesStrategyVoice({ seeded: 'weekly-strategy' }), true);
+  assert.equal(usesStrategyVoice({ mode: 'pillars', pillars: ['a'] } as { seeded?: unknown }), false, 'hand-written templates are unchanged');
+  // Image-only, like the built-in strategy: a stored clip is never attached.
+  const clip = { url: 'https://x/clip.mp4', title: 'Nutrition and recovery', relevant: true };
+  assert.equal(attachableClip({ media: clip, query: 'Nutrition', seedTopic: 'Nutrition' }, s, 'Nutrition'), null);
+  // Its place in the week picks its format / reader / closing rotation.
+  assert.equal(uploadVarietyKey([2], '09:00'), 'tue-1');
+  assert.equal(uploadVarietyKey([0], '18:30'), 'sun-2');
+  assert.equal(uploadVarietyKey([], '09:00'), null);
+});
+
+test('the Autopilot applies the strategy voice to every uploaded slot', () => {
+  const src = readFileSync(new URL('./autopilot.ts', import.meta.url), 'utf8');
+  // No keyword swaps: movers skipped, the angle kept, no keyword brief.
+  assert.match(src, /if \(!usesStrategyVoice\(strategy\)\) \{\n    try \{\n      movers = await keywordMovers/);
+  assert.match(src, /if \(usesStrategyVoice\(strategy\)\) \{\n    const pool = seedPool\.length/);
+  assert.match(src, /if \(!usesStrategyVoice\(strategy\)\) \{\n    try \{\n      brief = await buildKeywordBrief/);
+  // The voice, the promotion rewrite, the image-only rule.
+  assert.match(src, /const strategySlot = usesStrategyVoice\(strategy\);\n  const citationPolicy = citationPolicyFor/);
+  assert.match(src, /const strategySlot = usesStrategyVoice\(strategy\);\n  \/\/ The openings of the recent posts/);
+  assert.match(src, /const media = usesStrategyVoice\(strategy\) \? null/);
+  assert.match(src, /if \(usesStrategyVoice\(strategy\)\) \{\n    \/\/ Rules, day theme/);
+  // Weekly variety and no repeats across the week.
+  assert.match(src, /uploadKey \? varietyFor\(uploadKey, weekIndex\(run\.scheduled_for\)\)/);
+  assert.match(src, /coveredThisWeek: dealt \? siblingAngles\(strategy\.slot \|\| '', dealt\.week\) : uploadCovered/);
+  // The built-in document's own rotation still needs its own slot key.
+  assert.match(src, /if \(isStrategySlot\(strategy\) && strategy\.slot\) \{/);
+});
+
+test('the day theme, the post\'s notes and the direction all reach the writer; notes are never cut for the direction', () => {
+  const plan = normalizeUpload({ ...READ, mix: '5 medical, 5 lifestyle, 2 recovery, 2 Cancun', slots: [
+    { day: 'thu', time: '', pillar: 'Cancun and health tourism', theme: 'Prevention and destination', angles: ['Air connectivity'], format: 'social', channels: [], rule: 'Positioning note: avoid claiming Cancun is categorically better than every other Mexican destination.' },
+  ] });
+  assert.equal(plan.mix, '5 medical, 5 lifestyle, 2 recovery, 2 Cancun');
+  const rule = String(uploadRows(plan)[0].strategy.rule);
+  assert.match(rule, /^Day theme: Prevention and destination\. Positioning note: avoid claiming Cancun/);
+  assert.match(rule, /editorial direction: Educational/);
+  const long = ruleFor({ weekday: 4, time: '09:00', pillar: 'x', theme: 't', angles: [], format: 'social', providers: [], rule: 'NOTE '.repeat(80) }, 'D'.repeat(400));
+  assert.ok(String(long).includes('NOTE '.repeat(80).trim()), 'the note survives whole; the direction is what is shortened');
+});
+
 test('insert-only: an earlier upload is skipped, a clash is reported, nothing is updated', () => {
   const plan = normalizeUpload(READ);
   const existing = [
-    { name: 'Diagnosis and comprehensive assessment', weekdays: [1], time_of_day: '09:00:00', active: true, strategy: { seeded: UPLOAD_MARK } },
+    // Named differently by an earlier reading of the same document: still the same slot.
+    { name: 'Diagnosis and assessment', weekdays: [1], time_of_day: '09:00:00', active: true, strategy: { seeded: UPLOAD_MARK } },
     { name: 'Nutrition', weekdays: [0], time_of_day: '18:30', active: true, strategy: { seeded: 'weekly-strategy' } },
     { name: 'Paused one', weekdays: [1], time_of_day: '18:00', active: false, strategy: {} },
   ];
@@ -103,6 +149,7 @@ test('the schema is closed and asks for every key', () => {
   assert.equal(UPLOAD_SCHEMA.additionalProperties, false);
   assert.equal(UPLOAD_SCHEMA.properties.slots.items.additionalProperties, false);
   assert.deepEqual([...UPLOAD_SCHEMA.properties.slots.items.required].sort(), Object.keys(UPLOAD_SCHEMA.properties.slots.items.properties).sort());
+  assert.deepEqual([...UPLOAD_SCHEMA.required].sort(), Object.keys(UPLOAD_SCHEMA.properties).sort());
 });
 
 test('the route reads the PDF with Claude, then inserts only — and the panel is on both pages', () => {

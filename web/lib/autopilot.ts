@@ -94,14 +94,14 @@ import { RECONCILABLE_STATES, reconcilePlan, slotMatches } from '@/lib/run-recon
 // because this is where callers have always looked for them.
 import { normalizeStrategy, type StrategyMode, type TemplateStrategy } from '@/lib/template-strategy';
 import { rulesForSlot, slotContext } from '@/lib/content-strategy';
-import { angleFor, siblingAngles } from '@/lib/strategy-rotation';
+import { angleFor, siblingAngles, weekIndex } from '@/lib/strategy-rotation';
 import { varietyBriefs, varietyFor, varietyLabels, type Variety } from '@/lib/strategy-variety';
 import { openingOfPack } from '@/lib/opening-line';
 import { recentOpenings } from '@/lib/recent-openers';
 import { BLOG_ANGLES } from '@/lib/strategy-seed';
 import { scorePack, type RunScore } from '@/lib/score-pack';
 export { scorePack };
-import { citationPolicyFor, isStrategySlot, pickSupportingPhrase, pillarForStrategy, strategyBrand, strategyTopicPrompt } from '@/lib/strategy-voice';
+import { citationPolicyFor, isStrategySlot, isUploadedSlot, pickSupportingPhrase, pillarForStrategy, strategyBrand, strategyTopicPrompt, uploadVarietyKey, usesStrategyVoice } from '@/lib/strategy-voice';
 import { attachableClip, clipRelevant, pillarOf, usesPillarRotation, type PostTopic } from '@/lib/clip-relevance';
 export { normalizeStrategy };
 export type { StrategyFormat, StrategyMode, TemplateStrategy } from '@/lib/template-strategy';
@@ -628,7 +628,7 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
   // clinic's procedure searches, and one week in four the rotation offered
   // one of them — "stem cell therapy cancun" — as the supporting phrase of a
   // post about sleep. It also spent Semrush units on a result thrown away.
-  if (!isStrategySlot(strategy)) {
+  if (!usesStrategyVoice(strategy)) {
     try {
       movers = await keywordMovers(primaryDomain());
     } catch { movers = null; }
@@ -648,7 +648,7 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
   // keyword, which is the opposite of what the strategy asks for. The keyword
   // research still counts: a non-commercial phrase it found rides along as an
   // optional supporting phrase.
-  if (isStrategySlot(strategy)) {
+  if (usesStrategyVoice(strategy)) {
     const pool = seedPool.length || 1;
     // The supporting phrase comes from research on THIS angle only — its
     // primary keyword, related searches and questions — and must be on the
@@ -660,7 +660,16 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
     const picked = pickSupportingPhrase(seedTopic, pillarName, candidates);
     const pickedRow = picked ? candidates.find((k) => k.keyword === picked) : undefined;
     // The rest of "angle, question, format, or audience" (lib/strategy-variety.ts).
-    const variety = dealt ? varietyFor(strategy.slot, dealt.week) : null;
+    // A slot from a dropped document has no dealt schedule of its own; it
+    // takes the shape dealt to its place in the week (day, first or second
+    // post), so it too changes format, reader and closing every week.
+    const uploadKey = !dealt && isUploadedSlot(strategy) ? uploadVarietyKey(template.weekdays, template.time_of_day) : null;
+    const variety = dealt
+      ? varietyFor(strategy.slot, dealt.week)
+      : uploadKey ? varietyFor(uploadKey, weekIndex(run.scheduled_for)) : null;
+    // And what the week's other posts are writing, so this one does not
+    // repeat them (the built-in slots know this from the dealt schedule).
+    const uploadCovered = isUploadedSlot(strategy) ? await weekAnglesAround(run) : undefined;
     const labels = varietyLabels(variety);
     // And the memory an angle needs when it comes round again: how it opened
     // the last time it was published, so the writer can come at it afresh.
@@ -681,7 +690,7 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
       supportingPhrase: picked,
       // What this slot's siblings — and, for the article, the week's medical
       // posts — are writing this same week, so the brief can say "not these".
-      coveredThisWeek: dealt ? siblingAngles(strategy.slot || '', dealt.week) : undefined,
+      coveredThisWeek: dealt ? siblingAngles(strategy.slot || '', dealt.week) : uploadCovered,
       dealtWeek: dealt ? dealt.week : undefined,
       ...(variety ? { format: variety.format, audience: variety.audience, closing: variety.closing } : {}),
       ...(previousOpening ? { previousOpening } : {}),
@@ -697,7 +706,7 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
     const note = await chatAssistant([
       {
         role: 'user',
-        content: isStrategySlot(strategy)
+        content: usesStrategyVoice(strategy)
           ? 'In 2-3 short sentences, give editorial direction for an EDUCATIONAL ' + (strategy.format || 'social') +
             ' post for a clinic\'s weekly "' + template.name + '" theme, on the angle "' + angle.query +
             '". It must teach something practical and must not promote any treatment or ask readers to book. ' +
@@ -743,7 +752,7 @@ const GOAL_INSTRUCTION: Record<NonNullable<TemplateStrategy['goal']>, string> = 
 function topicPromptFor(angle: Angle, strategy: TemplateStrategy, templateName = ''): string {
   // A weekly-strategy slot gets the strategy's own brief: pillar, angle,
   // editorial direction and the no-promotion rules (lib/strategy-voice.ts).
-  if (isStrategySlot(strategy)) {
+  if (usesStrategyVoice(strategy)) {
     // Rules, day theme and what else the slot counts as come from the document
     // data at run time when the slot is known (lib/content-strategy.ts), so a
     // change to the strategy reaches every slot on deploy without a re-seed.
@@ -781,6 +790,39 @@ function topicPromptFor(angle: Angle, strategy: TemplateStrategy, templateName =
   if (strategy.rule) parts.push('STANDING RULE for this pillar (must follow): ' + strategy.rule);
   if (angle.reviewerNote) parts.push('REVIEWER FEEDBACK (must address): ' + angle.reviewerNote);
   return parts.join(' ');
+}
+
+/**
+ * The angles of this user's OTHER posts scheduled in the same week as `run`
+ * (three and a half days either side), for a slot from a dropped strategy
+ * document: its writer is told "related posts this week cover: …" so two
+ * pillars that share ground — Tuesday's nutrition and Saturday's practical
+ * nutrition — do not write the same post. Fail-soft: [] on any error.
+ */
+async function weekAnglesAround(run: RunRow): Promise<string[]> {
+  try {
+    const at = Date.parse(run.scheduled_for);
+    if (!Number.isFinite(at)) return [];
+    const half = 3.5 * 24 * 3600 * 1000;
+    const { data, error } = await supabaseAdmin()
+      .from('template_runs')
+      .select('angle, template_id')
+      .eq('user_id', run.user_id)
+      .neq('template_id', run.template_id)
+      .neq('state', 'superseded')
+      .not('angle', 'is', null)
+      .gte('scheduled_for', new Date(at - half).toISOString())
+      .lte('scheduled_for', new Date(at + half).toISOString())
+      .limit(40);
+    if (error) { reportError('autopilot:week-angles', error, { runId: run.id }); return []; }
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of data || []) {
+      const q = String((r as { angle?: { query?: unknown } }).angle?.query || '').trim();
+      if (q && !seen.has(q.toLowerCase())) { seen.add(q.toLowerCase()); out.push(q); }
+    }
+    return out.slice(0, 13);
+  } catch (err) { reportError('autopilot:week-angles', err); return []; }
 }
 
 // Media enrichment: find the user's best matching finished clip for an angle.
@@ -843,7 +885,7 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   // generator "researched, nothing to add" rather than running its own.
   let brief: KeywordBrief | null = null;
   let hint = '';
-  if (!isStrategySlot(strategy)) {
+  if (!usesStrategyVoice(strategy)) {
     try {
       brief = await buildKeywordBrief(angle.query);
       if (brief.source === 'semrush') hint = briefPromptFrom(brief);
@@ -901,7 +943,7 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   // abstracts are handed to the writer, and they are kept on the draft so the
   // score step can ask whether the cited paper supports the copy. Fail-open:
   // no papers means the post is written exactly as before.
-  const strategySlot = isStrategySlot(strategy);
+  const strategySlot = usesStrategyVoice(strategy);
   const citationPolicy = citationPolicyFor(strategy);
   let evidence: EvidenceItem[] = [];
   // Not for a slot that cites only when it makes a health claim (the Cancun
@@ -945,7 +987,7 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
     template_name: template.name,
     // The slot's identity, so the picture can find its pillar even after the
     // template is renamed (lib/planner-image.ts plannerImageFor).
-    ...(isStrategySlot(strategy) ? { slot: strategy.slot || null, pillar_id: pillarForStrategy(strategy, template.name)?.id || null } : {}),
+    ...(usesStrategyVoice(strategy) ? { slot: strategy.slot || null, pillar_id: pillarForStrategy(strategy, template.name)?.id || null } : {}),
     // Which occurrence of this cover title the post is (decided at research,
     // where the history is), so a repeat of an angle — or of the pillar
     // fallback — wears a different title (lib/planner-image.ts).
@@ -965,7 +1007,7 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   const topic: PostTopic | undefined = usesPillarRotation(strategy)
     ? { pillar: pillarOf(strategy, template.name, angle.seedTopic), seedTopic: angle.seedTopic, query: angle.query }
     : undefined;
-  const media = isStrategySlot(strategy) ? null : await findMatchingClip(run.user_id, angle, topic);
+  const media = usesStrategyVoice(strategy) ? null : await findMatchingClip(run.user_id, angle, topic);
   const angleOut: Angle = { ...angle, media };
 
   // Reuse the existing draft row on regeneration so the library doesn't
@@ -1132,7 +1174,7 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
     .from('drafts').select('id, pack, provider').eq('id', run.draft_id).eq('user_id', run.user_id).single();
   if (error || !draftRow) throw new Error('draft not found for scoring');
   let pack = (draftRow as { pack: ContentPack }).pack;
-  const strategySlot = isStrategySlot(strategy);
+  const strategySlot = usesStrategyVoice(strategy);
   // The openings of the recent posts, minus this draft's own (it is among the
   // recent drafts by now): a repeat is another post starting the same way.
   // Excluded by id, before de-duplicating — removing its line afterwards also

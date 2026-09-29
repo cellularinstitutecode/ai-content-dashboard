@@ -4,9 +4,10 @@
 // "Drop weekly strategy": drop a strategy PDF, see its week laid out day by
 // day, press "Create schedules". The slots become Autopilot templates
 // (app/api/templates/strategy-upload/route.ts, lib/strategy-upload.ts): each
-// post is researched against keywords and competitors, written ahead of time,
-// verified, and waits in the review queue — approved posts go to the calendar
-// and Metricool as they already do. Nothing here deletes or changes anything.
+// post is written the way the built-in weekly strategy is (the document's
+// angle, its voice, no promotion), verified, and waits in the review queue —
+// approved posts go to the calendar and Metricool as they already do. Nothing
+// here deletes or changes anything.
 
 import { useRef, useState } from 'react';
 import { announce } from '@/components/refreshBus';
@@ -50,6 +51,8 @@ function SlotCard({ slot, tone, on, onToggle }: { slot: UploadSlot; tone: string
       <div className="mt-3 leading-relaxed opacity-80" title={slot.angles.join('\n')}>
         {slot.angles.length} angle{slot.angles.length === 1 ? '' : 's'} · e.g. “{slot.angles[0]}”
       </div>
+      {/* The document's note for this post, shown so the team can see it was read. */}
+      {slot.rule && <div className="mt-2 rounded-lg bg-white/70 px-2 py-1.5 text-[11px] leading-snug"><span className="font-semibold">Note:</span> {slot.rule}</div>}
     </div>
   );
 }
@@ -125,7 +128,7 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
         <span className="text-[13px] text-ink-faint">PDF → the week → Autopilot</span>
       </div>
       <p className="mt-3 max-w-3xl text-[14px] leading-relaxed text-ink-muted">
-        Drop a strategy document like the clinic&rsquo;s weekly plan. Each post it lists becomes a weekly slot: Autopilot researches keywords and competitors, learns from what has performed, writes and verifies each post, and puts it in the review queue. Approved posts go to the calendar and publish through Metricool as they do today. Nothing existing is changed.
+        Drop a strategy document like the clinic&rsquo;s weekly plan. Each post it lists becomes a weekly slot, written the way the weekly strategy is: always the document&rsquo;s angle (keywords only as a supporting phrase), its educational voice with no promotion, a new format and reader each week, no repeats across the week, and a single image. Every post is verified and put in the review queue. Approved posts go to the calendar and publish through Metricool as they do today. Nothing existing is changed.
       </p>
 
       <div
@@ -161,6 +164,7 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
           <div className="text-[18px] font-semibold text-ink">{plan.title}</div>
           {plan.summary && <p className="mt-1.5 text-[13px] leading-relaxed text-ink-muted">{plan.summary}</p>}
           {plan.direction && <p className="mt-1.5 text-[13px] leading-relaxed text-ink-muted"><span className="font-medium">Editorial direction:</span> {plan.direction}</p>}
+          {plan.mix && <p className="mt-1.5 text-[13px] leading-relaxed text-ink-muted"><span className="font-medium">Weekly mix:</span> {plan.mix}</p>}
 
           <div className="mt-6 grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
             {WEEK_ORDER.map((d) => {
@@ -168,6 +172,7 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
               return (
                 <div key={d} className="min-w-0 rounded-2xl bg-canvas/60 p-3 ring-1 ring-line/50">
                   <div className="mb-3 px-1 text-[12px] font-semibold uppercase tracking-wider text-ink-faint">{DAY_LABELS[d].slice(0, 3)}</div>
+                  {day.find(({ s }) => s.theme) && <div className="-mt-2 mb-3 px-1 text-[12px] italic text-ink-muted">{day.find(({ s }) => s.theme)!.s.theme}</div>}
                   <div className="grid gap-3">
                     {day.length ? day.map(({ s, i }) => (
                       <SlotCard

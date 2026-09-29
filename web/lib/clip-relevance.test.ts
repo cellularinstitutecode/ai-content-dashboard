@@ -56,7 +56,9 @@ test('a weekly-strategy post never carries a clip, however relevant: it is text 
   assert.equal(attachableClip({ ...angle, media: { ...sleep, relevant: true } }, SLOT, 'x'), null);
 });
 
-test('wiring: stepDraft does not look for a clip for a strategy slot', () => {
+test('wiring: stepDraft does not look for a clip for a strategy slot, built-in or dropped', () => {
   const src = readFileSync(new URL('../lib/autopilot.ts', import.meta.url), 'utf8');
-  assert.match(src, /const media = isStrategySlot\(strategy\) \? null : await findMatchingClip\(run\.user_id, angle, topic\);/);
+  // usesStrategyVoice: the built-in weekly strategy's slots AND every slot from
+  // a dropped strategy document (lib/strategy-voice.ts).
+  assert.match(src, /const media = usesStrategyVoice\(strategy\) \? null : await findMatchingClip\(run\.user_id, angle, topic\);/);
 });
