@@ -175,3 +175,21 @@ export function libraryProvenance(input: {
     ...(input.libraryName ? { libraryName: String(input.libraryName).slice(0, 200) } : {}),
   };
 }
+
+/**
+ * Is `url` a file in the app's own public image bucket?
+ *
+ * libraryHero fetches the photo on the server, so the address the browser
+ * sends must be one the dashboard stored (import_image put it there), not any
+ * https address a request names: same origin as the Supabase project, under
+ * /storage/v1/object/public/<bucket>/, and no userinfo or odd port tricks.
+ */
+export function ownBucketUrl(url: string, supabaseUrl: string | null | undefined, bucket: string): boolean {
+  let u: URL;
+  let base: URL;
+  try { u = new URL(String(url || '')); base = new URL(String(supabaseUrl || '')); } catch { return false; }
+  if (u.protocol !== 'https:' || u.username || u.password) return false;
+  if (u.origin !== base.origin) return false;
+  const prefix = '/storage/v1/object/public/' + bucket + '/';
+  return u.pathname.startsWith(prefix) && u.pathname.length > prefix.length && !u.pathname.includes('/../');
+}

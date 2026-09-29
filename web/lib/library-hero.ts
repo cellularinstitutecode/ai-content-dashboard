@@ -24,12 +24,12 @@ import { promisify } from 'node:util';
 
 import type { BrandContext } from '@/lib/ai';
 import { resolveFfmpeg } from '@/lib/audio-extract';
-import { storeBytes, verifyLibraryPhoto, type ImageVerification, type PackImage } from '@/lib/images';
+import { IMAGE_BUCKET, storeBytes, verifyLibraryPhoto, type ImageVerification, type PackImage } from '@/lib/images';
 import { measureImage } from '@/lib/palette-measure';
 import { plannerImageFor } from '@/lib/planner-image';
 import { renderTitleCover } from '@/lib/title-cover';
 import { reportError } from '@/lib/report';
-import { coverTitleFor, ffmpegCoverArgs, gradeDecision, headroomPad, libraryProvenance, needsFfmpeg, type GradeDecision } from './library-cover.ts';
+import { coverTitleFor, ffmpegCoverArgs, gradeDecision, headroomPad, libraryProvenance, needsFfmpeg, ownBucketUrl, type GradeDecision } from './library-cover.ts';
 
 const run = promisify(execFile);
 
@@ -45,10 +45,13 @@ export type LibraryHeroResult = {
 
 /** The stored photo's bytes, from the app's own public bucket. */
 async function fetchPhoto(url: string): Promise<{ bytes: Buffer; contentType: string; ext: string }> {
+  // Fetched on the server, so only from the app's own bucket: a request must
+  // not be able to point this at any address it likes.
+  if (!ownBucketUrl(url, process.env.NEXT_PUBLIC_SUPABASE_URL, IMAGE_BUCKET)) throw new Error('that photo is not one the dashboard stored');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30_000);
   try {
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetch(url, { signal: controller.signal, redirect: 'error' });
     if (!res.ok) throw new Error('photo fetch ' + res.status);
     const bytes = Buffer.from(await res.arrayBuffer());
     if (!bytes.length) throw new Error('photo fetch: empty');

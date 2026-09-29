@@ -13,7 +13,7 @@ import { promisify } from 'node:util';
 import { BRAND_TARGET, GRADE_LIMITS, gradeFor } from './palette.ts';
 import {
   COVER_HEAD_CLEAR_PCT, COVER_MIN_HEAD_TOP_PCT, MAX_COVER_TITLE_CHARS, MAX_PAD_FRACTION,
-  cappedStats, coverTitleFor, ffmpegCoverArgs, gradeDecision, headTopAfterPad, headroomPad, libraryProvenance, needsFfmpeg, photographVerdict,
+  cappedStats, coverTitleFor, ffmpegCoverArgs, gradeDecision, headTopAfterPad, headroomPad, libraryProvenance, needsFfmpeg, ownBucketUrl, photographVerdict,
 } from './library-cover.ts';
 import { classifyVerdict } from './image-verdict.ts';
 
@@ -203,4 +203,19 @@ test('the button uses the library photo itself; the AI-description path is gone'
   const images = src('lib/images.ts');
   assert.match(images, /\{ headroom: true, photograph: true \}/, 'the reviewer is asked for the headroom, and reads the photo as a photograph');
   assert.match(images, /const verdict = mode\.photograph \? photographVerdict\(measured\) : measured;/);
+});
+
+test('the server fetches a library photo only from the app\'s own bucket', () => {
+  const base = 'https://abc.supabase.co';
+  const ok = base + '/storage/v1/object/public/content-images/packs/1-x-photo.jpg';
+  assert.equal(ownBucketUrl(ok, base, 'content-images'), true);
+  assert.equal(ownBucketUrl(ok + '?v=2', base, 'content-images'), true);
+  assert.equal(ownBucketUrl('https://evil.example/storage/v1/object/public/content-images/a.jpg', base, 'content-images'), false);
+  assert.equal(ownBucketUrl('https://abc.supabase.co.evil.example/storage/v1/object/public/content-images/a.jpg', base, 'content-images'), false);
+  assert.equal(ownBucketUrl('https://user@abc.supabase.co/storage/v1/object/public/content-images/a.jpg', base, 'content-images'), false);
+  assert.equal(ownBucketUrl(base + '/storage/v1/object/public/other-bucket/a.jpg', base, 'content-images'), false);
+  assert.equal(ownBucketUrl(base + '/storage/v1/object/public/content-images/', base, 'content-images'), false);
+  assert.equal(ownBucketUrl('http://abc.supabase.co/storage/v1/object/public/content-images/a.jpg', base, 'content-images'), false);
+  assert.equal(ownBucketUrl(ok, undefined, 'content-images'), false);
+  assert.equal(ownBucketUrl('not a url', base, 'content-images'), false);
 });
