@@ -25,6 +25,8 @@ export type FixInput = {
   image?: {
     url?: string | null;
     source?: string | null;
+    /** A library photo that went through the brand filter (lib/library-cover.ts) — checked like a cover. */
+    brandGraded?: boolean | null;
     verification?: { status?: string | null; issues?: readonly string[]; textDetected?: boolean; bannedProp?: boolean } | null;
   } | null;
 };
@@ -60,12 +62,27 @@ export function runFixInput(run: {
   };
 }
 
-/** Is the picture one the card warns about? A clinic photo is never generated over. */
+/**
+ * Is the picture one the card warns about?
+ *
+ * A clinic photo chosen as it is (or dropped in) is never generated over. A
+ * library photo that went through the brand filter and the title was checked
+ * like a cover, and a flag on it (a head under the title, the wrong subject)
+ * is one FIX acts on — by making an AI image, since FIX cannot choose a photo.
+ * An older "AI image styled after a library photo" is an AI image and is
+ * regenerated like any other.
+ */
 export function imageFlagged(image: FixInput['image']): boolean {
   if (!image?.url) return false;
-  if (['library', 'upload'].includes(String(image.source || ''))) return false;
+  if (['library', 'upload'].includes(String(image.source || '')) && !image.brandGraded) return false;
   const v = image.verification;
   return imageUnshippable(v) || v?.status === 'flagged';
+}
+
+/** What FIX does about a flagged picture: a fresh AI take, in place of an AI image or of a graded library photo. */
+export function fixImageMode(image: FixInput['image']): 'ai' | 'library-to-ai' | null {
+  if (!imageFlagged(image)) return null;
+  return String(image?.source || '') === 'library' ? 'library-to-ai' : 'ai';
 }
 
 export function fixPlan(input: FixInput | null | undefined): FixPlan {
@@ -93,7 +110,9 @@ export function fixPlan(input: FixInput | null | undefined): FixPlan {
 
   if (imageFlagged(input?.image)) {
     const v = input?.image?.verification;
-    add('image', v?.textDetected ? 'text in the image' : imageUnshippable(v) ? 'a banned prop in the image' : 'the image was flagged');
+    add('image', fixImageMode(input?.image) === 'library-to-ai'
+      ? 'the library photo was flagged (' + ((v?.issues || [])[0] || 'by the checker') + ') — FIX makes an AI image in its place; pick another library photo to keep a real one'
+      : v?.textDetected ? 'text in the image' : imageUnshippable(v) ? 'a banned prop in the image' : 'the image was flagged');
   }
 
   const order: FixStep[] = ['citation', 'copy', 'image'];
@@ -179,6 +198,10 @@ export type FixStatus = {
   state: 'running' | 'done' | 'failed';
   startedAt: string;
   endedAt?: string;
+  /** The step FIX is on right now (written as each one starts), so the card can say "now: the image". */
+  step?: FixStep | null;
+  /** The steps it set out to do. */
+  steps?: FixStep[];
   /** fixNote() of the result, or why it stopped. */
   note?: string;
   /** What still needs a person; empty when everything was resolved. */
@@ -188,24 +211,35 @@ export type FixStatus = {
 /**
  * A FIX still "running" after this long did not finish: the platform stops a
  * function at five minutes and nothing is left to write the result. The card
- * says so, and FIX can be pressed again.
+ * says so, and FIX can be pressed again. Ten minutes, so a slow but live FIX
+ * (its budget is a little over four) is never called stuck while it works.
  */
-export const FIX_STALE_MS = 6 * 60_000;
+export const FIX_STALE_MS = 10 * 60_000;
+
+/** The one line a run that never finished gets — on the card, and in the run's log when the tick finds it. */
+export const FIX_STALLED_NOTE = 'FIX did not finish — press it again. What it completed is saved.';
 
 export type FixView =
-  | { kind: 'running'; elapsedSec: number }
+  | { kind: 'running'; elapsedSec: number; startedAt: string; step: FixStep | null }
   | { kind: 'done'; note: string; clean: boolean }
   | { kind: 'stalled' }
   | null;
+
+/** Is this FIX stamp a run that started and never wrote its result? */
+export function fixStale(fix: FixStatus | null | undefined, now: number = Date.now()): boolean {
+  if (!fix || fix.state !== 'running') return false;
+  const started = Date.parse(String(fix.startedAt || ''));
+  return !Number.isFinite(started) || now - started > FIX_STALE_MS;
+}
 
 /** What the card shows for a run's FIX, from `angle.fix`. */
 export function fixView(angle: { fix?: FixStatus | null } | null | undefined, now: number = Date.now()): FixView {
   const f = angle?.fix;
   if (!f || !f.state) return null;
   if (f.state === 'running') {
+    if (fixStale(f, now)) return { kind: 'stalled' };
     const started = Date.parse(String(f.startedAt || ''));
-    if (!Number.isFinite(started) || now - started > FIX_STALE_MS) return { kind: 'stalled' };
-    return { kind: 'running', elapsedSec: Math.max(0, Math.floor((now - started) / 1000)) };
+    return { kind: 'running', elapsedSec: Math.max(0, Math.floor((now - started) / 1000)), startedAt: String(f.startedAt), step: f.step || null };
   }
   const note = String(f.note || '').trim();
   if (!note) return null;

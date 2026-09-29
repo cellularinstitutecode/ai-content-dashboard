@@ -69,7 +69,7 @@ import { findEvidence } from '@/lib/evidence';
 import { evidenceBriefFrom, type EvidenceItem } from '@/lib/evidence-brief';
 import { MAX_CANDIDATES, claimFrom, claimQuery, supportedItem, type ClaimSupportStamp, type SupportVerdict } from '@/lib/claim-support';
 import { pickCitation, refLineFrom } from '@/lib/citation-from-evidence';
-import { fixNote, fixPlan, fixRedraftNote, fixRunning, imageFlagged, runFixInput, swapRefLine, type FixStatus } from '@/lib/fix-plan';
+import { FIX_STALLED_NOTE, fixImageMode, fixNote, fixPlan, fixRedraftNote, fixRunning, fixStale, imageFlagged, runFixInput, swapRefLine, type FixStatus, type FixStep } from '@/lib/fix-plan';
 import { NETWORKS_NEEDING_MEDIA, mediaProblem } from '@/lib/composer';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
@@ -2865,6 +2865,9 @@ export async function fixRun(runId: string, userId: string): Promise<FixResult> 
   const initial = fixPlan(runFixInput({ score: run.score, pack: pack as unknown as Record<string, unknown> }));
   if (!initial.steps.length) return { ok: true, fixed, remaining, note: 'Nothing needed fixing — this post has no warnings.' };
   const aviso = await avisoForUser(run.user_id);
+  // The step in progress goes on the run as each one starts, so the card can
+  // say what FIX is doing and a kill mid-way leaves a trace of where it was.
+  const onStep = (step: FixStep) => markFixStep(db, runId, userId, step, initial.steps);
 
   // --- CITATION, without touching the copy.
   const cit: { claimHelp: ClaimHelp | null; reason: string } = { claimHelp: null, reason: '' };
@@ -2881,7 +2884,7 @@ export async function fixRun(runId: string, userId: string): Promise<FixResult> 
     }
   };
   let input = runFixInput({ score: run.score, pack: pack as unknown as Record<string, unknown> });
-  if (fixPlan(input).steps.includes('citation')) await citationPass();
+  if (fixPlan(input).steps.includes('citation')) { await onStep('citation'); await citationPass(); }
   input = runFixInput({ score: run.score, pack: pack as unknown as Record<string, unknown> });
 
   // --- COPY: the redraft path "Ask for changes" uses, with a note quoting each flag.
@@ -2891,6 +2894,7 @@ export async function fixRun(runId: string, userId: string): Promise<FixResult> 
     const wantsCopy = fixPlan(input).steps.includes('copy');
     if (!wantsCopy && !cit.claimHelp) break;
     if (left() < FIX_REDRAFT_MS) { copyReason = 'ran out of time before the copy could be redrafted — press FIX again'; break; }
+    await onStep('copy');
     const help = cit.claimHelp;
     const note = fixRedraftNote(input, help ? { title: help.item.title, year: help.item.year, abstract: help.item.abstract, ref: help.ref } : null);
     const claimed = await regenerateRun(run.id, userId, note, { noteLimit: 1400 });
@@ -2937,20 +2941,31 @@ export async function fixRun(runId: string, userId: string): Promise<FixResult> 
   }
 
   // --- IMAGE: only a flagged picture, through the verified path.
+  //
+  // An AI image (a plain take, or an older one "styled after" a library
+  // photo) is generated again. A library photo that went through the brand
+  // filter and was flagged (a head under the title, the wrong subject) is
+  // replaced by an AI image too — FIX cannot choose a photo — and the note
+  // says so, so a person can pick another real one instead.
   const image = (pack as ContentPack & { _image?: PackImage })._image;
-  if (imageFlagged(image)) {
+  const imageMode = fixImageMode(image);
+  if (imageMode) {
     if (left() < FIX_IMAGE_MS) {
       remaining.push('the image — ran out of time; press FIX again');
     } else {
+      await onStep('image');
+      const swapped = imageMode === 'library-to-ai' ? ' (the flagged library photo was replaced by an AI image — choose another library photo to keep a real one)' : '';
       try {
-        const made = await ensureDraftImage(draftId, userId, { force: true });
+        // What is left of FIX's own budget, less the write-back: the retry
+        // loop starts no take it cannot finish before the function ends.
+        const made = await ensureDraftImage(draftId, userId, { force: true, budgetMs: left() - 20_000 });
         if (made && !imageFlagged(made)) {
-          fixed.push('image');
-          changes.push('made a new hero image (verified)');
+          fixed.push('image' + swapped);
+          changes.push('made a new hero image (verified)' + (imageMode === 'library-to-ai' ? ' in place of the flagged library photo' : ''));
         } else {
           const issues = (made?.verification?.issues || []).slice(0, 2).join('; ');
           remaining.push('the image — ' + (made ? 'the new picture was flagged too' + (issues ? ' (' + issues + ')' : '') + '; press "New image" or choose a library photo' : 'images are off, so none could be made'));
-          if (made) changes.push('made a new hero image, still flagged');
+          if (made) changes.push('made a new hero image, still flagged' + (imageMode === 'library-to-ai' ? ', in place of the flagged library photo' : ''));
         }
       } catch (err) {
         reportError('autopilot:fix-image', err, { runId });
@@ -2971,6 +2986,44 @@ export async function fixRun(runId: string, userId: string): Promise<FixResult> 
   return { ok: true, fixed, remaining, note };
 }
 
+/** Write the step FIX is on to `angle.fix`. Best-effort: a failed stamp never stops the repair. */
+async function markFixStep(db: ReturnType<typeof supabaseAdmin>, runId: string, userId: string, step: FixStep, steps: readonly FixStep[]): Promise<void> {
+  const { data, error } = await db.from('template_runs').select('angle').eq('id', runId).eq('user_id', userId).maybeSingle();
+  if (error || !data) { if (error) reportError('autopilot:fix-step', error, { runId }); return; }
+  const angle = ((data as { angle?: Angle | null }).angle || {}) as Partial<Angle>;
+  if (angle.fix?.state !== 'running') return;
+  const fix: FixStatus = { ...angle.fix, step, steps: [...steps] };
+  const { error: writeError } = await db.from('template_runs').update({ angle: { ...angle, fix } }).eq('id', runId).eq('user_id', userId);
+  if (writeError) reportError('autopilot:fix-step', writeError, { runId });
+}
+
+/**
+ * The tick's sweep for FIXes that started and never wrote a result — the
+ * platform stopped the function, or the process died. The stamp is closed
+ * as failed with the card's own wording, so the run's log says what happened
+ * and the button is live again whichever screen reads it.
+ */
+export async function expireStaleFixes(scopeUserId?: string): Promise<number> {
+  const db = supabaseAdmin();
+  let q = db.from('template_runs').select('id, user_id, angle, log').eq('state', 'ready_for_review').not('angle', 'is', null);
+  if (scopeUserId) q = q.eq('user_id', scopeUserId);
+  const { data, error } = await q;
+  if (error) { reportError('autopilot:fix-expire', error); return 0; }
+  let closed = 0;
+  for (const row of (data || []) as { id: string; user_id: string; angle: Angle | null; log: RunRow['log'] }[]) {
+    const fix = row.angle?.fix;
+    if (!fixStale(fix)) continue;
+    const ended: FixStatus = { ...(fix as FixStatus), state: 'failed', endedAt: new Date().toISOString(), note: FIX_STALLED_NOTE, remaining: [] };
+    const { error: writeError } = await db
+      .from('template_runs')
+      .update({ angle: { ...row.angle, fix: ended }, log: logLine(row as unknown as RunRow, 'fix', 'FIX: ' + FIX_STALLED_NOTE + (fix?.step ? ' (it was on the ' + fix.step + ')' : '')) })
+      .eq('id', row.id).eq('user_id', row.user_id);
+    if (writeError) reportError('autopilot:fix-expire', writeError, { runId: row.id });
+    else closed++;
+  }
+  return closed;
+}
+
 /**
  * Start FIX: mark the run as being fixed, so the card can show it and a
  * second press is refused while it works. The route then runs
@@ -2985,7 +3038,7 @@ export async function startFix(runId: string, userId: string): Promise<{ ok: tru
   if (run.state !== 'ready_for_review') return { ok: false, note: 'This post is not waiting for review, so there is nothing to fix.' };
   if (!run.draft_id) return { ok: false, note: 'This post has no draft to fix.' };
   if (fixRunning(run.angle)) return { ok: false, note: 'FIX is already working on this post.' };
-  const fix: FixStatus = { state: 'running', startedAt: new Date().toISOString() };
+  const fix: FixStatus = { state: 'running', startedAt: new Date().toISOString(), step: null };
   const { data: claimed, error: claimError } = await db
     .from('template_runs')
     .update({ angle: { ...(run.angle || {}), fix } })
@@ -3017,6 +3070,8 @@ export async function fixRunInBackground(runId: string, userId: string): Promise
     state: result.ok ? 'done' : 'failed',
     startedAt: angle.fix?.startedAt || new Date().toISOString(),
     endedAt: new Date().toISOString(),
+    step: null,
+    ...(angle.fix?.steps ? { steps: angle.fix.steps } : {}),
     note: result.note,
     remaining: result.remaining,
   };

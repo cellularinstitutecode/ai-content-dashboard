@@ -6,9 +6,11 @@
 //
 //   New AI image        POST /api/drafts/image { regenerate }  (the "↻ New image")
 //   Choose from library import_image (the Image Library's "Use as hero image")
-//                       then { useUrl } — the photo, as it is, no generation
-//   Styled after photo  import_image, then { styleFromUrl } — a fresh AI take in
-//                       that photo's style (lib/image-reference.ts)
+//                       then { useUrl } — the photo with the brand's colour
+//                       filter, no title, no generation
+//   Library + brand     import_image, then { brandPhotoUrl } — the SAME photo
+//                       with the brand filter and the post's title on it
+//                       (lib/library-hero.ts). No AI image is made.
 //
 // Every generated take goes through the same verification as any other. What
 // happens AFTER the draft changed (reload, sync the Metricool post) belongs to
@@ -21,7 +23,7 @@ import ImportingLabel from '@/components/ImportingLabel';
 import { sizeLabel, tileNote, tooLargeToImport } from '@/lib/library-import';
 
 type DriveImage = { id: string; name: string; thumbUrl?: string; viewUrl?: string; size?: number | null };
-type Mode = 'use' | 'style';
+type Mode = 'use' | 'brand';
 
 export default function HeroImageControls({
   draftId,
@@ -63,7 +65,9 @@ export default function HeroImageControls({
       if (!r.ok || !j?.image?.url) throw new Error(friendlyImageError(j, fallback, { provider: 'openai' }));
       setMode(null);
       await onChanged(j.image);
-      setStatus({ text: 'Picture updated.', bad: false });
+      // The server says when the filter ran at its limit, or could not run.
+      const notes = Array.isArray(j?.notes) ? j.notes.map(String).filter(Boolean) : [];
+      setStatus({ text: 'Picture updated.' + (notes.length ? ' Note: ' + notes.join(' ') + '.' : ''), bad: false });
     } catch (e) {
       setStatus({ text: friendlyImageError(e, fallback, { provider: 'openai' }), bad: true });
     } finally {
@@ -107,8 +111,8 @@ export default function HeroImageControls({
     } finally {
       setCopying(null);
     }
-    if (mode === 'use') await send({ useUrl: url, alt: img.name }, img.id, 'That photo could not be attached.', true);
-    else await send({ styleFromUrl: url }, img.id, 'The styled image could not be made.', true);
+    if (mode === 'use') await send({ useUrl: url, alt: img.name, libraryFileId: img.id }, img.id, 'That photo could not be attached.', true);
+    else await send({ brandPhotoUrl: url, alt: img.name, libraryFileId: img.id }, img.id, 'That photo could not be prepared.', true);
   }
 
   const chip = 'rounded-full px-3 py-1 text-[12px] font-medium ring-1 transition disabled:opacity-50 ';
@@ -122,15 +126,15 @@ export default function HeroImageControls({
         <button type="button" disabled={Boolean(busy)} onClick={() => void send({ regenerate: true }, 'ai', 'The new image could not be made.')} className={chip + 'bg-surface text-ink/70 ring-black/10 hover:bg-black/5'} title="A fresh AI picture, verified before it replaces this one">
           {busy === 'ai' ? 'Making…' : hasImage ? '↻ New AI image' : 'Make an AI image'}
         </button>
-        <button type="button" disabled={Boolean(busy)} onClick={() => openLibrary('use')} className={chip + on('use')} title="A real photo from the team's Drive folder, used as it is">📁 Choose from Image Library</button>
-        <button type="button" disabled={Boolean(busy)} onClick={() => openLibrary('style')} className={chip + on('style')} title="Pick a library photo; the AI makes a new picture in its style">✨ AI image styled after a library photo</button>
+        <button type="button" disabled={Boolean(busy)} onClick={() => openLibrary('use')} className={chip + on('use')} title="A real photo from the team's Drive folder, with the brand's colour filter">📁 Choose from Image Library</button>
+        <button type="button" disabled={Boolean(busy)} onClick={() => openLibrary('brand')} className={chip + on('brand')} title="The library photo itself, with the brand's colour filter and the post title — no AI">🎨 Use library photo with brand filter</button>
       </div>
       {note && <p className="mt-1.5 text-[11px] text-ink/50">{note}</p>}
 
       {mode && (
         <div className="mt-2">
           <p className="text-[11px] text-ink/60">
-            {mode === 'use' ? 'Click a photo to use it as the picture. Nothing is generated.' : 'Click a photo. The AI makes a new picture in its style — its light, colours and setting — for this post, and checks it before it replaces the current one.'}
+            {mode === 'use' ? 'Click a photo to use it as the picture, with the brand\'s colour filter. Nothing is generated.' : 'Click a photo. It gets the brand\'s colour filter and the post title — no AI.'}
           </p>
           {loadingLib && <p className="mt-1 text-[11px] text-ink/50">Reading the library…</p>}
           {images && images.length === 0 && !loadingLib && <p className="mt-1 text-[11px] text-ink/50">The Drive folder has no photos in it yet.</p>}

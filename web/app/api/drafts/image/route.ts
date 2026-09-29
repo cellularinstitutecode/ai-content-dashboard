@@ -11,8 +11,8 @@ import { decodeDataUrl } from '@/lib/data-url';
 import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
-import { describeReferencePhoto, generatePackImage, imagesEnabled, removeSuperseded, storeBytes, type PackImage } from '@/lib/images';
-import { styleDirection } from '@/lib/image-reference';
+import { generatePackImage, imagesEnabled, removeSuperseded, storeBytes, type PackImage } from '@/lib/images';
+import { libraryHero } from '@/lib/library-hero';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { plannerImageFor } from '@/lib/planner-image';
 import type { BrandContext } from '@/lib/ai';
@@ -46,11 +46,12 @@ export async function POST(req: NextRequest) {
     // regenerate: true → discard the current image and produce a fresh take
     // with the NEXT composition variant, so the reviewer always gets a
     // visibly different proposition (never a re-roll of the same prompt).
-    // styleFromUrl: <library photo> → a fresh AI take in THAT photo's style: the
-    // vision model describes the photo and the description becomes the
-    // direction (lib/image-reference.ts). Always a new generation.
-    const styleFromUrl = typeof body?.styleFromUrl === 'string' ? body.styleFromUrl.trim() : '';
-    const regenerate = body?.regenerate === true || Boolean(styleFromUrl);
+    // brandPhotoUrl: <library photo> → THAT photo, with the brand's colour
+    // filter and the post's title on it (lib/library-hero.ts). No image model:
+    // this replaced "AI image styled after a library photo", whose fresh AI
+    // take was what the team did not want.
+    const brandPhotoUrl = typeof body?.brandPhotoUrl === 'string' ? body.brandPhotoUrl.trim() : '';
+    const regenerate = body?.regenerate === true;
     // option: true  → make ONE MORE proposition and keep it alongside the others
     //                 (the reviewer picks from several rather than rerolling blind).
     // choose: <url> → promote one of those propositions to the hero image.
@@ -75,11 +76,13 @@ export async function POST(req: NextRequest) {
     //              generated ones live in.
     const direction = typeof body?.prompt === 'string' ? body.prompt.trim().slice(0, 600) : '';
     const useUrl = typeof body?.useUrl === 'string' ? body.useUrl.trim() : '';
-    if (styleFromUrl && !/^https:\/\/\S+$/i.test(styleFromUrl)) {
-      return NextResponse.json({ error: 'bad_image', message: 'That reference photo address is not one the checker can fetch.' }, { status: 400 });
+    if (brandPhotoUrl && !/^https:\/\/\S+$/i.test(brandPhotoUrl)) {
+      return NextResponse.json({ error: 'bad_image', message: 'That library photo address is not one a network can fetch.' }, { status: 400 });
     }
     const dataUrl = typeof body?.dataUrl === 'string' ? body.dataUrl : '';
     const givenAlt = typeof body?.alt === 'string' ? body.alt.trim().slice(0, 300) : '';
+    // Which Drive file a library photo came from, for the picture's provenance.
+    const libraryFileId = typeof body?.libraryFileId === 'string' && /^[A-Za-z0-9_-]{10,}$/.test(body.libraryFileId) ? body.libraryFileId : null;
 
     // Scoped explicitly to the owner as well as by RLS — every sibling route
     // (drafts, posts, templates, brand) does both, and this was the only
@@ -118,13 +121,51 @@ export async function POST(req: NextRequest) {
       if (setErr) return NextResponse.json({ error: setErr.message }, { status: 500 });
       return NextResponse.json({ image: picked, options: keep });
     }
+    // Brand profile keeps the image on-brand (optional, fail-soft).
+    const loadBrand = async (): Promise<BrandContext | undefined> => {
+      try {
+        const { data: bp } = await sb.from('brand_profiles').select('*').eq('user_id', user.id).maybeSingle();
+        return bp ? (bp as BrandContext) : undefined;
+      } catch (err) { /* optional */ reportError('drafts-image:brand-load', err); return undefined; }
+    };
+    /** Set `_image` on the draft as it is NOW (the read above is stale after any long step) and remove what it replaced. */
+    const setHero = async (image: PackImage) => {
+      const { data: freshRow } = await sb.from('drafts').select('pack').eq('id', id).eq('user_id', user.id).maybeSingle();
+      const currentPack = (freshRow as { pack?: Record<string, unknown> } | null)?.pack ?? pack;
+      const nextPack = { ...currentPack, _image: image };
+      const { error: setErr } = await sb.from('drafts').update({ pack: nextPack }).eq('id', id).eq('user_id', user.id);
+      if (setErr) throw new Error(setErr.message);
+      await removeSuperseded(currentPack, nextPack);
+    };
+    const topic = String((d as { topic?: string }).topic || 'regenerative medicine');
+
+    // A LIBRARY PHOTO WITH THE BRAND FILTER AND THE TITLE. The photo itself
+    // becomes the hero: measured and graded toward the house palette, checked
+    // for a head under the title band (padded with sky when there is one),
+    // titled like a planner cover. No image model, no credits.
+    if (brandPhotoUrl) {
+      try {
+        const made = await libraryHero({ url: brandPhotoUrl, title: true, pack, topic, brand: await loadBrand(), libraryFileId, libraryName: givenAlt || null });
+        await setHero(made.image);
+        return NextResponse.json({ image: made.image, notes: made.notes, palette: made.decision.verdict });
+      } catch (e) {
+        reportError('drafts-image:library-hero', e, { id });
+        return NextResponse.json(
+          { error: 'library_photo_failed', message: 'That library photo could not be prepared: ' + (e instanceof Error ? e.message : 'unknown error') + '. Try another photo.' },
+          { status: 502 },
+        );
+      }
+    }
+
     // A stored image the checker marked as containing text is never good
     // enough to serve as "done": content images must be text-free, so treat
     // it like a regenerate request (next composition variant) instead.
-    // A PHOTOGRAPH THE CLINIC CHOSE. Saved as the hero image exactly as given —
-    // no generation, no verification: the text rule exists because an image
-    // MODEL writes gibberish signage, and a real photograph of the clinic is
-    // not that. It is their picture; they have seen it.
+    // A PHOTOGRAPH THE CLINIC CHOSE. Saved as the hero image as given — no
+    // generation, no checks: the text rule exists because an image MODEL
+    // writes gibberish signage, and a real photograph of the clinic is not
+    // that. It is their picture; they have seen it. A library photo gets the
+    // brand's colour filter on the way (lib/library-hero.ts) and no title;
+    // when the filter cannot run, the photo goes in as it is, as before.
     if (useUrl || dataUrl) {
       let url = useUrl;
       let source: 'library' | 'upload' = 'library';
@@ -136,7 +177,7 @@ export async function POST(req: NextRequest) {
       } else if (!/^https:\/\/\S+$/i.test(url)) {
         return NextResponse.json({ error: 'bad_image', message: 'That image address is not one a network can fetch.' }, { status: 400 });
       }
-      const chosen = {
+      let chosen: PackImage = {
         url,
         prompt: direction || '',
         alt: givenAlt || 'Photograph chosen by the clinic',
@@ -145,12 +186,19 @@ export async function POST(req: NextRequest) {
         variant: 0,
         source,
       };
-      const { data: freshRow } = await sb.from('drafts').select('pack').eq('id', id).eq('user_id', user.id).maybeSingle();
-      const currentPack = (freshRow as { pack?: Record<string, unknown> } | null)?.pack ?? pack;
-      const { error: setErr } = await sb.from('drafts').update({ pack: { ...currentPack, _image: chosen } })
-        .eq('id', id).eq('user_id', user.id);
-      if (setErr) return NextResponse.json({ error: setErr.message }, { status: 500 });
-      return NextResponse.json({ image: chosen });
+      let notes: string[] = [];
+      if (source === 'library') {
+        try {
+          const graded = await libraryHero({ url, title: false, pack, topic, brand: await loadBrand(), libraryFileId, libraryName: givenAlt || null });
+          chosen = { ...graded.image, alt: chosen.alt, prompt: chosen.prompt };
+          notes = graded.notes;
+        } catch (e) {
+          reportError('drafts-image:library-grade', e, { id });
+          notes = ['the brand filter could not be applied, so the photo was used as it is'];
+        }
+      }
+      try { await setHero(chosen); } catch (e) { return NextResponse.json({ error: e instanceof Error ? e.message : 'draft update failed' }, { status: 500 }); }
+      return NextResponse.json({ image: chosen, notes });
     }
 
     // Text, or a banned prop: an image that may never ship is never reused.
@@ -191,39 +239,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // The reference photo's look, in words. After the rate limit: it is a paid
-    // vision call. A photo the checker cannot read is a refusal, not a take
-    // that quietly ignores it.
-    let effectiveDirection = direction;
-    if (styleFromUrl) {
-      try {
-        effectiveDirection = styleDirection(await describeReferencePhoto(styleFromUrl), direction).slice(0, 900);
-      } catch (e) {
-        reportError('drafts-image:reference', e);
-        return NextResponse.json(
-          { error: 'reference_unreadable', message: 'The checker could not read that library photo, so no image was made. Try another photo, or "New AI image".' },
-          { status: 502 },
-        );
-      }
-    }
-
     // Brand profile keeps the image on-brand (optional, fail-soft).
-    let brand: BrandContext | undefined;
-    try {
-      const { data: bp } = await sb
-        .from('brand_profiles')
-        .select('*')
-        .eq('user_id', user.id)
-        .maybeSingle();
-      if (bp) brand = bp as BrandContext;
-    } catch (err) { /* optional */ reportError('drafts-image:brand-load', err); }
+    const brand = await loadBrand();
 
     const baseVariant = advanceVariant ? (existing?.variant ?? 0) + 1 + options.length : 0;
     const makeOne = (slot: number | null, variantOffset: number) => generatePackImage({
-      topic: String((d as { topic?: string }).topic || 'regenerative medicine'),
+      topic,
       pack,
       brand,
-      direction: effectiveDirection,
+      direction,
       // Fresh generations start at variant 0; each regenerate (explicit, or
       // forced by a text-flagged stored image) advances to the next
       // composition (hero shot → macro lab → lifestyle → still-life → …).
@@ -252,8 +276,6 @@ export async function POST(req: NextRequest) {
     const image = wantSet > 0
       ? madeSet[0]
       : await makeOne(askedSlot ?? (asOption ? 1 + (options.length % 3) : (advanceVariant ? null : 0)), 0);
-    // Provenance: which library photo this take was styled after.
-    if (styleFromUrl && wantSet === 0) image.styledAfter = styleFromUrl;
 
     // Re-read the pack immediately before writing, and merge `_image` into the
     // FRESH copy. Generation + vision verification takes 30-60s, and the pack

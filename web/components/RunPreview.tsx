@@ -22,7 +22,10 @@ export type ReviewRunImage = {
   verification?: { status?: 'approved' | 'flagged' | 'unchecked'; score?: number | null; issues?: string[]; textDetected?: boolean; bannedProp?: boolean };
   titled?: { title: string; photoUrl: string };
   source?: string;
+  /** Older takes only: an AI image styled after a library photo (that path is gone). */
   styledAfter?: string;
+  brandGraded?: boolean;
+  libraryName?: string;
 };
 
 /** What GET /api/autopilot/runs returns for one run, as far as this page reads it. */
@@ -46,7 +49,14 @@ export function ImageVerdictBadge({ image }: { image: ReviewRunImage | undefined
   const v = image?.verification;
   if (!image?.url) return null;
   if (['library', 'upload'].includes(String(image.source || ''))) {
-    return <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-800">Clinic photo</span>;
+    // A brand-graded library photo was checked like a cover: a flag on it is shown, as FIX reads it.
+    const flagged = image.brandGraded && v?.status === 'flagged';
+    return (
+      <>
+        <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-800">{image.brandGraded ? 'Clinic photo · brand filter' : 'Clinic photo'}</span>
+        {flagged && <span className="rounded-full bg-amber-500/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(v?.issues || []).join(' · ')}>⚠ flagged: {(v?.issues || []).slice(0, 2).join('; ')}</span>}
+      </>
+    );
   }
   if (v?.textDetected) return <span className="rounded-full bg-red-600/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(v.issues || []).join(' · ')}>✗ text in image — change it before approving</span>;
   if (imageUnshippable(v)) return <span className="rounded-full bg-red-600/95 px-2 py-0.5 text-[10px] font-semibold text-white" title={(v?.issues || []).join(' · ')}>✗ banned prop in frame — this image will not ship</span>;
@@ -116,7 +126,7 @@ export default function RunPreview({
               <img src={image.url} alt={image.alt || 'AI hero image'} className="max-h-72 w-full rounded-xl object-contain ring-1 ring-black/5" />
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 <ImageVerdictBadge image={image} />
-                <span className="text-[11px] text-ink/50">{image.styledAfter ? 'AI image styled after a library photo. ' : ''}Attaches to the post on approve.</span>
+                <span className="text-[11px] text-ink/50">{image.styledAfter ? 'AI image styled after a library photo. ' : image.titled && image.source === 'library' ? 'Library photo with the post title — no AI. ' : ''}Attaches to the post on approve.</span>
               </div>
             </div>
           ) : (

@@ -155,7 +155,8 @@ export default function HeroImagePicker({
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j?.url) throw new Error(friendlyError(j, 'That photo could not be copied.'));
-      await send({ useUrl: String(j.url), alt: img.name }, img.id);
+      // The photo gets the brand's colour filter on the server (lib/library-hero.ts).
+      await send({ useUrl: String(j.url), alt: img.name, libraryFileId: img.id }, img.id);
     } catch (e) {
       setStatus(friendlyError(e, 'That photo could not be copied.'));
       setBusy('');
