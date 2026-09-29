@@ -1665,8 +1665,9 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
         </section>
       )}
 
-{/* Stat cards — the overview page's own furniture, still Dashboard-only. */}
-{!isDraft && (
+{/* Stat cards — on both pages now, beside the guide in the right-hand panel,
+    so Drafts, Scheduled posts and Awaiting approval are in view while drafting too. */}
+{(
 <section className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4 xl:grid-cols-2 xl:gap-2">
 {statCards.map(s => (
 <div key={s.label} className="rounded-2xl bg-surface p-5 shadow-card ring-1 ring-line/60 xl:rounded-xl xl:p-3">

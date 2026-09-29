@@ -17,3 +17,9 @@ test('the guide and the counts sit in a right-hand panel the width of the menu',
   const main = page.slice(page.indexOf('<div className="min-w-0 flex-1">'));
   assert.ok(main.indexOf('<SystemStatus />') > 0 && main.indexOf('<SystemStatus />') < main.indexOf('{/* Generator */}'));
 });
+
+test('the counts show on the Draft page too, not only on the Dashboard', () => {
+  const at = page.indexOf('{statCards.map');
+  const before = page.slice(page.lastIndexOf('{/* Stat cards', at), at);
+  assert.doesNotMatch(before, /!isDraft/);
+});
