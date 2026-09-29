@@ -9,9 +9,11 @@
 import { useState, type ReactNode } from 'react';
 import { citationLabel, type CitationCheck } from '@/lib/citation';
 import { claimSupportNote, type ClaimSupportStamp } from '@/lib/claim-support';
+import { fixPlan, fixStepsLabel, runFixInput } from '@/lib/fix-plan';
 import { imageUnshippable } from '@/lib/image-verdict';
 import { complianceLines, runChannels } from '@/lib/publishing-list';
 import { fmtScheduleSlot } from '@/lib/schedule-clock';
+import { PanelLoader } from '@/components/LoadingScreen';
 
 export type ReviewRunImage = {
   url: string;
@@ -60,6 +62,10 @@ export default function RunPreview({
   onApprove,
   onApproveDraft,
   onSkip,
+  onFix,
+  fixing = false,
+  fixNote,
+  progressScope,
   imageControls,
 }: {
   run: ReviewRun;
@@ -69,6 +75,13 @@ export default function RunPreview({
   onApprove: () => void;
   onApproveDraft: () => void;
   onSkip: () => void;
+  /** FIX — resolve every warning shown here (POST /api/autopilot/runs { action: 'fix' }). */
+  onFix?: () => void;
+  fixing?: boolean;
+  /** What the last FIX reported, shown under the warnings. */
+  fixNote?: string | null;
+  /** The progress scope the caller's long actions (FIX) report under; the loader covers the modal. */
+  progressScope?: string;
   /** The Image section (New AI image / library), rendered under the picture. */
   imageControls?: ReactNode;
 }) {
@@ -81,10 +94,12 @@ export default function RunPreview({
   const citation = run.pack?._compliance?.citation;
   const citationBad = citation && ['not_found', 'mismatch', 'no_doi'].includes(String(citation.status));
   const claim = claimSupportNote(run.pack?._claimSupport);
+  const plan = fixPlan(runFixInput(run));
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
       <div className="relative flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-surface shadow-2xl ring-1 ring-black/10" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Autopilot draft preview">
+        {progressScope && <PanelLoader scope={progressScope} rounded="rounded-2xl" />}
         <div className="flex items-start justify-between gap-3 border-b border-black/5 px-5 py-4">
           <div className="min-w-0">
             <div className="mb-1 flex flex-wrap items-center gap-1.5">
@@ -131,6 +146,16 @@ export default function RunPreview({
           )}
           {run.score?.openingRepeat && (
             <div className="mb-2 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800">⚠ Opens the same way as a recent post.</div>
+          )}
+          {/* One button for every warning above, as on the Dashboard card. */}
+          {plan.steps.length > 0 && onFix && (
+            <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl bg-amber-50/70 px-3 py-2 text-[12px] text-amber-900 ring-1 ring-amber-200/60">
+              <span className="min-w-0">{fixing ? 'Fixing the ' + fixStepsLabel(plan.steps) + ' — this can take a few minutes…' : 'Fix the ' + fixStepsLabel(plan.steps) + ' automatically, then re-check.'}</span>
+              <button type="button" disabled={busy || fixing} onClick={onFix} title={'Resolves: ' + plan.reasons.join('; ')} className={btn + 'ml-auto bg-accent font-semibold text-white hover:opacity-90'}>{fixing ? 'Fixing…' : 'FIX'}</button>
+            </div>
+          )}
+          {fixNote && (
+            <div role="status" className="mb-2 rounded-xl bg-emerald-50 px-3 py-2 text-[12px] text-emerald-700 ring-1 ring-emerald-100">{fixNote}</div>
           )}
 
           {channels.length > 0 ? (

@@ -17,6 +17,7 @@ import { fmtScheduleTime, fmtScheduleSlot, scheduleDateKey, scheduleWallClock, i
 // is the one place to work from. Same route and same rules as the Dashboard.
 import { mergeByDate, reviewRuns, runText } from '@/lib/publishing-list';
 import RunPreview, { type ReviewRun } from '@/components/RunPreview';
+import { needsFix, runFixInput } from '@/lib/fix-plan';
 import HeroImageControls from '@/components/HeroImageControls';
 
 type Post = {
@@ -107,6 +108,9 @@ export default function CalendarPage() {
   const [runsFailed, setRunsFailed] = useState(false);
   const [runBusy, setRunBusy] = useState<string | null>(null);
   const [previewRunId, setPreviewRunId] = useState<string | null>(null);
+  // The run FIX is working on, and what the last FIX reported (per run).
+  const [fixingRunId, setFixingRunId] = useState<string | null>(null);
+  const [fixNotes, setFixNotes] = useState<Record<string, string>>({});
 
   // Click-a-day scheduling panel state
   const [scheduleDay, setScheduleDay] = useState<Date | null>(null);
@@ -244,26 +248,37 @@ export default function CalendarPage() {
 
   // The reviewer's decision on an Autopilot draft — the same request the
   // Dashboard sends, so approve logic lives in one place (lib/autopilot.ts).
-  async function runAct(run: ReviewRun, action: 'approve' | 'skip', schedule = false) {
+  async function runAct(run: ReviewRun, action: 'approve' | 'skip' | 'fix', schedule = false) {
+    const fallback = action === 'approve' ? 'We could not approve that draft.' : action === 'fix' ? 'We could not fix that draft.' : 'We could not skip that draft.';
     setRunBusy(run.id);
+    if (action === 'fix') setFixingRunId(run.id);
     setErr(null);
     try {
       const r = await fetch('/api/autopilot/runs', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        // FIX takes minutes; the progress scope keeps the preview's loader on it.
+        headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'calendar-run:' + run.id },
         body: JSON.stringify({ id: run.id, action, schedule }),
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(friendlyError(j, action === 'approve' ? 'We could not approve that draft.' : 'We could not skip that draft.'));
+      if (!r.ok) throw new Error(friendlyError(j, fallback));
+      if (action === 'fix') {
+        // The card stays open: the reviewer reads what changed and what still needs a look.
+        if (j?.note) setFixNotes((prev) => ({ ...prev, [run.id]: String(j.note) }));
+        await loadRuns();
+        announce('drafts', 'images', 'autopilot');
+        return;
+      }
       setPreviewRunId(null);
       // The approved run is now a `posts` row: reload both so it shows as Scheduled.
       await Promise.all([refresh(), loadRuns()]);
       if (action === 'approve') announce('posts', 'stats', 'drafts', 'autopilot', 'insights');
       else announce('drafts', 'autopilot');
     } catch (e: any) {
-      setErr(friendlyError(e, action === 'approve' ? 'We could not approve that draft.' : 'We could not skip that draft.'));
+      setErr(friendlyError(e, fallback));
     } finally {
       setRunBusy(null);
+      if (action === 'fix') setFixingRunId(null);
     }
   }
 
@@ -278,6 +293,10 @@ export default function CalendarPage() {
   function skipRun(run: ReviewRun) {
     if (!window.confirm('Skip this draft? It will not be published.')) return;
     void runAct(run, 'skip');
+  }
+  /** FIX: resolve every warning on the draft — citation, copy, image — then re-check. */
+  function fixRun(run: ReviewRun) {
+    void runAct(run, 'fix');
   }
 
   useEffect(() => {
@@ -940,6 +959,9 @@ export default function CalendarPage() {
                           <span className="rounded-full bg-black/5 px-2 py-[1px] text-[10px] text-ink/60">{r.template_name}</span>
                           <span className="flex-1" />
                           <button type="button" onClick={() => setPreviewRunId(r.id)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Preview</button>
+                          {needsFix(runFixInput(r)) && (
+                            <button type="button" disabled={runBusy === r.id} onClick={() => fixRun(r)} title="Resolves the warnings on this draft automatically, then re-checks" className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{fixingRunId === r.id ? 'Fixing…' : 'FIX'}</button>
+                          )}
                           <button type="button" disabled={runBusy === r.id} onClick={() => approveRunScheduled(r)} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{runBusy === r.id ? 'Working…' : 'Approve & schedule'}</button>
                           {!r.writes_article && (
                             <button type="button" disabled={runBusy === r.id} onClick={() => approveRunDraft(r)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/60 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">Approve as draft</button>
@@ -1085,6 +1107,10 @@ export default function CalendarPage() {
           onApprove={() => approveRunScheduled(previewRun)}
           onApproveDraft={() => approveRunDraft(previewRun)}
           onSkip={() => skipRun(previewRun)}
+          onFix={() => fixRun(previewRun)}
+          fixing={fixingRunId === previewRun.id}
+          fixNote={fixNotes[previewRun.id] || null}
+          progressScope={'calendar-run:' + previewRun.id}
           imageControls={
             <HeroImageControls
               draftId={previewRun.draft_id}

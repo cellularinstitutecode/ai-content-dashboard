@@ -18,6 +18,7 @@ import { imageUnshippable } from '@/lib/image-verdict';
 import { citationLabel, type CitationCheck } from '@/lib/citation';
 import { varietyLabels } from '@/lib/strategy-variety';
 import { claimSupportNote, type ClaimSupportStamp } from '@/lib/claim-support';
+import { fixPlan, fixStepsLabel, runFixInput } from '@/lib/fix-plan';
 
 // The visible pipeline an engine run walks through. The tick call does all of
 // this server-side in one request; the tracker paces the display so the viewer
@@ -231,6 +232,8 @@ export default function AutopilotQueue() {
   const [openChannel, setOpenChannel] = useState<Record<string, string>>({});
   const [imagingIds, setImagingIds] = useState<Set<string>>(new Set());
   const [regenIds, setRegenIds] = useState<Set<string>>(new Set());
+  // Cards whose warnings FIX is resolving right now.
+  const [fixIds, setFixIds] = useState<Set<string>>(new Set());
   // "Show me a few": how many propositions are still being made for this run.
   const [optionsIds, setOptionsIds] = useState<Set<string>>(new Set());
   const addTo = (set: typeof setBusyIds, id: string) => set((prev) => new Set(prev).add(id));
@@ -311,8 +314,9 @@ export default function AutopilotQueue() {
     return () => { cancelled = true; };
   }, [runs, load]);
 
-  async function act(id: string, action: 'approve' | 'skip' | 'run_now' | 'regenerate', extraNote?: string, schedule = false, redate = false) {
+  async function act(id: string, action: 'approve' | 'skip' | 'run_now' | 'regenerate' | 'fix', extraNote?: string, schedule = false, redate = false) {
     addTo(setBusyIds, id);
+    if (action === 'fix') addTo(setFixIds, id);
     setErr(null);
     setNote(null);
     try {
@@ -339,6 +343,7 @@ export default function AutopilotQueue() {
       setErr(e instanceof Error ? e.message : 'Action failed');
     } finally {
       dropFrom(setBusyIds, id);
+      if (action === 'fix') dropFrom(setFixIds, id);
     }
   }
 
@@ -626,6 +631,33 @@ export default function AutopilotQueue() {
                       ⚠ Opens the same way as a recent post. Give it a fresh first line — edit it or ask for changes.
                     </div>
                   )}
+
+                  {/* ONE button for every warning above (and the picture's, below).
+                      lib/fix-plan.ts decides from the same stamps the warnings
+                      are drawn from; the server repairs exactly those and
+                      re-checks (POST /api/autopilot/runs { action: 'fix' }). */}
+                  {(() => {
+                    const plan = fixPlan(runFixInput(r));
+                    if (!plan.steps.length) return null;
+                    return (
+                      <div className="flex flex-wrap items-center gap-2 border-b border-line bg-amber-50/60 px-5 py-2.5 text-[12px] text-amber-900">
+                        <span className="min-w-0">
+                          {fixIds.has(r.id)
+                            ? 'Fixing the ' + fixStepsLabel(plan.steps) + ' — this can take a few minutes…'
+                            : 'Fix the ' + fixStepsLabel(plan.steps) + ' automatically, then re-check.'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => act(r.id, 'fix')}
+                          disabled={busyIds.has(r.id) || regenIds.has(r.id) || optionsIds.has(r.id)}
+                          title={'Resolves: ' + plan.reasons.join('; ')}
+                          className="ml-auto rounded-full bg-accent px-4 py-1 text-[12px] font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50"
+                        >
+                          {fixIds.has(r.id) ? 'Fixing…' : 'FIX'}
+                        </button>
+                      </div>
+                    );
+                  })()}
 
                   {r.pack?._image?.url ? (
                     <div className="relative border-b border-line px-5 py-4">

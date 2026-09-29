@@ -33,7 +33,7 @@ import { reportError, redact } from '@/lib/report';
 import 'server-only';
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { checkCompliance, complianceMessage, ensureAviso } from '@/lib/compliance';
+import { checkCompliance, complianceMessage, ensureAviso, refPolicyOf } from '@/lib/compliance';
 import { avisoForUser } from '@/lib/compliance-gate';
 import { recordApproval } from '@/lib/approval-log';
 import { loadBrandContext } from '@/lib/brand-context';
@@ -64,10 +64,12 @@ import { ensureDraftImage, type PackImage } from '@/lib/images';
 import { imageUnshippable } from '@/lib/image-verdict';
 import { channelCopy, citationsIn, knownBadCitation, perNetworkPlan } from '@/lib/approve-plan';
 import { ARTICLE_LINK_PLACEHOLDER, PROMO_DELAY_MINUTES, articleLogNote, articleUrl, promoLink, readArticleLog, withArticleLink } from '@/lib/article-promo';
-import { verifyDoi } from '@/lib/citation';
+import { refTitle, verifyDoi } from '@/lib/citation';
 import { findEvidence } from '@/lib/evidence';
 import { evidenceBriefFrom, type EvidenceItem } from '@/lib/evidence-brief';
-import { MAX_CANDIDATES, claimFrom, type ClaimSupportStamp } from '@/lib/claim-support';
+import { MAX_CANDIDATES, claimFrom, claimQuery, supportedItem, type ClaimSupportStamp, type SupportVerdict } from '@/lib/claim-support';
+import { pickCitation, refLineFrom } from '@/lib/citation-from-evidence';
+import { fixNote, fixPlan, fixRedraftNote, imageFlagged, runFixInput, swapRefLine } from '@/lib/fix-plan';
 import { NETWORKS_NEEDING_MEDIA, mediaProblem } from '@/lib/composer';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
@@ -2585,7 +2587,9 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
 // Reviewer feedback loop: send a run back for a redraft that MUST address
 // the note. The existing draft row is reused, the pipeline restarts at the
 // draft step with the feedback embedded in the prompt.
-export async function regenerateRun(runId: string, userId: string, note?: string): Promise<boolean> {
+// `noteLimit`: how much of the note reaches the writer. 500 for a person's
+// note; FIX passes more, because its note quotes every flag it is fixing.
+export async function regenerateRun(runId: string, userId: string, note?: string, opts: { noteLimit?: number } = {}): Promise<boolean> {
   const db = supabaseAdmin();
   const { data: r, error: readError } = await db
     .from('template_runs')
@@ -2607,7 +2611,7 @@ export async function regenerateRun(runId: string, userId: string, note?: string
   if (Date.parse(run.scheduled_for) < Date.now() + MISSED_MARGIN_MS) return false;
   const angle: Angle = {
     ...run.angle,
-    reviewerNote: (note || '').trim().slice(0, 500) || run.angle.reviewerNote,
+    reviewerNote: (note || '').trim().slice(0, opts.noteLimit ?? 500) || run.angle.reviewerNote,
     reviewRequestedAt: new Date().toISOString(),
   };
   // Claim the state we READ, exactly as approveRun does. Without the predicate
@@ -2636,6 +2640,333 @@ export async function regenerateRun(runId: string, userId: string, note?: string
   }
   // Lost the race: something else moved this run between our read and write.
   return Array.isArray(claimed) && claimed.length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// FIX: resolve every warning on a review card, then re-check.
+// ---------------------------------------------------------------------------
+
+export type FixResult = {
+  ok: boolean;
+  /** What was resolved: 'citation' | 'copy' | 'image'. */
+  fixed: string[];
+  /** What still needs a person, each with its reason. */
+  remaining: string[];
+  note: string;
+};
+
+/** How long FIX gives itself. The route allows 300s; the rest is headroom for the write-back. */
+const FIX_BUDGET_MS = 250_000;
+/** Time a redraft (draft + score, with its own image step) needs to be started at all. */
+const FIX_REDRAFT_MS = 75_000;
+/** Time a verified image regeneration needs. */
+const FIX_IMAGE_MS = 90_000;
+/** Redrafts FIX will spend on the copy before handing it back. */
+const FIX_REDRAFT_ATTEMPTS = 2;
+
+const PACK_TEXT_KEYS = ['instagram', 'facebook', 'linkedin', 'tiktok', 'youtube', 'blog'] as const;
+
+/** The paper a rewrite should be written to, when nothing found backs the copy as written. */
+type ClaimHelp = { item: EvidenceItem; ref: string };
+
+type CitationFix = {
+  pack: ContentPack;
+  /** The REF line now cites a verified study that backs the copy. */
+  fixed: boolean;
+  /** What FIX did, for the log. */
+  change: string;
+  /** Why it is not fixed, for the card. */
+  reason: string;
+  /** Set when only a rewrite of the copy can fix it. */
+  claimHelp: ClaimHelp | null;
+};
+
+/** Merge the fields FIX owns into the draft as it is NOW, and return the result. */
+async function saveFixedPack(db: ReturnType<typeof supabaseAdmin>, run: RunRow, fields: Record<string, unknown>): Promise<ContentPack> {
+  // Re-read before writing, as every other pack writer does: the copy read at
+  // the start is stale by now and a concurrent image write must survive.
+  const { data: fresh, error: readError } = await db
+    .from('drafts').select('pack').eq('id', run.draft_id).eq('user_id', run.user_id).maybeSingle();
+  if (readError) throw new Error('fix: draft read failed: ' + readError.message);
+  const current = ((fresh as { pack?: Record<string, unknown> } | null)?.pack || {}) as Record<string, unknown>;
+  const next = { ...current, ...fields };
+  const { error } = await db.from('drafts').update({ pack: next }).eq('id', run.draft_id).eq('user_id', run.user_id);
+  if (error) throw new Error('fix: draft update failed: ' + error.message);
+  return next as unknown as ContentPack;
+}
+
+/**
+ * The citation rung of FIX: the same ladder the video pipeline climbs
+ * (lib/video-prepare.ts) — which paper in hand backs the copy; none, so search
+ * again at the claim; cite the one that does, on every channel, verified.
+ * Never redrafts. When nothing backs the copy it hands back the best real
+ * paper found so the redraft can be written to it.
+ */
+async function fixCitation(db: ReturnType<typeof supabaseAdmin>, run: RunRow, pack: ContentPack, aviso: string, extra: EvidenceItem[] = []): Promise<CitationFix> {
+  const p = pack as unknown as Record<string, unknown>;
+  const caption = String(p.instagram || p.facebook || '');
+  const current = checkCompliance(caption, aviso);
+  const citedDoi = String(current.doi || '').toLowerCase();
+  const claim = claimFrom(caption) || claimFrom(String(p.linkedin || p.blog || ''));
+  const doiOf = (i: EvidenceItem) => String(i.doi || '').toLowerCase();
+  const dedupe = (items: EvidenceItem[]) => items.filter((i, n, all) => all.findIndex((x) => doiOf(x) === doiOf(i)) === n);
+  const stampEvidence = (items: EvidenceItem[]) => items.slice(0, MAX_CANDIDATES).map((e) => ({ ...e, abstract: String(e.abstract || '').slice(0, 1200) }));
+  const refPolicy = refPolicyOf(pack);
+  const complianceOf = (next: Record<string, unknown>, citation: unknown) => ({
+    ...((pack as ContentPack & { _compliance?: Record<string, unknown> })._compliance || {}),
+    aviso,
+    instagram: checkCompliance(String(next.instagram || ''), aviso, { refPolicy }),
+    facebook: checkCompliance(String(next.facebook || ''), aviso, { refPolicy }),
+    citation,
+    refPolicy,
+  });
+  const claimStatus = String((pack as ContentPack & { _claimSupport?: ClaimSupportStamp })._claimSupport?.status || '');
+  const claimBad = claimStatus === 'unsupported' || claimStatus === 'unchecked';
+
+  // THE DOI AS IT STANDS, checked now — a stale 'unavailable' stamp, or a
+  // DOI the reviewer edited in, is settled by Crossref rather than assumed.
+  const standing = await verifyDoi(current.doi, { expectedTitle: refTitle(current.ref) });
+  const doiBad = ['not_found', 'mismatch', 'no_doi'].includes(standing.status);
+  if (!doiBad && !claimBad) {
+    if (standing.status === 'unavailable') {
+      return { pack, fixed: false, change: '', reason: 'Crossref could not be reached to verify the citation — press FIX again in a moment', claimHelp: null };
+    }
+    // Only the Crossref stamp was stale; the paper is real and nothing said it fails the copy.
+    const saved = await saveFixedPack(db, run, { _compliance: complianceOf(p, standing) });
+    return { pack: saved, fixed: true, change: 'verified the cited study with Crossref', reason: '', claimHelp: null };
+  }
+
+  const kept = (pack as ContentPack & { _evidence?: EvidenceItem[] })._evidence || [];
+  let candidates: EvidenceItem[] = dedupe([...extra, ...kept]);
+  // A post whose papers were never fetched (not a strategy slot) is searched at its angle first.
+  if (!candidates.length && run.angle?.query) {
+    try { candidates = await findEvidence(run.angle.query); } catch (err) { reportError('autopilot:fix-evidence', err, { runId: run.id }); }
+  }
+
+  // RUNG 1 — which of the papers in hand backs this claim?
+  let verdict: SupportVerdict = { status: 'unchecked' };
+  if (claim && candidates.length) verdict = await judgeClaimSupport({ claim, items: candidates });
+  // RUNG 2 — none does (or there were none): search again AT THE CLAIM.
+  if (claim && (verdict.status === 'none' || !candidates.length)) {
+    const query = claimQuery(claim);
+    if (query) {
+      const seen = new Set(candidates.map(doiOf));
+      let second: EvidenceItem[] = [];
+      try { second = (await findEvidence(query)).filter((i) => !seen.has(doiOf(i))); } catch (err) { reportError('autopilot:fix-evidence', err, { runId: run.id }); }
+      if (second.length) {
+        const retried = await judgeClaimSupport({ claim, items: second });
+        if (retried.status === 'supported') { candidates = second; verdict = retried; }
+        else if (!candidates.length) candidates = second;
+      }
+    }
+  }
+
+  /** Put this paper's REF line on every channel, verify it, stamp it. Null when Crossref rejects it. */
+  const cite = async (item: EvidenceItem, status: ClaimSupportStamp['status']) => {
+    const line = refLineFrom(item);
+    const same = doiOf(item) === citedDoi;
+    const checked = same ? standing : await verifyDoi(item.doi, { expectedTitle: item.title });
+    if (checked.status === 'not_found' || checked.status === 'mismatch') return null;
+    const texts: Record<string, string> = {};
+    if (!same) {
+      for (const key of PACK_TEXT_KEYS) {
+        const text = p[key];
+        if (typeof text === 'string' && text.trim()) texts[key] = swapRefLine(text, line);
+      }
+    }
+    const saved = await saveFixedPack(db, run, {
+      ...texts,
+      _claimSupport: { status, doi: item.doi } satisfies ClaimSupportStamp,
+      _compliance: complianceOf({ ...p, ...texts }, checked),
+      _evidence: stampEvidence(dedupe([item, ...candidates])),
+    });
+    return { saved, checked, same, line: line.replace(/^REF:\s*/, '') };
+  };
+
+  // RUNG 3 — cite the paper that backs it.
+  const backing = supportedItem(candidates, verdict);
+  if (backing) {
+    const done = await cite(backing, doiOf(backing) === citedDoi ? 'supported' : 'swapped');
+    if (done) {
+      const unavailable = done.checked.status === 'unavailable';
+      return {
+        pack: done.saved,
+        fixed: !unavailable,
+        change: done.same ? 'confirmed the cited study backs the copy' : 'replaced the citation with ' + done.line,
+        reason: unavailable ? 'the new citation could not be confirmed with Crossref just now — press FIX again in a moment' : '',
+        claimHelp: null,
+      };
+    }
+  }
+
+  // NOTHING BACKS THE COPY AS WRITTEN. The best real paper found is what the
+  // copy is rewritten to; a DOI Crossref rejected is replaced with it now, so
+  // the post never keeps a citation known to be wrong.
+  const best = pickCitation(candidates.filter((i) => doiOf(i) !== citedDoi)) || pickCitation(candidates);
+  if (!best) {
+    return { pack, fixed: false, change: '', reason: 'no real study could be found for what this post claims', claimHelp: null };
+  }
+  let next = pack;
+  let change = '';
+  if (doiBad && doiOf(best) !== citedDoi) {
+    const done = await cite(best, verdict.status === 'unchecked' ? 'unchecked' : 'unsupported');
+    if (done) { next = done.saved; change = 'replaced the citation with ' + done.line; }
+  }
+  if (verdict.status === 'unchecked') {
+    return { pack: next, fixed: false, change, reason: 'the citation could not be checked against the copy (the checker did not answer)', claimHelp: null };
+  }
+  return { pack: next, fixed: false, change, reason: 'no study found supports the copy as written', claimHelp: { item: best, ref: refLineFrom(best) } };
+}
+
+/**
+ * Resolve every warning on a review card, then re-check.
+ *
+ *   citation  the claim-support ladder swaps in a study that backs the copy;
+ *             when none does, the copy is redrafted to what the best study
+ *             shows (the "Ask for changes" path, with a targeted note).
+ *   copy      compliance, promotion and opening flags: a redraft with a note
+ *             quoting each flag, re-scored; up to FIX_REDRAFT_ATTEMPTS.
+ *   image     a flagged picture is generated again through the verified path
+ *             ("↻ New image").
+ *
+ * Only what is flagged is touched. The result names what was fixed and what
+ * still needs a person, and the run's log says what changed.
+ */
+export async function fixRun(runId: string, userId: string): Promise<FixResult> {
+  const db = supabaseAdmin();
+  const startedAt = Date.now();
+  const left = () => FIX_BUDGET_MS - (Date.now() - startedAt);
+  const refuse = (note: string): FixResult => ({ ok: false, fixed: [], remaining: [], note });
+
+  const readRun = async (): Promise<RunRow | null> => {
+    const { data, error } = await db.from('template_runs').select('*').eq('id', runId).eq('user_id', userId).maybeSingle();
+    if (error) { reportError('autopilot:fix-read', error, { runId }); return null; }
+    return (data as RunRow | null) || null;
+  };
+  const readPack = async (run: RunRow): Promise<ContentPack | null> => {
+    const { data, error } = await db.from('drafts').select('pack').eq('id', run.draft_id).eq('user_id', run.user_id).maybeSingle();
+    if (error) { reportError('autopilot:fix-draft', error, { runId }); return null; }
+    return ((data as { pack?: ContentPack } | null)?.pack as ContentPack) || null;
+  };
+
+  let run = await readRun();
+  if (!run) return refuse('run not found');
+  if (run.state !== 'ready_for_review') return refuse('This post is not waiting for review, so there is nothing to fix.');
+  if (!run.draft_id) return refuse('This post has no draft to fix.');
+  const draftId = run.draft_id;
+  let pack = await readPack(run);
+  if (!pack) return refuse('Could not read that draft just now. Nothing was changed; try again in a moment.');
+
+  const fixed: string[] = [];
+  const remaining: string[] = [];
+  const changes: string[] = [];
+  const initial = fixPlan(runFixInput({ score: run.score, pack: pack as unknown as Record<string, unknown> }));
+  if (!initial.steps.length) return { ok: true, fixed, remaining, note: 'Nothing needed fixing — this post has no warnings.' };
+  const aviso = await avisoForUser(run.user_id);
+
+  // --- CITATION, without touching the copy.
+  const cit: { claimHelp: ClaimHelp | null; reason: string } = { claimHelp: null, reason: '' };
+  const citationPass = async (extra: EvidenceItem[] = []) => {
+    try {
+      const r = await fixCitation(db, run!, pack!, aviso, extra);
+      pack = r.pack;
+      if (r.change) changes.push(r.change);
+      cit.claimHelp = r.claimHelp;
+      cit.reason = r.reason;
+    } catch (err) {
+      reportError('autopilot:fix-citation', err, { runId });
+      cit.reason = 'the citation could not be repaired just now';
+    }
+  };
+  let input = runFixInput({ score: run.score, pack: pack as unknown as Record<string, unknown> });
+  if (fixPlan(input).steps.includes('citation')) await citationPass();
+  input = runFixInput({ score: run.score, pack: pack as unknown as Record<string, unknown> });
+
+  // --- COPY: the redraft path "Ask for changes" uses, with a note quoting each flag.
+  let redrafted = false;
+  let copyReason = '';
+  for (let attempt = 0; attempt < FIX_REDRAFT_ATTEMPTS; attempt++) {
+    const wantsCopy = fixPlan(input).steps.includes('copy');
+    if (!wantsCopy && !cit.claimHelp) break;
+    if (left() < FIX_REDRAFT_MS) { copyReason = 'ran out of time before the copy could be redrafted — press FIX again'; break; }
+    const help = cit.claimHelp;
+    const note = fixRedraftNote(input, help ? { title: help.item.title, year: help.item.year, abstract: help.item.abstract, ref: help.ref } : null);
+    const claimed = await regenerateRun(run.id, userId, note, { noteLimit: 1400 });
+    if (!claimed) {
+      copyReason = Date.parse(run.scheduled_for) < Date.now() + MISSED_MARGIN_MS
+        ? 'its time has passed, so the copy cannot be redrafted — approve it for the next free slot first, or skip it'
+        : 'the copy could not be sent for a redraft just now';
+      break;
+    }
+    redrafted = true;
+    const result = await advanceRuns({ scopeUserId: userId, runId: run.id, budgetMs: Math.min(150_000, Math.max(30_000, left() - 20_000)), maxRuns: 1 });
+    const after = await readRun();
+    const afterPack = after ? await readPack(after) : null;
+    if (!after || after.state !== 'ready_for_review' || !afterPack) {
+      const why = result.skipped[0] || 'the redraft did not finish; the engine picks it up on its next tick';
+      await db.from('template_runs').update({ log: logLine(after || run, 'fix', 'FIX: ' + [...changes, 'redrafted the copy'].join('; ') + ' — ' + why) }).eq('id', run.id);
+      return { ok: true, fixed, remaining: ['the copy — ' + why], note: fixNote({ fixed, remaining: ['the copy — ' + why] }) };
+    }
+    run = after;
+    pack = afterPack;
+    changes.push('redrafted the copy (attempt ' + (attempt + 1) + ')');
+    // The new copy is checked again: its REF line may be new, and the claim
+    // must still be backed. The paper it was written to is among the candidates.
+    input = runFixInput({ score: run.score, pack: pack as unknown as Record<string, unknown> });
+    const wrote = help ? [help.item] : [];
+    cit.claimHelp = null;
+    cit.reason = '';
+    if (fixPlan(input).steps.includes('citation')) await citationPass(wrote);
+    input = runFixInput({ score: run.score, pack: pack as unknown as Record<string, unknown> });
+  }
+
+  // --- VERDICTS on the copy and the citation, from the stamps as they stand now.
+  const finalPlan = fixPlan(input);
+  if (finalPlan.steps.includes('copy')) {
+    const still = finalPlan.reasons.filter((r) => /compliance|promotion|opens like/.test(r));
+    remaining.push('the copy — ' + (copyReason || 'still flagged after ' + FIX_REDRAFT_ATTEMPTS + ' redrafts: ' + still.join(', ') + ' — edit it or ask for changes'));
+  } else if (redrafted && initial.steps.includes('copy')) {
+    fixed.push('copy');
+  }
+  if (finalPlan.steps.includes('citation')) {
+    remaining.push('the citation — ' + (cit.reason || copyReason || finalPlan.reasons.filter((r) => /cit|DOI|study|reference/i.test(r)).join(', ')));
+  } else if (initial.steps.includes('citation')) {
+    fixed.push('citation');
+  }
+
+  // --- IMAGE: only a flagged picture, through the verified path.
+  const image = (pack as ContentPack & { _image?: PackImage })._image;
+  if (imageFlagged(image)) {
+    if (left() < FIX_IMAGE_MS) {
+      remaining.push('the image — ran out of time; press FIX again');
+    } else {
+      try {
+        const made = await ensureDraftImage(draftId, userId, { force: true });
+        if (made && !imageFlagged(made)) {
+          fixed.push('image');
+          changes.push('made a new hero image (verified)');
+        } else {
+          const issues = (made?.verification?.issues || []).slice(0, 2).join('; ');
+          remaining.push('the image — ' + (made ? 'the new picture was flagged too' + (issues ? ' (' + issues + ')' : '') + '; press "New image" or choose a library photo' : 'images are off, so none could be made'));
+          if (made) changes.push('made a new hero image, still flagged');
+        }
+      } catch (err) {
+        reportError('autopilot:fix-image', err, { runId });
+        remaining.push('the image — the new picture could not be made; press "New image" in a moment');
+      }
+    }
+  } else if (initial.steps.includes('image')) {
+    // The redraft's own image step already replaced the flagged picture.
+    fixed.push('image');
+  }
+
+  const note = fixNote({ fixed, remaining });
+  const { error: logError } = await db
+    .from('template_runs')
+    .update({ log: logLine(run, 'fix', 'FIX: ' + (changes.length ? changes.join('; ') + '. ' : 'nothing changed. ') + note) })
+    .eq('id', run.id);
+  if (logError) reportError('autopilot:fix-log', logError, { runId });
+  return { ok: true, fixed, remaining, note };
 }
 
 export async function skipRun(runId: string, userId: string): Promise<boolean> {

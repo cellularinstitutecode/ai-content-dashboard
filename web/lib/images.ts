@@ -774,7 +774,10 @@ async function generateBestPackImage(opts: {
 // which bypasses RLS, and its only caller passes a draft id read off a
 // template_runs row - a column a user can point at somebody else's draft.
 // Without the owner check this function both reads and WRITES that draft.
-export async function ensureDraftImage(draftId: string, ownerId: string): Promise<PackImage | null> {
+// `force` is the FIX button's "↻ New image": the stored picture is replaced
+// with the next composition variant even when it is clean — used only when the
+// checker flagged it (lib/fix-plan.ts imageFlagged), never as a routine reroll.
+export async function ensureDraftImage(draftId: string, ownerId: string, opts: { force?: boolean } = {}): Promise<PackImage | null> {
   if (!imagesEnabled()) return null;
   const db = supabaseAdmin();
   const { data: d } = await db
@@ -792,7 +795,7 @@ export async function ensureDraftImage(draftId: string, ownerId: string): Promis
   // A planner draft still carrying a pre-cover picture gets the new cover once.
   const plannerNeedsCover = Boolean(plannerImageFor(pack)) && !existing?.titled &&
     !['library', 'upload'].includes(String(existing?.source || ''));
-  if (existing?.url && !existingHasText && !plannerNeedsCover) return existing;
+  if (existing?.url && !existingHasText && !plannerNeedsCover && !opts.force) return existing;
 
   // Brand voice makes the image on-brand too (best-effort).
   let brand: BrandContext | null = null;
@@ -809,7 +812,7 @@ export async function ensureDraftImage(draftId: string, ownerId: string): Promis
     topic: String(row.topic || 'regenerative medicine'),
     pack,
     brand,
-    variant: existingHasText ? (existing?.variant ?? 0) + 1 : 0,
+    variant: existingHasText || (opts.force && existing?.url) ? (existing?.variant ?? 0) + 1 : 0,
   });
   // Same re-read as /api/drafts/image: the pack read before generation is
   // 30-60s stale, and a redraft in that window would otherwise be silently

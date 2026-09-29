@@ -1,0 +1,142 @@
+// web/lib/fix-plan.test.ts
+// The FIX button: which repairs a card needs, from the same stamps its
+// warnings are drawn from — and where the button is actually wired.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fixNote, fixPlan, fixRedraftNote, fixStepsLabel, imageFlagged, needsFix, runFixInput, swapRefLine } from './fix-plan.ts';
+
+const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+
+test('a card with no warnings needs no fix', () => {
+  assert.deepEqual(fixPlan(null), { steps: [], reasons: [] });
+  assert.equal(needsFix(runFixInput({
+    score: { safetyFlags: [], promotionFlags: [], openingRepeat: false },
+    pack: { _compliance: { citation: { status: 'verified' } }, _claimSupport: { status: 'supported' }, _image: { url: 'x', verification: { status: 'approved' } } },
+  })), false);
+  // A post that needs no citation, and an older pack with no stamps at all.
+  assert.equal(needsFix({ citation: { status: 'not_required' } }), false);
+  assert.equal(needsFix(runFixInput({ score: null, pack: null })), false);
+});
+
+test('every citation warning the card shows is a citation step', () => {
+  for (const status of ['not_found', 'mismatch', 'no_doi', 'unavailable']) {
+    assert.deepEqual(fixPlan({ citation: { status } }).steps, ['citation'], status);
+  }
+  assert.deepEqual(fixPlan({ claimSupport: { status: 'unsupported' } }).steps, ['citation']);
+  assert.deepEqual(fixPlan({ claimSupport: { status: 'unchecked' } }).steps, ['citation']);
+  assert.deepEqual(fixPlan({ claimSupport: { status: 'swapped' } }).steps, []);
+  const both = fixPlan({ citation: { status: 'not_found' }, claimSupport: { status: 'unsupported' } });
+  assert.deepEqual(both.steps, ['citation'], 'one step, two reasons');
+  assert.equal(both.reasons.length, 2);
+});
+
+test('compliance, promotion and opening flags are a copy step; a flagged picture an image step', () => {
+  assert.deepEqual(fixPlan({ safetyFlags: [{ code: 'advice', message: 'Diagnostic/treatment-advice phrasing' }] }).steps, ['copy']);
+  assert.deepEqual(fixPlan({ promotionFlags: ['booking close'] }).steps, ['copy']);
+  assert.deepEqual(fixPlan({ openingRepeat: true }).steps, ['copy']);
+  assert.deepEqual(fixPlan({ image: { url: 'x', verification: { status: 'flagged', issues: ['off-topic — the picture does not show what this post is about'] } } }).steps, ['image']);
+  assert.deepEqual(fixPlan({ image: { url: 'x', verification: { status: 'approved', textDetected: true } } }).steps, ['image'], 'text can never pass');
+  assert.deepEqual(fixPlan({ image: { url: 'x', verification: { status: 'approved', issues: ['banned prop in frame'] } } }).steps, ['image']);
+  // A clinic photo is theirs; "review manually" (unchecked) is not a warning.
+  assert.equal(imageFlagged({ url: 'x', source: 'library', verification: { status: 'flagged' } }), false);
+  assert.equal(imageFlagged({ url: 'x', verification: { status: 'unchecked' } }), false);
+  assert.equal(imageFlagged({ url: '', verification: { status: 'flagged' } }), false);
+});
+
+test('the steps come in the order the repair runs, whatever order the flags came in', () => {
+  const plan = fixPlan({
+    image: { url: 'x', verification: { status: 'flagged' } },
+    openingRepeat: true,
+    citation: { status: 'mismatch' },
+  });
+  assert.deepEqual(plan.steps, ['citation', 'copy', 'image']);
+  assert.equal(fixStepsLabel(plan.steps), 'citation, copy and image');
+  assert.equal(fixStepsLabel(['image']), 'image');
+  assert.equal(fixStepsLabel([]), '');
+});
+
+test('the redraft note quotes each flag and names the study to write to', () => {
+  const note = fixRedraftNote(
+    { safetyFlags: [{ code: 'advice', message: 'Diagnostic/treatment-advice phrasing' }], promotionFlags: ['booking close'], openingRepeat: true },
+    { title: 'Red light and recovery', year: 2021, abstract: 'We measured recovery after exercise.', ref: 'REF: Smith et al. (2021). Red light and recovery. J. DOI: 10.1/x' },
+  );
+  assert.match(note, /^Keep the post as it is except/);
+  assert.match(note, /"Diagnostic\/treatment-advice phrasing"/);
+  assert.match(note, /remove: booking close/);
+  assert.match(note, /different first sentence/);
+  assert.match(note, /Rewrite ONLY the sentence\(s\)/);
+  assert.match(note, /"Red light and recovery" \(2021\) — We measured recovery/);
+  assert.match(note, /Cite exactly this study: REF: Smith/);
+  // No claim help: nothing about a study.
+  assert.doesNotMatch(fixRedraftNote({ openingRepeat: true }), /study/);
+});
+
+test('the note on the card says what was fixed and what still needs a look', () => {
+  assert.equal(fixNote({ fixed: ['citation', 'image'], remaining: [] }), 'Fixed: citation, image. Everything was re-checked.');
+  assert.equal(fixNote({ fixed: ['citation'], remaining: ['the image — the new picture was flagged too'] }), 'Fixed: citation. Still needs a look: the image — the new picture was flagged too.');
+  assert.equal(fixNote({ fixed: [], remaining: ['the copy — its time has passed'] }), 'Nothing needed fixing. Still needs a look: the copy — its time has passed.');
+});
+
+test('swapRefLine replaces the REF line in place and keeps the rest of the copy', () => {
+  const caption = 'Body of the post.\n\n#stemcells #cancun\n\nREF: Old et al. (2019). Made up. DOI: 10.1000/fake\n\nAVISO DE PUBLICIDAD: 2623022002A00090';
+  const out = swapRefLine(caption, 'REF: New et al. (2024). Real paper. Journal. DOI: 10.1000/real');
+  assert.equal(out, 'Body of the post.\n\n#stemcells #cancun\n\nREF: New et al. (2024). Real paper. Journal. DOI: 10.1000/real\n\nAVISO DE PUBLICIDAD: 2623022002A00090');
+  // The label is normalised, and a second REF line goes.
+  const two = swapRefLine('Text\nREF: one\nREFERENCIA: two\n', 'New et al. DOI: 10.1/x');
+  assert.equal(two, 'Text\nREF: New et al. DOI: 10.1/x\n\n');
+  // No REF line: before the AVISO, or at the end.
+  assert.equal(swapRefLine('Text\n\nAVISO DE PUBLICIDAD: 1', 'REF: r'), 'Text\n\nREF: r\nAVISO DE PUBLICIDAD: 1');
+  assert.equal(swapRefLine('Text\n', 'r'), 'Text\n\nREF: r');
+  // An article keeps its paragraphs.
+  const blog = '# Title\n\nParagraph one.\n\nParagraph two.\n\nREF: Old. DOI: 10.1/old\n\nAVISO DE PUBLICIDAD: 1';
+  assert.equal(swapRefLine(blog, 'New. DOI: 10.1/new'), '# Title\n\nParagraph one.\n\nParagraph two.\n\nREF: New. DOI: 10.1/new\n\nAVISO DE PUBLICIDAD: 1');
+  assert.equal(swapRefLine('Text\nREF: keep', ''), 'Text\nREF: keep', 'an empty line changes nothing');
+});
+
+// --- WHERE IT IS WIRED -------------------------------------------------------
+
+test('the route has a fix action, capped like regenerate, that runs fixRun', () => {
+  const route = src('app/api/autopilot/runs/route.ts');
+  assert.match(route, /if \(action === 'run_now' \|\| action === 'regenerate' \|\| action === 'fix'\) \{\s*const rl = await checkRateLimit\(user\.id, 'autopilot-action'\)/, 'the same rate-limit bucket');
+  assert.match(route, /if \(action === 'fix'\) \{[\s\S]{0,400}?await fixRun\(id, user\.id\)/);
+  assert.match(route, /import \{[^}]*fixRun[^}]*\} from '@\/lib\/autopilot'/);
+});
+
+test('fixRun reuses the existing pipelines rather than its own', () => {
+  const autopilot = src('lib/autopilot.ts');
+  const body = autopilot.slice(autopilot.indexOf('export async function fixRun('));
+  assert.match(body, /await regenerateRun\(run\.id, userId, note, \{ noteLimit: 1400 \}\)/, 'the copy goes through "Ask for changes"');
+  assert.match(body, /await advanceRuns\(\{ scopeUserId: userId, runId: run\.id/, 'and is redrafted right away');
+  assert.match(body, /await ensureDraftImage\(draftId, userId, \{ force: true \}\)/, 'the picture through the verified path');
+  assert.match(body, /if \(imageFlagged\(image\)\)/, 'and only when it is flagged');
+  assert.match(body, /logLine\(run, 'fix'/, 'the run says what FIX changed');
+  assert.match(body, /for \(let attempt = 0; attempt < FIX_REDRAFT_ATTEMPTS; attempt\+\+\)/);
+  assert.match(autopilot, /const FIX_REDRAFT_ATTEMPTS = 2;/, 'up to two redrafts');
+  const ladder = autopilot.slice(autopilot.indexOf('async function fixCitation('), autopilot.indexOf('export async function fixRun('));
+  assert.match(ladder, /judgeClaimSupport\(\{ claim, items: candidates \}\)/, 'rung 1: the papers in hand');
+  assert.match(ladder, /claimQuery\(claim\)/, 'rung 2: search at the claim');
+  assert.match(ladder, /refLineFrom\(item\)/, 'the drafter\'s own REF format');
+  assert.match(ladder, /verifyDoi\(item\.doi, \{ expectedTitle: item\.title \}\)/, 'verified with the title match');
+  assert.match(ladder, /swapRefLine\(text, line\)/, 'on every channel');
+  assert.match(ladder, /if \(checked\.status === 'not_found' \|\| checked\.status === 'mismatch'\) return null;/, 'never a REF Crossref rejects');
+});
+
+test('both review cards and the calendar row show FIX from the same plan', () => {
+  const queue = src('app/AutopilotQueue.tsx');
+  assert.match(queue, /fixPlan\(runFixInput\(r\)\)/);
+  assert.match(queue, /act\(r\.id, 'fix'\)/);
+  assert.match(queue, /\{fixIds\.has\(r\.id\) \? 'Fixing…' : 'FIX'\}/);
+  assert.match(queue, /'run_now' \| 'regenerate' \| 'fix'/);
+
+  const preview = src('components/RunPreview.tsx');
+  assert.match(preview, /fixPlan\(runFixInput\(run\)\)/);
+  assert.match(preview, /onClick=\{onFix\}/);
+  assert.match(preview, /\{fixing \? 'Fixing…' : 'FIX'\}/);
+
+  const page = src('app/calendar/page.tsx');
+  assert.match(page, /'approve' \| 'skip' \| 'fix'/);
+  assert.match(page, /needsFix\(runFixInput\(r\)\)/, 'the list row too');
+  assert.match(page, /onFix=\{\(\) => fixRun\(previewRun\)\}/);
+  assert.match(page, /setFixNotes\(\(prev\) => \(\{ \.\.\.prev, \[run\.id\]: String\(j\.note\) \}\)\)/, 'the note is shown');
+});
