@@ -11,7 +11,7 @@ import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { isAllowedEmail } from '@/lib/access';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { metricoolDeletePost, metricoolReplacePost, metricoolNetworks, normalizeMediaList } from '@/lib/metricool';
+import { metricoolDeletePost, metricoolReplacePost, metricoolNetworks, metricoolSchedulePost, normalizeMediaList, readPostId } from '@/lib/metricool';
 import { wantsBlog } from '@/lib/metricool-networks';
 import { normalizeFailure } from '@/lib/media-normalize-reason';
 import { youtubeDataFor } from '@/lib/youtube-meta';
@@ -723,6 +723,47 @@ export async function PATCH(req: Request) {
       });
     } catch (e) {
       reportError(action === 'reschedule' ? 'posts:metricool-reschedule' : action === 'sync_media' ? 'posts:metricool-sync-media' : action === 'fix_citation' ? 'posts:metricool-fix-citation' : 'posts:metricool-approve', e);
+      if (action === 'fix_citation') {
+        // The citation IS saved — on the post and on the draft — so this is not
+        // a failure of the button; it is Metricool's copy that is behind. Said
+        // so, with a 200, and the preview reloads the corrected text.
+        //
+        // A 404 means Metricool no longer has the post at all (deleted there,
+        // or gone from its scheduler), and every later approve or move would
+        // meet the same 404 — the row was stranded. A post still waiting for
+        // review with its slot ahead is simply sent again, as a new draft for
+        // review, and the row is pointed at it.
+        const said = redact(e instanceof Error ? e.message : String(e)).slice(0, 300);
+        const gone = /^Metricool 404\b/.test(e instanceof Error ? e.message : String(e));
+        if (gone && mode === 'review' && new Date(nextDate).getTime() > Date.now()) {
+          try {
+            const created = await metricoolSchedulePost({
+              text: String(existing.text || ''),
+              providers: rowNetworks,
+              publicationDate: nextDate,
+              media: media.map((url) => ({ url })),
+              youtubeData,
+              tiktokData,
+            }, 'review');
+            const newId = readPostId(created);
+            if (newId) {
+              await sb.from('posts').update({ metricool_post_id: newId }).eq('id', id).eq('user_id', user.id);
+              return NextResponse.json({
+                fixed: true, status: 'swapped', text: existing.text,
+                note: citationNote + ' Metricool no longer had this post, so it was sent again for review with the new citation.',
+              });
+            }
+          } catch (again) {
+            reportError('posts:metricool-fix-resend', again, { id });
+          }
+        }
+        return NextResponse.json({
+          fixed: true, status: 'swapped', text: existing.text, metricool: gone ? 'not_found' : 'refused',
+          note: citationNote + (gone
+            ? ' Metricool no longer has this post (it answered 404: it was deleted or published there), so its copy could not be updated. The new citation is saved here.'
+            : ' The new citation is saved here, but Metricool did not take it; it goes with the post the next time it is approved or moved. Metricool said: ' + said),
+        });
+      }
       return NextResponse.json(
         {
           error: 'metricool_update_failed',
@@ -730,9 +771,6 @@ export async function PATCH(req: Request) {
             ? 'We could not move this post in Metricool, so it has been left where it was. Open it in Metricool to change the time there.'
             : action === 'sync_media'
               ? 'The new picture is saved here, but Metricool did not take it. It goes with the post the next time it is approved or moved.'
-              : action === 'fix_citation'
-                ? 'The new citation is saved here, but Metricool did not take it. It goes with the post the next time it is approved or moved. '
-                  + 'Metricool said: ' + redact(e instanceof Error ? e.message : String(e)).slice(0, 300)
               : 'Metricool did not accept the approval, so the post is still waiting for review. Nothing was scheduled. '
                 // Metricool's own answer, on screen instead of only in the server log.
                 + 'Metricool said: ' + redact(e instanceof Error ? e.message : String(e)).slice(0, 300),

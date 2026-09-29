@@ -462,8 +462,9 @@ export default function CalendarPage() {
       if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'We could not check that post’s citation.'));
       const j = await r.json().catch(() => ({}));
       setErr(null);
-      setFixNote({ id: post.id, note: String(j?.note || (j?.fixed ? 'The citation was replaced.' : 'Checked.')), changed: Boolean(j?.fixed) });
+      setFixNote({ id: post.id, note: String(j?.note || (j?.fixed ? 'The citation was replaced.' : 'Checked.')), changed: Boolean(j?.fixed) && !j?.metricool });
       if (j?.fixed) {
+        // Reloaded whatever Metricool said: the corrected text is on the row.
         await refresh();
         announce('posts', 'drafts');
       }
