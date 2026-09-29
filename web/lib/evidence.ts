@@ -20,7 +20,7 @@
 // alternative is a clinic unable to publish because a public API was slow.
 import 'server-only';
 
-import { evidenceQuery } from '@/lib/evidence-query';
+import { evidenceQuery, filterRelevant } from '@/lib/evidence-query';
 import { reportError } from '@/lib/report';
 import { parseCrossrefWork, parsePubmedArticle, type EvidenceItem } from '@/lib/evidence-parse';
 
@@ -88,15 +88,19 @@ export async function findEvidence(subject: string, keywords: readonly string[] 
     // Primary query, then the deliberately shorter one — see lib/evidence-query.ts
     // for why length is the thing most likely to return nothing.
     for (const term of [q.primary, q.broad].filter(Boolean)) {
+      // ABOUT THE SUBJECT, OR NOT OFFERED. The broad two-word retry on an
+      // index that matches anything is how a tadalafil trial reached a
+      // peptides post (the September audit, point 3). A hit that shares none
+      // of the subject's words is not a weaker candidate; it is not one.
       try {
-        const found = await fromPubmed(term, ctl.signal);
+        const found = filterRelevant(await fromPubmed(term, ctl.signal), q.terms);
         if (found.length) return found;
       } catch (e) {
         // Reported once, not per query: PubMed being unreachable is one fact.
         if (term === q.primary) reportError('evidence:pubmed', e, { term });
       }
       try {
-        const found = await fromCrossref(term, ctl.signal);
+        const found = filterRelevant(await fromCrossref(term, ctl.signal), q.terms);
         if (found.length) return found;
       } catch (e) {
         if (term === q.primary) reportError('evidence:crossref', e, { term });
@@ -106,6 +110,51 @@ export async function findEvidence(subject: string, keywords: readonly string[] 
   } catch (e) {
     reportError('evidence:find', e);
     return [];
+  } finally {
+    clearTimeout(to);
+  }
+}
+
+/**
+ * One paper, by its DOI, with its abstract — so a citation the writer
+ * recalled on its own can be judged the way a fetched one is.
+ *
+ * The judge (lib/claim-support.ts) reads abstracts, and until now it could
+ * only read the abstracts of papers the search had returned: a DOI the writer
+ * brought from elsewhere was 'unchecked', which every door then waved
+ * through. PubMed first (by DOI), Crossref second, and null when neither has
+ * an abstract: an unverifiable citation stays unverified rather than judged
+ * on its title alone. Never throws.
+ */
+export async function findByDoi(doi: string): Promise<EvidenceItem | null> {
+  const id = String(doi || '').trim().replace(/^https?:\/\/(dx\.)?doi\.org\//i, '');
+  if (!/^10\.\d{4,9}\/\S+$/.test(id)) return null;
+  const ctl = new AbortController();
+  const to = setTimeout(() => ctl.abort(), TOTAL_MS);
+  try {
+    try {
+      const search = await getJson(
+        PUBMED() + '/esearch.fcgi?db=pubmed&retmode=json&retmax=1&term=' + encodeURIComponent(id + '[DOI]'),
+        ctl.signal,
+      );
+      const ids: string[] = search?.esearchresult?.idlist || [];
+      if (ids.length) {
+        const xml = await getText(PUBMED() + '/efetch.fcgi?db=pubmed&retmode=xml&id=' + ids[0], ctl.signal);
+        const article = (xml.match(/<PubmedArticle>[\s\S]*?<\/PubmedArticle>/g) || [])[0];
+        const item = article ? parsePubmedArticle(article) : null;
+        if (item && item.abstract) return item;
+      }
+    } catch (e) {
+      reportError('evidence:pubmed-doi', e, { doi: id });
+    }
+    try {
+      const j = await getJson(CROSSREF() + '/works/' + encodeURIComponent(id), ctl.signal);
+      const item = parseCrossrefWork((j?.message || {}) as Record<string, unknown>);
+      if (item && item.abstract) return item;
+    } catch (e) {
+      reportError('evidence:crossref-doi', e, { doi: id });
+    }
+    return null;
   } finally {
     clearTimeout(to);
   }

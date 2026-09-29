@@ -83,3 +83,18 @@ test('a clean draft is still clean when nothing repeats', () => {
   assert.equal(draftDefect('Smith 2020 doi:10/x', [], false), null);
   assert.equal(draftDefect('Smith 2020 doi:10/x', []), null, 'the third argument is optional');
 });
+
+test('a citation that backs nothing the post says is a defect that BLOCKS', () => {
+  // Since the September audit: a real, verified paper about something else
+  // entirely went out under three posts. Flagging it was not enough; nothing
+  // read the flag.
+  const d = draftDefect('Smith 2020 doi:10/x', [], false, true);
+  assert.equal(d?.kind, 'unsupported_citation');
+  assert.equal(d?.blocking, true);
+  assert.match(String(d?.corrective), /does not actually show/);
+  // Not "find another study" — use the ones already retrieved and checked.
+  assert.match(String(d?.corrective), /Do not go looking/);
+  // A missing citation still outranks it: that is the worse thing to say.
+  assert.equal(draftDefect('', [], false, true)?.kind, 'no_citation');
+  assert.equal(draftDefect('ref', ['Rodrigo'], false, true)?.kind, 'named_a_person');
+});

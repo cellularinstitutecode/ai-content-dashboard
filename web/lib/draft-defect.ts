@@ -115,11 +115,15 @@ const OPENING_CORRECTIVE =
  * relevance and their DOIs are already checked, so the fix is to make the point
  * one of them actually makes.
  *
- * NEVER BLOCKING. A post whose citation is real and verified but whose claim
- * the abstract does not squarely back is worth one more draft; it is not worth
- * stopping a video over, because the alternative — a row that waits for a
- * person — is the thing this whole path exists to avoid. lib/video-prepare.ts
- * publishes it flagged instead.
+ * BLOCKING, since the September audit. This used to be "never blocking":
+ * a post whose citation was real and verified but whose claim the abstract
+ * did not back got one more draft and then published flagged, because a row
+ * that waits for a person was thought the worse outcome. The audit found the
+ * result: a tadalafil trial under a peptides post, a vaccinia paper under a
+ * spine post, an unboxing-videos study under a third — a credibility and
+ * compliance risk on medical advertising. A reference that backs nothing the
+ * post says is worse than a row that waits, so after the second attempt it
+ * refuses, with the reason written down and the transcript banked.
  */
 const SUPPORT_CORRECTIVE =
   'IMPORTANT: your previous draft made a claim the study it cited does not actually show. Do not go looking ' +
@@ -138,7 +142,7 @@ const SUPPORT_CORRECTIVE =
  * @param leaked names the guard found in the copy
  * @param repeatsOpening lib/opening-line.ts found this opening in a recent post
  * @param unsupported the citation is real and verified, but no abstract backs
- *   the claim (lib/claim-support.ts). Never blocking — see SUPPORT_CORRECTIVE.
+ *   the claim (lib/claim-support.ts). Blocking — see SUPPORT_CORRECTIVE.
  */
 export function draftDefect(
   ref: string,
@@ -153,10 +157,10 @@ export function draftDefect(
   if (repeatsOpening) correctives.push(OPENING_CORRECTIVE);
   if (!correctives.length) return null;
 
-  const blocking = Boolean(leaked.length) || !String(ref || '').trim();
+  const blocking = Boolean(leaked.length) || !String(ref || '').trim() || unsupported;
   // Ordered by what is worst to publish, not by what was discovered first.
   const kind: DefectKind = leaked.length
     ? 'named_a_person'
-    : (blocking ? 'no_citation' : (unsupported ? 'unsupported_citation' : 'repeats_opening'));
+    : (!String(ref || '').trim() ? 'no_citation' : (unsupported ? 'unsupported_citation' : 'repeats_opening'));
   return { kind, corrective: correctives.join('\n\n'), blocking };
 }

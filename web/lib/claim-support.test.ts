@@ -259,17 +259,21 @@ test('the swapped caption still passes the REAL compliance gate', () => {
   assert.equal(claimFrom(swapped), 'Two wavelengths, used after training.');
 });
 
-// --- 6. IT REPAIRS; IT NEVER REFUSES ---------------------------------------
+// --- 6. IT REPAIRS FIRST; IT REFUSES ONLY WHEN THE REPAIR FAILED TWICE -----
 
-test('an unsupported citation asks for another draft and NEVER blocks the video', () => {
-  // The instruction this was built to: "It should fix the post, not refuse it
-  // — after fixing we're good to go, but it has to be automatic." A blocking
-  // defect is a row that stops and waits for a person, which is the outcome
-  // this whole path exists to avoid.
+test('an unsupported citation asks for another draft, and blocks if that draft has it too', () => {
+  // This was built to "fix the post, not refuse it", and the fix (rungs 2 and
+  // 3 above) still runs first. But the September audit found what "never
+  // refuse" produced once the fix had failed: a tadalafil trial under a
+  // peptides post, a vaccinia paper under a spine post, an unboxing-videos
+  // study under a third — each real, each verified, each about something
+  // else, each published flagged with nothing reading the flag. A reference
+  // that backs nothing the post says is worse on a medical advertisement than
+  // a row that waits for a person, so after the second draft it refuses.
   const defect = draftDefect('Nguyen, T. (2024). DOI: 10.1/x', [], false, true);
   assert.ok(defect, 'the writer is asked to try again');
   assert.equal(defect?.kind, 'unsupported_citation');
-  assert.equal(defect?.blocking, false, 'a real, verified citation is never a reason to refuse a video');
+  assert.equal(defect?.blocking, true, 'a citation the judge rejected twice is a reason to refuse a video');
   assert.ok(/does not actually show/i.test(defect?.corrective || ''), 'the corrective names what went wrong');
   assert.ok(
     /use the papers in the research section/i.test(defect?.corrective || ''),
@@ -321,17 +325,22 @@ test('the ladder is wired in the order that repairs rather than refuses', () => 
   // Rung 3: the swap reaches both captions.
   assert.match(prepare, /withCitation\(tiktok/, 'the swap must reach the TikTok caption');
   assert.match(prepare, /withCitation\(linkedin/, 'and the LinkedIn post, or one network publishes the rejected paper');
-  // Rung 4: one more draft, never a refusal.
+  // Rung 4: one more draft before any refusal.
   assert.match(prepare, /draftDefect\(ref, leaked, Boolean\(repeat\), unsupported\)/, 'the writer gets one more attempt');
 });
 
-test('nothing in the prepare path can refuse a video over claim support', () => {
+test('the prepare path refuses over claim support only after the repair has failed twice', () => {
   const prepare = src('lib/video-prepare.ts');
-  // The refusals are enumerated in one block guarded by `defect.blocking`, and
-  // the only two errors it can return are the two that existed before this
-  // check. If a third appears, this assertion is the place to justify it.
+  // The refusals are enumerated in one block guarded by `defect.blocking`. The
+  // third error, 'unsupported_citation', is justified by the September audit
+  // (see section 6 above): the fallback that cited the top search hit after
+  // the judge said 'none' is what put unrelated studies under three posts.
   const errors = Array.from(prepare.matchAll(/error: '([a-z_]+)'/g)).map((m) => m[1]);
-  assert.ok(!errors.includes('unsupported_citation'), 'an unsupported citation must never become a refusal');
+  assert.ok(errors.includes('unsupported_citation'), 'a citation the judge rejected twice is refused, in words');
+  const block = prepare.slice(prepare.indexOf('if (defect && defect.blocking) {'));
+  assert.match(block, /defect\.kind === 'unsupported_citation'/, 'and only inside the blocking block, after the re-roll');
+  // The judge's 'none' is final for the fallback: no top search hit is cited over it.
+  assert.match(prepare, /&& verdict\.status !== 'none'\) \{\s*const found = refLineFromEvidence\(evidence\)/);
 });
 
 test('the judge fails open, in the file that talks to the provider', () => {

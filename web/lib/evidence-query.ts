@@ -107,7 +107,37 @@ export type EvidenceQuery = {
   primary: string;
   /** Shorter, for when `primary` finds nothing. Empty when it would repeat it. */
   broad: string;
+  /** The primary query's terms, for judging what comes back (relevantTo). */
+  terms: string[];
 };
+
+/**
+ * Is this paper about the subject that was searched for?
+ *
+ * The audit found a tadalafil trial under a peptides post, a vaccinia paper
+ * under a spine post and an unboxing-videos study under a third. Each was a
+ * top hit for a two-word fallback query on an index that matches anything —
+ * and each shares almost no vocabulary with the subject. So a candidate has
+ * to carry the subject's own words in its title or abstract: two of them when
+ * the query had three or more, one otherwise. A crude stem (the last letter
+ * dropped from longer words) lets "peptides" find "peptide".
+ *
+ * This is a prefilter, not the judge (lib/claim-support.ts): it removes what
+ * is plainly off-subject before the writer ever sees it.
+ */
+export function relevantTo(item: { title?: string | null; abstract?: string | null }, queryTerms: readonly string[]): boolean {
+  const wanted = (queryTerms || []).map((w) => String(w || '').toLowerCase().trim()).filter((w) => w.length >= 3);
+  if (!wanted.length) return true;
+  const hay = (String(item?.title || '') + ' ' + String(item?.abstract || '')).toLowerCase();
+  const hits = wanted.filter((w) => hay.includes(w.length > 5 ? w.slice(0, -1) : w)).length;
+  const need = wanted.length >= 3 ? 2 : 1;
+  return hits >= need;
+}
+
+/** The candidates that are about the subject, in the order they came. */
+export function filterRelevant<T extends { title?: string | null; abstract?: string | null }>(items: readonly T[], queryTerms: readonly string[]): T[] {
+  return (items || []).filter((i) => relevantTo(i, queryTerms));
+}
 
 /**
  * Build the search from what the video is about.
@@ -130,5 +160,6 @@ export function evidenceQuery(subject: string, keywords: readonly string[] = [])
     primary: primary.join(' '),
     // Only worth a second request when it is actually a different, wider net.
     broad: broad.length && broad.length < primary.length ? broad.join(' ') : '',
+    terms: primary,
   };
 }

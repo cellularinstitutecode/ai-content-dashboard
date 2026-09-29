@@ -65,7 +65,8 @@ import { imageUnshippable } from '@/lib/image-verdict';
 import { channelCopy, citationsIn, knownBadCitation, perNetworkPlan } from '@/lib/approve-plan';
 import { ARTICLE_LINK_PLACEHOLDER, PROMO_DELAY_MINUTES, articleLogNote, articleUrl, promoLink, readArticleLog, withArticleLink } from '@/lib/article-promo';
 import { refTitle, verifyDoi } from '@/lib/citation';
-import { findEvidence } from '@/lib/evidence';
+import { findByDoi, findEvidence } from '@/lib/evidence';
+import { claimSupportRefusal } from '@/lib/citation-gate';
 import { evidenceBriefFrom, type EvidenceItem } from '@/lib/evidence-brief';
 import { MAX_CANDIDATES, claimFrom, claimQuery, supportedItem, type ClaimSupportStamp, type SupportVerdict } from '@/lib/claim-support';
 import { pickCitation, refLineFrom } from '@/lib/citation-from-evidence';
@@ -2259,6 +2260,45 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
         ' (DOI ' + doi + '). Replace the citation with the study the post means, then approve again. Nothing was sent.';
       await releaseClaim(db, run, 'approve-refused', why);
       return { ok: false, note: why };
+    }
+  }
+
+  // DOES THE STUDY BACK WHAT THE POST SAYS? Asked here, at the door.
+  //
+  // The scorer judges this and stamps `_claimSupport` on the draft, and
+  // nothing at this door ever read the stamp: a real, Crossref-verified paper
+  // about something else entirely went out on Approve (the September audit —
+  // a tadalafil trial under a peptides post). A draft the scorer never
+  // stamped, or whose REF line the reviewer edited since, is judged NOW
+  // against the paper the DOI resolves to, so the answer is about the copy
+  // as it stands rather than as it was.
+  {
+    const stamped = (pack as ContentPack & { _claimSupport?: ClaimSupportStamp })._claimSupport;
+    const cited = citationsIn(sends)[0]?.doi || '';
+    let status: ClaimSupportStamp['status'] | null = stamped?.status ?? null;
+    const stale = !stamped || String(stamped.doi || '').toLowerCase() !== cited.toLowerCase();
+    if (cited && (stale || status === 'unchecked')) {
+      try {
+        const kept = (pack as ContentPack & { _evidence?: EvidenceItem[] })._evidence || [];
+        const item = kept.find((i) => String(i.doi || '').toLowerCase() === cited.toLowerCase()) || (await findByDoi(cited));
+        if (item) {
+          const caption = String((pack as unknown as Record<string, unknown>).instagram || (pack as unknown as Record<string, unknown>).facebook || sends[0]?.text || '');
+          const verdict = await judgeClaimSupport({ claim: claimFrom(caption), items: [item] });
+          status = verdict.status === 'unchecked' ? 'unchecked' : (verdict.status === 'supported' ? 'supported' : 'unsupported');
+          const fresh: ClaimSupportStamp = { status, doi: cited };
+          (pack as ContentPack & { _claimSupport?: ClaimSupportStamp })._claimSupport = fresh;
+          if (run.draft_id) await db.from('drafts').update({ pack: { ...(pack as unknown as Record<string, unknown>), _claimSupport: fresh } }).eq('id', run.draft_id).eq('user_id', run.user_id);
+        }
+      } catch (err) {
+        // The judge or PubMed being down is not a reason to refuse a post, and
+        // not a reason to pass it either: it stays whatever the stamp said.
+        reportError('autopilot:approve-claim-support', err, { runId: run.id });
+      }
+    }
+    const unsupported = claimSupportRefusal(status);
+    if (unsupported) {
+      await releaseClaim(db, run, 'approve-refused', unsupported);
+      return { ok: false, note: unsupported + ' The run is back in your queue.' };
     }
   }
 

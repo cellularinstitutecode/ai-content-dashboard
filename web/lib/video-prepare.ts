@@ -21,6 +21,7 @@ import { resolveTranscript, type TranscriptOrigin } from '@/lib/video-transcript
 import { keywordLineFrom } from '@/lib/video-row';
 import { composeCaption, forbiddenNames, houseStyleHint, keywordGrounding, namesLeaked, topicFromTranscript, transcriptExcerpt, videoSubject, withCitation } from '@/lib/video-copy';
 import { draftDefect, type DraftDefect } from '@/lib/draft-defect';
+import { writerRefusedContent } from '@/lib/citation-gate';
 import { canCheckClaim, canResearchClaim, canWriteCopy, canWriteTitle, remainingMs } from '@/lib/prepare-budget';
 import { shouldReseed } from '@/lib/reseed';
 import { writerFailure } from '@/lib/writer-failure';
@@ -758,7 +759,14 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     // no paper was found, ref stays empty and the post is refused exactly as it
     // is today, because a fabricated reference on a medical advertisement is a
     // far worse thing than a missing one.
-    if (!ref || !haveDoi(ref)) {
+    //
+    // And NOT when the judge has already read these papers and said none of
+    // them backs the copy. That was the September audit's finding: the judge
+    // answered 'none', this fallback then cited the top search hit anyway —
+    // a tadalafil trial under a peptides post, a vaccinia paper under a spine
+    // post — and the post went out looking referenced. A verdict of 'none'
+    // leaves ref empty here, and the draft is refused below as unsupported.
+    if ((!ref || !haveDoi(ref)) && verdict.status !== 'none') {
       const found = refLineFromEvidence(evidence);
       if (found) {
         const candidate = found.replace(/^REF:\s*/i, '');
@@ -830,15 +838,32 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     // way. This is the half that does not depend on the writer complying.
     const repeat = repeatsOpening(openingLineOf(tiktok), priorOpenings);
 
+    // Did the writer write ABOUT the transcript instead of FROM it?
+    //
+    // "The transcript provided does not contain any content" is a sentence a
+    // writer handed silence produces, and it went to Metricool once with an
+    // AVISO and a REF line under it (the September audit). No re-roll fixes
+    // an empty recording; the words have to be pasted.
+    if (writerRefusedContent(tiktok) || writerRefusedContent(linkedin)) {
+      reportError('videos:writer-refused', new Error('the writer said the transcript had no content'), { title });
+      return {
+        ok: false,
+        status: 422,
+        error: 'empty_transcript',
+        message: 'The recording gave the writer nothing to work with — the draft only said the transcript had no content. ' +
+          'Paste what is said in the video and prepare it again.',
+        needsPaste: true,
+        title,
+      };
+    }
+
     defect = draftDefect(ref, leaked, Boolean(repeat), unsupported);
     if (!defect) break;
     if (repeat) {
       reportError('videos:opening-repeat', new Error('opening repeats a recent post (' + repeat.by + ', ' + repeat.score.toFixed(2) + ')'), { title });
     }
     if (unsupported) {
-      // Recorded, not raised. It does not stop the video; it is the one signal
-      // that would otherwise be invisible — a post whose citation is real,
-      // verified and beside the point.
+      // Recorded here; raised below if the second draft has the same problem.
       reportError('videos:claim-unsupported', new Error('none of the papers found supports the claim'), { title });
     }
 
@@ -874,6 +899,21 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
         error: 'named_a_person',
         message: 'The copy named ' + leaked.join(' and ') +
           ' — that is the file\u2019s owner, not somebody in the video, and a clinic must not appear to quote a patient who did not speak. ' +
+          retryAdvice(t.banked),
+        needsPaste: false,
+        title,
+      };
+    }
+    if (defect.kind === 'unsupported_citation') {
+      // A real paper that backs nothing the post says. Twice. Refused rather
+      // than sent flagged, since the September audit found the flag was never
+      // read and the posts reached Metricool with unrelated studies under them.
+      return {
+        ok: false,
+        status: 422,
+        error: 'unsupported_citation',
+        message: 'None of the studies found supports what the copy says, twice over — the writer kept making a point the papers in front of it do not show. ' +
+          'A reference that backs nothing the post says cannot go under a medical advertisement. ' +
           retryAdvice(t.banked),
         needsPaste: false,
         title,

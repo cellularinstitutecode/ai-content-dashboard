@@ -18,6 +18,7 @@
 import 'server-only';
 
 import { complianceGate } from '@/lib/compliance-gate';
+import { claimSupportOf } from '@/lib/citation-gate';
 import { MediaNotNormalisedError, metricoolConfigured, metricoolSchedulePost, readPostId, type Provider } from '@/lib/metricool';
 import { publishMode } from '@/lib/publish-mode';
 import { preflightPost } from '@/lib/post-preflight';
@@ -78,7 +79,7 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
     return { network, ok: false, reason: 'not_configured', message: 'Metricool is not configured on this deployment.' };
   }
 
-  const gate = await complianceGate(input.userId, input.text, network);
+  const gate = await complianceGate(input.userId, input.text, network, { claimSupport: claimSupportOf(input.pack) });
   if (!gate.ok) {
     // Deliberately not sent. Copy missing the AVISO line or the REF citation
     // must not go out at all, and now goes out by itself if it does.
