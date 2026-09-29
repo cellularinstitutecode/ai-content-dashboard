@@ -285,6 +285,10 @@ export async function GET() {
 //   { id, action: 'approve' }       review queue → live queue; Metricool
 //                                   publishes it at its publication_date
 //   { id, action: 'publish_now' }   same, dated a couple of minutes from now
+//   { id, action: 'sync_media' }    re-send the post with the linked draft's
+//                                   CURRENT hero image (the Publishing list's
+//                                   image controls changed it); same date,
+//                                   same queue
 //
 // `approve` is the only path in the whole app by which a post goes out, and it
 // is reachable only from a button a signed-in reviewer pressed after reading
@@ -329,7 +333,7 @@ export async function PATCH(req: Request) {
   if (!id || typeof id !== 'string') {
     return NextResponse.json({ error: 'id is required' }, { status: 400 });
   }
-  if (!['reschedule', 'approve', 'publish_now', 'attach_video'].includes(action)) {
+  if (!['reschedule', 'approve', 'publish_now', 'attach_video', 'sync_media'].includes(action)) {
     return NextResponse.json({ error: 'invalid_request', message: 'That is not something a post can do.' }, { status: 400 });
   }
   if (action === 'reschedule') {
@@ -556,6 +560,22 @@ export async function PATCH(req: Request) {
         { status: 409 },
       );
     }
+  } else if (action === 'sync_media') {
+    // Not an approval and not a move: the replace below carries whatever the
+    // draft's picture is NOW, at the same date and in the same queue. A video
+    // post keeps its video (media was resolved video-first above).
+    if (!existing.metricool_post_id) {
+      return NextResponse.json(
+        { error: 'not_in_metricool', message: 'This post is not in Metricool yet. The new picture is saved and goes with the post when it is next sent.' },
+        { status: 409 },
+      );
+    }
+    if (!media.length) {
+      return NextResponse.json(
+        { error: 'no_media', message: 'This post has no usable picture to send — the draft has none, or its picture failed the text check.' },
+        { status: 409 },
+      );
+    }
   } else {
     if (mode === 'scheduled') {
       return NextResponse.json(
@@ -640,13 +660,15 @@ export async function PATCH(req: Request) {
         tiktokData,
       });
     } catch (e) {
-      reportError(action === 'reschedule' ? 'posts:metricool-reschedule' : 'posts:metricool-approve', e);
+      reportError(action === 'reschedule' ? 'posts:metricool-reschedule' : action === 'sync_media' ? 'posts:metricool-sync-media' : 'posts:metricool-approve', e);
       return NextResponse.json(
         {
           error: 'metricool_update_failed',
           message: action === 'reschedule'
             ? 'We could not move this post in Metricool, so it has been left where it was. Open it in Metricool to change the time there.'
-            : 'Metricool did not accept the approval, so the post is still waiting for review. Nothing was scheduled — try again in a moment.',
+            : action === 'sync_media'
+              ? 'The new picture is saved here, but Metricool did not take it. It goes with the post the next time it is approved or moved.'
+              : 'Metricool did not accept the approval, so the post is still waiting for review. Nothing was scheduled — try again in a moment.',
         },
         { status: 502 },
       );

@@ -12,7 +12,12 @@ import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 import { isAwaitingApproval, postStatusMeta } from '@/lib/post-mode';
 import { overduePosts, weeklyPlanByDay, type PlanTemplate } from '@/lib/calendar-plan';
 import { sheetRowUrl, sheetRowLabel, sheetRowTitle, type PostSource } from '@/lib/sheet-link';
-import { fmtScheduleTime, scheduleDateKey, scheduleWallClock, isoAtScheduleWallClock, scheduleTzLabel } from '@/lib/schedule-clock';
+import { fmtScheduleTime, fmtScheduleSlot, scheduleDateKey, scheduleWallClock, isoAtScheduleWallClock, scheduleTzLabel } from '@/lib/schedule-clock';
+// Autopilot drafts waiting for approval sit in this list too, so the calendar
+// is the one place to work from. Same route and same rules as the Dashboard.
+import { mergeByDate, reviewRuns, runText } from '@/lib/publishing-list';
+import RunPreview, { type ReviewRun } from '@/components/RunPreview';
+import HeroImageControls from '@/components/HeroImageControls';
 
 type Post = {
   id?: string;
@@ -30,6 +35,8 @@ type Post = {
   /** Set by GET /api/posts: the linked draft's hero image, if any. */
   imageUrl?: string | null;
   packTitle?: string | null;
+  /** The draft this post was written from, whose hero image is the post's picture. */
+  draft_id?: string | null;
 };
 
 function toArray(x: any): any[] {
@@ -94,6 +101,12 @@ export default function CalendarPage() {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
+  // Autopilot runs, as GET /api/autopilot/runs returns them (the Dashboard's
+  // own read). Only the ones waiting for a decision are shown.
+  const [runs, setRuns] = useState<ReviewRun[]>([]);
+  const [runsFailed, setRunsFailed] = useState(false);
+  const [runBusy, setRunBusy] = useState<string | null>(null);
+  const [previewRunId, setPreviewRunId] = useState<string | null>(null);
 
   // Click-a-day scheduling panel state
   const [scheduleDay, setScheduleDay] = useState<Date | null>(null);
@@ -171,7 +184,63 @@ export default function CalendarPage() {
     }
   }
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); void loadRuns(); }, []);
+
+  // The Autopilot drafts. Best-effort: a failed read says so in the list and
+  // never hides the posts.
+  async function loadRuns() {
+    try {
+      const r = await fetch('/api/autopilot/runs');
+      if (!r.ok) { setRunsFailed(true); return; }
+      const j = await r.json().catch(() => ({}));
+      if (Array.isArray(j?.runs)) { setRuns(j.runs); setRunsFailed(false); }
+    } catch {
+      setRunsFailed(true);
+    }
+  }
+
+  // Approving, skipping or re-imaging a run anywhere in the app changes this list.
+  useEffect(() => onRefresh((scopes) => {
+    if (scopes.includes('autopilot') || scopes.includes('images') || scopes.includes('drafts')) void loadRuns();
+  }), []);
+
+  // The reviewer's decision on an Autopilot draft — the same request the
+  // Dashboard sends, so approve logic lives in one place (lib/autopilot.ts).
+  async function runAct(run: ReviewRun, action: 'approve' | 'skip', schedule = false) {
+    setRunBusy(run.id);
+    setErr(null);
+    try {
+      const r = await fetch('/api/autopilot/runs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: run.id, action, schedule }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(friendlyError(j, action === 'approve' ? 'We could not approve that draft.' : 'We could not skip that draft.'));
+      setPreviewRunId(null);
+      // The approved run is now a `posts` row: reload both so it shows as Scheduled.
+      await Promise.all([refresh(), loadRuns()]);
+      if (action === 'approve') announce('posts', 'stats', 'drafts', 'autopilot', 'insights');
+      else announce('drafts', 'autopilot');
+    } catch (e: any) {
+      setErr(friendlyError(e, action === 'approve' ? 'We could not approve that draft.' : 'We could not skip that draft.'));
+    } finally {
+      setRunBusy(null);
+    }
+  }
+
+  function approveRunScheduled(run: ReviewRun) {
+    if (!window.confirm('Approve and schedule this post?\n\nIt will be published at ' + fmtScheduleSlot(run.scheduled_for) + ' (clinic time). Metricool does the publishing; you will not need to open it.')) return;
+    void runAct(run, 'approve', true);
+  }
+  function approveRunDraft(run: ReviewRun) {
+    if (!window.confirm('Approve as a draft?\n\nIt goes to Metricool for review, not live. You can approve it from this list afterwards.')) return;
+    void runAct(run, 'approve', false);
+  }
+  function skipRun(run: ReviewRun) {
+    if (!window.confirm('Skip this draft? It will not be published.')) return;
+    void runAct(run, 'skip');
+  }
 
   useEffect(() => {
     // Best-effort: a failed read just hides the plan row, never the calendar.
@@ -336,6 +405,26 @@ export default function CalendarPage() {
     }
   }
 
+  // The post's picture changed on its draft (Image section of the preview).
+  // If the post is already in Metricool, send the new picture there through
+  // the same replace every move and approve use (PATCH sync_media). A post
+  // that has its video keeps the video; the picture is not sent in front of it.
+  async function afterPostImageChanged(post: Post) {
+    try {
+      if (post.id && post.metricool_post_id && !post.mediaUrl) {
+        const r = await fetch('/api/posts', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: post.id, action: 'sync_media' }),
+        });
+        if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'The new picture is saved here, but Metricool did not take it. It goes with the post the next time it is approved or moved.'));
+      }
+    } finally {
+      await refresh();
+      announce('posts', 'images', 'drafts');
+    }
+  }
+
   // Open the scheduling panel for a given day.
   function openScheduler(day: Date) {
     setScheduleDay(day);
@@ -428,6 +517,21 @@ export default function CalendarPage() {
   // today, so without this these posts disappeared from the page entirely.
   const overdueList = useMemo(() => (mounted ? overduePosts(posts, isAwaitingApproval, today.getTime()) : []), [posts, mounted, today]);
 
+  // Autopilot drafts waiting for a decision, in with the posts by date. Gated
+  // on `mounted` like the overdue list, so the server-rendered page never
+  // decides "missed" on a stale clock.
+  const runLists = useMemo(() => (mounted ? reviewRuns(runs, today.getTime()) : { upcoming: [] as ReviewRun[], missed: [] as ReviewRun[] }), [runs, mounted, today]);
+  const upcomingEntries = useMemo(() => mergeByDate(upcomingList, runLists.upcoming), [upcomingList, runLists]);
+  const runsByDay = useMemo(() => {
+    const m: Record<string, ReviewRun[]> = {};
+    for (const r of [...runLists.upcoming, ...runLists.missed]) {
+      const k = postDayKey(r.scheduled_for);
+      if (k) (m[k] = m[k] || []).push(r);
+    }
+    return m;
+  }, [runLists]);
+  const previewRun = previewRunId ? runs.find((r) => r.id === previewRunId) || null : null;
+
   function jumpTo(p: Post) {
     if (!p.publication_date) return;
     const d = new Date(p.publication_date);
@@ -517,11 +621,11 @@ export default function CalendarPage() {
   const previewPost = previewId ? posts.find((p) => String(p.id) === previewId) || null : null;
   // Escape closes the preview, as it would any dialog.
   useEffect(() => {
-    if (!previewId) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPreviewId(null); };
+    if (!previewId && !previewRunId) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setPreviewId(null); setPreviewRunId(null); } };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [previewId]);
+  }, [previewId, previewRunId]);
 
   return (
     <main className="min-h-screen bg-canvas text-ink">
@@ -637,6 +741,22 @@ export default function CalendarPage() {
                       )}
                     </div>
                   ))}
+                  {/* Autopilot drafts: amber, not draggable (the slot belongs to
+                      the template), click to preview and approve. */}
+                  {(runsByDay[k] || []).map((r) => (
+                    <div
+                      key={r.id}
+                      onClick={(e) => { e.stopPropagation(); setPreviewRunId(r.id); }}
+                      title={runText(r.pack) || r.template_name}
+                      className={'cursor-pointer rounded-lg border border-amber-300/60 bg-amber-50 px-2 py-1 text-[11px] leading-tight text-ink transition hover:bg-amber-100 ' + (runBusy === r.id ? 'opacity-50 ' : '')}
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-medium text-amber-800">{timeLabel(r.scheduled_for)}</span>
+                        <span className="rounded-full bg-amber-200/80 px-1.5 py-[1px] text-[9px] font-semibold text-amber-900">{r.missed ? 'Missed' : 'Autopilot · approve'}</span>
+                      </div>
+                      <div className="truncate">{r.angle?.query || runText(r.pack) || r.template_name}</div>
+                    </div>
+                  ))}
                 </div>
               </div>
             );
@@ -654,8 +774,11 @@ export default function CalendarPage() {
         <div className="sticky top-6 rounded-2xl border border-black/5 bg-surface p-4">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-[13px] font-semibold uppercase tracking-wide text-ink/60">Publishing list</h2>
-            <span className="text-xs text-ink/40">{upcomingList.length} coming up</span>
+            <span className="text-xs text-ink/40">{upcomingEntries.length} coming up{runLists.upcoming.length ? ' · ' + runLists.upcoming.length + ' to approve' : ''}</span>
           </div>
+          {runsFailed && (
+            <p className="mb-3 rounded-xl bg-amber-50 px-3 py-2 text-[11px] text-amber-800">The Autopilot drafts could not be loaded, so none are shown here. <button type="button" onClick={() => void loadRuns()} className="font-semibold underline">Try again</button></p>
+          )}
           {/* Bulk bar for the whole list: tick posts below (past or upcoming),
               then delete them together. Always visible so the option is
               obvious even before anything is ticked. */}
@@ -677,15 +800,34 @@ export default function CalendarPage() {
               </button>
             </div>
           )}
-          {overdueList.length > 0 && (
+          {(overdueList.length > 0 || runLists.missed.length > 0) && (
             <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50/70 p-3 text-[12px]">
-              <div className="mb-1 font-semibold text-rose-800">{overdueList.length} past {overdueList.length === 1 ? 'its' : 'their'} time, still waiting</div>
-              <p className="mb-2 text-[11px] text-rose-800/80">These were never approved, so they did not go out. Click one to preview it. Tick the ones you don&apos;t need and delete them together, or move one to tomorrow.</p>
+              <div className="mb-1 font-semibold text-rose-800">{overdueList.length + runLists.missed.length} past {overdueList.length + runLists.missed.length === 1 ? 'its' : 'their'} time, still waiting</div>
+              <p className="mb-2 text-[11px] text-rose-800/80">These were never approved, so they did not go out. Click one to preview it. Tick the ones you don&apos;t need and delete them together, or move one to tomorrow.{runLists.missed.length ? ' A missed Autopilot draft can only be skipped here.' : ''}</p>
+              {overdueIds.length > 0 && (
               <label className="mb-2 flex w-fit cursor-pointer items-center gap-1.5 rounded-lg bg-rose-100/90 px-2 py-1 text-[11px] font-medium text-rose-900">
                 <input type="checkbox" checked={allPastPicked} onChange={() => toggleGroup(overdueIds, allPastPicked)} disabled={Boolean(bulk)} className="h-3.5 w-3.5 accent-rose-600" aria-label="Select all past posts" />
                 Select all past ({overdueIds.length})
               </label>
+              )}
               <ul className="max-h-[45vh] space-y-1.5 overflow-y-auto pr-1">
+                {runLists.missed.map((r) => (
+                  <li key={r.id} className="flex gap-2 rounded-lg bg-amber-50 p-2 ring-1 ring-amber-200">
+                    <div className="min-w-0 flex-1">
+                      <button type="button" onClick={() => setPreviewRunId(r.id)} className="block w-full text-left" title="Preview this draft">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-ink">{fmtScheduleSlot(r.scheduled_for)}</span>
+                          <span className="rounded-full bg-amber-200/80 px-2 py-[1px] text-[10px] font-semibold text-amber-900">Autopilot · missed</span>
+                        </div>
+                        <div className="mt-0.5 line-clamp-1 text-ink/70">{r.angle?.query || runText(r.pack) || r.template_name}</div>
+                      </button>
+                      <div className="mt-1 flex gap-1.5">
+                        <button type="button" onClick={() => setPreviewRunId(r.id)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Preview</button>
+                        <button type="button" disabled={runBusy === r.id} onClick={() => skipRun(r)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-50">{runBusy === r.id ? 'Working…' : 'Skip'}</button>
+                      </div>
+                    </div>
+                  </li>
+                ))}
                 {overdueList.map((p) => {
                   const id = String(p.id || '');
                   const d = p.publication_date ? new Date(p.publication_date) : null;
@@ -722,16 +864,45 @@ export default function CalendarPage() {
           )}
           {loading && posts.length === 0 ? (
             <p className="text-sm text-ink/50">Loading…</p>
-          ) : upcomingList.length === 0 ? (
+          ) : upcomingEntries.length === 0 ? (
             <p className="text-sm text-ink/50">Nothing scheduled from today onward. Write a post under Draft, or click a day on the calendar.</p>
           ) : (
             <>
+            {upcomingIds.length > 0 && (
             <label className="mb-2 flex w-fit cursor-pointer items-center gap-1.5 rounded-lg bg-black/5 px-2 py-1 text-[11px] font-medium text-ink/70">
               <input type="checkbox" checked={allUpcomingPicked} onChange={() => toggleGroup(upcomingIds, allUpcomingPicked)} disabled={Boolean(bulk)} className="h-3.5 w-3.5 accent-rose-600" aria-label="Select all upcoming posts" />
               Select all upcoming ({upcomingIds.length})
             </label>
+            )}
             <ol className="max-h-[70vh] space-y-2 overflow-y-auto pr-1">
-              {upcomingList.map((p) => {
+              {upcomingEntries.map((entry) => {
+                if (entry.kind === 'run') {
+                  // An Autopilot draft: not in Metricool yet, so no tick, no
+                  // move, no delete — preview, approve or skip.
+                  const r = entry.run;
+                  return (
+                    <li key={'run-' + r.id} className="flex gap-2 rounded-xl border border-amber-300/70 bg-amber-50 p-3 text-[12px]">
+                      <div className="min-w-0 flex-1">
+                        <button type="button" onClick={() => setPreviewRunId(r.id)} title="Preview this draft" className="flex w-full items-center justify-between gap-2 text-left">
+                          <span className="font-semibold text-ink">{fmtScheduleSlot(r.scheduled_for)}</span>
+                          <span className="rounded-full bg-amber-200/80 px-2 py-[2px] text-[10px] font-semibold text-amber-900">Autopilot · needs approval</span>
+                        </button>
+                        <button type="button" onClick={() => setPreviewRunId(r.id)} className="mt-1 line-clamp-2 block w-full text-left text-ink/80" title="Preview this draft">{r.angle?.query || runText(r.pack) || r.template_name}</button>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          <span className="rounded-full bg-black/5 px-2 py-[1px] text-[10px] text-ink/60">{r.template_name}</span>
+                          <span className="flex-1" />
+                          <button type="button" onClick={() => setPreviewRunId(r.id)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Preview</button>
+                          <button type="button" disabled={runBusy === r.id} onClick={() => approveRunScheduled(r)} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{runBusy === r.id ? 'Working…' : 'Approve & schedule'}</button>
+                          {!r.writes_article && (
+                            <button type="button" disabled={runBusy === r.id} onClick={() => approveRunDraft(r)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/60 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">Approve as draft</button>
+                          )}
+                          <button type="button" disabled={runBusy === r.id} onClick={() => skipRun(r)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-50">Skip</button>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                }
+                const p = entry.post;
                 const waiting = isAwaitingApproval(p.status);
                 // Waiting on its video rather than on a reviewer. Approve is
                 // refused server-side for these, so the list offers the attach
@@ -815,6 +986,17 @@ export default function CalendarPage() {
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={previewPost.imageUrl} alt="Post image" className="mb-3 max-h-72 w-full rounded-xl object-contain ring-1 ring-black/5" />
               ) : null}
+              {previewPost.draft_id && !previewPost.mediaUrl && (
+                <HeroImageControls
+                  draftId={previewPost.draft_id}
+                  hasImage={Boolean(previewPost.imageUrl)}
+                  note={previewPost.metricool_post_id
+                    ? 'The new picture is sent to Metricool as soon as it is ready.'
+                    : 'This post is not in Metricool yet: the new picture goes with it when it is next sent.'}
+                  beforeChange={() => !previewPost.metricool_post_id || window.confirm('This replaces the picture and updates the post in Metricool too. Continue?')}
+                  onChanged={() => afterPostImageChanged(previewPost)}
+                />
+              )}
               <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-ink">{previewPost.text || 'Untitled post'}</div>
               {sheetRowUrl(previewPost.source) && (
                 <a href={sheetRowUrl(previewPost.source) as string} target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1 text-[12px] font-medium text-accent hover:underline">
@@ -845,6 +1027,25 @@ export default function CalendarPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {previewRun && (
+        <RunPreview
+          run={previewRun}
+          busy={runBusy === previewRun.id}
+          onClose={() => setPreviewRunId(null)}
+          onApprove={() => approveRunScheduled(previewRun)}
+          onApproveDraft={() => approveRunDraft(previewRun)}
+          onSkip={() => skipRun(previewRun)}
+          imageControls={
+            <HeroImageControls
+              draftId={previewRun.draft_id}
+              hasImage={Boolean(previewRun.pack?._image?.url)}
+              note="Nothing reaches Metricool until you approve."
+              onChanged={async () => { await loadRuns(); announce('images', 'drafts', 'autopilot'); }}
+            />
+          }
+        />
       )}
 
       {scheduleDay && (

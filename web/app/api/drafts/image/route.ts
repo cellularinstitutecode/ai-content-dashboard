@@ -11,7 +11,8 @@ import { decodeDataUrl } from '@/lib/data-url';
 import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
-import { generatePackImage, imagesEnabled, removeSuperseded, storeBytes, type PackImage } from '@/lib/images';
+import { describeReferencePhoto, generatePackImage, imagesEnabled, removeSuperseded, storeBytes, type PackImage } from '@/lib/images';
+import { styleDirection } from '@/lib/image-reference';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { plannerImageFor } from '@/lib/planner-image';
 import type { BrandContext } from '@/lib/ai';
@@ -45,7 +46,11 @@ export async function POST(req: NextRequest) {
     // regenerate: true → discard the current image and produce a fresh take
     // with the NEXT composition variant, so the reviewer always gets a
     // visibly different proposition (never a re-roll of the same prompt).
-    const regenerate = body?.regenerate === true;
+    // styleFromUrl: <library photo> → a fresh AI take in THAT photo's style: the
+    // vision model describes the photo and the description becomes the
+    // direction (lib/image-reference.ts). Always a new generation.
+    const styleFromUrl = typeof body?.styleFromUrl === 'string' ? body.styleFromUrl.trim() : '';
+    const regenerate = body?.regenerate === true || Boolean(styleFromUrl);
     // option: true  → make ONE MORE proposition and keep it alongside the others
     //                 (the reviewer picks from several rather than rerolling blind).
     // choose: <url> → promote one of those propositions to the hero image.
@@ -70,6 +75,9 @@ export async function POST(req: NextRequest) {
     //              generated ones live in.
     const direction = typeof body?.prompt === 'string' ? body.prompt.trim().slice(0, 600) : '';
     const useUrl = typeof body?.useUrl === 'string' ? body.useUrl.trim() : '';
+    if (styleFromUrl && !/^https:\/\/\S+$/i.test(styleFromUrl)) {
+      return NextResponse.json({ error: 'bad_image', message: 'That reference photo address is not one the checker can fetch.' }, { status: 400 });
+    }
     const dataUrl = typeof body?.dataUrl === 'string' ? body.dataUrl : '';
     const givenAlt = typeof body?.alt === 'string' ? body.alt.trim().slice(0, 300) : '';
 
@@ -183,6 +191,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // The reference photo's look, in words. After the rate limit: it is a paid
+    // vision call. A photo the checker cannot read is a refusal, not a take
+    // that quietly ignores it.
+    let effectiveDirection = direction;
+    if (styleFromUrl) {
+      try {
+        effectiveDirection = styleDirection(await describeReferencePhoto(styleFromUrl), direction).slice(0, 900);
+      } catch (e) {
+        reportError('drafts-image:reference', e);
+        return NextResponse.json(
+          { error: 'reference_unreadable', message: 'The checker could not read that library photo, so no image was made. Try another photo, or "New AI image".' },
+          { status: 502 },
+        );
+      }
+    }
+
     // Brand profile keeps the image on-brand (optional, fail-soft).
     let brand: BrandContext | undefined;
     try {
@@ -199,7 +223,7 @@ export async function POST(req: NextRequest) {
       topic: String((d as { topic?: string }).topic || 'regenerative medicine'),
       pack,
       brand,
-      direction,
+      direction: effectiveDirection,
       // Fresh generations start at variant 0; each regenerate (explicit, or
       // forced by a text-flagged stored image) advances to the next
       // composition (hero shot → macro lab → lifestyle → still-life → …).
@@ -228,6 +252,8 @@ export async function POST(req: NextRequest) {
     const image = wantSet > 0
       ? madeSet[0]
       : await makeOne(askedSlot ?? (asOption ? 1 + (options.length % 3) : (advanceVariant ? null : 0)), 0);
+    // Provenance: which library photo this take was styled after.
+    if (styleFromUrl && wantSet === 0) image.styledAfter = styleFromUrl;
 
     // Re-read the pack immediately before writing, and merge `_image` into the
     // FRESH copy. Generation + vision verification takes 30-60s, and the pack
