@@ -133,38 +133,61 @@ export async function PATCH(req: NextRequest) {
   return NextResponse.json({ draft: data });
 }
 
+/** The most drafts one request may delete. The list checks 10 at a time; a person cannot reach this. */
+const MAX_BULK_DELETE = 100;
+
+// DELETE /api/drafts?id=<one>  or  ?ids=<a>,<b>,<c>
+//
+// Several at once, for the checkboxes on Recent Drafts. Each draft is
+// removed exactly as a single delete removes it — its images go with it —
+// and one that fails does not stop the rest: the answer says how many went
+// and which did not, so the list can show what is left.
 export async function DELETE(req: NextRequest) {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
-  const id = req.nextUrl.searchParams.get('id');
-  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
+  const one = (req.nextUrl.searchParams.get('id') || '').trim();
+  const many = (req.nextUrl.searchParams.get('ids') || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const ids = Array.from(new Set(one ? [one, ...many] : many));
+  if (!ids.length) return NextResponse.json({ error: 'id required' }, { status: 400 });
+  if (ids.length > MAX_BULK_DELETE) {
+    return NextResponse.json({ error: 'too_many', message: 'At most ' + MAX_BULK_DELETE + ' drafts can be deleted at once.' }, { status: 400 });
+  }
 
-  // Read the pack BEFORE the row goes: its images go with it. This used to be
-  // a bare row delete, which left the hero image and the whole carousel in the
-  // public bucket for good — one click, several megabytes, unreachable and
-  // still billed. The read is best-effort: a draft that cannot be read is
-  // still deleted, it just leaves its images for the nightly sweep to find.
-  const { data: before } = await sb
-    .from('drafts')
-    .select('pack')
-    .eq('id', id)
-    .eq('user_id', user.id)
-    .maybeSingle();
+  const deleted: string[] = [];
+  const failed: { id: string; error: string }[] = [];
+  for (const id of ids) {
+    // Read the pack BEFORE the row goes: its images go with it. This used to be
+    // a bare row delete, which left the hero image and the whole carousel in the
+    // public bucket for good — one click, several megabytes, unreachable and
+    // still billed. The read is best-effort: a draft that cannot be read is
+    // still deleted, it just leaves its images for the nightly sweep to find.
+    const { data: before } = await sb
+      .from('drafts')
+      .select('pack')
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .maybeSingle();
 
-  const { error } = await sb
-    .from('drafts')
-    .delete()
-    .eq('id', id)
-    .eq('user_id', user.id);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    const { error } = await sb
+      .from('drafts')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', user.id);
+    if (error) { failed.push({ id, error: error.message }); continue; }
+    deleted.push(id);
 
-  // Awaited, not fired-and-forgotten: a serverless function is frozen the
-  // moment it answers, and work left running then may simply never happen.
-  const pack = (before as { pack?: unknown } | null)?.pack;
-  if (pack) await removeDraftImages(pack).catch((e) => reportError('drafts:delete-images', e, { id }));
-  return NextResponse.json({ ok: true });
+    // Awaited, not fired-and-forgotten: a serverless function is frozen the
+    // moment it answers, and work left running then may simply never happen.
+    const pack = (before as { pack?: unknown } | null)?.pack;
+    if (pack) await removeDraftImages(pack).catch((e) => reportError('drafts:delete-images', e, { id }));
+  }
+
+  if (!deleted.length) {
+    return NextResponse.json({ error: failed[0]?.error || 'delete failed', deleted, failed }, { status: 500 });
+  }
+  return NextResponse.json({ ok: true, deleted, failed });
 }
 
 /**
