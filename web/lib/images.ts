@@ -19,6 +19,7 @@
 import { cleanTopic, familyAt, onTopicCheck, plannerImageFor, plannerPromptLines, scienceOffered, SHOT_COUNT, type PlannerImage } from '@/lib/planner-image';
 import { renderTitleCover } from '@/lib/title-cover';
 import { briefSource, briefSystemPrompt, briefUserPrompt, parseSceneBrief, type SceneBrief } from '@/lib/image-brief';
+import { REFERENCE_DESCRIBE_SYSTEM, parseReferenceDescription } from '@/lib/image-reference';
 import { setStoredFontReader } from '@/lib/brand-card';
 import { readStoredFonts } from '@/lib/brand-fonts';
 
@@ -89,6 +90,8 @@ export type PackImage = {
    * deliberate, so the text rule does not apply to them.
    */
   titled?: { title: string; photoUrl: string; family: string };
+  /** The library photo this take was styled after (lib/image-reference.ts), when it was. */
+  styledAfter?: string;
 };
 
 const BUCKET = process.env.IMAGE_BUCKET || 'content-images';
@@ -432,6 +435,46 @@ async function sceneBriefFor(planner: PlannerImage, pack: Record<string, unknown
   } catch (err) {
     reportError('images:scene-brief', err, { title: planner.title });
     return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Describe a reference photograph's STYLE with the vision model, for "AI image
+ * styled after a library photo". The Images API path here takes no picture
+ * input, so the look is carried over as words (lib/image-reference.ts).
+ * Throws when the photo could not be read: a styled take that ignored its
+ * reference would be worse than a plain refusal.
+ */
+export async function describeReferencePhoto(url: string): Promise<string> {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) throw new Error('OPENAI_API_KEY missing');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25_000);
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: VISION_MODEL,
+        max_tokens: 200,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: REFERENCE_DESCRIBE_SYSTEM },
+          { role: 'user', content: [
+            { type: 'text', text: 'Describe the style of this reference photograph.' },
+            { type: 'image_url', image_url: { url } },
+          ] },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`vision ${res.status}`);
+    const data = await res.json();
+    const described = parseReferenceDescription(String(data?.choices?.[0]?.message?.content ?? ''));
+    if (!described) throw new Error('vision returned no description');
+    return described;
   } finally {
     clearTimeout(timer);
   }

@@ -17,6 +17,7 @@ import { fmtScheduleTime, fmtScheduleSlot, scheduleDateKey, scheduleWallClock, i
 // is the one place to work from. Same route and same rules as the Dashboard.
 import { mergeByDate, reviewRuns, runText } from '@/lib/publishing-list';
 import RunPreview, { type ReviewRun } from '@/components/RunPreview';
+import HeroImageControls from '@/components/HeroImageControls';
 
 type Post = {
   id?: string;
@@ -34,6 +35,8 @@ type Post = {
   /** Set by GET /api/posts: the linked draft's hero image, if any. */
   imageUrl?: string | null;
   packTitle?: string | null;
+  /** The draft this post was written from, whose hero image is the post's picture. */
+  draft_id?: string | null;
 };
 
 function toArray(x: any): any[] {
@@ -399,6 +402,26 @@ export default function CalendarPage() {
       setErr(friendlyError(e, 'We could not attach the video to that post.'));
     } finally {
       setSaving(null);
+    }
+  }
+
+  // The post's picture changed on its draft (Image section of the preview).
+  // If the post is already in Metricool, send the new picture there through
+  // the same replace every move and approve use (PATCH sync_media). A post
+  // that has its video keeps the video; the picture is not sent in front of it.
+  async function afterPostImageChanged(post: Post) {
+    try {
+      if (post.id && post.metricool_post_id && !post.mediaUrl) {
+        const r = await fetch('/api/posts', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: post.id, action: 'sync_media' }),
+        });
+        if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'The new picture is saved here, but Metricool did not take it. It goes with the post the next time it is approved or moved.'));
+      }
+    } finally {
+      await refresh();
+      announce('posts', 'images', 'drafts');
     }
   }
 
@@ -963,6 +986,17 @@ export default function CalendarPage() {
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={previewPost.imageUrl} alt="Post image" className="mb-3 max-h-72 w-full rounded-xl object-contain ring-1 ring-black/5" />
               ) : null}
+              {previewPost.draft_id && !previewPost.mediaUrl && (
+                <HeroImageControls
+                  draftId={previewPost.draft_id}
+                  hasImage={Boolean(previewPost.imageUrl)}
+                  note={previewPost.metricool_post_id
+                    ? 'The new picture is sent to Metricool as soon as it is ready.'
+                    : 'This post is not in Metricool yet: the new picture goes with it when it is next sent.'}
+                  beforeChange={() => !previewPost.metricool_post_id || window.confirm('This replaces the picture and updates the post in Metricool too. Continue?')}
+                  onChanged={() => afterPostImageChanged(previewPost)}
+                />
+              )}
               <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-ink">{previewPost.text || 'Untitled post'}</div>
               {sheetRowUrl(previewPost.source) && (
                 <a href={sheetRowUrl(previewPost.source) as string} target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1 text-[12px] font-medium text-accent hover:underline">
@@ -1003,6 +1037,14 @@ export default function CalendarPage() {
           onApprove={() => approveRunScheduled(previewRun)}
           onApproveDraft={() => approveRunDraft(previewRun)}
           onSkip={() => skipRun(previewRun)}
+          imageControls={
+            <HeroImageControls
+              draftId={previewRun.draft_id}
+              hasImage={Boolean(previewRun.pack?._image?.url)}
+              note="Nothing reaches Metricool until you approve."
+              onChanged={async () => { await loadRuns(); announce('images', 'drafts', 'autopilot'); }}
+            />
+          }
         />
       )}
 

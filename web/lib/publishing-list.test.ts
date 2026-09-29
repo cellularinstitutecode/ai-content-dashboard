@@ -92,3 +92,26 @@ test('the calendar lists the Autopilot drafts and approves them through the Dash
   // A missed run offers Skip only: its time has gone and Metricool refuses a past date.
   assert.match(preview, /run\.missed \? null :/);
 });
+
+test('changing a post’s picture re-sends it to Metricool through the existing replace', () => {
+  const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  const route = src('app/api/posts/route.ts');
+  assert.match(route, /\['reschedule', 'approve', 'publish_now', 'attach_video', 'sync_media'\]/);
+  const sync = route.indexOf("else if (action === 'sync_media')");
+  const approve = route.indexOf("mode = 'scheduled'");
+  const replace = route.indexOf('await metricoolReplacePost(');
+  assert.ok(sync > -1 && sync < approve, 'sync_media is its own branch, above the approve path — never an approval');
+  assert.ok(approve < replace, 'and reaches the one replace call every change uses');
+  // No second scheduler call was added: the media travels with the replace.
+  assert.equal((route.match(/metricoolReplacePost\(/g) || []).length, 1, 'the one call');
+
+  const page = src('app/calendar/page.tsx');
+  assert.match(page, /action: 'sync_media'/);
+  assert.match(page, /post\.metricool_post_id && !post\.mediaUrl/, 'only a post already in Metricool, and never in front of its video');
+
+  const controls = src('components/HeroImageControls.tsx');
+  assert.match(controls, /regenerate: true/, 'New AI image is the Dashboard’s regenerate');
+  assert.match(controls, /action: 'import_image'/, 'a library photo is copied the way "Use as hero image" copies it');
+  assert.match(controls, /useUrl: url/);
+  assert.match(controls, /styleFromUrl: url/);
+});

@@ -20,6 +20,7 @@ export type ReviewRunImage = {
   verification?: { status?: 'approved' | 'flagged' | 'unchecked'; score?: number | null; issues?: string[]; textDetected?: boolean; bannedProp?: boolean };
   titled?: { title: string; photoUrl: string };
   source?: string;
+  styledAfter?: string;
 };
 
 /** What GET /api/autopilot/runs returns for one run, as far as this page reads it. */
@@ -104,7 +105,7 @@ export default function RunPreview({
               <img src={image.url} alt={image.alt || 'AI hero image'} className="max-h-72 w-full rounded-xl object-contain ring-1 ring-black/5" />
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 <ImageVerdictBadge image={image} />
-                <span className="text-[11px] text-ink/50">Attaches to the post on approve.</span>
+                <span className="text-[11px] text-ink/50">{image.styledAfter ? 'AI image styled after a library photo. ' : ''}Attaches to the post on approve.</span>
               </div>
             </div>
           ) : (
