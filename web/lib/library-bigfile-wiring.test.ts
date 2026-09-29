@@ -38,7 +38,17 @@ test('the captioner still scales before it looks, and still refuses the absurd',
   assert.match(caption, /skipped: 'too_large'/);
 });
 
-test('the ceiling stays 25 MB for callers that did not opt in', () => {
+test('import_image opts in too: it scales the picture down before storing it', () => {
+  // "Use as hero image" and the calendar's "Choose from Image Library" refused
+  // the same 30-45 MB exports with "larger than 25 MB" — the downscaler ran
+  // only after a download that never happened.
   const imports = readFileSync(new URL('../app/api/sources/route.ts', import.meta.url), 'utf8');
-  assert.doesNotMatch(imports, /downloadDriveFile\([^)]*BIG_FILE_MAX_BYTES/);
+  assert.match(imports, /const BIG_FILE_MAX_BYTES = 64 \* 1024 \* 1024;/);
+  assert.match(imports, /downloadDriveFile\(body\.fileId, BIG_FILE_MAX_BYTES\)/);
+  assert.match(imports, /fitImage\(file\.bytes/);
+  // And still refuses to store a big original the downscaler could not shrink.
+  assert.match(imports, /!fit\.resized && fit\.bytes\.length > DRIVE_FILE_MAX_BYTES/);
+  assert.doesNotMatch(imports, /larger than 25 MB/);
+  // And has the time to do it, like the caption and palette routes.
+  assert.match(imports, /export const maxDuration = 300;/);
 });
