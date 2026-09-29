@@ -15,6 +15,8 @@ import { filterQueue, matchesQueueSearch } from "@/lib/queue-search";
 import MediaPicker from "@/components/MediaPicker";
 import SchedulePack from "@/components/SchedulePack";
 import HeroImagePicker from "@/components/HeroImagePicker";
+import HeroImageControls from "@/components/HeroImageControls";
+import YouTubeStats from "@/components/YouTubeStats";
 import { useWorkspace } from "@/components/workspace";
 import { appliesTo as complianceApplies, checkCompliance, complianceNetworksLabel, ensureAviso, DEFAULT_AVISO_NUMBER } from "@/lib/compliance";
 import { PanelLoader } from "@/components/LoadingScreen";
@@ -613,6 +615,11 @@ const [rescheduleAt, setRescheduleAt] = useState('');
 // video, the channels and the time — what will actually go out — before
 // anyone presses Approve on a two-line excerpt.
 const [previewPostId, setPreviewPostId] = useState<string | null>(null);
+// The preview's Edit section: the picture editor (new AI image, library photo,
+// the title, and notes/prompt for a regeneration). Held as the id of the post
+// being edited, so opening another post's preview starts closed.
+const [previewEditingId, setPreviewEditingId] = useState<string | null>(null);
+const previewEditing = previewPostId != null && previewEditingId === previewPostId;
 useEffect(() => {
   if (!previewPostId) return;
   const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPreviewPostId(null); };
@@ -903,6 +910,23 @@ if (!r.ok) { setActionMsg(await friendlyErrorFromResponse(r, 'We could not delet
 setActionMsg(null);
 refreshPosts(); announce('posts', 'stats', 'insights');
 } catch (e) { setActionMsg(friendlyError(e, 'We could not delete that post.')); }
+}
+
+// The preview's picture changed (Edit). A post already in Metricool gets the
+// new picture there too, the same sync the Calendar's preview uses; then the
+// queue re-reads so the preview shows it.
+async function afterQueueImageChanged(p: any) {
+try {
+if (p?.id && p?.metricool_post_id && !p?.mediaUrl) {
+const r = await fetch('/api/posts', {
+method: 'PATCH',
+headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({ id: p.id, action: 'sync_media' }),
+});
+if (!r.ok) setActionMsg(await friendlyErrorFromResponse(r, 'The new picture is saved here, but Metricool did not take it. It goes with the post the next time it is approved or moved.'));
+}
+} catch (e) { setActionMsg(friendlyError(e, 'The new picture is saved here, but Metricool could not be updated just now.')); }
+finally { refreshPosts(); announce('posts', 'images', 'drafts'); }
 }
 
 // The reviewer's yes. This is the only control in the app that makes a post
@@ -2420,6 +2444,9 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 </div>
 </div>
 </div>
+              {/* The YouTube channel's community numbers (Metricool's Community ·
+                  Growth panel), on the main page. */}
+{!isDraft && <YouTubeStats />}
               {/* Semrush Intelligence — the full SEO command center (domain
                   overview, rankings, competitors, backlinks, site health) plus
                   the keyword brain that pre-filters every draft */}
@@ -2750,6 +2777,8 @@ className="rounded-full bg-subtle px-5 py-2 text-[13px] font-medium text-ink rin
   const ppMeta = postStatusMeta(pp?.status);
   const ppPending = pp?.videoPending === true;
   const ppWaiting = ppMeta.label === 'Waiting for your approval' && !ppPending;
+  // A picture can be edited on a post with a draft behind it and no video.
+  const ppCanEdit = Boolean(pp.draft_id) && !pp.mediaUrl;
   const close = () => setPreviewPostId(null);
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={close}>
@@ -2772,6 +2801,21 @@ className="rounded-full bg-subtle px-5 py-2 text-[13px] font-medium text-ink rin
           ) : (
             <p className="mb-3 rounded-xl bg-subtle px-3 py-2 text-[12px] text-ink-muted ring-1 ring-line">{ppPending ? 'This post is waiting for its video.' : 'No picture or video on this post.'}</p>
           )}
+          {ppCanEdit && previewEditing && (
+            // EDIT: remake the picture with AI (with notes/prompt for the
+            // adjustment), change or remove its title, or use a library photo.
+            <div className="mb-3" id="queue-preview-edit">
+              <HeroImageControls
+                draftId={String(pp.draft_id)}
+                hasImage={Boolean(pp.imageUrl)}
+                note={pp.metricool_post_id
+                  ? 'The new picture is sent to Metricool as soon as it is ready.'
+                  : 'This post is not in Metricool yet: the new picture goes with it when it is approved.'}
+                beforeChange={() => !pp.metricool_post_id || window.confirm('This replaces the picture and updates the post in Metricool too. Continue?')}
+                onChanged={() => afterQueueImageChanged(pp)}
+              />
+            </div>
+          )}
           <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-ink">{pp.text || 'Scheduled post'}</div>
           {sheetRowUrl(pp.source) && (
             <a href={sheetRowUrl(pp.source) as string} target="_blank" rel="noopener noreferrer" title={sheetRowTitle(pp.source)} className="mt-3 inline-flex items-center gap-1 text-[12px] font-medium text-accent hover:underline">
@@ -2782,6 +2826,9 @@ className="rounded-full bg-subtle px-5 py-2 text-[13px] font-medium text-ink rin
         <div className="flex flex-wrap items-center gap-2 border-t border-line bg-subtle px-5 py-3">
           <span className={'rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ' + (ppMeta.tone === 'amber' ? 'bg-amber-50 text-amber-700 ring-amber-100' : ppMeta.tone === 'green' ? 'bg-emerald-50 text-emerald-700 ring-emerald-100' : 'bg-blue-50 text-blue-700 ring-blue-100')}>{ppPending ? 'Pending video' : ppMeta.label}</span>
           <span className="flex-1" />
+          {ppCanEdit && (
+            <button type="button" onClick={() => { setPreviewEditingId(previewEditing ? null : ppId); if (!previewEditing) setTimeout(() => document.getElementById('queue-preview-edit')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50); }} aria-expanded={previewEditing} title="Remake the picture with AI (with your own notes), change its title, or use a library photo" className={'rounded-full px-3 py-1 text-[12px] font-medium ring-1 ' + (previewEditing ? 'bg-ink text-white ring-ink' : 'text-ink ring-line hover:bg-white')}>{previewEditing ? 'Done editing' : '\u270E Edit'}</button>
+          )}
           {ppWaiting && (
             <>
               <button type="button" onClick={() => { close(); continueDraft(pp); }} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line hover:bg-white">Continue</button>

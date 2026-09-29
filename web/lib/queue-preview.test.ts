@@ -38,3 +38,18 @@ test('the preview shows what goes out and acts through the row\'s own functions'
   assert.match(modal, /safePosts\.find\(\(x: any\) => String\(x\?\.id \|\| ''\) === previewPostId\)/);
   assert.match(page, /if \(e\.key === 'Escape'\) setPreviewPostId\(null\)/, 'Escape closes it');
 });
+
+test('Edit opens the picture editor: AI remake with notes, title, library photo', () => {
+  const modal = page.slice(page.indexOf('const pp: any = previewPostId'));
+  assert.match(modal, /const ppCanEdit = Boolean\(pp\.draft_id\) && !pp\.mediaUrl;/, 'a picture post with a draft behind it');
+  assert.match(modal, /setPreviewEditingId\(previewEditing \? null : ppId\)/, 'the Edit button toggles the section');
+  // The same editor the Calendar preview uses (it carries ImageEditPanel:
+  // notes for the picture + "Regenerate with these notes").
+  assert.match(modal, /<HeroImageControls\s+draftId=\{String\(pp\.draft_id\)\}/);
+  assert.match(modal, /onChanged=\{\(\) => afterQueueImageChanged\(pp\)\}/);
+  // A post already in Metricool asks first, then gets the new picture there too.
+  assert.match(modal, /beforeChange=\{\(\) => !pp\.metricool_post_id \|\| window\.confirm/);
+  const sync = page.slice(page.indexOf('async function afterQueueImageChanged('));
+  assert.match(sync.slice(0, 900), /action: 'sync_media'/);
+  assert.match(page, /const previewEditing = previewPostId != null && previewEditingId === previewPostId;/, 'closed again for each new preview');
+});
