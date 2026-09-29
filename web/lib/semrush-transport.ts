@@ -251,13 +251,15 @@ export function toMcpCall(report: string, v3params: Record<string, string>): Mcp
  * with one campaign is the project id — the same id the v3 path used.
  */
 export function toMcpProjectCall(
-  kind: 'siteaudit_info' | 'tracking_report',
+  kind: 'siteaudit_info' | 'siteaudit_history' | 'tracking_report',
   projectId: string,
   v3params: Record<string, string>
 ): McpCall | null {
   const id = parseInt(projectId, 10);
   if (!Number.isFinite(id)) return null;
   if (kind === 'siteaudit_info') return { report: 'info', params: { id } };
+  // The newest audit only: the health score, billed per snapshot returned.
+  if (kind === 'siteaudit_history') return { report: 'history', params: { id, limit: 1 } };
   if (kind === 'tracking_report') {
     const iso = (s: string | undefined) => (s && /^\d{8}$/.test(s) ? s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8) : s);
     const params: Record<string, unknown> = { campaign_id: String(id) };

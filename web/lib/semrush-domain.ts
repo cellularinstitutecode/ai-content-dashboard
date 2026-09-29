@@ -36,6 +36,7 @@ import {
   type SemSource,
 } from '@/lib/semrush';
 import { reasonForCode, reasonForHttpStatus } from '@/lib/semrush-reason';
+import { healthCachePhrase, parseAuditHealth, parseAuditInfo, unwrapEnvelope } from './semrush-audit.ts';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 
 // ---------------------------------------------------------------------------
@@ -534,20 +535,21 @@ export async function organicCompetitors(
 const PROJECT_TTL_MS = 12 * 60 * 60 * 1000;
 
 async function projectJson(
-  cacheReport: 'siteaudit_info' | 'tracking_report',
+  cacheReport: 'siteaudit_info' | 'siteaudit_history' | 'tracking_report',
   cachePhrase: string,
   projectId: string,
   path: string,
-  params: Record<string, string>
+  params: Record<string, string>,
+  ttlMs: number = PROJECT_TTL_MS,
 ): Promise<{ json: any | null; meta: SectionMeta }> {
-  const cached = await cacheGet(cacheReport, 'proj', cachePhrase, PROJECT_TTL_MS);
+  const cached = await cacheGet(cacheReport, 'proj', cachePhrase, ttlMs);
   if (cached && cached[0]) {
     void logUsage(cacheReport, cachePhrase, 0, 'cache');
     return { json: cached[0], meta: { ok: true, source: 'cache', reason: 'ok', unitsSpent: 0 } };
   }
   const key = process.env.SEMRUSH_API_KEY;
   if (!key) return { json: null, meta: { ok: false, source: 'none', reason: 'no_token', unitsSpent: 0 } };
-  const est = UNIT_COST.siteaudit_info;
+  const est = UNIT_COST[cacheReport] ?? UNIT_COST.siteaudit_info;
   const decision = await budgetDecision(est);
   if (!decision.allow) {
     return { json: null, meta: { ok: false, source: 'none', ...refusalReason(decision), unitsSpent: 0 } };
@@ -567,6 +569,9 @@ async function projectJson(
     }
     let json: any = null;
     try { json = JSON.parse(text); } catch { /* not JSON - an expected branch, not a fault */ }
+    // The MCP transport wraps every report as { data, metadata }; the readers
+    // below expect the v3 body. Unwrapped once, here, for every project report.
+    json = unwrapEnvelope(json);
     if (json == null) return { json: null, meta: { ok: false, source: 'none', reason: 'http', note: 'unexpected response', unitsSpent: 0 } };
     void cachePut(cacheReport, 'proj', cachePhrase, [json], est);
     void logUsage(cacheReport, cachePhrase, est, 'live');
@@ -586,22 +591,44 @@ export async function siteAudit(): Promise<{ data: SiteAuditSnapshot; meta: Sect
   if (!id) return { data: empty, meta: { ok: false, source: 'none', reason: 'no_token', note: 'SEMRUSH_PROJECT_ID not set', unitsSpent: 0 } };
   const { json, meta: m } = await projectJson('siteaudit_info', id, id, `/reports/v1/projects/${encodeURIComponent(id)}/siteaudit/info`, {});
   if (!json) return { data: empty, meta: m };
-  const q = json.quality || {};
+  const info = parseAuditInfo(json);
+
+  // THE HEALTH SCORE. Not in `info`: it is the audit history's quality value,
+  // billed at 10,000 units. It only changes when an audit finishes (about
+  // monthly), so it is kept under that audit's finish time and fetched once
+  // per audit — a refresh costs nothing, a new audit costs one fetch.
+  let health = info.health;
+  let healthDelta = info.healthDelta;
+  let units = m.unitsSpent;
+  const phrase = healthCachePhrase(id, info.lastAuditMs);
+  if (health == null && phrase) {
+    const h = await projectJson(
+      'siteaudit_history', phrase, id,
+      `/reports/v1/projects/${encodeURIComponent(id)}/siteaudit/history`, { limit: '1' },
+      400 * 24 * 60 * 60 * 1000,
+    );
+    if (h.json) {
+      const parsed = parseAuditHealth(h.json);
+      health = parsed.health;
+      healthDelta = parsed.healthDelta;
+    }
+    units += h.meta.unitsSpent;
+  }
   return {
     data: {
       configured: true,
-      status: typeof json.status === 'string' ? json.status : null,
-      health: num(q.value),
-      healthDelta: num(q.delta),
-      errors: num(json.errors),
-      warnings: num(json.warnings),
-      notices: num(json.notices),
-      pagesCrawled: num(json.pages_crawled),
-      pagesHealthy: num(json.healthy),
-      pagesWithIssues: num(json.haveIssues),
-      lastAudit: json.last_audit ? new Date(Number(json.last_audit) * 1000).toISOString() : null,
+      status: info.status,
+      health,
+      healthDelta,
+      errors: info.errors,
+      warnings: info.warnings,
+      notices: info.notices,
+      pagesCrawled: info.pagesCrawled,
+      pagesHealthy: info.pagesHealthy,
+      pagesWithIssues: info.pagesWithIssues,
+      lastAudit: info.lastAudit,
     },
-    meta: m,
+    meta: { ...m, unitsSpent: units },
   };
 }
 

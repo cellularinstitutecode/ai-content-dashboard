@@ -102,6 +102,9 @@ export const UNIT_COST: Record<string, number> = {
   // Projects API endpoints bill per REQUEST, not per line.
   siteaudit_info: 100,
   tracking_report: 100,
+  // The audit history carries the health score, and Semrush bills it per
+  // snapshot returned (10,000 for one). Fetched once per finished audit.
+  siteaudit_history: 10000,
 };
 
 export function db(): string {
@@ -448,7 +451,7 @@ export async function semrushRequest(
 
   if (semrushTransport() === 'mcp') {
     let call: McpCall | null;
-    if (report === 'siteaudit_info' || report === 'tracking_report') {
+    if (report === 'siteaudit_info' || report === 'siteaudit_history' || report === 'tracking_report') {
       call = toMcpProjectCall(report, opts.projectId || '', params);
     } else {
       call = toMcpCall(report, params);
@@ -464,7 +467,7 @@ export async function semrushRequest(
   }
 
   const url = new URL(API_BASE.replace(/\/$/, '') + (opts.path ?? '/'));
-  if (report !== 'siteaudit_info' && report !== 'tracking_report') url.searchParams.set('type', report);
+  if (report !== 'siteaudit_info' && report !== 'siteaudit_history' && report !== 'tracking_report') url.searchParams.set('type', report);
   url.searchParams.set('key', key);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   const ctl = new AbortController();

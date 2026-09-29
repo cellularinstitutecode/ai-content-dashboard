@@ -94,6 +94,8 @@ test('the key never rides along into MCP parameters', () => {
 
 test('project reports map to the MCP site-audit and position-tracking reports', () => {
   assert.deepEqual(toMcpProjectCall('siteaudit_info', '12833067', {}), { report: 'info', params: { id: 12833067 } });
+  // The health score: the newest audit only (billed per snapshot returned).
+  assert.deepEqual(toMcpProjectCall('siteaudit_history', '12833067', {}), { report: 'history', params: { id: 12833067, limit: 1 } });
   const t = toMcpProjectCall('tracking_report', '12833067', { action: 'report', type: 'tracking_visibility_organic', date_begin: '20260806', date_end: '20260904', url: '*.x.com/*' });
   assert.deepEqual(t, { report: 'tracking_visibility_organic', params: { campaign_id: '12833067', url: '*.x.com/*', date_begin: '2026-08-06', date_end: '2026-09-04' } });
   assert.equal(toMcpProjectCall('siteaudit_info', '', {}), null);
