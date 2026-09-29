@@ -1698,6 +1698,11 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 </div>
 )}
 
+{/* Drop weekly strategy — the team's most important feature, so it sits at
+    the top of the overview, full width, above every other panel. A strategy
+    PDF becomes Autopilot slots (components/StrategyDrop.tsx). */}
+{!isDraft && <StrategyDrop />}
+
 {/* One plain-English line when the app is running degraded, so a blank
     Site Audit dial or a missing keyword note has a stated cause instead of
     looking like three unrelated glitches. Silent when all is well. */}
@@ -2440,9 +2445,6 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 </div>
 </div>
 </div>
-              {/* Drop weekly strategy: a strategy PDF becomes Autopilot slots
-                  (components/StrategyDrop.tsx). Additive — nothing is removed. */}
-{!isDraft && <StrategyDrop />}
               {/* The YouTube channel's community numbers (Metricool's Community ·
                   Growth panel), on the main page. */}
 {!isDraft && <YouTubeStats />}

@@ -37,17 +37,17 @@ function toneFor(pillar: string, all: string[]): string {
 
 function SlotCard({ slot, tone, on, onToggle }: { slot: UploadSlot; tone: string; on: boolean; onToggle: () => void }) {
   return (
-    <div className={'min-w-0 break-words hyphens-auto rounded-xl p-2 text-[11px] ring-1 transition ' + tone + (on ? '' : ' opacity-40')}>
-      <div className="flex items-start justify-between gap-1">
-        <span className="font-semibold tabular-nums">{slot.time}</span>
+    <div className={'min-w-0 break-words hyphens-auto rounded-2xl p-3.5 text-[12px] ring-1 transition ' + tone + (on ? '' : ' opacity-40')}>
+      <div className="flex items-start justify-between gap-2">
+        <span className="text-[13px] font-semibold tabular-nums">{slot.time}</span>
         <input type="checkbox" checked={on} onChange={onToggle} aria-label={'Include ' + slot.pillar + ' on ' + DAY_LABELS[slot.weekday]} className="mt-0.5" />
       </div>
-      <div className="mt-1 text-[11.5px] font-semibold leading-snug">{slot.pillar}</div>
-      <div className="mt-1 flex flex-wrap gap-1">
-        {slot.format === 'blog' && <span className="rounded bg-white/70 px-1 font-medium">Article</span>}
-        {slot.providers.map((p) => <span key={p} className="rounded bg-white/70 px-1">{NETWORK_LABEL[p] || p}</span>)}
+      <div className="mt-2 text-[14px] font-semibold leading-snug">{slot.pillar}</div>
+      <div className="mt-2.5 flex flex-wrap gap-1.5">
+        {slot.format === 'blog' && <span className="rounded-md bg-white/70 px-1.5 py-0.5 font-medium">Article</span>}
+        {slot.providers.map((p) => <span key={p} className="rounded-md bg-white/70 px-1.5 py-0.5">{NETWORK_LABEL[p] || p}</span>)}
       </div>
-      <div className="mt-1.5 opacity-80" title={slot.angles.join('\n')}>
+      <div className="mt-3 leading-relaxed opacity-80" title={slot.angles.join('\n')}>
         {slot.angles.length} angle{slot.angles.length === 1 ? '' : 's'} · e.g. “{slot.angles[0]}”
       </div>
     </div>
@@ -119,12 +119,12 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
   const nothingNew = Boolean(preview && preview.create === 0);
 
   return (
-    <section id="section-strategy-drop" className="mb-8 rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7 2xl:col-span-2 2xl:mb-0" aria-label="Drop weekly strategy">
+    <section id="section-strategy-drop" className="mb-10 rounded-3xl bg-surface p-6 shadow-card ring-2 ring-accent/30 sm:p-10" aria-label="Drop weekly strategy">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-[17px] font-semibold text-ink">Drop weekly strategy</h2>
-        <span className="text-[12px] text-ink-faint">PDF → the week → Autopilot</span>
+        <h2 className="text-[24px] font-semibold tracking-tight text-ink">Drop weekly strategy</h2>
+        <span className="text-[13px] text-ink-faint">PDF → the week → Autopilot</span>
       </div>
-      <p className="mt-1 text-[13px] text-ink-muted">
+      <p className="mt-3 max-w-3xl text-[14px] leading-relaxed text-ink-muted">
         Drop a strategy document like the clinic&rsquo;s weekly plan. Each post it lists becomes a weekly slot: Autopilot researches keywords and competitors, learns from what has performed, writes and verifies each post, and puts it in the review queue. Approved posts go to the calendar and publish through Metricool as they do today. Nothing existing is changed.
       </p>
 
@@ -136,14 +136,14 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
         onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
         onDrop={(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f && !reading) void read(f); }}
-        className={'mt-4 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-4 py-7 text-center transition ' +
+        className={'mt-8 flex cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed px-6 py-14 text-center transition ' +
           (drag ? 'border-accent bg-accent/5' : 'border-line hover:border-accent/60')}
       >
-        <div className="text-[26px]" aria-hidden>📄</div>
-        <div className="mt-1 text-[14px] font-medium text-ink">
+        <div className="text-[40px]" aria-hidden>📄</div>
+        <div className="mt-3 text-[16px] font-medium text-ink">
           {reading ? 'Reading ' + (fileName || 'the strategy') + '…' : 'Drop the strategy PDF here, or click to choose'}
         </div>
-        <div className="mt-0.5 text-[12px] text-ink-faint">{reading ? 'This takes up to a minute.' : 'PDF, up to 4 MB'}</div>
+        <div className="mt-1.5 text-[13px] text-ink-faint">{reading ? 'This takes up to a minute.' : 'PDF, up to 4 MB'}</div>
         <input
           ref={input}
           type="file"
@@ -153,22 +153,22 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
         />
       </div>
 
-      {err && <p role="alert" className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-900 ring-1 ring-amber-200/60">{err}</p>}
-      {done && <p role="status" className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-[12px] text-emerald-900 ring-1 ring-emerald-200/60">{done} <a href="/templates" className="font-medium underline">See them on Templates</a></p>}
+      {err && <p role="alert" className="mt-5 rounded-xl bg-amber-50 px-4 py-3 text-[13px] text-amber-900 ring-1 ring-amber-200/60">{err}</p>}
+      {done && <p role="status" className="mt-5 rounded-xl bg-emerald-50 px-4 py-3 text-[13px] text-emerald-900 ring-1 ring-emerald-200/60">{done} <a href="/templates" className="font-medium underline">See them on Templates</a></p>}
 
       {plan && (
-        <div className="mt-5">
-          <div className="text-[15px] font-semibold text-ink">{plan.title}</div>
-          {plan.summary && <p className="mt-0.5 text-[12px] text-ink-muted">{plan.summary}</p>}
-          {plan.direction && <p className="mt-1 text-[12px] text-ink-muted"><span className="font-medium">Editorial direction:</span> {plan.direction}</p>}
+        <div className="mt-10">
+          <div className="text-[18px] font-semibold text-ink">{plan.title}</div>
+          {plan.summary && <p className="mt-1.5 text-[13px] leading-relaxed text-ink-muted">{plan.summary}</p>}
+          {plan.direction && <p className="mt-1.5 text-[13px] leading-relaxed text-ink-muted"><span className="font-medium">Editorial direction:</span> {plan.direction}</p>}
 
-          <div className="mt-4 grid grid-cols-1 gap-1.5 sm:grid-cols-4 lg:grid-cols-7">
+          <div className="mt-6 grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
             {WEEK_ORDER.map((d) => {
               const day = plan.slots.map((s, i) => ({ s, i })).filter(({ s }) => s.weekday === d);
               return (
-                <div key={d} className="min-w-0 rounded-2xl bg-canvas/60 p-1.5 ring-1 ring-line/50">
-                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-faint">{DAY_LABELS[d].slice(0, 3)}</div>
-                  <div className="grid gap-2">
+                <div key={d} className="min-w-0 rounded-2xl bg-canvas/60 p-3 ring-1 ring-line/50">
+                  <div className="mb-3 px-1 text-[12px] font-semibold uppercase tracking-wider text-ink-faint">{DAY_LABELS[d].slice(0, 3)}</div>
+                  <div className="grid gap-3">
                     {day.length ? day.map(({ s, i }) => (
                       <SlotCard
                         key={i}
@@ -185,7 +185,7 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
           </div>
 
           {(plan.notes.length > 0 || (preview && (preview.already > 0 || preview.clashes.length > 0))) && (
-            <ul className="mt-3 list-disc space-y-0.5 pl-5 text-[12px] text-ink-muted">
+            <ul className="mt-5 list-disc space-y-1 pl-5 text-[13px] text-ink-muted">
               {plan.notes.map((n, i) => <li key={'n' + i}>{n}</li>)}
               {preview && preview.already > 0 && <li>{preview.already} of these already exist from an earlier upload and will be left as they are.</li>}
               {preview && preview.clashes.slice(0, 5).map((c, i) => <li key={'c' + i}>{c.slot} shares its time with &ldquo;{c.with}&rdquo; — both will post.</li>)}
@@ -193,17 +193,17 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
             </ul>
           )}
 
-          <div className="mt-4 flex flex-wrap items-center gap-3">
+          <div className="mt-8 flex flex-wrap items-center gap-4">
             <button
               type="button"
               onClick={() => void create()}
               disabled={creating || chosen === 0 || nothingNew}
-              className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-white shadow-sm transition hover:opacity-90 disabled:opacity-50"
+              className="rounded-full bg-accent px-7 py-3 text-[15px] font-semibold text-white shadow-sm transition hover:opacity-90 disabled:opacity-50"
             >
               {creating ? 'Creating…' : nothingNew ? 'Already created' : 'Create ' + chosen + ' schedule' + (chosen === 1 ? '' : 's')}
             </button>
             <button type="button" onClick={() => { setPlan(null); setPreview(null); }} className="text-[12px] font-medium text-ink-muted hover:underline">Discard</button>
-            <span className="text-[11px] text-ink-faint">Every post waits for your approval before it is scheduled or published.</span>
+            <span className="text-[12px] text-ink-faint">Every post waits for your approval before it is scheduled or published.</span>
           </div>
         </div>
       )}
