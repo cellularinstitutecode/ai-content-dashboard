@@ -96,6 +96,8 @@ export default function CalendarPage() {
   // failed load read as "nothing is scheduled", which is the wrong conclusion.
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
+  /** What "Verify / fix" concluded about the post it was pressed on (shown in that post's preview only). */
+  const [fixNote, setFixNote] = useState<{ id: string; note: string; changed: boolean } | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   // Publishing list: which posts are ticked for bulk delete, which one is open
   // in the preview, and the running bulk delete's progress.
@@ -439,6 +441,34 @@ export default function CalendarPage() {
       announce('posts', 'stats', 'insights');
     } catch (e: any) {
       setErr(friendlyError(e, 'We could not approve that post.'));
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  // What "Verify / fix" does: checks the study in the REF line against the
+  // copy and, when it does not support it, swaps in one that does — here, on
+  // the draft, and in Metricool. Never an approval; the post stays where it is.
+  async function verifyFix(post: Post) {
+    if (!post.id) return;
+    setSaving(post.id);
+    setFixNote(null);
+    try {
+      const r = await fetch('/api/posts', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: post.id, action: 'fix_citation' }),
+      });
+      if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'We could not check that post’s citation.'));
+      const j = await r.json().catch(() => ({}));
+      setErr(null);
+      setFixNote({ id: post.id, note: String(j?.note || (j?.fixed ? 'The citation was replaced.' : 'Checked.')), changed: Boolean(j?.fixed) });
+      if (j?.fixed) {
+        await refresh();
+        announce('posts', 'drafts');
+      }
+    } catch (e: any) {
+      setErr(friendlyError(e, 'We could not check that post’s citation.'));
     } finally {
       setSaving(null);
     }
@@ -1075,6 +1105,11 @@ export default function CalendarPage() {
                 />
               )}
               <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-ink">{previewPost.text || 'Untitled post'}</div>
+              {fixNote && fixNote.id === String(previewPost.id) && (
+                <div className={'mt-3 rounded-xl px-3 py-2 text-[12px] ' + (fixNote.changed ? 'border border-emerald-200 bg-emerald-50 text-emerald-800' : 'border border-black/10 bg-canvas text-ink/70')} role="status">
+                  {fixNote.note}
+                </div>
+              )}
               {sheetRowUrl(previewPost.source) && (
                 <a href={sheetRowUrl(previewPost.source) as string} target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1 text-[12px] font-medium text-accent hover:underline">
                   <span aria-hidden>{'\u{1F4C4}'}</span> {sheetRowLabel(previewPost.source)} {'\u2197'}
@@ -1089,6 +1124,7 @@ export default function CalendarPage() {
                 </label>
               )}
               <span className="flex-1" />
+              <button type="button" disabled={saving === previewPost.id} onClick={() => void verifyFix(previewPost)} title="Check that the cited study supports this post; replace it with one that does if not" className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">{saving === previewPost.id ? 'Checking…' : 'Verify / fix'}</button>
               <button type="button" onClick={() => { jumpTo(previewPost); setPreviewId(null); }} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Show on calendar</button>
               {previewPost.videoPending === true ? (
                 <button type="button" disabled={saving === previewPost.id} onClick={() => void attachVideo(previewPost)} className="rounded-full bg-rose-600 px-3 py-1 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{saving === previewPost.id ? 'Attaching…' : 'Attach video'}</button>

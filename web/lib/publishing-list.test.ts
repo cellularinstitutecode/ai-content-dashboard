@@ -96,7 +96,7 @@ test('the calendar lists the Autopilot drafts and approves them through the Dash
 test('changing a post’s picture re-sends it to Metricool through the existing replace', () => {
   const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
   const route = src('app/api/posts/route.ts');
-  assert.match(route, /\['reschedule', 'approve', 'publish_now', 'attach_video', 'sync_media'\]/);
+  assert.match(route, /\['reschedule', 'approve', 'publish_now', 'attach_video', 'sync_media', 'fix_citation'\]/);
   const sync = route.indexOf("else if (action === 'sync_media')");
   const approve = route.indexOf("mode = 'scheduled'");
   const replace = route.indexOf('await metricoolReplacePost(');

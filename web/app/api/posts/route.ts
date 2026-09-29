@@ -2,6 +2,8 @@
 import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
 import { refPolicyOf } from '@/lib/compliance';
 import { claimSupportOf } from '@/lib/citation-gate';
+import { fixPostCitation } from '@/lib/post-citation-fix';
+import { avisoForUser } from '@/lib/compliance-gate';
 import { videoVerdict, pendingRefusal, videoSourceOf, type PackLike } from '@/lib/video-required';
 import { ensureShareableVideo } from '@/lib/media-library';
 import { recordApproval } from '@/lib/approval-log';
@@ -334,7 +336,7 @@ export async function PATCH(req: Request) {
   if (!id || typeof id !== 'string') {
     return NextResponse.json({ error: 'id is required' }, { status: 400 });
   }
-  if (!['reschedule', 'approve', 'publish_now', 'attach_video', 'sync_media'].includes(action)) {
+  if (!['reschedule', 'approve', 'publish_now', 'attach_video', 'sync_media', 'fix_citation'].includes(action)) {
     return NextResponse.json({ error: 'invalid_request', message: 'That is not something a post can do.' }, { status: 400 });
   }
   if (action === 'reschedule') {
@@ -443,6 +445,57 @@ export async function PATCH(req: Request) {
     (existing as { media_drive_file_id?: string | null }).media_drive_file_id = made.fileId;
   }
 
+  // --- fix_citation: what the "Verify / fix" button does ---------------------
+  //
+  // Does the study in the REF line back what this post says (lib/post-citation-fix.ts)?
+  // If not, the citation is replaced with one that does — on the post's text, on
+  // every channel of its draft, and in Metricool through the ordinary replace
+  // below, at the same date and in the same queue. It is not an approval. When
+  // no study backs the copy, nothing is swapped and the post is stamped
+  // 'unsupported', which the approve door refuses.
+  let citationNote: string | null = null;
+  let citationSwapped = false;
+  if (action === 'fix_citation') {
+    let fix: Awaited<ReturnType<typeof fixPostCitation>>;
+    try {
+      fix = await fixPostCitation({ text: String(existing.text || ''), pack: draftPack, aviso: await avisoForUser(user.id) });
+    } catch (e) {
+      reportError('posts:fix-citation', e, { id });
+      return NextResponse.json(
+        { error: 'fix_failed', message: 'The citation could not be checked just now. Nothing was changed — try again in a moment.' },
+        { status: 502 },
+      );
+    }
+    citationNote = fix.note;
+    citationSwapped = fix.swapped;
+    if (existing.draft_id && Object.keys(fix.packPatch).length) {
+      // Merged over a fresh read, like every other pack writer: the copy read
+      // above may be stale by now and a concurrent image write must survive.
+      const { data: fresh } = await sb.from('drafts').select('pack').eq('id', existing.draft_id).eq('user_id', user.id).maybeSingle();
+      const currentPack = ((fresh as { pack?: Record<string, unknown> } | null)?.pack || draftPack || {}) as Record<string, unknown>;
+      const nextPack = { ...currentPack, ...fix.packPatch };
+      const { error: packError } = await sb.from('drafts').update({ pack: nextPack }).eq('id', existing.draft_id).eq('user_id', user.id);
+      if (packError) {
+        reportError('posts:fix-citation-draft', packError, { id });
+        return NextResponse.json({ error: 'draft_update_failed', message: 'The check ran, but the draft could not be updated. Nothing was changed — try again in a moment.' }, { status: 503 });
+      }
+      draftPack = nextPack;
+    }
+    if (fix.swapped) {
+      const { error: textError } = await sb.from('posts').update({ text: fix.text }).eq('id', id).eq('user_id', user.id);
+      if (textError) {
+        reportError('posts:fix-citation-text', textError, { id });
+        return NextResponse.json({ error: 'post_update_failed', message: 'The new citation was saved on the draft, but not on this post. Try again in a moment.' }, { status: 503 });
+      }
+      // Read back through the same field the rest of this handler uses, so the
+      // replace below carries the corrected copy to Metricool.
+      (existing as { text?: string | null }).text = fix.text;
+    } else {
+      // Nothing to send to Metricool: the post reads exactly as it did.
+      return NextResponse.json({ fixed: false, status: fix.status, note: fix.note, ref: fix.ref });
+    }
+  }
+
   // Only the linked draft's IMAGE was ever looked up for this, so approving a
   // video post stripped the video — the one thing the post existed to carry.
   // The video's world-readable copy is recoverable from the row's own
@@ -537,6 +590,12 @@ export async function PATCH(req: Request) {
 
   if (action === 'reschedule') {
     nextDate = publicationDate;
+  } else if (action === 'fix_citation') {
+    // The corrected copy goes to Metricool at the same date, in the same
+    // queue. A post Metricool does not have yet is simply saved here.
+    if (!existing.metricool_post_id) {
+      return NextResponse.json({ fixed: true, status: 'swapped', note: citationNote + ' This post is not in Metricool yet: the new citation goes with it when it is next sent.', text: existing.text });
+    }
   } else if (action === 'attach_video') {
     // Attaching is NOT approving. The replace below carries the video to
     // Metricool and the post stays exactly where it was in the queue, waiting
@@ -663,7 +722,7 @@ export async function PATCH(req: Request) {
         tiktokData,
       });
     } catch (e) {
-      reportError(action === 'reschedule' ? 'posts:metricool-reschedule' : action === 'sync_media' ? 'posts:metricool-sync-media' : 'posts:metricool-approve', e);
+      reportError(action === 'reschedule' ? 'posts:metricool-reschedule' : action === 'sync_media' ? 'posts:metricool-sync-media' : action === 'fix_citation' ? 'posts:metricool-fix-citation' : 'posts:metricool-approve', e);
       return NextResponse.json(
         {
           error: 'metricool_update_failed',
@@ -671,6 +730,9 @@ export async function PATCH(req: Request) {
             ? 'We could not move this post in Metricool, so it has been left where it was. Open it in Metricool to change the time there.'
             : action === 'sync_media'
               ? 'The new picture is saved here, but Metricool did not take it. It goes with the post the next time it is approved or moved.'
+              : action === 'fix_citation'
+                ? 'The new citation is saved here, but Metricool did not take it. It goes with the post the next time it is approved or moved. '
+                  + 'Metricool said: ' + redact(e instanceof Error ? e.message : String(e)).slice(0, 300)
               : 'Metricool did not accept the approval, so the post is still waiting for review. Nothing was scheduled. '
                 // Metricool's own answer, on screen instead of only in the server log.
                 + 'Metricool said: ' + redact(e instanceof Error ? e.message : String(e)).slice(0, 300),
@@ -719,6 +781,7 @@ export async function PATCH(req: Request) {
     // So the caller can tell the two apart without inspecting the row: an
     // attach leaves the post exactly where it was, waiting for a person.
     ...(action === 'attach_video' ? { attached: true, mediaUrl: media[0] || null } : {}),
+    ...(action === 'fix_citation' ? { fixed: citationSwapped, status: 'swapped', note: citationNote, text: existing.text } : {}),
   });
 }
 

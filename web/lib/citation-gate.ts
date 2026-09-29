@@ -26,12 +26,22 @@
 //
 // No imports, deliberately: the test runner strips types and runs this file.
 
-/** `pack._claimSupport.status`, or null when the draft carries none. */
+/**
+ * The judge's verdict on the draft, or null when the draft carries none.
+ *
+ * Two spellings, because two pipelines write it: the Autopilot stamps
+ * `_claimSupport` and the video pipeline (lib/video-prepare.ts) stamps
+ * `claimSupport`. Reading only one of them is how a video post's 'unsupported'
+ * never reached the gate that was written to read it.
+ */
 export function claimSupportOf(pack: unknown): string | null {
   if (!pack || typeof pack !== 'object') return null;
-  const stamp = (pack as { _claimSupport?: { status?: unknown } | null })._claimSupport;
-  const status = stamp && typeof stamp === 'object' ? String(stamp.status || '').trim().toLowerCase() : '';
-  return status || null;
+  const p = pack as { _claimSupport?: { status?: unknown } | null; claimSupport?: { status?: unknown } | null };
+  for (const stamp of [p._claimSupport, p.claimSupport]) {
+    const status = stamp && typeof stamp === 'object' ? String(stamp.status || '').trim().toLowerCase() : '';
+    if (status) return status;
+  }
+  return null;
 }
 
 /**
