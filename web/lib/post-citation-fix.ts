@@ -12,9 +12,12 @@
 //   1. Judge the paper cited NOW against the copy as it stands. The cited
 //      paper is fetched by its DOI if the draft did not keep it, so the judge
 //      reads the abstract rather than trusting a stale stamp.
-//   2. No — so search PubMed for what the post is about: the papers the
-//      draft kept, then the video's subject and keywords, then the
-//      transcript's own vocabulary, then the copy's.
+//   2. No — so take the post apart into its checkable statements
+//      (lib/claim-extract.ts), each with a search of its own, and judge
+//      each one: a planner post that makes three citable points is not one
+//      claim, and asking the judge about it whole got null every time.
+//      Then, still nothing: search for what the post is about — the video's
+//      subject and keywords, the transcript's vocabulary, the copy's.
 //   3. Cite the one that backs it, on every channel of the draft and on the
 //      post's text, after Crossref has confirmed the DOI.
 //   4. None does: nothing is swapped (one wrong study for another is not a
@@ -24,7 +27,7 @@
 // It never redrafts the copy: the words are the clinic's; the citation is ours.
 import 'server-only';
 
-import { judgeClaimSupport } from '@/lib/ai';
+import { extractCheckableClaims, judgeClaimSupport } from '@/lib/ai';
 import { MAX_CANDIDATES, claimFrom, claimQuery, supportedItem, type ClaimSupportStamp, type SupportVerdict } from '@/lib/claim-support';
 import { checkCompliance, refPolicyOf } from '@/lib/compliance';
 import { refTitle, verifyDoi } from '@/lib/citation';
@@ -82,7 +85,12 @@ export function searchSubjectsFor(pack: Record<string, unknown> | null, text: st
   return out.filter((s, n, all) => s.subject && all.findIndex((x) => x.subject === s.subject) === n);
 }
 
-export async function fixPostCitation(input: { text: string; pack: Record<string, unknown> | null; aviso?: string | null }): Promise<CitationFixOutcome> {
+/** How long the ladder may climb before it reports what it has. */
+export const FIX_BUDGET_MS = 150_000;
+
+export async function fixPostCitation(input: { text: string; pack: Record<string, unknown> | null; aviso?: string | null; budgetMs?: number }): Promise<CitationFixOutcome> {
+  const startedAt = Date.now();
+  const outOfTime = () => Date.now() - startedAt > (input.budgetMs ?? FIX_BUDGET_MS);
   const text = String(input.text || '');
   const pack = input.pack || {};
   const current = checkCompliance(text, input.aviso ?? undefined, { refPolicy: refPolicyOf(pack) });
@@ -117,10 +125,38 @@ export async function fixPostCitation(input: { text: string; pack: Record<string
   if (candidates.length) verdict = await judgeClaimSupport({ claim, items: candidates });
   let backing = supportedItem(candidates, verdict);
 
-  // RUNG 2 — search for what the post is about, one subject at a time.
-  if (!backing) {
-    const seen = new Set(candidates.map(doiOf));
+  // RUNG 2 — the post's own statements, one at a time.
+  //
+  // The judge is asked about ONE concrete claim, which is the question it was
+  // built to answer, first against the papers in hand and then against a
+  // search written for that claim. The first paper it accepts is the citation.
+  /** The statement the chosen paper backs, for the note. */
+  let backedClaim = '';
+  const seen = new Set(candidates.map(doiOf));
+  if (!backing && !outOfTime()) {
+    const claims = await extractCheckableClaims(text);
+    for (const c of claims) {
+      if (backing || outOfTime()) break;
+      if (candidates.length) {
+        const inHand = await judgeClaimSupport({ claim: c.claim, items: candidates });
+        const hit = supportedItem(candidates, inHand);
+        if (hit) { backing = hit; verdict = inHand; backedClaim = c.claim; break; }
+      }
+      let found: EvidenceItem[] = [];
+      try { found = (await findEvidence(c.query)).filter((i) => doiOf(i) && !seen.has(doiOf(i))); } catch (err) { reportError('post-citation-fix:claim-search', err); }
+      if (!found.length) continue;
+      found.forEach((i) => seen.add(doiOf(i)));
+      const retried = await judgeClaimSupport({ claim: c.claim, items: found });
+      const hit = supportedItem(found, retried);
+      if (hit) { backing = hit; candidates = dedupe([hit, ...candidates]); verdict = retried; backedClaim = c.claim; break; }
+      if (retried.status !== 'unchecked') verdict = retried;
+    }
+  }
+
+  // RUNG 2b — search for what the post is about, one subject at a time.
+  if (!backing && !outOfTime()) {
     for (const s of searchSubjectsFor(pack, text)) {
+      if (outOfTime()) break;
       let found: EvidenceItem[] = [];
       try { found = (await findEvidence(s.subject, s.keywords)).filter((i) => doiOf(i) && !seen.has(doiOf(i))); } catch (err) { reportError('post-citation-fix:search', err); }
       if (!found.length) continue;
@@ -167,12 +203,20 @@ export async function fixPostCitation(input: { text: string; pack: Record<string
     const ref = line.replace(/^REF:\s*/, '');
     return {
       text: nextText, packPatch: stampOn('swapped', backing.doi, candidates, texts), swapped: true, status: 'swapped',
-      note: (citedDoi ? 'The cited study did not support this post. ' : 'This post had no verifiable citation. ') + 'Replaced the citation with ' + ref,
+      note: (citedDoi ? 'The cited study did not support this post. ' : 'This post had no verifiable citation. ') + 'Replaced the citation with ' + ref +
+        (backedClaim ? ' \u2014 it backs the post\u2019s statement that ' + backedClaim.replace(/\.$/, '').replace(/^[A-Z]/, (m) => m.toLowerCase()) + '.' : ''),
       ref,
     };
   }
 
   // RUNG 4 — nothing found backs the copy as written.
+  if (outOfTime()) {
+    return {
+      text, packPatch: stampOn('unsupported', citedDoi || null, candidates), swapped: false, status: 'unsupported',
+      note: 'No study found so far supports what this post says, and the search ran out of time. The citation was left as it is; press Verify / fix again to keep looking.',
+      ref: currentRef,
+    };
+  }
   return {
     text, packPatch: stampOn('unsupported', citedDoi || null, candidates), swapped: false, status: 'unsupported',
     note: 'No study could be found that supports what this post says' + (citedDoi ? ', and the one cited does not either' : '') +
