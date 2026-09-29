@@ -15,7 +15,7 @@ import { normalizeFailure } from '@/lib/media-normalize-reason';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { tiktokDataFor } from '@/lib/tiktok-meta';
 import { cachedPublicCopy } from '@/lib/transcript-cache';
-import { reportError } from '@/lib/report';
+import { redact, reportError } from '@/lib/report';
 import { deleteDriveFile } from '@/lib/drive';
 import { deleteBucketVideo, isBucketVideoKey } from '@/lib/video-bucket';
 import { forgetPublicCopy } from '@/lib/transcript-cache';
@@ -671,7 +671,9 @@ export async function PATCH(req: Request) {
             ? 'We could not move this post in Metricool, so it has been left where it was. Open it in Metricool to change the time there.'
             : action === 'sync_media'
               ? 'The new picture is saved here, but Metricool did not take it. It goes with the post the next time it is approved or moved.'
-              : 'Metricool did not accept the approval, so the post is still waiting for review. Nothing was scheduled — try again in a moment.',
+              : 'Metricool did not accept the approval, so the post is still waiting for review. Nothing was scheduled. '
+                // Metricool's own answer, on screen instead of only in the server log.
+                + 'Metricool said: ' + redact(e instanceof Error ? e.message : String(e)).slice(0, 300),
         },
         { status: 502 },
       );
