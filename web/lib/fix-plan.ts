@@ -163,3 +163,56 @@ export function swapRefLine(text: string, refLine: string): string {
   if (aviso) return t.slice(0, aviso.index).replace(/\s+$/, '') + '\n\n' + line + '\n' + t.slice(aviso.index);
   return t.replace(/\s+$/, '') + '\n\n' + line;
 }
+
+// ---------------------------------------------------------------------------
+// FIX in the background: the status the card reads while it runs.
+// ---------------------------------------------------------------------------
+//
+// FIX takes one to four minutes (a redraft, a citation search, a new picture).
+// Held open as one request it covered the card with a loader that sat at 94%
+// the whole time, and a request the platform cut off at five minutes left it
+// there with nothing said. So the request only starts FIX (POST answers at
+// once) and the work continues after the response; its progress lives on the
+// run itself (`angle.fix`), which the card already reads and polls.
+
+export type FixStatus = {
+  state: 'running' | 'done' | 'failed';
+  startedAt: string;
+  endedAt?: string;
+  /** fixNote() of the result, or why it stopped. */
+  note?: string;
+  /** What still needs a person; empty when everything was resolved. */
+  remaining?: string[];
+};
+
+/**
+ * A FIX still "running" after this long did not finish: the platform stops a
+ * function at five minutes and nothing is left to write the result. The card
+ * says so, and FIX can be pressed again.
+ */
+export const FIX_STALE_MS = 6 * 60_000;
+
+export type FixView =
+  | { kind: 'running'; elapsedSec: number }
+  | { kind: 'done'; note: string; clean: boolean }
+  | { kind: 'stalled' }
+  | null;
+
+/** What the card shows for a run's FIX, from `angle.fix`. */
+export function fixView(angle: { fix?: FixStatus | null } | null | undefined, now: number = Date.now()): FixView {
+  const f = angle?.fix;
+  if (!f || !f.state) return null;
+  if (f.state === 'running') {
+    const started = Date.parse(String(f.startedAt || ''));
+    if (!Number.isFinite(started) || now - started > FIX_STALE_MS) return { kind: 'stalled' };
+    return { kind: 'running', elapsedSec: Math.max(0, Math.floor((now - started) / 1000)) };
+  }
+  const note = String(f.note || '').trim();
+  if (!note) return null;
+  return { kind: 'done', note, clean: f.state === 'done' && !(f.remaining || []).length };
+}
+
+/** Is a FIX working on this run right now (and not stalled)? */
+export function fixRunning(angle: { fix?: FixStatus | null } | null | undefined, now: number = Date.now()): boolean {
+  return fixView(angle, now)?.kind === 'running';
+}

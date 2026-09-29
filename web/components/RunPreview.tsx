@@ -9,11 +9,11 @@
 import { useState, type ReactNode } from 'react';
 import { citationLabel, type CitationCheck } from '@/lib/citation';
 import { claimSupportNote, type ClaimSupportStamp } from '@/lib/claim-support';
-import { fixPlan, fixStepsLabel, runFixInput } from '@/lib/fix-plan';
+import { fixPlan, fixRunning, fixStepsLabel, runFixInput, type FixStatus } from '@/lib/fix-plan';
 import { imageUnshippable } from '@/lib/image-verdict';
 import { complianceLines, runChannels } from '@/lib/publishing-list';
 import { fmtScheduleSlot } from '@/lib/schedule-clock';
-import { PanelLoader } from '@/components/LoadingScreen';
+import FixStatusLine from '@/components/FixStatusLine';
 
 export type ReviewRunImage = {
   url: string;
@@ -34,7 +34,7 @@ export type ReviewRun = {
   scheduled_for: string;
   state: string;
   missed?: boolean;
-  angle: { query?: string; rationale?: string } | null;
+  angle: { query?: string; rationale?: string; fix?: FixStatus | null } | null;
   score: { total: number; safetyFlags: { code: string; message: string }[]; promotionFlags?: string[]; openingRepeat?: boolean } | null;
   pack: (Record<string, unknown> & { _image?: ReviewRunImage; _compliance?: { citation?: CitationCheck | null }; _claimSupport?: ClaimSupportStamp | null }) | null;
 };
@@ -63,9 +63,6 @@ export default function RunPreview({
   onApproveDraft,
   onSkip,
   onFix,
-  fixing = false,
-  fixNote,
-  progressScope,
   imageControls,
 }: {
   run: ReviewRun;
@@ -75,13 +72,12 @@ export default function RunPreview({
   onApprove: () => void;
   onApproveDraft: () => void;
   onSkip: () => void;
-  /** FIX — resolve every warning shown here (POST /api/autopilot/runs { action: 'fix' }). */
+  /**
+   * FIX — resolve every warning shown here (POST /api/autopilot/runs
+   * { action: 'fix' }). It runs in the background; its progress and result
+   * are on the run (angle.fix), shown by FixStatusLine.
+   */
   onFix?: () => void;
-  fixing?: boolean;
-  /** What the last FIX reported, shown under the warnings. */
-  fixNote?: string | null;
-  /** The progress scope the caller's long actions (FIX) report under; the loader covers the modal. */
-  progressScope?: string;
   /** The Image section (New AI image / library), rendered under the picture. */
   imageControls?: ReactNode;
 }) {
@@ -95,11 +91,11 @@ export default function RunPreview({
   const citationBad = citation && ['not_found', 'mismatch', 'no_doi'].includes(String(citation.status));
   const claim = claimSupportNote(run.pack?._claimSupport);
   const plan = fixPlan(runFixInput(run));
+  const fixing = fixRunning(run.angle);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
       <div className="relative flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-surface shadow-2xl ring-1 ring-black/10" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Autopilot draft preview">
-        {progressScope && <PanelLoader scope={progressScope} rounded="rounded-2xl" />}
         <div className="flex items-start justify-between gap-3 border-b border-black/5 px-5 py-4">
           <div className="min-w-0">
             <div className="mb-1 flex flex-wrap items-center gap-1.5">
@@ -150,13 +146,11 @@ export default function RunPreview({
           {/* One button for every warning above, as on the Dashboard card. */}
           {plan.steps.length > 0 && onFix && (
             <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl bg-amber-50/70 px-3 py-2 text-[12px] text-amber-900 ring-1 ring-amber-200/60">
-              <span className="min-w-0">{fixing ? 'Fixing the ' + fixStepsLabel(plan.steps) + ' — this can take a few minutes…' : 'Fix the ' + fixStepsLabel(plan.steps) + ' automatically, then re-check.'}</span>
+              <span className="min-w-0">Fix the {fixStepsLabel(plan.steps)} automatically, then re-check.</span>
               <button type="button" disabled={busy || fixing} onClick={onFix} title={'Resolves: ' + plan.reasons.join('; ')} className={btn + 'ml-auto bg-accent font-semibold text-white hover:opacity-90'}>{fixing ? 'Fixing…' : 'FIX'}</button>
             </div>
           )}
-          {fixNote && (
-            <div role="status" className="mb-2 rounded-xl bg-emerald-50 px-3 py-2 text-[12px] text-emerald-700 ring-1 ring-emerald-100">{fixNote}</div>
-          )}
+          <FixStatusLine angle={run.angle} steps={plan.steps} className="mb-2 block" />
 
           {channels.length > 0 ? (
             <>
@@ -181,15 +175,15 @@ export default function RunPreview({
           <span className="flex-1" />
           {run.missed ? null : (
             <>
-              <button type="button" disabled={busy} onClick={onApprove} className={btn + 'bg-accent font-semibold text-white hover:opacity-90'}>{busy ? 'Working…' : 'Approve & schedule'}</button>
+              <button type="button" disabled={busy || fixing} title={fixing ? 'Wait for FIX to finish' : undefined} onClick={onApprove} className={btn + 'bg-accent font-semibold text-white hover:opacity-90'}>{busy ? 'Working…' : 'Approve & schedule'}</button>
               {run.writes_article ? (
                 <span className="text-[11px] text-ink/50" title="Articles are approved and scheduled together, so the post and its link go out at the slot.">No draft option for articles</span>
               ) : (
-                <button type="button" disabled={busy} onClick={onApproveDraft} className={btn + 'text-ink/70 ring-1 ring-black/10 hover:bg-black/5'}>Approve as draft</button>
+                <button type="button" disabled={busy || fixing} onClick={onApproveDraft} className={btn + 'text-ink/70 ring-1 ring-black/10 hover:bg-black/5'}>Approve as draft</button>
               )}
             </>
           )}
-          <button type="button" disabled={busy} onClick={onSkip} className={btn + 'text-red-600 ring-1 ring-red-200 hover:bg-red-50'}>{busy ? 'Working…' : 'Skip'}</button>
+          <button type="button" disabled={busy || fixing} onClick={onSkip} className={btn + 'text-red-600 ring-1 ring-red-200 hover:bg-red-50'}>{busy ? 'Working…' : 'Skip'}</button>
         </div>
       </div>
     </div>

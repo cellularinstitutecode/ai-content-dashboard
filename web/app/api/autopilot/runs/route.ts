@@ -6,10 +6,10 @@
 // Metricool DRAFT (autoPublish: false) plus a pending_review posts row.
 import { isAllowedEmail } from '@/lib/access';
 import { reportError } from '@/lib/report';
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { advanceRuns, approveRun, fixRun, regenerateRun, skipRun } from '@/lib/autopilot';
+import { advanceRuns, approveRun, fixRunInBackground, regenerateRun, skipRun, startFix } from '@/lib/autopilot';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { bucketRuns, DEFAULT_LIMITS, FAILED_WINDOW_DAYS } from '@/lib/review-queue';
 import { wantsBlog } from '@/lib/metricool-networks';
@@ -272,11 +272,15 @@ export async function POST(req: NextRequest) {
   }
   if (action === 'fix') {
     // FIX resolves every warning on the card — citation, copy, image — and
-    // re-checks (lib/autopilot.ts fixRun). `fixed` and `remaining` let the
-    // card say what changed and what still needs a look.
-    const result = await fixRun(id, user.id);
-    if (!result.ok) return NextResponse.json({ error: 'fix_refused', message: result.note, ...result }, { status: 400 });
-    return NextResponse.json(result);
+    // re-checks (lib/autopilot.ts fixRun). It takes minutes, so the request
+    // only starts it: the work runs after the response (inside this route's
+    // maxDuration), and its progress and result land on the run (angle.fix),
+    // which the card polls. Holding the request open instead is what left the
+    // card behind a loader at 94% for the whole of it.
+    const started = await startFix(id, user.id);
+    if (!started.ok) return NextResponse.json({ error: 'fix_refused', message: started.note }, { status: 400 });
+    after(() => fixRunInBackground(id, user.id));
+    return NextResponse.json({ ok: true, started: true, note: 'FIX is working on it. The card updates when it is done (usually one to four minutes).' }, { status: 202 });
   }
   return NextResponse.json({ error: 'unknown action' }, { status: 400 });
 }
