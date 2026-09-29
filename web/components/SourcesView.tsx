@@ -34,6 +34,7 @@ import { preparedByRow, rowKeyOf, type PreparedRow } from '@/lib/prepared-rows';
 import { ZOOM_MAX, ZOOM_MIN, frameGeometry, readStoredZoom, zoomIn, zoomLabel, zoomOut, zoomStorageKey } from '@/lib/sheet-zoom';
 import ImportingLabel from '@/components/ImportingLabel';
 import { tooLargeToImport } from '@/lib/library-import';
+import { filterVideos } from '@/lib/video-search';
 
 /** How a batched row is getting on, in words rather than a spinner. */
 const BATCH_LABEL: Record<string, string> = {
@@ -1153,16 +1154,9 @@ export default function SourcesView({ kind }: { kind: Tab }) {
   const today = new Date().toISOString().slice(0, 10);
   const upcoming = useMemo(() => (calendar?.entries || []).filter((e) => e.date && e.date >= today).sort((a, b) => String(a.date).localeCompare(String(b.date))), [calendar, today]);
   const recent = useMemo(() => (calendar?.entries || []).filter((e) => !e.date || e.date < today).slice(0, 12), [calendar, today]);
-  const filteredVideos = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    const list = videos?.entries || [];
-    if (!needle) return list;
-    // The row number is searchable too: it is the reference people read off the
-    // sheet and off the annotation on a screenshot, so typing "190" should find
-    // row 190 rather than every caption that happens to contain those digits.
-    return list.filter((v) => String(v.row) === needle
-      || [v.title, v.copy, v.type, v.creator, v.format, v.tab].join(' ').toLowerCase().includes(needle));
-  }, [videos, q]);
+  // A bare number finds that sheet row only (lib/video-search.ts); words search
+  // the title, copy, creator and tab.
+  const filteredVideos = useMemo(() => filterVideos(videos?.entries || [], q), [videos, q]);
 
   /** What the table actually shows: the search, narrowed to the basket when asked. */
   const shownVideos = useMemo(
@@ -1354,9 +1348,9 @@ export default function SourcesView({ kind }: { kind: Tab }) {
             </section>
             <section style={card}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                <h2 style={{ margin: 0, fontSize: 15 }}>Videos {videos ? '(' + videos.entries.length + ')' : ''}</h2>
+                <h2 style={{ margin: 0, fontSize: 15 }}>Videos {videos ? '(' + (q.trim() ? filteredVideos.length + ' of ' + videos.entries.length : videos.entries.length) + ')' : ''}</h2>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search row number, title, copy, creator…" style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.12)', fontSize: 13, minWidth: 240 }} />
+                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Row number (e.g. 200), or title, copy, creator…" aria-label="Search the video library: a number finds that sheet row" style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.12)', fontSize: 13, minWidth: 240 }} />
                   <button type="button" style={ghost} disabled={running} onClick={() => load('videos', true)}>Refresh</button>
                 </div>
               </div>
