@@ -118,3 +118,18 @@ test('"Verify / fix" on a calendar post runs the ladder and carries the result t
   assert.doesNotMatch(fix, /generateContentPack|generateVideoCopy|from '@\/lib\/video-copy'/, 'the words stay the clinic\'s; only the citation is ours');
   assert.match(fix, /stampOn\('unsupported'/);
 });
+
+test('a citation Metricool did not take is still a fix, and a post Metricool lost is sent again', () => {
+  const route = src('app/api/posts/route.ts');
+  const block = route.slice(route.indexOf("if (action === 'fix_citation') {\n        // The citation IS saved"), route.indexOf('return NextResponse.json(\n        {\n          error: \'metricool_update_failed\''));
+  // Never a 502 for a change that was saved: the preview must reload the new REF line.
+  assert.doesNotMatch(block, /status: 502/);
+  assert.match(block, /fixed: true, status: 'swapped'/);
+  // A 404 on a post still waiting for review, with its slot ahead, is re-sent as a review draft.
+  assert.match(block, /gone && mode === 'review' && new Date\(nextDate\)\.getTime\(\) > Date\.now\(\)/);
+  assert.match(block, /metricoolSchedulePost\(\{[\s\S]{0,400}\}, 'review'\)/);
+  assert.match(block, /update\(\{ metricool_post_id: newId \}\)/);
+  // The client reloads on any fixed answer, Metricool's copy aside.
+  const page = src('app/calendar/page.tsx');
+  assert.match(page, /if \(j\?\.fixed\) \{[\s\S]{0,200}await refresh\(\)/);
+});
