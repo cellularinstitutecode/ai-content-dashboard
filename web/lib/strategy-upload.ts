@@ -8,17 +8,25 @@
 // angles, the channels and any standing rule. Everything the model said is
 // then run through normalizeUpload() below, so a slot on "Funday" at "25:99"
 // never reaches the database. What comes out is shown to the team as a week;
-// on "Create schedules" it becomes ordinary `pillars` templates, which the
-// Autopilot already knows how to run: keyword research and the competitor
-// landscape for each angle, what has performed before, the verification gates,
-// then the review queue. Nothing publishes until someone approves it; approved
-// posts go to the calendar and Metricool exactly like every other post.
+// on "Create schedules" it becomes `pillars` templates marked UPLOAD_MARK.
+//
+// WRITTEN LIKE THE STRATEGY, EVERY TIME. The mark puts every uploaded slot on
+// the built-in weekly strategy's rules (lib/strategy-voice.ts
+// usesStrategyVoice): the document's angle is always the subject — keyword
+// research only supplies an optional supporting phrase, never a replacement;
+// the document's educational voice replaces the Brand Brain's promotional
+// rules; a draft that reads as an advert is rewritten; format, reader and
+// closing change every week; the week's other posts are named so this one does
+// not repeat them; and posts carry a single image, never a clip. The day's
+// theme, the document's notes for the post and its editorial direction ride in
+// the slot's standing rule. Nothing publishes until someone approves it;
+// approved posts go to the calendar and Metricool like every other post.
 //
 // ADDITIVE, ALWAYS. This file only ever produces rows to INSERT. It never
 // updates or deletes a template — the built-in weekly strategy, hand-written
 // templates and slots from an earlier upload are all left exactly as they are.
-// A slot already created by an earlier upload (same mark, day, time and name)
-// is skipped rather than written twice.
+// A slot already created by an earlier upload (same mark, day and time) is
+// skipped rather than written twice.
 //
 // Pure: `./x.ts` imports only, so the test runner reads this file directly.
 import { STRATEGY_PROVIDERS } from './strategy-seed.ts';
@@ -48,6 +56,7 @@ export const UPLOAD_SCHEMA = {
     title: { type: 'string', description: 'The document title.' },
     summary: { type: 'string', description: 'One or two sentences: what the strategy is for and how the week is built.' },
     direction: { type: 'string', description: 'The editorial direction every post must follow (tone, what to avoid), in at most three sentences. Empty if the document gives none.' },
+    mix: { type: 'string', description: 'The recommended weekly mix or pillar frequency the document gives (for example "5 medical, 5 lifestyle, 2 recovery, 2 Cancun"), in one sentence. Empty if none.' },
     slots: {
       type: 'array',
       items: {
@@ -55,29 +64,32 @@ export const UPLOAD_SCHEMA = {
         properties: {
           day: { type: 'string', enum: [...DAY_KEYS] },
           time: { type: 'string', description: '24-hour HH:MM. Empty if the document does not say.' },
-          pillar: { type: 'string', description: 'The content pillar or theme of this post, as the document names it.' },
+          pillar: { type: 'string', description: 'The content pillar of this post, named as the post\'s own heading on its day page.' },
+          theme: { type: 'string', description: 'The day\'s theme or subtitle the document gives (for example "Understand before treating"). Empty if none.' },
           angles: { type: 'array', items: { type: 'string' }, description: 'The angles, questions or topics the document lists for this pillar, in its order, verbatim where possible.' },
           format: { type: 'string', enum: ['social', 'blog'] },
           channels: { type: 'array', items: { type: 'string', enum: [...SOCIAL, 'blog'] } },
-          rule: { type: 'string', description: 'Any standing rule the document gives for this pillar. Empty if none.' },
+          rule: { type: 'string', description: 'Every note, rule or caution the document attaches to this post or its day (positioning notes, service-integration notes, things to avoid), in its own words. Empty if none.' },
         },
-        required: ['day', 'time', 'pillar', 'angles', 'format', 'channels', 'rule'],
+        required: ['day', 'time', 'pillar', 'theme', 'angles', 'format', 'channels', 'rule'],
         additionalProperties: false,
       },
     },
   },
-  required: ['title', 'summary', 'direction', 'slots'],
+  required: ['title', 'summary', 'direction', 'mix', 'slots'],
   additionalProperties: false,
 } as const;
 
 export const UPLOAD_PROMPT = [
   'This PDF is a weekly content strategy for a medical clinic\'s social media.',
   'Read the whole document and return its week as data: one entry in `slots` for every post it schedules, Monday to Sunday.',
-  'For each slot give the day, the time if the document states one (24-hour HH:MM, otherwise an empty string), the pillar or theme,',
-  'and the angles the document lists for that pillar — copied in its own words and order, never invented.',
-  'A long-form article or blog post is format "blog" with channels ["blog","facebook","linkedin"]; everything else is format "social".',
+  'For each slot give the day, the time if the document states one (24-hour HH:MM, otherwise an empty string), the pillar',
+  '(the post\'s own heading on its day page), the day\'s theme or subtitle,',
+  'and the angles the document lists for that post — copied in its own words and order, never invented.',
+  'Only if the document schedules a long-form article or blog post is that slot format "blog" with channels ["blog","facebook","linkedin"]; every other post is format "social".',
   'Use only the channels the document names; if it names none, use ["instagram","facebook","linkedin"].',
-  'Put any rule the document attaches to a pillar in `rule`, and the document\'s overall editorial direction in `direction`.',
+  'Put every note, rule or caution the document attaches to a post or its day in that slot\'s `rule` — positioning notes and service-integration notes included, in the document\'s words.',
+  'Put the document\'s overall editorial direction in `direction`, and its recommended weekly mix or pillar frequency in `mix`.',
   'If the document is not a content strategy, return an empty `slots` array.',
 ].join(' ');
 
@@ -87,6 +99,8 @@ export type UploadSlot = {
   /** HH:MM. */
   time: string;
   pillar: string;
+  /** The day's theme, e.g. "Understand before treating"; '' when the document gives none. */
+  theme: string;
   angles: string[];
   format: 'social' | 'blog';
   providers: string[];
@@ -97,6 +111,8 @@ export type UploadPlan = {
   title: string;
   summary: string;
   direction: string;
+  /** The document's recommended weekly mix, shown with the week. */
+  mix: string;
   slots: UploadSlot[];
   /** What was dropped or corrected, in words, for the preview. */
   notes: string[];
@@ -184,7 +200,7 @@ export function normalizeUpload(raw: unknown): UploadPlan {
     }
     seen.add(key);
     perDay.set(weekday, nth + 1);
-    slots.push({ weekday, time, pillar, angles: angles.slice(0, MAX_ANGLES), format, providers, rule: clean(s.rule, 500) });
+    slots.push({ weekday, time, pillar, theme: clean(s.theme, 80), angles: angles.slice(0, MAX_ANGLES), format, providers, rule: clean(s.rule, 500) });
   }
 
   // Monday first, as the document reads; Sunday last.
@@ -193,6 +209,7 @@ export function normalizeUpload(raw: unknown): UploadPlan {
     title: clean(o.title, 120) || 'Uploaded weekly strategy',
     summary: clean(o.summary, 400),
     direction: clean(o.direction, 400),
+    mix: clean(o.mix, 300),
     slots,
     notes,
   };
@@ -217,9 +234,18 @@ export type UploadRow = {
   };
 };
 
-/** The standing rule a slot's posts carry: its own, then the document's direction. ≤ 800, as normalizeStrategy keeps. */
+/**
+ * The standing rule a slot's posts carry: the day's theme, the document's
+ * notes for this post, then its editorial direction. ≤ 800, as
+ * normalizeStrategy keeps; the notes come before the direction so a long
+ * direction is what gets shortened, never a note.
+ */
 export function ruleFor(slot: UploadSlot, direction: string): string | undefined {
-  const parts = [slot.rule, direction ? 'The strategy\'s editorial direction: ' + direction : ''].filter(Boolean);
+  const parts = [
+    slot.theme ? 'Day theme: ' + slot.theme + '.' : '',
+    slot.rule,
+    direction ? 'The strategy\'s editorial direction: ' + direction : '',
+  ].filter(Boolean);
   const text = parts.join(' ').trim();
   return text ? text.slice(0, 800) : undefined;
 }
@@ -266,9 +292,12 @@ export function planUpload(plan: UploadPlan, existing: readonly ExistingRow[] = 
   const out: UploadApplyPlan = { create: [], already: [], clashes: [] };
   for (const row of uploadRows(plan)) {
     const day = row.weekdays[0];
+    // By day and time, not by name: the same document names some posts two
+    // ways ("Diagnosis and comprehensive assessment" / "Diagnosis and
+    // assessment"), and a second reading that picked the other name would
+    // otherwise create the post again.
     const same = existing.find((e) =>
-      markOf(e.strategy) === UPLOAD_MARK && daysOf(e.weekdays).includes(day) && hhmm(e.time_of_day) === row.time_of_day &&
-      String(e.name ?? '').trim().toLowerCase() === row.name.toLowerCase());
+      markOf(e.strategy) === UPLOAD_MARK && daysOf(e.weekdays).includes(day) && hhmm(e.time_of_day) === row.time_of_day);
     if (same) { out.already.push(row); continue; }
     out.create.push(row);
     for (const e of existing) {

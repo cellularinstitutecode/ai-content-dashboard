@@ -8,7 +8,7 @@
 // real ground with the post's pillar and angle; otherwise the hero image goes.
 //
 // Pure: `./x.ts` imports only, so the test runner reads this file directly.
-import { isStrategySlot, pillarForStrategy } from './strategy-voice.ts';
+import { isStrategySlot, pillarForStrategy, usesStrategyVoice } from './strategy-voice.ts';
 
 export type ClipText = { title?: unknown; text?: unknown; description?: unknown; hashtags?: unknown };
 export type PostTopic = { pillar?: string | null; seedTopic?: string | null; query?: string | null };
@@ -86,7 +86,8 @@ export function attachableClip(
   // The weekly strategy is text with a single image — the clinic's chosen
   // format — so its posts never carry a clip, however relevant. A stored clip
   // on an older run is ignored rather than shipped over the post's picture.
-  if (isStrategySlot(strategy)) return null;
+  // So is a strategy dropped as a document (lib/strategy-upload.ts).
+  if (usesStrategyVoice(strategy)) return null;
   if (!usesPillarRotation(strategy)) return media;
   if (media.relevant === true) return media;
   const post = { pillar: pillarOf(strategy, templateName, angle?.seedTopic), seedTopic: String(angle?.seedTopic || ''), query: String(angle?.query || '') };

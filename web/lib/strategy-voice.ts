@@ -41,6 +41,41 @@ export function isStrategySlot(strategy: { seeded?: unknown } | null | undefined
   return String(strategy?.seeded || '') === SEED_MARK;
 }
 
+/** Was this template created by dropping a strategy document (lib/strategy-upload.ts)? */
+export function isUploadedSlot(strategy: { seeded?: unknown } | null | undefined): boolean {
+  return String(strategy?.seeded || '') === UPLOAD_MARK;
+}
+
+/**
+ * Does this template write in the strategy's voice — the document's angle kept
+ * as the subject, its editorial direction instead of the Brand Brain's
+ * promotional rules, no keyword swaps, the promotion rewrite, varied format and
+ * audience, and a single image?
+ *
+ * The built-in weekly strategy's slots, and every slot from a dropped strategy
+ * document: a dropped document IS a strategy, and must be written like one.
+ * What depends on the built-in document's own slot keys (its dealt rotation,
+ * day themes and frequency tags) still asks isStrategySlot and `strategy.slot`.
+ */
+export function usesStrategyVoice(strategy: { seeded?: unknown } | null | undefined): boolean {
+  return isStrategySlot(strategy) || isUploadedSlot(strategy);
+}
+
+const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
+
+/**
+ * The week-grid position an uploaded slot takes for its format / audience /
+ * closing rotation (lib/strategy-variety.ts): its day, and first or second post
+ * by time of day. The dealt variety is keyed by these positions, so an uploaded
+ * week changes shape each week exactly as the built-in one does.
+ */
+export function uploadVarietyKey(weekdays: unknown, time: unknown): string | null {
+  const day = Array.isArray(weekdays) ? Number(weekdays[0]) : NaN;
+  if (!Number.isInteger(day) || day < 0 || day > 6) return null;
+  const hour = Number(String(time ?? '').slice(0, 2));
+  return DAY_KEYS[day] + '-' + (Number.isFinite(hour) && hour >= 12 ? '2' : '1');
+}
+
 function key(s: unknown): string {
   return String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
