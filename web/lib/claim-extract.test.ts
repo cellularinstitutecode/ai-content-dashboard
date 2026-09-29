@@ -44,11 +44,14 @@ test('the prompt carries the post and asks for JSON only', () => {
 
 test('"Verify / fix" asks about each statement before giving up on the post whole', () => {
   const fix = src('lib/post-citation-fix.ts');
-  const rung2 = fix.indexOf('extractCheckableClaims(text)');
-  const subjects = fix.indexOf('searchSubjectsFor(pack, text)');
+  const ladder = fix.slice(fix.indexOf('export async function fixPostCitation'));
+  const rung2 = ladder.indexOf('await findBackingByClaims(');
+  const subjects = ladder.indexOf('searchSubjectsFor(pack, text)');
   assert.ok(rung2 > -1 && subjects > rung2, 'the statements come before the subject searches');
-  assert.match(fix, /judgeClaimSupport\(\{ claim: c\.claim, items: candidates \}\)/, 'the papers in hand are judged against each statement');
-  assert.match(fix, /findEvidence\(c\.query\)/, 'and each statement has its own search');
+  const byClaims = fix.slice(fix.indexOf('export async function findBackingByClaims'), fix.indexOf('export async function fixPostCitation'));
+  assert.match(byClaims, /extractCheckableClaims\(input\.text\)/);
+  assert.match(byClaims, /judgeClaimSupport\(\{ claim: c\.claim, items: candidates \}\)/, 'the papers in hand are judged against each statement');
+  assert.match(byClaims, /findEvidence\(c\.query\)/, 'and each statement has its own search');
   // The model call fails open, in the file that talks to the provider.
   const ai = src('lib/ai.ts');
   const call = ai.slice(ai.indexOf('export async function extractCheckableClaims'));

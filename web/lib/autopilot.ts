@@ -67,6 +67,7 @@ import { ARTICLE_LINK_PLACEHOLDER, PROMO_DELAY_MINUTES, articleLogNote, articleU
 import { refTitle, verifyDoi } from '@/lib/citation';
 import { findByDoi, findEvidence } from '@/lib/evidence';
 import { claimSupportRefusal } from '@/lib/citation-gate';
+import { autoFixCitation } from '@/lib/citation-autofix';
 import { evidenceBriefFrom, type EvidenceItem } from '@/lib/evidence-brief';
 import { MAX_CANDIDATES, claimFrom, claimQuery, supportedItem, type ClaimSupportStamp, type SupportVerdict } from '@/lib/claim-support';
 import { pickCitation, refLineFrom } from '@/lib/citation-from-evidence';
@@ -1252,7 +1253,20 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
   // fetched at draft time. The verdict is stamped on the draft, shown on the
   // card, and read by autoScheduleVerdict (an 'unsupported' holds the post).
   if (strategySlot) {
-    const stamp = await strategyClaimSupport(pack);
+    let stamp = await strategyClaimSupport(pack);
+    // "Verify / fix", by default (lib/citation-autofix.ts): a citation the
+    // judge did not accept is repaired NOW, before the card is shown, so the
+    // reviewer sees the corrected study rather than a warning about the wrong
+    // one. The stamp below is then whatever the repair concluded.
+    if (stamp && stamp.status !== 'supported') {
+      const p0 = pack as unknown as Record<string, unknown>;
+      const fixed = await autoFixCitation({ userId: run.user_id, draftId: run.draft_id, text: String(p0.instagram || p0.facebook || ''), pack: p0, budgetMs: 60_000 });
+      if (fixed.pack) pack = fixed.pack as unknown as ContentPack;
+      if (fixed.swapped) {
+        await db.from('template_runs').update({ log: logLine(run, 'fix', 'FIX (automatic, at draft): ' + fixed.note) }).eq('id', run.id);
+        stamp = null; // already stamped and saved by the repair
+      }
+    }
     if (stamp) {
       (pack as ContentPack & { _claimSupport?: ClaimSupportStamp })._claimSupport = stamp;
       const { data: fresh } = await db.from('drafts').select('pack').eq('id', run.draft_id).eq('user_id', run.user_id).maybeSingle();
@@ -2194,7 +2208,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     await releaseClaim(db, run, 'approve-failed', 'Approval could not proceed: the draft could not be read. Returned for review.');
     return { ok: false, note: 'Could not read that draft just now, so nothing was sent. It is back in your queue.' };
   }
-  const pack = (d as { pack?: ContentPack } | null)?.pack;
+  let pack = (d as { pack?: ContentPack } | null)?.pack;
   if (!pack) {
     await releaseClaim(db, run, 'approve-failed', 'Approval could not proceed: the draft has no content. Returned for review.');
     return { ok: false, note: 'The draft has no content, so nothing was sent. The run is back in your queue.' };
@@ -2218,6 +2232,20 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // WordPress has the article. They are checked here with a stand-in link of
   // realistic length, and built again around the real one after publishing.
   const refPolicy = citationPolicyFor((t as { strategy?: TemplateStrategy | null } | null)?.strategy);
+  // "Verify / fix", by default (lib/citation-autofix.ts). A citation the judge
+  // has not already accepted is checked against the copy and swapped for a
+  // study that backs it, on every channel of the draft, BEFORE the sends are
+  // planned — so what goes to Metricool is the corrected copy, and the claim
+  // gate below reads a fresh stamp. Fails open; the gate still decides.
+  if (mcProviders.length) {
+    const p0 = pack as unknown as Record<string, unknown>;
+    const caption = String(p0.instagram || p0.facebook || p0.linkedin || '');
+    const fixed = await autoFixCitation({ userId: run.user_id, draftId: run.draft_id, text: caption, pack: p0, budgetMs: 60_000 });
+    if (fixed.swapped && fixed.pack) {
+      pack = fixed.pack as unknown as ContentPack;
+      await db.from('template_runs').update({ log: logLine(run, 'fix', 'FIX (automatic, at approve): ' + fixed.note) }).eq('id', run.id);
+    }
+  }
   const plan = perNetworkPlan(pack as unknown as Record<string, unknown>, mcProviders, {
     aviso,
     refPolicy,

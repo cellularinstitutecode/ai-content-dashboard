@@ -2,6 +2,7 @@ import { reportError, redact } from '@/lib/report';
 import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
 import { refPolicyOf, type RefPolicy } from '@/lib/compliance';
 import { claimSupportOf } from '@/lib/citation-gate';
+import { autoFixCitation } from '@/lib/citation-autofix';
 import { apiBase as metricoolApiBase, normalizeMediaList } from '@/lib/metricool';
 import { mediaHandoverMessage, normalizeFailure, ourLinkNote } from '@/lib/media-normalize-reason';
 import { verifyPlayableMp4 } from '@/lib/media-verify';
@@ -112,7 +113,7 @@ export async function POST(req: NextRequest) {
   let payload: any;
   try { payload = await req.json(); } catch { payload = {}; }
   const network = String(payload.network || '').toLowerCase();
-  const text = String(payload.text || '').trim();
+  let text = String(payload.text || '').trim();
   const when = normalizePublishAt(payload.publishAt);
   const blogId = String(payload.blogId || DEFAULT_BLOG_ID);
   const draftId = payload.draftId ? String(payload.draftId) : null;
@@ -129,6 +130,14 @@ export async function POST(req: NextRequest) {
     ownedDraftIdEarly = ownDraftEarly ? draftId : null;
     draftRefPolicy = refPolicyOf((ownDraftEarly as { pack?: unknown } | null)?.pack);
     draftClaimSupport = claimSupportOf((ownDraftEarly as { pack?: unknown } | null)?.pack);
+    // "Verify / fix", by default (lib/citation-autofix.ts): a citation the
+    // judge has not accepted is checked now and swapped for a study that backs
+    // the copy, on this text and on the draft, before the gate reads it.
+    if (ownedDraftIdEarly && text) {
+      const fixed = await autoFixCitation({ userId: user.id, draftId: ownedDraftIdEarly, text, pack: (ownDraftEarly as { pack?: Record<string, unknown> } | null)?.pack });
+      if (fixed.swapped) text = fixed.text;
+      draftClaimSupport = fixed.status ?? draftClaimSupport;
+    }
   }
   if (!when) return NextResponse.json({ error: 'publishAt must be a valid datetime' }, { status: 400 });
   // Metricool refuses a past date, but only when a person opens the draft and

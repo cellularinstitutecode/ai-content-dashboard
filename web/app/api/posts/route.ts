@@ -3,6 +3,7 @@ import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
 import { refPolicyOf } from '@/lib/compliance';
 import { claimSupportOf } from '@/lib/citation-gate';
 import { fixPostCitation } from '@/lib/post-citation-fix';
+import { autoFixCitation } from '@/lib/citation-autofix';
 import { avisoForUser } from '@/lib/compliance-gate';
 import { videoVerdict, pendingRefusal, videoSourceOf, type PackLike } from '@/lib/video-required';
 import { ensureShareableVideo } from '@/lib/media-library';
@@ -494,6 +495,23 @@ export async function PATCH(req: Request) {
       // Nothing to send to Metricool: the post reads exactly as it did.
       return NextResponse.json({ fixed: false, status: fix.status, note: fix.note, ref: fix.ref });
     }
+  }
+
+  // --- approve: "Verify / fix" runs by itself first ---------------------------
+  //
+  // The button above is the safety net; this is the default. Before an approve
+  // reaches the compliance gate, a citation the judge has not already accepted
+  // is checked and, if a study that backs the copy is found, swapped in — on
+  // the row, on the draft, and (through the replace below) in Metricool.
+  // Fails open (lib/citation-autofix.ts): the gate still decides.
+  if (action === 'approve' || action === 'publish_now') {
+    const fixed = await autoFixCitation({ userId: user.id, draftId: existing.draft_id, text: String(existing.text || ''), pack: draftPack, budgetMs: 90_000 });
+    if (fixed.swapped) {
+      const { error: textError } = await sb.from('posts').update({ text: fixed.text }).eq('id', id).eq('user_id', user.id);
+      if (textError) reportError('posts:autofix-text', textError, { id });
+      else (existing as { text?: string | null }).text = fixed.text;
+    }
+    if (fixed.pack) draftPack = fixed.pack;
   }
 
   // Only the linked draft's IMAGE was ever looked up for this, so approving a
