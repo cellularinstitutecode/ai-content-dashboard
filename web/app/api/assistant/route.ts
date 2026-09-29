@@ -35,6 +35,9 @@ import { healthNotes } from "@/lib/health-notes";
 import { sessionKey, signBatch, batchIsAuthentic, claimBatch, newTicketId, BATCH_TTL_MS, type BatchTicket } from "@/lib/assistant-token";
 import { describeTemplates, listTemplates, saveTemplate, setTemplateActive, upcomingRuns } from "@/lib/planner-admin";
 import { normalizeStrategy } from "@/lib/autopilot";
+import { ensureDraftImage } from "@/lib/images";
+import { workspaceBlock } from "@/lib/workspace-snapshot";
+import { RESUME_ACK, STANDBY_ACK, STANDBY_RULES, standbyCommand } from "@/lib/assistant-standby";
 
 // Compact, chat-friendly rendering of Semrush keyword rows.
 function fmtKw(k: SemKeyword): string {
@@ -90,6 +93,14 @@ type Session = {
   cta?: string;
   channels?: string[];
   provider?: string;
+  /**
+   * Told to stand by. Answers questions, takes no action and offers none until
+   * told to resume (lib/assistant-standby.ts). Signed with the rest of the
+   * session, so it cannot be forged off.
+   */
+  standby?: boolean;
+  /** The last picture generate_image made, so the panel can show it. */
+  lastImage?: { url: string; alt?: string | null; draftId: string } | null;
   model?: string;
   pack?: Record<string, any>;
   draftId?: string;
@@ -475,7 +486,10 @@ async function liveSituation(userId: string): Promise<{ snapshot: ReturnType<typ
   // cached system block; concatenating it into this one — which changes every
   // single turn by design — is what made ~2,000 tokens of it uncacheable and
   // re-sent on each of up to four tool-loop iterations per message.
-  const prompt = [brandBlock(brand), renderSnapshot(snapshot)].filter(Boolean).join("\n\n");
+  // And the rest of the room — calendar, Autopilot queue, drafts, planner —
+  // which the assistant could not see at all before (lib/workspace-snapshot.ts).
+  const workspace = await workspaceBlock(userId).catch((e: unknown) => { reportError("assistant:workspace", e); return ""; });
+  const prompt = [brandBlock(brand), renderSnapshot(snapshot), workspace].filter(Boolean).join("\n\n");
   return { snapshot, prompt, brand };
 }
 
@@ -831,9 +845,12 @@ async function runBatch(
   return { message: lines.join("\n"), queued: queued.length, note };
 }
 
-async function runAgent(session: Session, input: string, userId: string | null, snapshot: string, deadlineAt: number, brand?: BrandContext) {
+async function runAgent(session: Session, input: string, userId: string | null, situation: string, deadlineAt: number, brand?: BrandContext) {
   const tm: ToolMessage[] = boundToolMessages(session.toolMessages);
   tm.push({ role: "user", content: input });
+  // On standby the model is told so AND has no tools to call (lib/ai.ts).
+  const standby = session.standby === true;
+  const snapshot = standby ? situation + "\n\n" + STANDBY_RULES : situation;
 
   // Reliable auto-save: remember any pre-existing draft so we can tell if THIS turn saved one.
   const _startDraftId = (session as any).draftId || null;
@@ -849,7 +866,7 @@ async function runAgent(session: Session, input: string, userId: string | null, 
         "I ran out of time in this request. Anything I finished is saved; ask me again to carry on.";
       break;
     }
-    const turn = await chatWithTools(tm, snapshot);
+    const turn = await chatWithTools(tm, snapshot, { tools: !standby });
     // Record the assistant turn (text and/or tool_use) so the model keeps context.
     const assistantBlocks: any[] = [];
     if (turn.message) assistantBlocks.push({ type: "text", text: turn.message });
@@ -1019,6 +1036,43 @@ async function runAgent(session: Session, input: string, userId: string | null, 
         }
       } catch (e: any) {
         toolResult = "Research failed: " + (e?.message || "unknown error");
+      }
+    } else if (call.name === "generate_image") {
+      // The picture for a draft: the one this conversation wrote (saved first
+      // if it is not yet), or a saved one by id. The same verified path the
+      // Image section on the dashboard uses (lib/images.ts ensureDraftImage).
+      try {
+        let draftId = String(call.input.draftId || "").trim() || String((session as any).draftId || "");
+        if (!draftId && session.lastPack && userId) {
+          const _sb = await supabaseServer();
+          const { data: made, error: mkErr } = await _sb
+            .from("drafts")
+            .insert({ user_id: userId, topic: String(session.lastTopic || "Untitled"), pack: session.lastPack, provider: session.provider || "anthropic" })
+            .select("id")
+            .single();
+          if (mkErr) throw mkErr;
+          draftId = String((made as { id?: string } | null)?.id || "");
+          if (draftId) {
+            (session as any).draftId = draftId;
+            session.links = session.links || [];
+            session.links.push({ label: "Open draft", url: "/?draft=" + draftId });
+          }
+        }
+        if (!draftId) {
+          toolResult = "There is no draft to make a picture for. Write and save a post first, or name a saved draft by its id.";
+        } else if (!userId) {
+          toolResult = "Not signed in, so no picture was made.";
+        } else {
+          const image = await ensureDraftImage(draftId, userId, { force: Boolean(call.input.fresh), budgetMs: Math.max(20_000, deadlineAt - Date.now() - 20_000) });
+          if (!image?.url) {
+            toolResult = "No picture could be made just now (image generation may be off on this deployment, or the draft could not be read). Nothing was changed.";
+          } else {
+            session.lastImage = { url: image.url, alt: (image as { alt?: string | null }).alt ?? null, draftId };
+            toolResult = "Picture ready for draft " + draftId + ": " + image.url + ". It is saved on the draft and shown to the user in this thread; do not paste the URL.";
+          }
+        }
+      } catch (e: any) {
+        toolResult = "The picture could not be made: " + (e?.message || "unknown error");
       }
     } else if (call.name === "keyword_lookup") {
       try {
@@ -1302,7 +1356,13 @@ async function runAgent(session: Session, input: string, userId: string | null, 
 
   session.toolMessages = tm;
   if (!finalMessage) finalMessage = "Done.";
-  return { message: finalMessage, options: ((session as any).lastPack ? { preview: (session as any).lastPack, draftId: (session as any).draftId ?? null } : undefined) as any };}
+  const image = session.lastImage || null;
+  // Shown once, in the reply that made it.
+  session.lastImage = null;
+  const options = ((session as any).lastPack || image)
+    ? { preview: (session as any).lastPack ?? null, draftId: (session as any).draftId ?? null, ...(image ? { image } : {}) }
+    : undefined;
+  return { message: finalMessage, options: options as any };}
 
 export async function POST(req: Request) {
   // Guarded like every other route in the repo: an unparseable body used to
@@ -1365,11 +1425,24 @@ export async function POST(req: Request) {
   const live = await liveSituation(userId);
 
   try {
-    // Priming call: greet without advancing state.
-    //
-    // This was a fixed paragraph introducing the product to somebody who has
-    // been using it every day for weeks. It is the most-read message in the
-    // app and it knew nothing — so it now opens with what needs them.
+    // STANDBY, decided before anything below can act. "standby" parks the
+    // assistant: it keeps watching and answering, and does nothing — no
+    // retries, no drafts, no queueing, no offers — until "resume". A pending
+    // offer is dropped on the way in, so a later "yes" cannot land on it.
+    const mode = standbyCommand(input);
+    if (mode === "standby") {
+      session.standby = true;
+      if (session.pendingBatch) { claimBatch(session.pendingBatch.jti); session.pendingBatch = null; session.toolMessages = closeOpenToolCall(session.toolMessages, "The user put the assistant on standby. Nothing was drafted or queued."); }
+      if (session.pendingSchedule) { session.pendingSchedule = null; session.toolMessages = closeOpenToolCall(session.toolMessages, "The user put the assistant on standby. Nothing was scheduled."); }
+      return reply({ ...session, mode: "chat", step: "greet" }, STANDBY_ACK);
+    }
+    if (mode === "resume") {
+      session.standby = false;
+      return reply({ ...session, mode: "chat", step: "greet" }, RESUME_ACK);
+    }
+
+    // The status report, on request only: the panel opens with one line of
+    // its own and never asks for this unprompted (lib/assistant-standby.ts).
     if (!input && session.step === "greet" && !session.mode) {
       const greeting = greetingFor(live.snapshot);
       return reply(session, greeting.message, greeting.chips);

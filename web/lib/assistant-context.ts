@@ -260,12 +260,13 @@ export function renderSnapshot(s: Snapshot): string {
 }
 
 /**
- * The first thing said when the panel is opened.
+ * The status report, in priority order: what is broken, then what needs a
+ * person, then what is stuck on something temporary.
  *
- * This used to be a fixed paragraph introducing the product to somebody who
- * has been using it daily for weeks. It is the single most-read message in the
- * app and it knew nothing — so it is now the status report, in priority order:
- * what is broken, then what needs them, then what can be fixed for them.
+ * It REPORTS and stops. It used to end with "I can retry the temporary ones
+ * now" and a Retry chip, and the panel opened with it unasked; the assistant
+ * now waits for a command (lib/assistant-standby.ts), so the report says what
+ * is there and what a person could ask for, and offers nothing on its own.
  */
 export function greetingFor(s: Snapshot): { message: string; chips: string[] } {
   const chips: string[] = [];
@@ -331,11 +332,9 @@ export function greetingFor(s: Snapshot): { message: string; chips: string[] } {
   const message =
     parts.join(', and ') + '.' +
     (named.length ? '\n\n' + named.join('\n') : '') +
-    (retryable ? '\n\nI can retry the temporary ones now — nothing goes to Metricool without you saying so.' : '') +
+    (retryable ? '\n\nSay the word and I will retry the temporary ones — I will not touch them until you do, and nothing goes to Metricool without you saying so.' : '') +
     aside;
 
-  if (retryable === 1) chips.push('Retry that one');
-  else if (retryable > 1) chips.push('Retry everything that is stuck');
   chips.push('Show me the video pipeline');
 
   return { message, chips };

@@ -83,7 +83,7 @@ test('something degraded ELSEWHERE does not blank the video report', () => {
   });
   const g = greetingFor(s);
   assert.match(g.message, /Hydrogen reel/);
-  assert.deepEqual(g.chips[0], 'Retry that one');
+  assert.deepEqual(g.chips, ['Show me the video pipeline']);
   // Still said — as a footnote, and naming the actual file.
   assert.match(g.message, /Separately: .*autopilot\.sql/);
 });
@@ -107,24 +107,29 @@ test('the prompt block says which failures touch video and which do not', () => 
   assert.match(out, /does NOT affect video.*Autopilot templates/);
 });
 
-test('the greeting names what is stuck and offers to fix it', () => {
+test('the report names what is stuck and waits to be told, offering nothing', () => {
   const s = summarise([
     { state: 'failed', video_title: 'Hydrogen reel', row_number: 180, last_error_code: 'out_of_time', last_error: 'Ran out of time.' },
   ], NOW);
   const g = greetingFor(s);
   assert.match(g.message, /Hydrogen reel/);
   assert.match(g.message, /row 180/);
-  assert.deepEqual(g.chips[0], 'Retry that one');
+  // It says what it COULD do if told, and that it will not do it unasked.
+  assert.match(g.message, /Say the word/);
+  assert.match(g.message, /will not touch them until you do/);
+  assert.ok(!g.chips.some((c) => /retry/i.test(c)), 'no Retry chip: the assistant acts on a command, not an offer');
   // The promise that must survive every rewording of this file.
   assert.match(g.message, /nothing goes to Metricool without you saying so/i);
 });
 
-test('several stuck videos offer one action, not one per row', () => {
+test('several stuck videos still produce no offer, only the report', () => {
   const rows: RunRow[] = [
     { state: 'failed', video_title: 'A', last_error_code: 'out_of_time' },
     { state: 'failed', video_title: 'B', last_error_code: 'generation_failed' },
   ];
-  assert.equal(greetingFor(summarise(rows, NOW)).chips[0], 'Retry everything that is stuck');
+  const g = greetingFor(summarise(rows, NOW));
+  assert.match(g.message, /2 videos are stuck on something temporary/);
+  assert.deepEqual(g.chips, ['Show me the video pipeline']);
 });
 
 test('an all-clear pipeline does not invent work', () => {
