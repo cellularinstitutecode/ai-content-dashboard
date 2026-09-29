@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { useVoiceAssistant } from "@/components/useVoiceAssistant";
 import { useLiveContent } from "@/components/LiveContentProvider";
 import { PanelLoader } from '@/components/LoadingScreen';
+import { OPENING_CHIPS, OPENING_LINE } from '@/lib/assistant-standby';
 
-type Msg = { id: string; role: "assistant" | "user"; text: string; options?: string[] | null };
+type Msg = { id: string; role: "assistant" | "user"; text: string; options?: string[] | null; image?: { url: string; alt?: string | null } | null };
 let __msgSeq = 0;
 const uid = () => `m_${Date.now().toString(36)}_${(__msgSeq++).toString(36)}`;
 
@@ -65,9 +66,10 @@ export default function DraftingAssistant() {
         setMsgs((m) => [...m, { id: uid(), role: "assistant", text: "\u26a0\ufe0f " + data.error }]);
       } else {
         setSession(data.session);
+        const image = data.options && !Array.isArray(data.options) && data.options.image?.url ? data.options.image : null;
         setMsgs((m) => [
           ...m,
-          { id: uid(), role: "assistant", text: data.message, options: Array.isArray(data.options) ? data.options : null },
+          { id: uid(), role: "assistant", text: data.message, options: Array.isArray(data.options) ? data.options : null, image },
         ]);
       }
     } catch (e: any) {
@@ -79,8 +81,12 @@ export default function DraftingAssistant() {
 
   function start() {
     setOpen(true);
-    if (msgs.length === 0) send("");
+    // One line of its own, no request: the assistant waits for a command. It
+    // used to open by asking the server for a status report and an offer to
+    // retry whatever was stuck (lib/assistant-standby.ts).
+    if (msgs.length === 0) setMsgs([{ id: uid(), role: "assistant", text: OPENING_LINE, options: OPENING_CHIPS }]);
   }
+  const onStandby = Boolean(session?.standby);
 
   return (
     <>
@@ -97,7 +103,9 @@ export default function DraftingAssistant() {
       )}
 
       {open && (
-        <div className="fixed bottom-6 right-6 z-50 flex h-[560px] w-[380px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-surface shadow-2xl ring-1 ring-black/10">
+        <div className={"fixed bottom-6 right-6 z-50 flex h-[560px] w-[380px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-surface shadow-2xl transition-shadow " +
+          // Outlined in blue while a turn is in flight; quiet otherwise.
+          (busy ? "ring-2 ring-accent shadow-[0_0_0_6px_rgba(0,113,227,0.18)]" : onStandby ? "ring-1 ring-amber-300" : "ring-1 ring-black/10")}>
           <PanelLoader scope="assistant" rounded="rounded-2xl" />
           <header className="flex items-center justify-between gap-2 border-b border-black/5 px-4 py-3">
             <div className="flex min-w-0 items-center gap-3">
@@ -108,38 +116,27 @@ export default function DraftingAssistant() {
               </span>
               <div className="min-w-0 leading-tight">
                 <p className="truncate text-sm font-semibold text-ink">Drafting Assistant</p>
-                <p className="truncate text-xs text-ink/50">Draft, review &amp; schedule</p>
+                <p className="flex items-center gap-1.5 truncate text-xs text-ink/50">
+                  <span className={"inline-block h-1.5 w-1.5 shrink-0 rounded-full " + (busy ? "animate-pulse bg-accent" : onStandby ? "bg-amber-400" : "bg-emerald-500")} aria-hidden />
+                  {busy ? "Working…" : onStandby ? "On standby — say “resume”" : "Standing by for a command"}
+                </p>
               </div>
             </div>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => send(onStandby ? "resume" : "standby")}
+              title={onStandby ? "Put the assistant back to work" : "Park the assistant: it keeps watching, and does nothing until you say resume"}
+              className={"shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium ring-1 transition disabled:opacity-40 " + (onStandby ? "bg-amber-50 text-amber-700 ring-amber-200 hover:bg-amber-100" : "text-ink/60 ring-black/10 hover:bg-black/5")}
+            >
+              {onStandby ? "Resume" : "Standby"}
+            </button>
             <button onClick={() => setOpen(false)} aria-label="Close" className="shrink-0 rounded-full p-1 text-ink/40 hover:bg-black/5 hover:text-ink">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
             </button>
           </header>
 
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
-{/* Generic openers, shown ONLY when the greeting had nothing specific to
-                offer. The greeting now names what is stuck and carries its own
-                buttons; rendering both put four suggestions about writing blog
-                posts ABOVE "Retry that one", which buries the one thing the
-                person actually opened the panel to do. */}
-            {msgs.every((m) => m.role !== "user") && !msgs.some((m) => m.role === "assistant" && m.options?.length) && (
-              <div className="space-y-1.5">
-                <p className="text-[11px] font-medium uppercase tracking-wide text-ink/40">Try asking</p>
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    "Draft an Instagram post about our stem cell therapy and save it",
-                    "Turn this YouTube video into clips: ",
-                    "Research trending topics about regenerative medicine",
-                    "Write a blog article about exosome therapy",
-                  ].map((q) => (
-                    <button key={q} type="button" disabled={busy} onClick={() => send(q)}
-                      className="rounded-full border border-accent/30 bg-accent/5 px-3 py-1 text-left text-xs font-medium text-accent transition hover:bg-accent/10 disabled:opacity-50">
-                      {q}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
                         {msgs.map((m) => (
                               <div key={m.id}>
                 <div className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
@@ -147,6 +144,10 @@ export default function DraftingAssistant() {
                     {m.text}
                   </div>
                 </div>
+                {m.role === "assistant" && m.image?.url && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={m.image.url} alt={m.image.alt || "Generated picture"} className="mt-2 max-h-56 w-full rounded-xl object-cover ring-1 ring-black/10" />
+                )}
                 {m.role === "assistant" && m.options && (
                   <div className="mt-2 flex flex-wrap gap-2">
                     {m.options.map((o) => (
@@ -161,7 +162,7 @@ export default function DraftingAssistant() {
             {voice.active && (<div className="flex items-center gap-2 text-xs text-red-500"><span className="h-2 w-2 animate-pulse rounded-full bg-red-500" /><span>Listening… speak your request.</span></div>)}
             {voice.connecting && (<div className="flex items-center gap-2 text-xs text-amber-600"><span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" /><span>Connecting… allow microphone access if your browser prompts you.</span></div>)}
             {voice.error && (<div className="rounded-md bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-700 ring-1 ring-red-200">{voice.error}</div>)}
-            {busy && (<div className="flex items-center gap-2 text-xs text-ink/50"><span className="flex gap-1"><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent" /></span><span>Working on it… longer formats like a full blog can take up to a minute.</span></div>)}
+            {busy && (<div className="flex items-center gap-2 text-xs text-accent"><span className="flex gap-1"><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent" /></span><span>Working on it…</span></div>)}
             <div ref={endRef} />
           </div>
 

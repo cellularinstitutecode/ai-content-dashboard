@@ -25,6 +25,7 @@ import {
 import type { EvidenceItem } from '@/lib/evidence-parse';
 import { TITLE_SYSTEM, readTitle, titlePrompt } from '@/lib/title-writer';
 import { CLAIMS_SYSTEM, claimsPrompt, parseClaims, type CheckableClaim } from '@/lib/claim-extract';
+import { COMMAND_ONLY_RULES } from '@/lib/assistant-standby';
 
 /**
  * Record what a provider just did, then throw if it refused.
@@ -943,7 +944,8 @@ export type ToolName =
   | "create_schedule"
   | "update_schedule"
   | "pause_schedule"
-  | "draft_batch";
+  | "draft_batch"
+  | "generate_image";
 
 export type ToolCall = {
   name: ToolName;
@@ -960,6 +962,8 @@ const TOOLS_SYSTEM = `You are the built-in AI assistant for Content Studio, the 
 
 You can hold a normal conversation AND take actions for the user using tools. When the user asks you to create, draft, or schedule content, use the tools rather than only describing what to do.
 
+You are fully aware of the workspace: the LIVE SITUATION and WORKSPACE blocks tell you, on every turn, what state the video pipeline is in, what is on the calendar, what the Autopilot has waiting for review, what drafts exist and what the planner is doing. Answer from them. ${COMMAND_ONLY_RULES}
+
 Tool guidance:
 - generate_content: produce a ready-to-post content pack for a topic. Use this first when the user wants a post/article/email/etc. Infer a sensible format (social/blog/email/video/ad) from the request.
 - save_draft: save a generated pack to the drafts feed. Call after generate_content when the user wants to keep or later schedule the content.
@@ -972,13 +976,14 @@ Tool guidance:
 - create_schedule / update_schedule: build or change a template. One template produces at most one post per weekday at its own time_of_day, so SEVERAL POSTS A DAY MEANS SEVERAL TEMPLATES — same weekdays, different time_of_day, each with its own strategy.pillars or strategy.topic. When the user asks for more than one blog a day, explain that shape AND offer to create the templates; if they say yes, create them, one call each.
 - pause_schedule: turn a template off without deleting it, keeping its history.
 - draft_batch: write a whole set of posts and queue every one as a Metricool DRAFT for the user to approve. Propose the list first — topics, networks, dates — and call this only once the user has agreed to the BATCH. Each item is researched, written in the clinic's voice, checked against the advertising rules, saved to drafts, and queued as a draft. Nothing publishes.
+- generate_image: make (or remake) the picture for a draft — the one just written and saved, or a saved draft named by its id from the WORKSPACE block. Use it when the user asks for an image, a picture, a visual or a cover. It costs a credit, so call it once per request, not speculatively.
 - keyword_lookup: fetch REAL Semrush search data for a topic — monthly volume, keyword difficulty (KD), CPC, searcher intent, and the questions people actually ask. Call this BEFORE recommending topics, angles, or keywords, and whenever the user asks what to write about or how content might perform.
 
 Semrush grounding rules: recommendations about WHAT to write must be grounded in keyword_lookup or research_topic data, not guesses. Prefer high-volume, lower-difficulty (KD under ~60) terms; say the numbers out loud (e.g. "1,900 searches/mo, KD 26") so the user can judge; when data is unavailable, say so plainly rather than inventing metrics.
 
-What you may do without asking, and what you may not:
-- You MAY retry, re-prepare and rewrite a video, and write the caption into the Google Sheet, as many times as needed. Do it, then say what happened. Do not ask permission first.
-- You MAY create, change and pause schedule templates when the user asks for a schedule. Do it rather than describing how they could.
+What you may do when told, and what you may never do:
+- When the user tells you to retry, re-prepare or rewrite a video, do it — as many as they name — and write the caption into the Google Sheet, then say what happened. Never do it unasked, and never offer it unasked: report what is stuck and wait.
+- When the user asks for a schedule, create, change and pause templates. Do it rather than describing how they could.
 - You MAY queue Metricool DRAFTS with draft_batch — but ask once for the BATCH first. Show the list you intend to write (topics, networks, dates), get a yes, then run it. Never queue a batch nobody asked for, and never expand one you were given.
 - You may NEVER publish anything, or ask for anything to be published. NONE of the tools you have can publish: every one of them stops at a draft in Metricool, and a person presses Approve there. (Elsewhere in this dashboard a human approving a run can choose to schedule it live — that is their button, not yours, and you never have it.) Say so plainly when someone asks you to "post" something.
 - A draft refused by the advertising check is REPORTED, never quietly reworded and queued anyway. Say which rule it failed. Never invent an AVISO number or a REF citation to get past the check.
@@ -986,7 +991,7 @@ What you may do without asking, and what you may not:
 - Never claim a video was fixed unless the tool result says so. A tool that reports "still needs a transcript" means a person has to paste one; say that plainly instead of offering to try again.
 - When the LIVE SITUATION says the pipeline could not be read, you do not know how many videos are done, queued or stuck. Say that, and do not answer from the counts.
 
-Keep replies concise and friendly. Only reference the clinic own website and YouTube content. Never invent medical claims; keep language compliant and non-exaggerated. If a scheduling request is missing the network or the date/time, ask a brief clarifying question instead of calling schedule_post.`;
+Keep replies concise and friendly — one thing at a time, plain words, no lists of everything you could do. Only reference the clinic own website and YouTube content. Never invent medical claims; keep language compliant and non-exaggerated. If a scheduling request is missing the network or the date/time, ask a brief clarifying question instead of calling schedule_post.`;
 
 const TOOL_DEFS = [
   {
@@ -1158,6 +1163,19 @@ const TOOL_DEFS = [
     },
   },
   {
+    name: "generate_image",
+    description: "Make (or remake) the picture for a draft: the draft just written in this conversation, or a saved draft by id. Costs one image credit. Returns the picture's URL.",
+    input_schema: {
+      type: "object",
+      properties: {
+        draftId: { type: "string", description: "A saved draft's id (from the WORKSPACE block). Omit for the draft written in this conversation." },
+        fresh: { type: "boolean", description: "true to make a new picture even when the draft already has one." },
+        notes: { type: "string", description: "What the picture should show, when the user said." },
+      },
+      required: [],
+    },
+  },
+  {
     name: "keyword_lookup",
     description: "Fetch real Semrush search data for a topic: monthly volume, keyword difficulty, CPC, searcher intent, and real searcher questions. Use before recommending topics/angles or judging demand.",
     input_schema: {
@@ -1179,7 +1197,7 @@ export type ToolMessage = { role: "user" | "assistant"; content: any };
  *   cached later without a rewrite), and the model sees a clearly delimited
  *   "here is the situation right now" rather than a prompt that looks edited.
  */
-export async function chatWithTools(messages: ToolMessage[], systemExtra?: string): Promise<ToolTurn> {
+export async function chatWithTools(messages: ToolMessage[], systemExtra?: string, opts: { tools?: boolean } = {}): Promise<ToolTurn> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error("ANTHROPIC_API_KEY missing");
   const model = process.env.ANTHROPIC_MODEL || "claude-sonnet-5";
@@ -1207,7 +1225,9 @@ export async function chatWithTools(messages: ToolMessage[], systemExtra?: strin
         { type: 'text', text: PLAYBOOK, cache_control: { type: 'ephemeral' } },
         ...(systemExtra ? [{ type: 'text', text: systemExtra }] : []),
       ],
-      tools: TOOL_DEFS,
+      // On standby the tools are withheld, not merely forbidden in prose: a
+      // model that cannot call retry_video cannot retry a video.
+      ...(opts.tools === false ? {} : { tools: TOOL_DEFS }),
       messages,
     }),
   });
