@@ -609,6 +609,16 @@ const [postsLoading, setPostsLoading] = useState(false);
 const [packsWarning, setPacksWarning] = useState(false);
 const [rescheduleId, setRescheduleId] = useState<string | null>(null);
 const [rescheduleAt, setRescheduleAt] = useState('');
+// The queue post open in the preview: the whole caption, the picture or
+// video, the channels and the time — what will actually go out — before
+// anyone presses Approve on a two-line excerpt.
+const [previewPostId, setPreviewPostId] = useState<string | null>(null);
+useEffect(() => {
+  if (!previewPostId) return;
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPreviewPostId(null); };
+  window.addEventListener('keydown', onKey);
+  return () => window.removeEventListener('keydown', onKey);
+}, [previewPostId]);
 
 // Trending stem-cell topics: a curated, editable list (not scraped) that only
 // pre-fills the generator prompt for a human to review before anything is made.
@@ -2354,7 +2364,7 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 )}
 <span className="text-[11px] tabular-nums text-ink-faint">{fmtDateTime(p?.publication_date)}</span>
 </div>
-<p className="mt-1.5 line-clamp-2 text-[13px] text-ink">{p?.text || 'Scheduled post'}</p>
+<button type="button" onClick={() => id && setPreviewPostId(id)} title="Preview this post" className="mt-1.5 line-clamp-2 block w-full text-left text-[13px] text-ink hover:text-ink/80">{p?.text || 'Scheduled post'}</button>
 {/* Which row of which tab wrote this post. The same link the calendar's
     publishing list carries — a caption truncated to two lines does not
     identify a post in the sheet, and the row number does. */}
@@ -2369,6 +2379,7 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 ))}
 {id && rescheduleId !== id && (
 <span className="ml-auto flex items-center gap-3">
+<button type="button" onClick={() => setPreviewPostId(id)} title="See the whole post — picture, caption and channels — before approving" className="rounded-full px-2.5 py-0.5 text-[11px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle hover:text-ink">Preview</button>
 {meta.label === 'Waiting for your approval' && !pending && (
 <>
 <button type="button" disabled={approvingId === id} onClick={() => approvePost(p)} className="rounded-full bg-accent px-2.5 py-0.5 text-[11px] font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50">{approvingId === id ? 'Approving…' : 'Approve'}</button>
@@ -2729,6 +2740,62 @@ className="rounded-full bg-subtle px-5 py-2 text-[13px] font-medium text-ink rin
 
 
 {/* Draft detail modal — click a draft to view / play / edit */}
+{(() => {
+  // The queue post preview (see previewPostId). Read from the list as it is
+  // now, so an approve or delete elsewhere closes it rather than showing a
+  // post that is gone.
+  const pp: any = previewPostId ? safePosts.find((x: any) => String(x?.id || '') === previewPostId) : null;
+  if (!pp || typeof document === 'undefined') return null;
+  const ppId = String(pp.id || '');
+  const ppMeta = postStatusMeta(pp?.status);
+  const ppPending = pp?.videoPending === true;
+  const ppWaiting = ppMeta.label === 'Waiting for your approval' && !ppPending;
+  const close = () => setPreviewPostId(null);
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={close}>
+      <div className="relative flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Post preview">
+        <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
+          <div className="min-w-0">
+            <h3 className="truncate text-base font-semibold text-ink">{pp.packTitle || 'Post preview'}</h3>
+            <p className="mt-0.5 text-[12px] text-ink-faint">
+              {fmtDateTime(pp.publication_date)} ({scheduleTzLabel()} time){' · '}{(pp.providers || []).map((n: string) => networkLabel(n)).join(', ') || 'no channel'}
+            </p>
+          </div>
+          <button type="button" onClick={close} className="rounded-full px-2 text-lg leading-none text-ink-faint hover:bg-subtle" aria-label="Close preview">×</button>
+        </div>
+        <div className="overflow-y-auto px-5 py-4">
+          {pp.mediaUrl ? (
+            <video src={pp.mediaUrl} controls preload="metadata" className="mb-3 max-h-72 w-full rounded-xl bg-black" />
+          ) : pp.imageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={pp.imageUrl} alt="The picture this post goes out with" className="mb-3 max-h-72 w-full rounded-xl object-contain ring-1 ring-line" />
+          ) : (
+            <p className="mb-3 rounded-xl bg-subtle px-3 py-2 text-[12px] text-ink-muted ring-1 ring-line">{ppPending ? 'This post is waiting for its video.' : 'No picture or video on this post.'}</p>
+          )}
+          <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-ink">{pp.text || 'Scheduled post'}</div>
+          {sheetRowUrl(pp.source) && (
+            <a href={sheetRowUrl(pp.source) as string} target="_blank" rel="noopener noreferrer" title={sheetRowTitle(pp.source)} className="mt-3 inline-flex items-center gap-1 text-[12px] font-medium text-accent hover:underline">
+              <span aria-hidden>{'\u{1F4C4}'}</span> {sheetRowLabel(pp.source)} {'\u2197'}
+            </a>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 border-t border-line bg-subtle px-5 py-3">
+          <span className={'rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ' + (ppMeta.tone === 'amber' ? 'bg-amber-50 text-amber-700 ring-amber-100' : ppMeta.tone === 'green' ? 'bg-emerald-50 text-emerald-700 ring-emerald-100' : 'bg-blue-50 text-blue-700 ring-blue-100')}>{ppPending ? 'Pending video' : ppMeta.label}</span>
+          <span className="flex-1" />
+          {ppWaiting && (
+            <>
+              <button type="button" onClick={() => { close(); continueDraft(pp); }} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line hover:bg-white">Continue</button>
+              <button type="button" disabled={approvingId === ppId} onClick={() => void approvePost(pp, true)} className="rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line hover:bg-white disabled:opacity-50">Publish now</button>
+              <button type="button" disabled={approvingId === ppId} onClick={() => void approvePost(pp)} className="rounded-full bg-accent px-3 py-1 text-[12px] font-semibold text-white shadow-soft hover:opacity-90 disabled:opacity-50">{approvingId === ppId ? 'Approving…' : 'Approve'}</button>
+            </>
+          )}
+          {!ppWaiting && <button type="button" onClick={close} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line hover:bg-white">Close</button>}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+})()}
 {selectedDraft && typeof document !== 'undefined' ? createPortal((
 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" onClick={() => { setSelectedDraft(null); setEditingDraft(false); }}>
 <div className="relative max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7" onClick={(e) => e.stopPropagation()}>
