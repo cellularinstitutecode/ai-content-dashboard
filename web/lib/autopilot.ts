@@ -44,6 +44,9 @@ import {
   type BrandContext,
   type ContentPack,
   type ContentType,
+  stampFromBrief,
+  keywordLadder,
+  type SemrushStamp,
 } from '@/lib/ai';
 import {
   buildKeywordBrief,
@@ -68,6 +71,7 @@ import { refTitle, verifyDoi } from '@/lib/citation';
 import { findByDoi, findEvidence } from '@/lib/evidence';
 import { claimSupportRefusal } from '@/lib/citation-gate';
 import { autoFixCitation } from '@/lib/citation-autofix';
+import { ensureKeywords } from '@/lib/keyword-guard';
 import { evidenceBriefFrom, type EvidenceItem } from '@/lib/evidence-brief';
 import { MAX_CANDIDATES, claimFrom, claimQuery, supportedItem, type ClaimSupportStamp, type SupportVerdict } from '@/lib/claim-support';
 import { pickCitation, refLineFrom } from '@/lib/citation-from-evidence';
@@ -887,6 +891,10 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   // generator "researched, nothing to add" rather than running its own.
   let brief: KeywordBrief | null = null;
   let hint = '';
+  // The stamp the pack will carry, whichever rung answered. A strategy slot
+  // keeps the lighter contract (no brief in the prompt) but still records the
+  // research: no post goes out without keywords behind it.
+  let keywordStamp: SemrushStamp | null = null;
   if (!usesStrategyVoice(strategy)) {
     try {
       brief = await buildKeywordBrief(angle.query);
@@ -894,8 +902,21 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
       else brief = null;
     } catch { brief = null; }
     if (!brief && run.brief && run.brief.source === 'semrush') {
+      brief = run.brief;
       hint = briefPromptFrom(run.brief);
     }
+    if (brief) keywordStamp = stampFromBrief(brief);
+    else {
+      // Semrush had nothing for this angle: the ladder's fallbacks, without
+      // spending another unit (lib/keyword-fallback.ts).
+      const fallback = await keywordLadder(angle.query, { context: angle.seedTopic, skipSemrush: true });
+      hint = fallback.hint || '';
+      keywordStamp = fallback.stamp;
+    }
+  } else {
+    keywordStamp = run.brief && run.brief.source === 'semrush'
+      ? stampFromBrief(run.brief)
+      : (await keywordLadder(angle.query, { context: angle.seedTopic, skipSemrush: true })).stamp;
   }
 
   // Brand voice.
@@ -967,8 +988,10 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
     brand: strategySlot ? strategyBrand(brand, { citation: citationPolicy }) : brand,
     performanceHint: strategySlot ? undefined : performanceHint,
     // Pass the prepared hint ('' = researched, nothing found) so the
-    // generator does not run a second, redundant Semrush lookup.
+    // generator does not run a second, redundant Semrush lookup — and the
+    // stamp, so the pack records which rung its keywords came from.
     keywordHint: hint,
+    keywordStamp,
     evidenceHint,
     citationPolicy,
     // The reader this week's occurrence is written for (lib/strategy-variety.ts);
@@ -2245,6 +2268,9 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
       pack = fixed.pack as unknown as ContentPack;
       await db.from('template_runs').update({ log: logLine(run, 'fix', 'FIX (automatic, at approve): ' + fixed.note) }).eq('id', run.id);
     }
+    // And keywords: a post never goes out without them (lib/keyword-guard.ts).
+    const kw = await ensureKeywords({ userId: run.user_id, draftId: run.draft_id, text: caption, pack: pack as unknown as Record<string, unknown> });
+    if (kw.backfilled && kw.pack) pack = kw.pack as unknown as ContentPack;
   }
   const plan = perNetworkPlan(pack as unknown as Record<string, unknown>, mcProviders, {
     aviso,

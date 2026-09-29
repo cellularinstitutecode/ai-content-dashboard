@@ -30,6 +30,7 @@ import { mapLimit } from '@/lib/map-limit';
 import { findDuplicatePosts } from '@/lib/duplicate-posts';
 import { sheetRowUrl, sheetRowLabel, sheetRowTitle } from '@/lib/sheet-link';
 import { semrushDraftNote } from '@/lib/semrush-reason';
+import { keywordSourceNote } from '@/lib/keyword-fallback';
 import { looksInternal, professionalTitle } from '@/lib/post-title';
 import { imageUnshippable } from '@/lib/image-verdict';
 import { fmtScheduleDateTime, fmtScheduleTime, scheduleDateKey, scheduleTzLabel, schedulePresetValue, scheduleInputValue, scheduleInstantFromInput } from '@/lib/schedule-clock';
@@ -2978,7 +2979,10 @@ className="min-w-0 flex-1 rounded-xl bg-subtle px-3 py-2 text-[16px] font-semibo
 </div>
 ) : null}
 {selectedDraft?.pack && selectedDraft.pack.kind !== 'clip' && selectedDraft.pack._semrush && selectedDraft.pack._semrush.source !== 'semrush' && !editingDraft ? (
-<p className="mb-4 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">{semrushDraftNote(selectedDraft.pack._semrush.reason)}</p>
+<p className="mb-4 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">
+{/* Estimated keywords (lib/keyword-fallback.ts) are named; only a draft with none at all reads as written without data. */}
+{['model', 'derived'].includes(String(selectedDraft.pack._semrush.source)) ? keywordSourceNote(selectedDraft.pack._semrush) : semrushDraftNote(selectedDraft.pack._semrush.reason)}
+</p>
 ) : null}
 {selectedDraft?.pack?._image?.url && selectedDraft?.pack?.kind !== 'clip' && !editingDraft ? (
 <div className="mb-4 overflow-hidden rounded-2xl ring-1 ring-line/60">

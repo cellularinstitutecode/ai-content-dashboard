@@ -117,7 +117,7 @@ export async function POST(req: NextRequest) {
       brand,
       performanceHint,
     });
-    const keywordSource: 'semrush' | 'none' = semrush?.source === 'semrush' ? 'semrush' : 'none';
+    const keywordSource: string = semrush?.source ?? 'none';
     const keywordsApplied: string[] = semrush?.keywords ?? [];
     // WHY the lookup produced nothing, so the dashboard can say the true
     // reason instead of guessing "the API key is not set" — which was wrong

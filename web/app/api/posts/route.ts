@@ -4,6 +4,7 @@ import { refPolicyOf } from '@/lib/compliance';
 import { claimSupportOf } from '@/lib/citation-gate';
 import { fixPostCitation } from '@/lib/post-citation-fix';
 import { autoFixCitation } from '@/lib/citation-autofix';
+import { ensureKeywords } from '@/lib/keyword-guard';
 import { avisoForUser } from '@/lib/compliance-gate';
 import { videoVerdict, pendingRefusal, videoSourceOf, type PackLike } from '@/lib/video-required';
 import { ensureShareableVideo } from '@/lib/media-library';
@@ -512,6 +513,9 @@ export async function PATCH(req: Request) {
       else (existing as { text?: string | null }).text = fixed.text;
     }
     if (fixed.pack) draftPack = fixed.pack;
+    // And keywords: a post never goes out without them (lib/keyword-guard.ts).
+    const kw = await ensureKeywords({ userId: user.id, draftId: existing.draft_id, text: String(existing.text || ''), pack: draftPack });
+    if (kw.pack) draftPack = kw.pack;
   }
 
   // Only the linked draft's IMAGE was ever looked up for this, so approving a

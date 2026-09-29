@@ -781,6 +781,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
         // send, must not read the same as one that got everything.
         const status = preparedStatus({
           hasKeywords: prepared.hasKeywords,
+          keywordSource: prepared.keywordSource,
           overLength: posted.some((p) => p.reason === 'too_long'),
         });
         if (status !== STATUS_TEXT.prepared) {
@@ -1205,6 +1206,7 @@ export async function completeRow(opts: {
 
   const status = preparedStatus({
     hasKeywords: opts.prepared.hasKeywords,
+    keywordSource: opts.prepared.keywordSource,
     overLength: metricool.some((m) => m.reason === 'too_long'),
   });
   if (status !== STATUS_TEXT.prepared) {

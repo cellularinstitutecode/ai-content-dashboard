@@ -3,6 +3,7 @@ import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
 import { refPolicyOf, type RefPolicy } from '@/lib/compliance';
 import { claimSupportOf } from '@/lib/citation-gate';
 import { autoFixCitation } from '@/lib/citation-autofix';
+import { ensureKeywords } from '@/lib/keyword-guard';
 import { apiBase as metricoolApiBase, normalizeMediaList } from '@/lib/metricool';
 import { mediaHandoverMessage, normalizeFailure, ourLinkNote } from '@/lib/media-normalize-reason';
 import { verifyPlayableMp4 } from '@/lib/media-verify';
@@ -137,6 +138,8 @@ export async function POST(req: NextRequest) {
       const fixed = await autoFixCitation({ userId: user.id, draftId: ownedDraftIdEarly, text, pack: (ownDraftEarly as { pack?: Record<string, unknown> } | null)?.pack });
       if (fixed.swapped) text = fixed.text;
       draftClaimSupport = fixed.status ?? draftClaimSupport;
+      // And keywords: a post never goes out without them (lib/keyword-guard.ts).
+      await ensureKeywords({ userId: user.id, draftId: ownedDraftIdEarly, text, pack: fixed.pack ?? (ownDraftEarly as { pack?: Record<string, unknown> } | null)?.pack });
     }
   }
   if (!when) return NextResponse.json({ error: 'publishAt must be a valid datetime' }, { status: 400 });

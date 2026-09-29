@@ -15,7 +15,8 @@
 // It never publishes and never ticks a network column. Approve is still a person.
 import 'server-only';
 
-import { autoKeywordBrief, generateContentPack, judgeClaimSupport, writeTitle, type BrandContext, type ContentPack, type SemrushStamp } from '@/lib/ai';
+import { autoKeywordBrief, generateContentPack, judgeClaimSupport, keywordLadder, writeTitle, type BrandContext, type ContentPack, type SemrushStamp } from '@/lib/ai';
+import { hasKeywords } from '@/lib/keyword-fallback';
 import { avisoNumberFor, checkCompliance } from '@/lib/compliance';
 import { resolveTranscript, type TranscriptOrigin } from '@/lib/video-transcript';
 import { keywordLineFrom } from '@/lib/video-row';
@@ -126,6 +127,8 @@ export type PrepareOk = {
    * and the row must not look the same as one that got the full treatment.
    */
   hasKeywords: boolean;
+  /** Which rung supplied them: semrush (real data), model or derived (fallbacks), none. */
+  keywordSource: string;
   /** The REF citation the writer produced, without the label, or ''. */
   ref: string;
   /** Whether that citation backs the copy, and what was done about it. */
@@ -456,6 +459,19 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     }
   }
 
+  // NOTHING IS PREPARED WITHOUT KEYWORDS. Semrush has been asked twice by now
+  // (the subject, then what was spoken); when it had nothing — out of units,
+  // unreachable, no row for this phrase — the copy used to be written blind and
+  // the sheet said "SIN keywords". The ladder goes on without spending another
+  // unit: the model's own terms for this subject, then the subject's and the
+  // transcript's own words (lib/keyword-fallback.ts), stamped as estimates.
+  if (!hasSemrushData(brief.stamp)) {
+    const fallback = await keywordLadder(spoken || subject, { context: excerpt, skipSemrush: true });
+    if (hasKeywords(fallback.stamp)) {
+      brief = { ...fallback, stamp: { ...fallback.stamp, reason: brief.stamp.reason || fallback.stamp.reason } };
+    }
+  }
+
   // THE TITLE A PATIENT SEES, BUILT FROM THE RESEARCH THAT JUST RAN.
   //
   // `title` above is whatever the sheet or the file was called, and these files
@@ -577,6 +593,9 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
         // parameter for the same idea.
         topic: defect ? topic + '\n\n' + defect.corrective : topic,
         keywordHint: brief.hint ?? '',
+        // The research above, on the pack: every saved draft says which rung
+        // its keywords came from, and the doors can see they are there.
+        keywordStamp: brief.stamp,
         evidenceHint,
         landscapeHint,
         contentType: 'social',
@@ -992,7 +1011,9 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
     transcript: { source: t.origin, language: t.language, chars: transcript.length, preview: transcript.slice(0, 600), full: transcript },
     keywords: semrush,
     keywordLine: keywordLineFrom(semrush),
-    hasKeywords: hasSemrushData(semrush),
+    // Any rung counts as keywords; `keywordSource` tells the sheet which.
+    hasKeywords: hasKeywords(semrush),
+    keywordSource: semrush?.source ?? 'none',
     ref,
     claimSupport,
     compliance: (pack as ContentPack & { _compliance?: unknown })._compliance ?? null,
