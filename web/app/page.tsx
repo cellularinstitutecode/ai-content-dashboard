@@ -1623,6 +1623,62 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 </div>
 </header>
 
+{/* THE RIGHT-HAND PANEL. The "How this works" guide and the stat cards sat
+    across the top of the page and pushed the work below the fold; they now
+    sit in a column on the right, the same width as the menu on the left
+    (w-60), that stays in view while the page scrolls.
+    It comes FIRST in the markup and the row is reversed, so below 1280px,
+    where a side column would squeeze the panels, it stacks on top as before. */}
+<div className="xl:flex xl:flex-row-reverse xl:items-start xl:gap-8">
+<aside aria-label="Guide and counts" className="xl:sticky xl:top-8 xl:w-60 xl:shrink-0">
+{/* Onboarding "How this works" strip — dismissible, remembered per browser.
+
+    ON BOTH PAGES, and that is the point of it. This used to sit inside the
+    same {!isDraft} wrapper as the stat cards below, because when /draft was
+    split out the strip read as overview-page furniture. But the four sections
+    it indexes — Create, Images, Repurpose, Schedule — ALL live on Draft, which
+    is where their "Step 1 · Create" headings are. The index and the things it
+    indexes ended up on opposite pages, so the Draft page numbered its steps
+    one to four with nothing on screen saying what the four were. */}
+      {(
+        <section className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60 xl:mb-6">
+          <div className="flex items-center justify-between gap-3 border-b border-line px-6 py-4 sm:px-8 xl:flex-wrap xl:gap-2 xl:px-4 xl:py-3">
+            <div>
+              <h2 className="text-[15px] font-semibold text-ink">How this works</h2>
+              <p className="mt-0.5 text-[12px] text-ink-muted">A quick tour of the create → images → repurpose → schedule flow.</p>
+            </div>
+            <button type="button" onClick={toggleOnboard} aria-expanded={onboardOpen}
+              className="shrink-0 rounded-full px-3 py-1.5 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">
+              {onboardOpen ? 'Hide guide' : 'Show guide'}
+            </button>
+          </div>
+          {onboardOpen && (
+            <div className="grid gap-3 p-6 sm:grid-cols-2 sm:p-8 lg:grid-cols-5 xl:grid-cols-1 xl:gap-2 xl:p-3">
+              {ONBOARD_STEPS.map((s, i) => (
+                <button key={s.title} type="button" onClick={() => scrollToStep(i)} className="cursor-pointer rounded-2xl bg-subtle/60 p-4 text-left ring-1 ring-line transition hover:bg-white hover:ring-accent xl:rounded-xl xl:p-3">
+                  <div className="text-[13px] font-semibold text-ink">{s.title}</div>
+                  <p className="mt-1 text-[12px] leading-relaxed text-ink-muted">{s.body}</p>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+{/* Stat cards — the overview page's own furniture, still Dashboard-only. */}
+{!isDraft && (
+<section className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4 xl:grid-cols-2 xl:gap-2">
+{statCards.map(s => (
+<div key={s.label} className="rounded-2xl bg-surface p-5 shadow-card ring-1 ring-line/60 xl:rounded-xl xl:p-3">
+<div className="text-[28px] font-semibold leading-none tracking-tight tabular-nums xl:text-[22px]">{s.value}</div>
+<div className="mt-2 text-[13px] text-ink-muted xl:mt-1 xl:text-[11px] xl:leading-tight">{s.label}</div>
+</div>
+))}
+</section>
+)}
+</aside>
+<div className="min-w-0 flex-1">
+
 {/* One place that says a load failed, and one that says an action failed.
     Both used to be silence: a 401 or a dropped connection left every panel in
     its empty state, which reads as "you have nothing" rather than "we could
@@ -1644,53 +1700,6 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
     Site Audit dial or a missing keyword note has a stated cause instead of
     looking like three unrelated glitches. Silent when all is well. */}
 <SystemStatus />
-
-{/* Onboarding "How this works" strip — dismissible, remembered per browser.
-
-    ON BOTH PAGES, and that is the point of it. This used to sit inside the
-    same {!isDraft} wrapper as the stat cards below, because when /draft was
-    split out the strip read as overview-page furniture. But the four sections
-    it indexes — Create, Images, Repurpose, Schedule — ALL live on Draft, which
-    is where their "Step 1 · Create" headings are. The index and the things it
-    indexes ended up on opposite pages, so the Draft page numbered its steps
-    one to four with nothing on screen saying what the four were. */}
-      {(
-        <section className="mb-8 overflow-hidden rounded-3xl bg-surface shadow-card ring-1 ring-line/60">
-          <div className="flex items-center justify-between border-b border-line px-6 py-4 sm:px-8">
-            <div>
-              <h2 className="text-[15px] font-semibold text-ink">How this works</h2>
-              <p className="mt-0.5 text-[12px] text-ink-muted">A quick tour of the create → images → repurpose → schedule flow.</p>
-            </div>
-            <button type="button" onClick={toggleOnboard} aria-expanded={onboardOpen}
-              className="shrink-0 rounded-full px-3 py-1.5 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">
-              {onboardOpen ? 'Hide guide' : 'Show guide'}
-            </button>
-          </div>
-          {onboardOpen && (
-            <div className="grid gap-3 p-6 sm:grid-cols-2 sm:p-8 lg:grid-cols-5">
-              {ONBOARD_STEPS.map((s, i) => (
-                <button key={s.title} type="button" onClick={() => scrollToStep(i)} className="cursor-pointer rounded-2xl bg-subtle/60 p-4 text-left ring-1 ring-line transition hover:bg-white hover:ring-accent">
-                  <div className="text-[13px] font-semibold text-ink">{s.title}</div>
-                  <p className="mt-1 text-[12px] leading-relaxed text-ink-muted">{s.body}</p>
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
-
-{/* Stat cards — the overview page's own furniture, still Dashboard-only. */}
-{!isDraft && (
-<section className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
-{statCards.map(s => (
-<div key={s.label} className="rounded-2xl bg-surface p-5 shadow-card ring-1 ring-line/60">
-<div className="text-[28px] font-semibold leading-none tracking-tight tabular-nums">{s.value}</div>
-<div className="mt-2 text-[13px] text-ink-muted">{s.label}</div>
-</div>
-))}
-</section>
-)}
-
 
 {/* Generator */}
 {/* The panels, two across.
@@ -2976,6 +2985,8 @@ className="w-full resize-y rounded-2xl bg-subtle/50 p-4 text-[14px] leading-rela
 </div>
 </div>
 ), document.body) : null}
+</div>
+</div>
 </main>
 </div>
 </div>
