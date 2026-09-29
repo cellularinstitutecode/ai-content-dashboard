@@ -24,6 +24,7 @@ import {
 } from '@/lib/claim-support';
 import type { EvidenceItem } from '@/lib/evidence-parse';
 import { TITLE_SYSTEM, readTitle, titlePrompt } from '@/lib/title-writer';
+import { CLAIMS_SYSTEM, claimsPrompt, parseClaims, type CheckableClaim } from '@/lib/claim-extract';
 
 /**
  * Record what a provider just did, then throw if it refused.
@@ -858,6 +859,67 @@ export async function writeTitle(args: {
   } catch (e) {
     reportError('title:write', e);
     return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The checkable statements in a post (lib/claim-extract.ts), for "Verify / fix".
+// ---------------------------------------------------------------------------
+
+/**
+ * Take a post apart into the statements a study could back, each with its own
+ * PubMed query. Never throws; returns [] when it cannot be had, and the caller
+ * then falls back to judging the post whole, as before.
+ */
+export async function extractCheckableClaims(text: string, timeoutMs = 15000): Promise<CheckableClaim[]> {
+  const copy = String(text || '').trim();
+  if (!copy) return [];
+  const prompt = claimsPrompt(copy);
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
+  try {
+    if (anthropicKey) {
+      const res = await fetchWithRetry(
+        (process.env.ANTHROPIC_API_BASE || 'https://api.anthropic.com').replace(/\/$/, '') + '/v1/messages',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({
+            model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5',
+            max_tokens: 400,
+            // The same post must come apart the same way twice.
+            temperature: 0,
+            system: CLAIMS_SYSTEM,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+        },
+        { retries: 1, timeoutMs },
+      );
+      await noteProvider('anthropic', res);
+      const data = await res.json();
+      return parseClaims(String(data?.content?.[0]?.text ?? ''));
+    }
+    if (!openaiKey) return [];
+    const res = await fetchWithRetry(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${openaiKey}` },
+        body: JSON.stringify({
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          max_tokens: 400,
+          temperature: 0,
+          messages: [{ role: 'system', content: CLAIMS_SYSTEM }, { role: 'user', content: prompt }],
+        }),
+      },
+      { retries: 1, timeoutMs },
+    );
+    await noteProvider('openai', res);
+    const data = await res.json();
+    return parseClaims(String(data?.choices?.[0]?.message?.content ?? ''));
+  } catch (e) {
+    reportError('claim-extract', e);
+    return [];
   }
 }
 
