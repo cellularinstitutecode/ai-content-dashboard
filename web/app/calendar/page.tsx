@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import PageNav from '@/components/PageNav';
 import { localDateKey, tightestLimit, networkLabel, PUBLISH_NETWORKS, mediaProblem } from '@/lib/composer';
 import MediaPicker from '@/components/MediaPicker';
@@ -184,7 +184,45 @@ export default function CalendarPage() {
     }
   }
 
-  useEffect(() => { refresh(); void loadRuns(); }, []);
+  useEffect(() => { refresh(); void loadRuns(); lastSyncRef.current = Date.now(); }, []);
+
+  // Keeping the page current. Nothing tells this page when the Autopilot
+  // finishes a draft in the background (the hourly engine, or another tab), so
+  // the list reloads by itself — when the tab comes back into view after 30
+  // seconds away, and every two minutes while it is open and visible — and
+  // "↻ Refresh" does it on demand. Posts read from their own rate-limit
+  // bucket (posts-read) and the runs read has none, so this is cheap.
+  const lastSyncRef = useRef(0);
+  const syncingRef = useRef(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncedAt, setSyncedAt] = useState<Date | null>(null);
+  async function refreshAll() {
+    if (syncingRef.current) return;
+    syncingRef.current = true;
+    setSyncing(true);
+    try {
+      await Promise.all([refresh(), loadRuns()]);
+      lastSyncRef.current = Date.now();
+      setSyncedAt(new Date());
+    } finally {
+      syncingRef.current = false;
+      setSyncing(false);
+    }
+  }
+  const refreshAllRef = useRef(refreshAll);
+  useEffect(() => { refreshAllRef.current = refreshAll; });
+  useEffect(() => {
+    const stale = (ms: number) => document.visibilityState === 'visible' && Date.now() - lastSyncRef.current >= ms;
+    const onBack = () => { if (stale(30_000)) void refreshAllRef.current(); };
+    const tick = window.setInterval(() => { if (stale(120_000)) void refreshAllRef.current(); }, 30_000);
+    document.addEventListener('visibilitychange', onBack);
+    window.addEventListener('focus', onBack);
+    return () => {
+      window.clearInterval(tick);
+      document.removeEventListener('visibilitychange', onBack);
+      window.removeEventListener('focus', onBack);
+    };
+  }, []);
 
   // The Autopilot drafts. Best-effort: a failed read says so in the list and
   // never hides the posts.
@@ -644,6 +682,16 @@ export default function CalendarPage() {
             <button onClick={prevMonth} className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5">&lsaquo; Prev</button>
             <button onClick={goToday} className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5">Today</button>
             <button onClick={nextMonth} className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5">Next &rsaquo;</button>
+            <button
+              type="button"
+              onClick={() => void refreshAll()}
+              disabled={syncing}
+              title={syncedAt ? 'Last updated ' + syncedAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) + '. It also updates by itself every two minutes.' : 'Reload the posts and the Autopilot drafts'}
+              aria-label="Refresh the publishing list"
+              className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5 disabled:opacity-50"
+            >
+              {syncing ? 'Refreshing…' : '↻ Refresh'}
+            </button>
           </div>
           <h2 className="text-lg font-semibold">{monthLabel}</h2>
           <div className="min-w-[90px] text-right text-xs text-ink/40">

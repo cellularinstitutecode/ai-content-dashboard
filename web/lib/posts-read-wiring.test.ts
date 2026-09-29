@@ -39,3 +39,12 @@ test('a failed load on the calendar is not shown as an empty calendar', () => {
   assert.match(cal, /!loading && !loadFailed && posts\.length === 0/);
   assert.doesNotMatch(cal, /Failed to load posts \(/);
 });
+
+test('the calendar keeps itself current: a refresh button, and a reload on return and every two minutes', () => {
+  const cal = src('app/calendar/page.tsx');
+  assert.match(cal, /\{syncing \? 'Refreshing…' : '↻ Refresh'\}/, 'the button');
+  assert.match(cal, /await Promise\.all\(\[refresh\(\), loadRuns\(\)\]\)/, 'it reloads the posts and the Autopilot drafts together');
+  assert.match(cal, /addEventListener\('visibilitychange', onBack\)/, 'on returning to the tab');
+  assert.match(cal, /stale\(120_000\)/, 'and every two minutes while visible');
+  assert.match(cal, /if \(syncingRef\.current\) return;/, 'never two reloads at once');
+});
