@@ -17,6 +17,7 @@ import SchedulePack from "@/components/SchedulePack";
 import HeroImagePicker from "@/components/HeroImagePicker";
 import HeroImageControls from "@/components/HeroImageControls";
 import YouTubeStats from "@/components/YouTubeStats";
+import StrategyDrop from "@/components/StrategyDrop";
 import { useWorkspace } from "@/components/workspace";
 import { appliesTo as complianceApplies, checkCompliance, complianceNetworksLabel, ensureAviso, DEFAULT_AVISO_NUMBER } from "@/lib/compliance";
 import { PanelLoader } from "@/components/LoadingScreen";
@@ -2439,6 +2440,9 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 </div>
 </div>
 </div>
+              {/* Drop weekly strategy: a strategy PDF becomes Autopilot slots
+                  (components/StrategyDrop.tsx). Additive — nothing is removed. */}
+{!isDraft && <StrategyDrop />}
               {/* The YouTube channel's community numbers (Metricool's Community ·
                   Growth panel), on the main page. */}
 {!isDraft && <YouTubeStats />}

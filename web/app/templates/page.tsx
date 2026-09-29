@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import PageNav from '@/components/PageNav';
 import WeeklyPlanner, { type PlannerTemplate } from '@/components/WeeklyPlanner';
 import StrategyPerformance from '@/components/StrategyPerformance';
+import StrategyDrop from '@/components/StrategyDrop';
 import { announce, onRefresh } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
 
@@ -332,6 +333,8 @@ export default function TemplatesPage() {
       <div style={{ maxWidth: 1200, margin: '0 auto', padding: 24, display: 'grid', gap: 24 }}>
         {err && <div role="alert" aria-live="assertive" style={{ color: '#d70015', fontSize: 14 }}>Error: {err}</div>}
         {status && <div role="status" aria-live="polite" style={{ color: '#248a3d', fontSize: 14 }}>{status}</div>}
+
+        <StrategyDrop onCreated={() => void load()} />
 
         <WeeklyPlanner
           templates={templates as PlannerTemplate[]}
