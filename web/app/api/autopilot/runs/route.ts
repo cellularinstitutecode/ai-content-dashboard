@@ -1,7 +1,7 @@
 // web/app/api/autopilot/runs/route.ts
 // The reviewer's API for the Autopilot queue.
 //   GET  → the signed-in user's runs (joined with template name + draft pack).
-//   POST → { id, action: 'approve' | 'skip' | 'run_now' }
+//   POST → { id, action: 'approve' | 'skip' | 'run_now' | 'regenerate' | 'fix' }
 // Approve is the only path toward publishing, and it only ever creates a
 // Metricool DRAFT (autoPublish: false) plus a pending_review posts row.
 import { isAllowedEmail } from '@/lib/access';
@@ -9,7 +9,7 @@ import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { advanceRuns, approveRun, regenerateRun, skipRun } from '@/lib/autopilot';
+import { advanceRuns, approveRun, fixRun, regenerateRun, skipRun } from '@/lib/autopilot';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { bucketRuns, DEFAULT_LIMITS, FAILED_WINDOW_DAYS } from '@/lib/review-queue';
 import { wantsBlog } from '@/lib/metricool-networks';
@@ -224,9 +224,9 @@ export async function POST(req: NextRequest) {
       ? NextResponse.json({ ok: true })
       : NextResponse.json({ error: 'run not found' }, { status: 404 });
   }
-  // run_now / regenerate each drive a full LLM generation pipeline. Capped
-  // like every other AI route.
-  if (action === 'run_now' || action === 'regenerate') {
+  // run_now / regenerate / fix each drive a full LLM generation pipeline.
+  // Capped like every other AI route.
+  if (action === 'run_now' || action === 'regenerate' || action === 'fix') {
     const rl = await checkRateLimit(user.id, 'autopilot-action');
     if (!rl.ok) {
       return NextResponse.json(
@@ -269,6 +269,14 @@ export async function POST(req: NextRequest) {
       );
     }
     return NextResponse.json({ ok: true, ...result });
+  }
+  if (action === 'fix') {
+    // FIX resolves every warning on the card — citation, copy, image — and
+    // re-checks (lib/autopilot.ts fixRun). `fixed` and `remaining` let the
+    // card say what changed and what still needs a look.
+    const result = await fixRun(id, user.id);
+    if (!result.ok) return NextResponse.json({ error: 'fix_refused', message: result.note, ...result }, { status: 400 });
+    return NextResponse.json(result);
   }
   return NextResponse.json({ error: 'unknown action' }, { status: 400 });
 }
