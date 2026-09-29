@@ -19,7 +19,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   installFetchProgress, subscribe, snapshot, scopedSnapshot, type Snapshot,
 } from './progressBus';
-import MobiusProgress from './MobiusProgress';
+import PercentBar from './PercentBar';
 
 const SHOW_AFTER_MS = 220;   // don't flash for a request that finishes instantly
 
@@ -86,17 +86,18 @@ export function PanelLoader({ scope, rounded = 'rounded-3xl' }: { scope: string;
       data-scope={scope}
     >
       <div className="mx-4 w-full max-w-xs p-4 text-center">
-        <div className="relative mx-auto flex h-28 w-28 items-center justify-center">
-          <MobiusProgress percent={snap.percent} size={112} showNumber={false} />
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div
-              className="font-display text-[30px] font-bold leading-none tabular-nums text-ink"
-              data-testid="panel-loading-percent"
-            >
-              {snap.percent}
-              <span className="ml-0.5 align-top text-[14px] font-semibold text-ink-muted">%</span>
-            </div>
+        <div className="mx-auto flex w-40 flex-col items-center">
+          <div
+            className="font-display text-[30px] font-bold leading-none tabular-nums text-ink"
+            data-testid="panel-loading-percent"
+          >
+            {snap.percent}
+            <span className="ml-0.5 align-top text-[14px] font-semibold text-ink-muted">%</span>
           </div>
+          {/* The blue line under the number: fills as the work finishes. */}
+          <span className="mt-3 block h-1 w-full overflow-hidden rounded-full" style={{ background: 'rgba(0,113,227,0.15)' }} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={snap.percent}>
+            <span className="block h-full rounded-full" style={{ width: Math.max(0, Math.min(100, snap.percent)) + '%', background: 'var(--accent, #0071e3)', transition: 'width 220ms cubic-bezier(0.28,0.11,0.32,1)' }} />
+          </span>
         </div>
 
         <p className="mt-4 text-[14px] font-semibold text-ink" data-testid="panel-loading-label">
@@ -145,11 +146,12 @@ export function TopProgressBar() {
           Both were present and neither was noticeable, which is the whole
           reason this changed — one visible thing beats two invisible ones. */}
       <span
-        className="flex flex-col items-center gap-1.5 rounded-2xl bg-white/85 p-1.5 text-ink-muted shadow-soft ring-1 ring-line backdrop-blur"
+        className="flex flex-col items-center gap-1.5 rounded-2xl bg-white/85 px-2.5 pb-1.5 pt-2.5 text-ink-muted shadow-soft ring-1 ring-line backdrop-blur"
         data-testid="top-progress-percent"
         data-percent={snap.percent}
       >
-        <MobiusProgress percent={snap.percent} size={48} />
+        {/* The number, with a blue line under it that fills as the work finishes. */}
+        <PercentBar percent={snap.percent} width={64} fontSize={16} unit />
         {/* What it is doing, which the bus has always carried and this badge
             has always dropped. Capped narrow: it lives beside the page, not in
             it, and a sentence here would be a second thing to read. */}
