@@ -15,7 +15,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { mediaHandoverMessage, normalizeFailure, ourLinkNote, readableSize } from './media-normalize-reason.ts';
+import { imageRefusalMessage, mediaHandoverMessage, normalizeFailure, ourLinkNote, readableSize } from './media-normalize-reason.ts';
 
 const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 
@@ -119,4 +119,19 @@ test('every door that hands over a video names the reason it was refused', () =>
       path + ' still sends people to inspect the video copy whatever went wrong',
     );
   }
+});
+
+test('an image refusal names the echo or the status, and what the upload said', () => {
+  const echo = imageRefusalMessage({
+    status: 404,
+    echoed: true,
+    attempts: [{ path: '/actions/normalize/image/url', status: 200 }, { path: '/v2/actions/normalize/image/url', status: 404 }],
+    upload: 'Metricool answered 400 when asked to open an image upload.',
+  });
+  assert.match(echo, /did not take the image/);
+  assert.match(echo, /handed the same link straight back \(image 200 · v2\/image 404\)/);
+  assert.match(echo, /Uploading the image into Metricool failed too: Metricool answered 400/);
+  assert.doesNotMatch(echo, /video/);
+  assert.match(imageRefusalMessage({ status: 500 }), /normalise endpoint answered 500\./);
+  assert.match(imageRefusalMessage({ error: 'Metricool timed out after 60s' }), /could not be reached \(Metricool timed out after 60s\)/);
 });

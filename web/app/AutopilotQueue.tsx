@@ -597,10 +597,10 @@ export default function AutopilotQueue() {
                       nobody told. A not-found citation is also refused at
                       Approve (lib/approve-plan.ts). */}
                   {r.pack?._compliance?.citation && r.pack._compliance.citation.status !== 'verified' && r.pack._compliance.citation.status !== 'not_required' && (
-                    <div className={'border-b border-line px-5 py-2.5 text-[12px] ' + (r.pack._compliance.citation.status === 'not_found' || r.pack._compliance.citation.status === 'no_doi' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}>
-                      {r.pack._compliance.citation.status === 'not_found' ? '✗ ' : '⚠ '}
+                    <div className={'border-b border-line px-5 py-2.5 text-[12px] ' + (r.pack._compliance.citation.status === 'not_found' || r.pack._compliance.citation.status === 'mismatch' || r.pack._compliance.citation.status === 'no_doi' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}>
+                      {r.pack._compliance.citation.status === 'not_found' || r.pack._compliance.citation.status === 'mismatch' ? '✗ ' : '⚠ '}
                       {citationLabel(r.pack._compliance.citation)}
-                      {r.pack._compliance.citation.status === 'not_found' ? ' — this post will not be sent until the REF line cites a real study.' : ''}
+                      {r.pack._compliance.citation.status === 'not_found' || r.pack._compliance.citation.status === 'mismatch' ? ' — this post will not be sent until the REF line cites a real study.' : ''}
                     </div>
                   )}
 

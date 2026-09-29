@@ -120,7 +120,8 @@ export async function metricoolFetch(
 // because callers have always imported them from this file.
 export { looksLikeVideoUrl, mayBeVideoUrl } from '@/lib/metricool-normalize-parse';
 import { mayBeVideoUrl } from '@/lib/metricool-normalize-parse';
-import { isMetricoolHostedUrl } from '@/lib/metricool-upload-parse';
+import { imageUploadEligible, isMetricoolHostedUrl } from '@/lib/metricool-upload-parse';
+import { imageRefusalMessage } from '@/lib/media-normalize-reason';
 
 export type NormalizeOutcome = {
   /** What to put in the post: Metricool's own reference, or '' when it failed. */
@@ -161,6 +162,10 @@ export type NormalizeOutcome = {
    * check that exists to catch files that did not move.
    */
   hosted?: boolean;
+  /** An image the normalise would not take, uploaded into Metricool's storage instead. */
+  uploaded?: boolean;
+  /** The sentence for a person, when this outcome already knows it (an image). */
+  message?: string;
 };
 
 /**
@@ -190,6 +195,11 @@ export async function normalizeMediaDetailed(rawUrl: string): Promise<NormalizeO
   if (isMetricoolHostedUrl(url)) {
     console.info('metricool:normalize-media already hosted, sent as is');
     return { url, ok: true, status: null, error: null, attempts: [], hosted: true };
+  }
+  // Uploaded a moment ago for another network of the same post.
+  const known = uploadedImages.get(url);
+  if (known && Date.now() - known.at < UPLOADED_IMAGE_TTL_MS) {
+    return { url: known.url, ok: true, status: null, error: null, attempts: [], uploaded: true };
   }
   let lastStatus: number | null = null;
   let lastShape = '';
@@ -260,7 +270,7 @@ export async function normalizeMediaDetailed(rawUrl: string): Promise<NormalizeO
         console.warn('metricool:normalize-media unusable answer', method, path, res.status, parsed.shape, raw.slice(0, 200));
       }
     }
-    return {
+    const failed: NormalizeOutcome = {
       url,
       ok: false,
       status: lastStatus,
@@ -269,11 +279,44 @@ export async function normalizeMediaDetailed(rawUrl: string): Promise<NormalizeO
       attempts,
       ...(sawEcho ? { echoed: true } : {}),
     };
+    // An image the normalise echoed or refused goes up the upload route instead.
+    return isVideo ? failed : await uploadImageInstead(failed);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.warn('metricool:normalize-media failed', message);
-    return { url, ok: false, status: lastStatus, error: message, attempts };
+    const failed: NormalizeOutcome = { url, ok: false, status: lastStatus, error: message, attempts };
+    return mayBeVideoUrl(url) ? failed : await uploadImageInstead(failed);
   }
+}
+
+/** Images already uploaded, by source link, so one approve uploads once for all its networks. */
+const uploadedImages = new Map<string, { url: string; at: number }>();
+const UPLOADED_IMAGE_TTL_MS = 6 * 60 * 60_000;
+
+/**
+ * Upload an image the normalise did not take into Metricool's own storage
+ * (lib/metricool-upload.ts), or refuse with what each step said. Drive links
+ * and videos never reach here.
+ */
+async function uploadImageInstead(failed: NormalizeOutcome): Promise<NormalizeOutcome> {
+  const src = failed.url;
+  let upload: string | null = null;
+  if (imageUploadEligible(src)) {
+    // Imported here: lib/metricool-upload.ts imports this module.
+    const { uploadImageUrlToMetricool } = await import('@/lib/metricool-upload');
+    const up = await uploadImageUrlToMetricool(src);
+    if (up.ok) {
+      console.info('metricool:normalize-media image uploaded instead');
+      if (uploadedImages.size > 100) uploadedImages.clear();
+      uploadedImages.set(src, { url: up.url, at: Date.now() });
+      return { url: up.url, ok: true, status: failed.status, error: null, attempts: failed.attempts, uploaded: true };
+    }
+    upload = up.message;
+  }
+  return {
+    ...failed,
+    message: imageRefusalMessage({ status: failed.status, error: failed.error, echoed: failed.echoed, attempts: failed.attempts, upload }),
+  };
 }
 
 export { acceptEcho } from '@/lib/metricool-echo';
@@ -395,12 +438,13 @@ export async function metricoolSchedulePost(input: SchedulePostInput, mode: Post
   // Normalised before the post is built, never after: an un-normalised URL is
   // accepted and then discarded, so "media sent" and "media attached" are two
   // different things and only this call makes them the same one.
-  const { media, degraded } = await normalizeMediaList((input.media || []).map((m) => m.url).filter(Boolean));
+  const { media, degraded, failure } = await normalizeMediaList((input.media || []).map((m) => m.url).filter(Boolean));
   if (degraded) {
     // Refused, not warned about: the failure is otherwise invisible — Metricool
     // answers 200 and the post arrives with no video.
     console.error('metricool:media-not-normalised — the post is NOT created', { count: media.length });
-    throw new MediaNotNormalisedError();
+    // An image carries its own reason; a video keeps the standing sentence.
+    throw new MediaNotNormalisedError(failure?.message || undefined);
   }
 
   const body = {

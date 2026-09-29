@@ -22,18 +22,20 @@ export const POST_WEEKDAYS = [1, 2, 3, 4, 5];
 /** Every day: the grid when VIDEO_POST_DAYS is `all`. */
 export const EVERY_DAY = [0, 1, 2, 3, 4, 5, 6];
 
-/** Clinic morning. Matches the Video Library composer's own default. */
-export const POST_TIME_OF_DAY = process.env.VIDEO_AUTOPILOT_TIME || '08:00';
+/** The first slot of the day. Matches the Video Library composer's own default. */
+export const POST_TIME_OF_DAY = process.env.VIDEO_AUTOPILOT_TIME || '13:00';
 
 /**
- * Two slots a day, morning and late afternoon on the clinic's clock, unless a
+ * Two slots a day, early and late afternoon on the clinic's clock, unless a
  * setting says otherwise.
  *
  * THE one place the grid is decided: postTimes(), nextFreeSlot() and
  * reserveSlots() all read it at call time, so every caller follows from here.
- * Moved 09:00 -> 08:00 at the clinic's request; the afternoon slot is unchanged.
+ * Moved 09:00 -> 08:00 at the clinic's request, then to 13:00 so the reels
+ * stay clear of the weekly strategy's 09:00 post; the 17:00 slot is unchanged.
+ * VIDEO_AUTOPILOT_TIMES still overrides it.
  */
-export const DEFAULT_POST_TIMES = ['08:00', '17:00'];
+export const DEFAULT_POST_TIMES = ['13:00', '17:00'];
 
 /**
  * Which days carry slots, read at call time so a setting changed on the
@@ -53,7 +55,7 @@ export function postWeekdays(env: Record<string, string | undefined> = process.e
 /**
  * The times of day that carry a slot, in order.
  *
- * VIDEO_AUTOPILOT_TIMES is a comma list ("08:00,17:00"); the older singular
+ * VIDEO_AUTOPILOT_TIMES is a comma list ("13:00,17:00"); the older singular
  * VIDEO_AUTOPILOT_TIME still works as a one-entry list, so anything already
  * configured keeps its meaning. Unreadable entries are dropped, never guessed;
  * with nothing readable at all the grid is the clinic default, two a day.
@@ -88,9 +90,9 @@ export function nextFreeSlot(taken: Iterable<string>, now: Date = new Date(), tz
     const at = Date.parse(String(t));
     if (Number.isFinite(at)) used.add(at);
   }
-  // One grid per time of day, merged and ordered: with 08:00 and 17:00 the
-  // morning of a day always comes before its afternoon, and both before the
-  // next day's morning — which is what makes "two a day" mean two a day.
+  // One grid per time of day, merged and ordered: with 13:00 and 17:00 the
+  // first slot of a day always comes before its second, and both before the
+  // next day's first — which is what makes "two a day" mean two a day.
   const days = postWeekdays();
   const slots = postTimes()
     .flatMap((t) => upcomingSlots(days, t, HORIZON_DAYS, tz, now))

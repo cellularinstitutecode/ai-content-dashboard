@@ -62,7 +62,7 @@ import { professionalTitle } from '@/lib/post-title';
 import { publishArticle, wordpressConfig, wordpressConfigured } from '@/lib/wordpress';
 import { ensureDraftImage, type PackImage } from '@/lib/images';
 import { imageUnshippable } from '@/lib/image-verdict';
-import { channelCopy, doisIn, knownBadCitation, perNetworkPlan } from '@/lib/approve-plan';
+import { channelCopy, citationsIn, knownBadCitation, perNetworkPlan } from '@/lib/approve-plan';
 import { ARTICLE_LINK_PLACEHOLDER, PROMO_DELAY_MINUTES, articleLogNote, articleUrl, promoLink, readArticleLog, withArticleLink } from '@/lib/article-promo';
 import { verifyDoi } from '@/lib/citation';
 import { findEvidence } from '@/lib/evidence';
@@ -99,6 +99,7 @@ import { BLOG_ANGLES } from '@/lib/strategy-seed';
 import { scorePack, type RunScore } from '@/lib/score-pack';
 export { scorePack };
 import { citationPolicyFor, isStrategySlot, pickSupportingPhrase, pillarForStrategy, strategyBrand, strategyTopicPrompt } from '@/lib/strategy-voice';
+import { attachableClip, clipRelevant, pillarOf, usesPillarRotation, type PostTopic } from '@/lib/clip-relevance';
 export { normalizeStrategy };
 export type { StrategyFormat, StrategyMode, TemplateStrategy } from '@/lib/template-strategy';
 
@@ -125,7 +126,7 @@ export type Angle = {
   reviewRequestedAt?: string;
   provenPerformer?: boolean; // boosted by the measured-engagement learning loop
   supportingPhrase?: string; // weekly-strategy slots: an optional search phrase found by research
-  media?: { url: string; title: string } | null; // matching clip to attach on approve
+  media?: { url: string; title: string; relevant?: boolean } | null; // matching clip to attach on approve
   redatedFrom?: string; // the slot this run missed, when a reviewer moved it to the next free one
   coveredThisWeek?: string[]; // weekly-strategy slots: what the related slots write the same week
   dealtWeek?: number; // weekly-strategy slots: the week of the dealt schedule this occurrence belongs to
@@ -776,8 +777,10 @@ function topicPromptFor(angle: Angle, strategy: TemplateStrategy, templateName =
 // clips.result is the OpusClip webhook payload (title/text/hashtags + mp4 urls).
 async function findMatchingClip(
   userId: string,
-  angle: Angle
-): Promise<{ url: string; title: string } | null> {
+  angle: Angle,
+  /** Set for a strategy or pillar-rotation run: only a clip relevant to it (lib/clip-relevance.ts). */
+  topic?: PostTopic,
+): Promise<{ url: string; title: string; relevant?: boolean } | null> {
   try {
     const db = supabaseAdmin();
     const { data: rows, error: rowsError } = await db
@@ -798,6 +801,7 @@ async function findMatchingClip(
       for (const c of clips as Record<string, unknown>[]) {
         const url = String(c.export || c.preview || '');
         if (!url) continue;
+        if (topic && !clipRelevant(c, topic)) continue;
         const hay = (String(c.title || '') + ' ' + String(c.text || '') + ' ' + String(c.description || '') + ' ' + String(c.hashtags || '')).toLowerCase();
         const score = words.filter((w) => hay.includes(w)).length;
         if (score > 0 && (!best || score > best.score)) {
@@ -805,7 +809,7 @@ async function findMatchingClip(
         }
       }
     }
-    return best ? { url: best.url, title: best.title } : null;
+    return best ? { url: best.url, title: best.title, ...(topic ? { relevant: true } : {}) } : null;
   } catch {
     return null;
   }
@@ -939,12 +943,15 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   // Media enrichment: remember the best matching finished clip so approval
   // can attach it to the Metricool draft. Purely additive.
   //
-  // NOT for the weekly strategy. The matcher accepts any clip sharing one word
-  // longer than three letters with the angle — "what", "with", "time" — and a
-  // matched clip wins over the picture at approval. So a Tuesday post on
-  // protein could go out carrying an HBOT procedure reel in place of the
-  // educational cover it was made with. Those posts have their own picture.
-  const media = isStrategySlot(strategy) ? null : await findMatchingClip(run.user_id, angle);
+  // NOT for the weekly strategy: its posts are text with a single image, the
+  // clinic's chosen format, so no clip is looked for at all. For other pillar
+  // rotations, only a clip that shares real ground with the pillar and the
+  // angle (lib/clip-relevance.ts): the loose matcher alone put an infusion reel
+  // on a sleep post. Otherwise the post keeps its own picture.
+  const topic: PostTopic | undefined = usesPillarRotation(strategy)
+    ? { pillar: pillarOf(strategy, template.name, angle.seedTopic), seedTopic: angle.seedTopic, query: angle.query }
+    : undefined;
+  const media = isStrategySlot(strategy) ? null : await findMatchingClip(run.user_id, angle, topic);
   const angleOut: Angle = { ...angle, media };
 
   // Reuse the existing draft row on regeneration so the library doesn't
@@ -1537,7 +1544,7 @@ async function autoSchedule(
       promotionFlags: run.score?.promotionFlags?.length ?? 0,
       openingRepeat: Boolean(run.score?.openingRepeat),
       networks: template.providers || [],
-      hasMedia: hasImage || (!isStrategySlot(template.strategy) && Boolean(run.angle?.media?.url)),
+      hasMedia: hasImage || Boolean(attachableClip(run.angle, template.strategy, template.name)),
       // The judge's verdict on a strategy post's citation (stepScore). Null for
       // every other post, which is what this always was.
       claimSupport: (pack?._claimSupport as { status?: string } | undefined)?.status ?? null,
@@ -2116,11 +2123,10 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     return { ok: false, note: why };
   }
   const wantsArticle = wantsBlog(providers);
-  // A weekly-strategy post never carries a matched clip. Runs drafted before
-  // stepDraft stopped matching them may still have one stored; it is ignored
+  // A weekly-strategy or pillar-rotation post carries a clip only when it is
+  // relevant to the pillar and angle; a stored clip that is not is ignored
   // here rather than shipped over the post's own picture.
-  const strategyPost = isStrategySlot((t as { strategy?: TemplateStrategy | null } | null)?.strategy);
-  const clip = strategyPost ? null : run.angle?.media?.url ? run.angle.media : null;
+  const clip = attachableClip(run.angle, (t as { strategy?: TemplateStrategy | null } | null)?.strategy, (t as { name?: string } | null)?.name);
   if (!metricoolNetworks(providers).length && !wantsArticle) {
     await releaseClaim(db, run, 'approve-failed', 'Approval could not proceed: the template has no networks selected. Returned for review.');
     return { ok: false, note: 'That template has no networks selected, so there was nowhere to send it. It is back in your queue.' };
@@ -2171,19 +2177,30 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   // badge" to tell the reviewer — and the planner card never showed that
   // badge, so a made-up study could go out on a person's Approve. Refused
   // here instead. A DOI the reviewer has since edited in is checked now.
-  const stamp = (pack as ContentPack & { _compliance?: { citation?: { status?: string | null; doi?: string | null } | null } })._compliance;
+  const stamp = (pack as ContentPack & { _compliance?: { citation?: { status?: string | null; doi?: string | null; title?: string | null } | null } })._compliance;
   const badDoi = knownBadCitation(stamp, sends);
   if (badDoi) {
     const why = 'Not sent: Crossref has no record of the study cited in the REF line (DOI ' + badDoi + '). Replace the citation with a real study, then approve again. Nothing was sent.';
     await releaseClaim(db, run, 'approve-refused', why);
     return { ok: false, note: why };
   }
+  // Every DOI is checked now, the stamped one included: the title in the REF
+  // line must match the paper the DOI resolves to, and older stamps never
+  // compared titles. An unreachable Crossref still passes.
   const stampedDoi = String(stamp?.citation?.doi || '').toLowerCase();
-  for (const doi of doisIn(sends)) {
-    if (doi === stampedDoi) continue;
-    const checked = await verifyDoi(doi);
+  for (const { doi, title } of citationsIn(sends)) {
+    let checked = await verifyDoi(doi, { expectedTitle: title });
+    if (checked.status === 'unavailable' && doi === stampedDoi && stamp?.citation?.status === 'mismatch') {
+      checked = { ...checked, status: 'mismatch', title: stamp.citation.title ?? null };
+    }
     if (checked.status === 'not_found') {
       const why = 'Not sent: Crossref has no record of the study cited in the REF line (DOI ' + doi + '). Replace the citation with a real study, then approve again. Nothing was sent.';
+      await releaseClaim(db, run, 'approve-refused', why);
+      return { ok: false, note: why };
+    }
+    if (checked.status === 'mismatch') {
+      const why = 'Not sent: the DOI in the REF line points to a different paper: ' + (checked.title ? '"' + checked.title + '"' : 'not the study it names') +
+        ' (DOI ' + doi + '). Replace the citation with the study the post means, then approve again. Nothing was sent.';
       await releaseClaim(db, run, 'approve-refused', why);
       return { ok: false, note: why };
     }

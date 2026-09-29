@@ -15,6 +15,7 @@
 //
 // Pure: `./x.ts` imports only, so the test runner reads this file directly.
 import { appliesTo, checkCompliance, complianceMessage, ensureAviso, type RefPolicy } from './compliance.ts';
+import { refTitle } from './citation.ts';
 import { fitsNetwork } from './video-row.ts';
 
 export type NetworkSend = { network: string; text: string };
@@ -79,6 +80,18 @@ export function doisIn(sends: readonly NetworkSend[]): string[] {
     if (doi) out.add(doi.toLowerCase());
   }
   return [...out];
+}
+
+/** Each DOI the sends carry, with the paper title its REF line quotes (null when none can be read). */
+export function citationsIn(sends: readonly NetworkSend[]): { doi: string; title: string | null }[] {
+  const out = new Map<string, string | null>();
+  for (const s of sends) {
+    const c = checkCompliance(s.text);
+    if (!c.doi) continue;
+    const doi = c.doi.toLowerCase();
+    if (!out.get(doi)) out.set(doi, refTitle(c.ref));
+  }
+  return [...out].map(([doi, title]) => ({ doi, title }));
 }
 
 /**

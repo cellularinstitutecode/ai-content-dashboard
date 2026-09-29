@@ -395,7 +395,7 @@ export function slotByKey(key: unknown): Slot | null {
 /** Every slot, in the order the week runs — Monday first, as the document reads. */
 export const WEEK_ORDER: Weekday[] = [1, 2, 3, 4, 5, 6, 0];
 
-/** The times the two daily slots default to, clear of the video pipeline's 08:00 / 17:00. */
+/** The times the two daily slots default to, clear of the video pipeline's 13:00 / 17:00. */
 export const SLOT_TIMES: Record<1 | 2, string> = { 1: '09:00', 2: '18:00' };
 
 export function pillarById(id: string): Pillar | null {

@@ -210,3 +210,29 @@ export function ourLinkNote(probe: { ok: boolean; message?: string; bytes?: numb
   if (probe.ok) return 'The video link this app handed over is fine' + (size ? ' (' + size + ')' : '') + ', so the file itself is not the problem.';
   return 'The video link this app handed over did not answer either: ' + String(probe.message || 'it could not be fetched') + '.';
 }
+
+/**
+ * The refusal for an IMAGE: what the normalise answered, and what the upload
+ * into Metricool's storage said when it was tried next.
+ */
+export function imageRefusalMessage(input: {
+  status?: number | null;
+  error?: string | null;
+  echoed?: boolean | null;
+  attempts?: readonly { path: string; status: number; method?: string }[] | null;
+  /** The upload's own message, when it was tried and failed. */
+  upload?: string | null;
+}): string {
+  const trace = attemptTrace(input.attempts);
+  const status = Number.isFinite(Number(input.status)) && input.status != null ? Number(input.status) : null;
+  const why = input.echoed
+    ? 'its normalise endpoint handed the same link straight back'
+    : input.error
+      ? 'its normalise endpoint could not be reached (' + String(input.error) + ')'
+      : status != null
+        ? 'its normalise endpoint answered ' + status
+        : 'its normalise endpoint gave no usable answer';
+  const upload = String(input.upload || '').trim();
+  return 'Metricool did not take the image, so the post was not created: ' + why + (trace ? ' (' + trace + ')' : '') + '.' +
+    (upload ? ' Uploading the image into Metricool failed too: ' + upload.replace(/\.$/, '') + '.' : '');
+}

@@ -58,6 +58,9 @@ import {
   completionBody,
   derivedConvertedUrl,
   directUploadEnabled,
+  IMAGE_UPLOAD_MAX_BYTES,
+  imageContentType,
+  imageUploadEligible,
   isMetricoolHostedUrl,
   metricoolCopyId,
   partRanges,
@@ -725,5 +728,104 @@ export async function uploadVideoToMetricool(
   } finally {
     if (dir) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     if (claimed) await releaseUpload(id);
+  }
+}
+
+/**
+ * Upload one image, fetched from a public URL, into Metricool's storage.
+ *
+ * The same transaction as a video, declared as one slice with the image's own
+ * content type. For an image the normalise endpoint handed back or refused.
+ * Never throws.
+ */
+export async function uploadImageUrlToMetricool(
+  sourceUrl: string,
+  opts: { budgetMs?: number; blogId?: string | null } = {},
+): Promise<DirectUpload> {
+  const url = String(sourceUrl || '').trim();
+  if (!imageUploadEligible(url)) return { ok: false, reason: 'failed', message: 'Only a plain https image link can be uploaded this way.' };
+  if (!directUploadEnabled()) return { ok: false, reason: 'off', message: 'Direct upload to Metricool is switched off (METRICOOL_DIRECT_UPLOAD).' };
+  if (!metricoolConfigured()) return { ok: false, reason: 'unconfigured', message: 'Metricool is not configured, so nothing can be uploaded to it.' };
+  const deadline = Date.now() + (opts.budgetMs ?? 60_000);
+  const left = () => deadline - Date.now();
+  try {
+    // 1. The bytes, from the public link.
+    const src = await fetch(url, { signal: AbortSignal.timeout(Math.min(30_000, Math.max(5_000, left()))) });
+    if (!src.ok) return { ok: false, reason: 'unreachable', status: src.status, message: 'The image link answered HTTP ' + src.status + ' when this app fetched it.' };
+    const contentType = imageContentType(src.headers.get('content-type'));
+    if (!contentType) {
+      await src.body?.cancel().catch(() => undefined);
+      return { ok: false, reason: 'failed', message: 'The image link served ' + (src.headers.get('content-type') || 'no content type') + ', not an image.' };
+    }
+    const declaredLength = Number(src.headers.get('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > IMAGE_UPLOAD_MAX_BYTES) {
+      await src.body?.cancel().catch(() => undefined);
+      return { ok: false, reason: 'too_large', sizeBytes: declaredLength, message: mb(declaredLength) + ' is more than the ' + mb(IMAGE_UPLOAD_MAX_BYTES) + ' an image upload takes.' };
+    }
+    const buf = Buffer.from(await src.arrayBuffer());
+    const bytes = buf.length;
+    if (!bytes) return { ok: false, reason: 'failed', message: 'The image link returned an empty file.' };
+    if (bytes > IMAGE_UPLOAD_MAX_BYTES) return { ok: false, reason: 'too_large', sizeBytes: bytes, message: mb(bytes) + ' is more than the ' + mb(IMAGE_UPLOAD_MAX_BYTES) + ' an image upload takes.' };
+    const hash = createHash('sha256').update(buf).digest('base64');
+    const declared: DeclaredPart[] = [{ size: bytes, startByte: 0, endByte: bytes, hash }];
+    const blob = new Blob([buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer], { type: contentType });
+
+    // 2. The transaction.
+    const opened = await openTransaction({ contentType, bytes, parts: declared, blogId: opts.blogId, left });
+    if (!opened.tx) {
+      const status = opened.status ?? 0;
+      return {
+        ok: false, reason: status >= 500 ? 'unreachable' : 'refused', status: opened.status, sizeBytes: bytes,
+        message: 'Metricool answered ' + status + ' when asked to open an image upload' + (opened.detail ? '. It said: ' + opened.detail : '.'),
+      };
+    }
+    const tx = opened.tx;
+
+    // 3. The bytes, to the address Metricool named.
+    const uploaded: UploadedPart[] = [];
+    if (tx.uploadType === 'MULTIPART') {
+      const part = tx.parts[0];
+      if (!tx.uploadId || !tx.key || !part) {
+        return { ok: false, reason: 'unreadable', shape: tx.shape, sizeBytes: bytes, message: 'Metricool opened an image upload but named no part address (it replied with ' + tx.shape + ').' };
+      }
+      const r = await putPart({ url: part.presignedUrl, blob, contentType, hash, left });
+      if (!r.ok) return { ok: false, reason: r.status >= 500 ? 'unreachable' : 'refused', status: r.status, sizeBytes: bytes, message: 'The storage Metricool named refused the image (' + r.status + ')' + (r.detail ? ': ' + r.detail : '.') };
+      if (!r.etag) return { ok: false, reason: 'unreadable', sizeBytes: bytes, message: 'The image went up but the storage returned no ETag.' };
+      uploaded.push({ partNumber: part.partNumber, etag: r.etag });
+    } else {
+      if (!tx.presignedUrl) {
+        return { ok: false, reason: 'unreadable', shape: tx.shape, sizeBytes: bytes, message: 'Metricool opened an image upload but named no upload address (it replied with ' + tx.shape + ').' };
+      }
+      const r = await putPart({ url: tx.presignedUrl, blob, contentType, hash, left });
+      if (!r.ok) return { ok: false, reason: r.status >= 500 ? 'unreachable' : 'refused', status: r.status, sizeBytes: bytes, message: 'The storage Metricool named refused the image (' + r.status + ')' + (r.detail ? ': ' + r.detail : '.') };
+    }
+
+    // 4. Completion.
+    const done = await metricoolFetch(TRANSACTIONS_PATH, {
+      method: 'PATCH',
+      body: JSON.stringify(completionBody(tx, uploaded)),
+      timeoutMs: Math.max(CALL_MS, left()),
+      blogId: opts.blogId,
+    });
+    const doneText = await done.text();
+    if (!done.ok) {
+      return {
+        ok: false, reason: done.status >= 500 ? 'unreachable' : 'refused', status: done.status, sizeBytes: bytes,
+        message: 'The image went up but Metricool answered ' + done.status + ' to completing the upload' + (said(doneText) ? '. It said: ' + said(doneText) : '.'),
+      };
+    }
+    const finished = readCompletedTransaction(doneText);
+    const fileUrl = finished.convertedFileUrl || finished.fileUrl || tx.fileUrl;
+    if (!fileUrl) {
+      return { ok: false, reason: 'unreadable', shape: finished.shape, sizeBytes: bytes, message: 'The image upload completed but named no file address (it replied with ' + finished.shape + ').' };
+    }
+    if (!isMetricoolHostedUrl(fileUrl)) console.warn('metricool:image-upload unfamiliar host', fileUrl.slice(0, 120));
+    console.info('metricool:image-upload complete', contentType, bytes, 'bytes');
+    const copyId = metricoolCopyId(finished.key || tx.key || new URL(fileUrl).pathname);
+    return { ok: true, url: fileUrl, copyId, bytes, sizeBytes: bytes };
+  } catch (e) {
+    reportError('metricool-upload:image', e, {});
+    const aborted = e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError');
+    return { ok: false, reason: aborted ? 'unreachable' : 'failed', message: aborted ? 'Moving the image into Metricool ran out of time.' : (e instanceof Error ? e.message : String(e)) };
   }
 }

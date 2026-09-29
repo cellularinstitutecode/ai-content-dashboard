@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { channelCopy, doisIn, knownBadCitation, perNetworkPlan } from './approve-plan.ts';
+import { channelCopy, citationsIn, doisIn, knownBadCitation, perNetworkPlan } from './approve-plan.ts';
 
 const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 const REF = 'REF: Smith, A., et al. (2020). "Protein and recovery." J Nutr, 1(2), 3-4. DOI: 10.1000/abc123';
@@ -65,4 +65,21 @@ test('wiring: approveRun sends one post per network, checked before the first go
   assert.doesNotMatch(approve, /let text = channelText\(pack, mcProviders\[0\]/, 'the single shared caption is gone');
   assert.match(approve, /knownBadCitation\(stamp, sends\)/, 'a not-found DOI is refused at Approve');
   assert.match(approve, /BUT NOT EVERY NETWORK WENT/, 'a partial send is said, and not released');
+});
+
+test('each DOI travels with the title its REF line quotes', () => {
+  const sends = [
+    { network: 'instagram', text: 'Post.\n\nREF: Smith, J., et al. (2018). "Evidence-based criteria in the nutritional context." Nutrients. DOI: 10.3390/nu10040478' },
+    { network: 'facebook', text: 'Post.\n\nREF: Smith, J., et al. (2018). "Evidence-based criteria in the nutritional context." Nutrients. DOI: 10.3390/NU10040478' },
+  ];
+  assert.deepEqual(citationsIn(sends), [{ doi: '10.3390/nu10040478', title: 'Evidence-based criteria in the nutritional context' }]);
+});
+
+test('wiring: Approve checks every DOI against its REF title and refuses a mismatch', () => {
+  const ap = src('lib/autopilot.ts');
+  const approve = ap.slice(ap.indexOf('export async function approveRun'));
+  assert.match(approve, /for \(const \{ doi, title \} of citationsIn\(sends\)\)/);
+  assert.match(approve, /verifyDoi\(doi, \{ expectedTitle: title \}\)/);
+  assert.match(approve, /the DOI in the REF line points to a different paper: /);
+  assert.doesNotMatch(approve, /if \(doi === stampedDoi\) continue;/, 'the stamped DOI is checked too');
 });

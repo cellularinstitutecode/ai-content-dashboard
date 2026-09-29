@@ -80,11 +80,13 @@ export function autoScheduleVerdict(input: AutoScheduleInput): AutoScheduleVerdi
     const said =
       input.citation === 'not_found'
         ? 'Crossref has no record of the DOI in the REF line'
-        : input.citation === 'no_doi'
-          ? 'the REF line carries no DOI'
-          : input.citation === 'unavailable'
-            ? 'the citation could not be checked against Crossref just now'
-            : 'the citation was never checked';
+        : input.citation === 'mismatch'
+          ? 'the DOI in the REF line points to a different paper'
+          : input.citation === 'no_doi'
+            ? 'the REF line carries no DOI'
+            : input.citation === 'unavailable'
+              ? 'the citation could not be checked against Crossref just now'
+              : 'the citation was never checked';
     return {
       ok: false,
       reason: 'citation',

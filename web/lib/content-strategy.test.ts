@@ -12,6 +12,7 @@
 // trims a bank to save a line.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { DEFAULT_POST_TIMES } from './video-slot.ts';
 import {
   CANCUN_RULE,
   DAY_THEMES,
@@ -192,12 +193,12 @@ test('each slot becomes a one-day template, which is what makes the rotation wee
 });
 
 test('the slot times stay clear of the video pipeline', () => {
-  // The reels publish at 08:00 and 17:00 (lib/video-slot.ts DEFAULT_POST_TIMES).
+  // The reels publish at 13:00 and 17:00 (lib/video-slot.ts DEFAULT_POST_TIMES).
   // These 14 are additional, by your decision — so they should not land in the
   // same hour and make the calendar unreadable.
   assert.equal(SLOT_TIMES[1], '09:00');
   assert.equal(SLOT_TIMES[2], '18:00');
   for (const t of Object.values(SLOT_TIMES)) {
-    assert.ok(!['08:00', '17:00'].includes(t), 'collides with a video slot');
+    assert.ok(!DEFAULT_POST_TIMES.includes(t), 'collides with a video slot');
   }
 });

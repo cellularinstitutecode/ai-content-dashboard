@@ -152,3 +152,9 @@ test('a strategy post that opens like a recent one does not go, whatever it scor
   assert.match(holdNote(v), /opens the same way as a recent one/);
   assert.deepEqual(autoScheduleVerdict({ ...GOOD, openingRepeat: false }), { ok: true });
 });
+
+test('a DOI that resolves to a different paper does not go, and says so', () => {
+  const v = autoScheduleVerdict({ ...GOOD, citation: 'mismatch' });
+  assert.equal(v.ok, false);
+  assert.match(holdNote(v), /points to a different paper/);
+});

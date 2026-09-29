@@ -5,7 +5,7 @@ import 'server-only';
 
 import { MEDICAL_SAFETY_GUARDRAILS } from '@/lib/safety';
 import { REF_IF_CLAIM_INSTRUCTION, REF_INSTRUCTION, avisoNumberFor, checkCompliance, ensureAviso, type ComplianceCheck, type RefPolicy } from '@/lib/compliance';
-import { verifyDoi, type CitationCheck } from '@/lib/citation';
+import { refTitle, verifyDoi, type CitationCheck } from '@/lib/citation';
 import { researchBundle, briefPromptFrom, type KeywordBrief } from '@/lib/semrush';
 import { attemptPlan } from '@/lib/ai-attempts';
 import { packKeyContract } from '@/lib/pack-keys';
@@ -581,13 +581,22 @@ export async function generateContentPack(
   // Crossref does not know earns exactly one regeneration; after that the
   // reviewer sees the flag and decides.
   const aviso = avisoNumberFor(input.brand?.aviso_publicidad);
-  let citation = await verifyDoi(checkCompliance(pack.instagram, aviso).doi || checkCompliance(pack.facebook, aviso).doi);
+  // The REF line's own title goes with its DOI, so a DOI for a different paper is caught.
+  const citedIn = (p: ContentPack) => {
+    const c = checkCompliance(p.instagram, aviso).doi ? checkCompliance(p.instagram, aviso) : checkCompliance(p.facebook, aviso);
+    return { doi: c.doi, expectedTitle: refTitle(c.ref) };
+  };
+  const first = citedIn(pack);
+  let citation = await verifyDoi(first.doi, { expectedTitle: first.expectedTitle });
   let regenerated = false;
-  if (citation.status === 'not_found') {
+  if (citation.status === 'not_found' || citation.status === 'mismatch') {
     try {
-      const again = await call('IMPORTANT: the previous draft cited DOI ' + citation.doi + ', which does not exist. Cite a DIFFERENT real study with a real DOI.');
-      const c2 = await verifyDoi(checkCompliance(again.instagram, aviso).doi || checkCompliance(again.facebook, aviso).doi);
-      if (c2.status !== 'not_found') { pack = again; citation = c2; }
+      const again = await call(citation.status === 'mismatch'
+        ? 'IMPORTANT: the previous draft cited DOI ' + citation.doi + ', which belongs to a different paper ("' + (citation.title || 'another study') + '"). Cite a real study whose DOI and title match.'
+        : 'IMPORTANT: the previous draft cited DOI ' + citation.doi + ', which does not exist. Cite a DIFFERENT real study with a real DOI.');
+      const next = citedIn(again);
+      const c2 = await verifyDoi(next.doi, { expectedTitle: next.expectedTitle });
+      if (c2.status !== 'not_found' && c2.status !== 'mismatch') { pack = again; citation = c2; }
       regenerated = true;
     } catch { /* keep the first draft; the badge tells the reviewer */ }
   }

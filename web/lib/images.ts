@@ -16,7 +16,7 @@
 // - Idempotent: ensureDraftImage() skips drafts that already carry an
 //   image, so retries and concurrent callers don't double-spend.
 // - No new secrets: reuses OPENAI_API_KEY + the Supabase service role.
-import { cleanTopic, familyAt, onTopicCheck, plannerImageFor, plannerPromptLines, scienceAllowed, SHOT_COUNT, type PlannerImage } from '@/lib/planner-image';
+import { cleanTopic, familyAt, onTopicCheck, plannerImageFor, plannerPromptLines, scienceOffered, SHOT_COUNT, type PlannerImage } from '@/lib/planner-image';
 import { renderTitleCover } from '@/lib/title-cover';
 import { briefSource, briefSystemPrompt, briefUserPrompt, parseSceneBrief, type SceneBrief } from '@/lib/image-brief';
 import { setStoredFontReader } from '@/lib/brand-card';
@@ -633,9 +633,9 @@ async function generateBestPackImage(opts: {
   // checked for being on topic; every other draft is unchanged.
   const plannerBase = plannerImageFor(opts.pack);
   // Read the post once: does its own body talk about biology? Only then may a
-  // microscopy or lab frame be offered for it.
+  // microscopy or lab frame be offered for it — and never on a lifestyle theme.
   const planner = plannerBase
-    ? { ...plannerBase, science: scienceAllowed(briefSource(opts.pack, 6000) || opts.topic) }
+    ? { ...plannerBase, science: scienceOffered(plannerBase.pillarId, briefSource(opts.pack, 6000) || opts.topic) }
     : null;
   const sceneCount = planner ? SHOT_COUNT : STYLE_VARIANTS.length;
   const baseVariant = Math.abs(Math.round(opts.variant ?? 0)) % sceneCount;

@@ -104,9 +104,10 @@ test('the approve path in /api/posts is gated, on the video and not on any media
 test('approveRun is gated on the matched clip, not on the hero image', () => {
   const src = readSrc('lib/autopilot.ts');
   // `clip` is the matched clip (run.angle.media), except on a weekly-strategy
-  // post, which never carries one — there the gate sees no video and refuses a
-  // video draft, which is the safe direction.
-  assert.match(src, /const clip = strategyPost \? null : run\.angle\?\.media\?\.url \? run\.angle\.media : null;/);
+  // or pillar-rotation post whose clip is not relevant (lib/clip-relevance.ts)
+  // — there the gate sees no video and refuses a video draft, which is the
+  // safe direction.
+  assert.match(src, /const clip = attachableClip\(run\.angle, /);
   assert.match(src, /videoVerdict\(pack as PackLike, Boolean\(clip\?\.url\)\)/);
   // And it must let the run go, not strand it in `approved` where nothing can
   // reach it — the exact defect the Autopilot audit found four times.
