@@ -78,3 +78,13 @@ test('siteAudit reads through these, and fetches the health score only for a new
   assert.doesNotMatch(fn, /\* 1000\)/, 'no second conversion of an already-millisecond stamp');
   assert.match(src, /unwrapEnvelope\(json\)/, 'the tracking report is unwrapped too');
 });
+
+test('the Site Audit card is gone from the panel, and the panel no longer pays for its data', () => {
+  const panel = readFileSync(new URL('../app/SemrushPanel.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(panel, /tag="Site Audit"/, 'removed at the team\'s request');
+  assert.doesNotMatch(panel, /label="Site Health"/);
+  const route = readFileSync(new URL('../app/api/semrush/route.ts', import.meta.url), 'utf8');
+  const project = route.slice(route.indexOf("if (action === 'project')"), route.indexOf("if (!topic)"));
+  assert.doesNotMatch(project, /siteAudit\(/, 'the project action serves Position Tracking only');
+  assert.match(project, /trackingSummary\(domain\)/);
+});
