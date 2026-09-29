@@ -83,6 +83,10 @@ export function attachableClip(
 ): StoredClip | null {
   const media = angle?.media;
   if (!media?.url) return null;
+  // The weekly strategy is text with a single image — the clinic's chosen
+  // format — so its posts never carry a clip, however relevant. A stored clip
+  // on an older run is ignored rather than shipped over the post's picture.
+  if (isStrategySlot(strategy)) return null;
   if (!usesPillarRotation(strategy)) return media;
   if (media.relevant === true) return media;
   const post = { pillar: pillarOf(strategy, templateName, angle?.seedTopic), seedTopic: String(angle?.seedTopic || ''), query: String(angle?.query || '') };

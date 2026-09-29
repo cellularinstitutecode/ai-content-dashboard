@@ -943,14 +943,15 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   // Media enrichment: remember the best matching finished clip so approval
   // can attach it to the Metricool draft. Purely additive.
   //
-  // For the weekly strategy and pillar rotations, only a clip that shares real
-  // ground with the pillar and the angle (lib/clip-relevance.ts): the loose
-  // matcher alone put an infusion reel on a sleep post. Otherwise the post
-  // keeps its own picture.
+  // NOT for the weekly strategy: its posts are text with a single image, the
+  // clinic's chosen format, so no clip is looked for at all. For other pillar
+  // rotations, only a clip that shares real ground with the pillar and the
+  // angle (lib/clip-relevance.ts): the loose matcher alone put an infusion reel
+  // on a sleep post. Otherwise the post keeps its own picture.
   const topic: PostTopic | undefined = usesPillarRotation(strategy)
     ? { pillar: pillarOf(strategy, template.name, angle.seedTopic), seedTopic: angle.seedTopic, query: angle.query }
     : undefined;
-  const media = await findMatchingClip(run.user_id, angle, topic);
+  const media = isStrategySlot(strategy) ? null : await findMatchingClip(run.user_id, angle, topic);
   const angleOut: Angle = { ...angle, media };
 
   // Reuse the existing draft row on regeneration so the library doesn't

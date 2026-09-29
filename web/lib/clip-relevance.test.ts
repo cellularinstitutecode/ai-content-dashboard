@@ -2,6 +2,7 @@
 // same thing; otherwise the post keeps its hero image.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { attachableClip, clipRelevant, topicWords, usesPillarRotation } from './clip-relevance.ts';
 
 const SLOT = { mode: 'fixed_topic', seeded: 'weekly-strategy', pillarId: 'sleep-stress' };
@@ -34,15 +35,28 @@ test('strategy slots and pillar rotations are gated; other templates are not', (
   assert.equal(usesPillarRotation(null), false);
 });
 
-test('approve attaches a relevant clip, and the hero image otherwise', () => {
+test('approve attaches a relevant clip on a pillar rotation, and the hero image otherwise', () => {
   const infusion = { url: 'https://x.test/infusion.mp4', title: 'Infusion Administration Guide' };
   const sleep = { url: 'https://x.test/sleep.mp4', title: 'Sleep hygiene and a regular bedtime' };
   const angle = { query: SLEEP.query, seedTopic: 'Sleep' };
-  assert.equal(attachableClip({ ...angle, media: infusion }, SLOT, 'Sleep and stress management'), null);
-  assert.deepEqual(attachableClip({ ...angle, media: sleep }, SLOT, 'Sleep and stress management'), sleep);
-  assert.deepEqual(attachableClip({ ...angle, media: { ...infusion, relevant: true } }, SLOT, 'x'), { ...infusion, relevant: true },
+  const ROTATION = { mode: 'pillars', pillars: ['Sleep and stress management', 'Nutrition'] };
+  assert.equal(attachableClip({ ...angle, media: infusion }, ROTATION, 'Sleep and stress management'), null);
+  assert.deepEqual(attachableClip({ ...angle, media: sleep }, ROTATION, 'Sleep and stress management'), sleep);
+  assert.deepEqual(attachableClip({ ...angle, media: { ...infusion, relevant: true } }, ROTATION, 'x'), { ...infusion, relevant: true },
     'a clip the matcher already judged on its full text is trusted');
   // Outside the rotation, unchanged.
   assert.deepEqual(attachableClip({ ...angle, media: infusion }, { mode: 'fixed_topic', topic: 'IV therapy' }, 'IV'), infusion);
-  assert.equal(attachableClip({ ...angle, media: null }, SLOT, 'x'), null);
+  assert.equal(attachableClip({ ...angle, media: null }, ROTATION, 'x'), null);
+});
+
+test('a weekly-strategy post never carries a clip, however relevant: it is text with a single image', () => {
+  const sleep = { url: 'https://x.test/sleep.mp4', title: 'Sleep hygiene and a regular bedtime' };
+  const angle = { query: SLEEP.query, seedTopic: 'Sleep' };
+  assert.equal(attachableClip({ ...angle, media: sleep }, SLOT, 'Sleep and stress management'), null);
+  assert.equal(attachableClip({ ...angle, media: { ...sleep, relevant: true } }, SLOT, 'x'), null);
+});
+
+test('wiring: stepDraft does not look for a clip for a strategy slot', () => {
+  const src = readFileSync(new URL('../lib/autopilot.ts', import.meta.url), 'utf8');
+  assert.match(src, /const media = isStrategySlot\(strategy\) \? null : await findMatchingClip\(run\.user_id, angle, topic\);/);
 });
