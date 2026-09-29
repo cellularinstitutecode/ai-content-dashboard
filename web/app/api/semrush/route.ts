@@ -180,9 +180,12 @@ export async function GET(req: NextRequest) {
 
   if (action === 'project') {
     const domain = normalizeDomain(req.nextUrl.searchParams.get('domain') || '') || primaryDomain();
-    const [audit, tracking] = await Promise.all([siteAudit(), trackingSummary(domain)]);
+    // Position Tracking only. The Site Audit card was removed from the panel,
+    // so its reports (100 units, and 10,000 for the health score) are no
+    // longer fetched for it.
+    const tracking = await trackingSummary(domain);
     return NextResponse.json(
-      { audit: audit.data, auditMeta: audit.meta, tracking: tracking.data, trackingMeta: tracking.meta },
+      { tracking: tracking.data, trackingMeta: tracking.meta },
       { headers: { 'Cache-Control': 'private, max-age=300' } }
     );
   }

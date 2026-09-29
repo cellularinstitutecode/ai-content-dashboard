@@ -102,20 +102,6 @@ type DomainBundle = {
   keywordResearch?: { ok: boolean; reason: 'ok' | 'no_token' | 'budget' | 'balance_unknown'; transport: 'v3' | 'mcp' };
 };
 
-type SiteAuditSnapshot = {
-  configured: boolean;
-  status: string | null;
-  health: number | null;
-  healthDelta: number | null;
-  errors: number | null;
-  warnings: number | null;
-  notices: number | null;
-  pagesCrawled: number | null;
-  pagesHealthy: number | null;
-  pagesWithIssues: number | null;
-  lastAudit: string | null;
-};
-
 type TrackingSummary = {
   configured: boolean;
   visibility: number | null;
@@ -124,7 +110,7 @@ type TrackingSummary = {
   trend: { date: string; visibility: number | null }[];
 };
 
-type ProjectData = { audit: SiteAuditSnapshot; auditMeta: SectionMeta; tracking: TrackingSummary; trackingMeta: SectionMeta };
+type ProjectData = { tracking: TrackingSummary; trackingMeta: SectionMeta };
 
 type ActivityRow = { topic: string; keyword: string; volume: number | null; difficulty: number | null; role: string; createdAt: string };
 
@@ -219,13 +205,6 @@ function posTone(p: number | null | undefined): string {
   if (p <= 10) return 'bg-sky-100 text-sky-700';
   if (p <= 20) return 'bg-amber-100 text-amber-700';
   return 'bg-subtle text-ink-muted';
-}
-
-function healthHex(h: number | null): string {
-  if (h == null) return '#a1a1a6';
-  if (h >= 90) return '#34c759';
-  if (h >= 70) return '#ff9f0a';
-  return '#ff3b30';
 }
 
 function ascoreHex(a: number | null): string {
@@ -426,33 +405,6 @@ function RingStat({ count, total, label, sub, color = '#34c759' }: { count: numb
       <div className="text-[11px] font-medium text-ink-muted">{label}</div>
       {sub && <div className="-mt-1 text-[10px] text-ink-faint">{sub}</div>}
     </div>
-  );
-}
-
-// Donut gauge (0..100) with % in the center.
-function Gauge({ value, label, size = 132 }: { value: number | null; label: string; size?: number }) {
-  const r = size * 0.35;
-  const c = 2 * Math.PI * r;
-  const pct = value != null ? Math.max(0, Math.min(100, value)) : 0;
-  const hex = healthHex(value);
-  const half = size / 2;
-  return (
-    <svg width={size} height={size} viewBox={'0 0 ' + size + ' ' + size} role="img" aria-label={label + ': ' + (value != null ? Math.round(value) + '%' : 'no data')}>
-      <circle cx={half} cy={half} r={r} fill="none" stroke="rgba(0,0,0,0.07)" strokeWidth={size * 0.085} />
-      <circle
-        cx={half} cy={half} r={r} fill="none"
-        stroke={value != null ? hex : 'rgba(0,0,0,0.07)'}
-        strokeWidth={size * 0.085} strokeLinecap="round"
-        strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)}
-        transform={'rotate(-90 ' + half + ' ' + half + ')'}
-      />
-      <text x={half} y={half - 2} textAnchor="middle" style={{ font: '600 ' + Math.round(size * 0.2) + 'px -apple-system, BlinkMacSystemFont, sans-serif', fill: '#1d1d1f' }}>
-        {value != null ? Math.round(value) + '%' : '—'}
-      </text>
-      <text x={half} y={half + size * 0.13} textAnchor="middle" style={{ font: '400 ' + Math.round(size * 0.085) + 'px -apple-system, BlinkMacSystemFont, sans-serif', fill: '#6e6e73' }}>
-        {label}
-      </text>
-    </svg>
   );
 }
 
@@ -694,7 +646,6 @@ export default function SemrushPanel({
   }, [kws]);
 
   const tracking = project?.tracking ?? null;
-  const audit = project?.audit ?? null;
   const visPts: Pt[] = useMemo(
     () => (tracking?.trend ?? []).filter((t) => t.visibility != null).map((t) => ({ date: t.date, value: t.visibility as number })),
     [tracking]
@@ -907,13 +858,13 @@ export default function SemrushPanel({
               {!loading && bundle && bundle.overviewMeta.ok && !bundle.backlinksMeta.ok && <SectionNotice meta={bundle.backlinksMeta} what="Backlink metrics" />}
             </Card>
 
-            {/* --- Position tracking + Site audit row --- */}
-            <div className="grid gap-4 lg:grid-cols-5">
+            {/* --- Position tracking. (The Site Audit card beside it was removed
+                at the team's request; the full audit is in Semrush.) --- */}
+            <div className="grid gap-4">
               {/* Position tracking */}
               <Card
                 tag="Position Tracking"
                 title="United States (Google) · English"
-                className="lg:col-span-3"
                 right={<a href={SEM.organic(domain)} target="_blank" rel="noopener noreferrer" className="text-[12px] font-medium text-accent hover:underline">View full report ↗</a>}
               >
                 <div className="grid gap-5 sm:grid-cols-[1fr_auto]">
@@ -996,65 +947,6 @@ export default function SemrushPanel({
                   </div>
                 )}
                 {project && !project.trackingMeta.ok && tracking?.configured && <SectionNotice meta={project.trackingMeta} what="Position Tracking" />}
-              </Card>
-
-              {/* Site audit */}
-              <Card
-                tag="Site Audit"
-                title={audit?.lastAudit ? 'Updated ' + new Date(audit.lastAudit).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : undefined}
-                className="lg:col-span-2"
-                right={<a href={SEM.projects()} target="_blank" rel="noopener noreferrer" className="text-[12px] font-medium text-accent hover:underline">View full report ↗</a>}
-              >
-                {audit && audit.configured && project?.auditMeta.ok ? (
-                  <>
-                    <div className="flex items-center gap-5">
-                      <Gauge value={audit.health} label="Site Health" />
-                      <div className="grid flex-1 grid-cols-2 gap-3">
-                        <div>
-                          <div className="text-[12px] font-medium text-ink-muted">Errors</div>
-                          <div className="mt-0.5 text-[26px] font-semibold tabular-nums text-rose-600">{fmtExact(audit.errors)}</div>
-                        </div>
-                        <div>
-                          <div className="text-[12px] font-medium text-ink-muted">Warnings</div>
-                          <div className="mt-0.5 text-[26px] font-semibold tabular-nums text-amber-600">{fmtExact(audit.warnings)}</div>
-                        </div>
-                        <div>
-                          <div className="text-[12px] font-medium text-ink-muted">Notices</div>
-                          <div className="mt-0.5 text-[20px] font-semibold tabular-nums text-ink">{fmtExact(audit.notices)}</div>
-                        </div>
-                        <div>
-                          <div className="text-[12px] font-medium text-ink-muted">Crawled Pages</div>
-                          <div className="mt-0.5 text-[20px] font-semibold tabular-nums text-ink">{fmtExact(audit.pagesCrawled)}</div>
-                        </div>
-                      </div>
-                    </div>
-                    {audit.pagesCrawled != null && audit.pagesHealthy != null && audit.pagesWithIssues != null && (
-                      <div className="mt-4">
-                        <SegmentBar
-                          ariaLabel={'Crawled pages: ' + audit.pagesHealthy + ' healthy, ' + audit.pagesWithIssues + ' with issues'}
-                          segments={[
-                            { label: 'Healthy', count: audit.pagesHealthy, color: '#34c759' },
-                            { label: 'With issues', count: audit.pagesWithIssues, color: '#ff9f0a' },
-                            { label: 'Other', count: Math.max(0, audit.pagesCrawled - audit.pagesHealthy - audit.pagesWithIssues), color: 'rgba(0,0,0,0.12)' },
-                          ]}
-                        />
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="flex h-full min-h-[180px] flex-col items-center justify-center gap-2 text-center">
-                    <Gauge value={null} label="Site Health" />
-                    <p className="max-w-[260px] text-[12px] text-ink-muted">
-                      {project?.auditMeta?.reason === 'v3_key'
-                        // Plain English beats a raw "(HTTP 403)" leaking into
-                        // the UI for a state no retry can clear.
-                        ? 'Site Audit scores come from Semrush’s Standard API (v3), a Business-plan entitlement — open the full report in Semrush instead.'
-                        : audit?.configured
-                        ? 'Site Audit data is unavailable right now' + (project?.auditMeta.note ? ' (' + project.auditMeta.note + ')' : '') + '.'
-                        : 'Link a Semrush project to pull your Site Audit score, errors and warnings here — ask whoever set this up.'}
-                    </p>
-                  </div>
-                )}
               </Card>
             </div>
 
@@ -1264,7 +1156,7 @@ export default function SemrushPanel({
               {adviceErr && <p className="rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">{adviceErr}</p>}
               {!advice && !adviceLoading && !adviceErr && (
                 <p className="text-[13px] text-ink-muted">
-                  The advisor reads everything on this panel — rankings, movers, competitors, backlinks, site audit — and returns a prioritized
+                  The advisor reads everything on this panel — rankings, movers, competitors, backlinks — and returns a prioritized
                   plan of the highest-impact moves. Content recommendations come with one-click AI draft prompts.
                 </p>
               )}
