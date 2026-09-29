@@ -26,6 +26,7 @@ import type { EvidenceItem } from '@/lib/evidence-parse';
 import { TITLE_SYSTEM, readTitle, titlePrompt } from '@/lib/title-writer';
 import { CLAIMS_SYSTEM, claimsPrompt, parseClaims, type CheckableClaim } from '@/lib/claim-extract';
 import { COMMAND_ONLY_RULES } from '@/lib/assistant-standby';
+import { KEYWORDS_SYSTEM, derivedKeywords, fallbackBriefPrompt, fallbackStamp, hasKeywords, keywordsPrompt, parseKeywords } from '@/lib/keyword-fallback';
 
 /**
  * Record what a provider just did, then throw if it refused.
@@ -109,6 +110,10 @@ export type GenerateInput = {
   // Optional Semrush keyword hint (search volume + difficulty) so the model
   // writes with real keyword data. Injected by the generate route.
   keywordHint?: string;
+  /** The research the caller already did, to be stamped on the pack as `_semrush`. */
+  keywordStamp?: SemrushStamp | null;
+  /** What is said about the topic (a transcript, a brief), for the keyword ladder's fallbacks. */
+  keywordContext?: string | null;
   /**
    * Milliseconds left on the caller's clock for the whole writing step.
    *
@@ -471,13 +476,20 @@ function parseJsonStrict(text: string): ContentPack {
 // skip the filter. The result is stamped on the pack as `_semrush`, which
 // persists into saved drafts, giving autonomous posts a visible, auditable
 // record that real keyword research ran before the AI wrote a word.
-// Cache-first + budget-guarded (lib/semrush): a repeat topic costs 0 units and
-// a missing key degrades to a stamped "none" — generation is never blocked.
+// Cache-first + budget-guarded (lib/semrush): a repeat topic costs 0 units.
+//
+// A missing key, an empty unit balance or a phrase Semrush has no row for
+// used to degrade to a stamped "none" and the post was written anyway, with
+// nothing behind it (the sheet read "Listo — SIN keywords"). Now the ladder
+// below (keywordLadder) goes on: an expired cache entry, then the model's own
+// terms, then the subject's — and a pack without keywords is REFUSED
+// (NoKeywordsError) rather than written blind. lib/keyword-fallback.ts.
 // ---------------------------------------------------------------------------
 
 export type SemrushStamp = {
   checked: boolean; // keyword research was attempted for this generation
-  source: 'semrush' | 'none'; // real data applied vs unavailable
+  /** semrush: real search data. model / derived: fallbacks (lib/keyword-fallback.ts). none: nothing at all. */
+  source: 'semrush' | 'model' | 'derived' | 'none';
   primary: string | null;
   volume: number | null;
   difficulty: number | null;
@@ -530,9 +542,113 @@ export async function autoKeywordBrief(
       },
     };
   } catch {
-    // Keyword research must NEVER block generation.
+    // Semrush being down is not the end: keywordLadder goes on to the fallbacks.
     return { brief: null, stamp: { ...base, reason: 'error' } };
   }
+}
+
+/** A KeywordBrief (lib/semrush.ts) as the stamp a pack carries. */
+export function stampFromBrief(b: KeywordBrief): SemrushStamp {
+  return {
+    checked: true,
+    source: b.source === 'semrush' && b.primary ? 'semrush' : 'none',
+    primary: b.primary?.keyword ?? null,
+    volume: b.primary?.volume ?? null,
+    difficulty: b.primary?.difficulty ?? null,
+    keywords: [b.primary, ...b.supporting].filter(Boolean).map((k) => (k as { keyword: string }).keyword),
+    questions: (b.questions || []).map((q) => q.keyword),
+    intent: b.intentSummary || null,
+    fromCache: b.fromCache,
+    unitsSpent: b.unitsSpent,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Ask the writer model for the search terms, when Semrush has none.
+ * Never throws; returns nothing when it cannot be had, and the ladder goes on.
+ */
+export async function suggestKeywords(topic: string, context?: string | null, timeoutMs = 15000): Promise<{ primary: string | null; keywords: string[] }> {
+  const empty = { primary: null, keywords: [] as string[] };
+  if (!String(topic || '').trim()) return empty;
+  const prompt = keywordsPrompt(topic, context);
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
+  try {
+    if (anthropicKey) {
+      const res = await fetchWithRetry(
+        (process.env.ANTHROPIC_API_BASE || 'https://api.anthropic.com').replace(/\/$/, '') + '/v1/messages',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5', max_tokens: 300, temperature: 0, system: KEYWORDS_SYSTEM, messages: [{ role: 'user', content: prompt }] }),
+        },
+        { retries: 1, timeoutMs },
+      );
+      await noteProvider('anthropic', res);
+      const data = await res.json();
+      return parseKeywords(String(data?.content?.[0]?.text ?? ''));
+    }
+    if (!openaiKey) return empty;
+    const res = await fetchWithRetry(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${openaiKey}` },
+        body: JSON.stringify({ model: process.env.OPENAI_MODEL || 'gpt-4o-mini', max_tokens: 300, temperature: 0, messages: [{ role: 'system', content: KEYWORDS_SYSTEM }, { role: 'user', content: prompt }] }),
+      },
+      { retries: 1, timeoutMs },
+    );
+    await noteProvider('openai', res);
+    const data = await res.json();
+    return parseKeywords(String(data?.choices?.[0]?.message?.content ?? ''));
+  } catch (e) {
+    reportError('keywords:suggest', e);
+    return empty;
+  }
+}
+
+/** Thrown by generateContentPack when not even the ladder's last rung found a term. */
+export class NoKeywordsError extends Error {
+  constructor(topic: string) {
+    super('No keywords could be found for "' + String(topic || '').slice(0, 80) + '", so nothing was written: a post is never drafted without keyword research. Give the topic a few more words and try again.');
+    this.name = 'NoKeywordsError';
+  }
+}
+
+/**
+ * THE LADDER. Every drafting path gets its keywords here.
+ *
+ *   1. Semrush — live, the cache, or an expired cache entry (lib/semrush.ts),
+ *      on the topic and then on each alternative seed offered.
+ *   2. The writer model's own terms for the subject (suggestKeywords).
+ *   3. The subject's and the transcript's own words (derivedKeywords).
+ *
+ * `skipSemrush` is for callers that have already asked Semrush on this
+ * request (the video pipeline, the doors): it must not spend units twice.
+ * The stamp says which rung answered; `hint` is the prompt block for it.
+ */
+export async function keywordLadder(
+  topic: string,
+  opts: { context?: string | null; seeds?: readonly string[]; skipSemrush?: boolean } = {},
+): Promise<{ hint?: string; brief: KeywordBrief | null; stamp: SemrushStamp }> {
+  let reason: string | undefined;
+  if (!opts.skipSemrush) {
+    for (const seed of [topic, ...(opts.seeds || [])].map((s) => String(s || '').trim()).filter((s, i, all) => s && all.indexOf(s) === i)) {
+      const got = await autoKeywordBrief(seed);
+      if (got.stamp.source === 'semrush' && hasKeywords(got.stamp)) return got;
+      reason = reason || got.stamp.reason;
+    }
+  }
+  const context = String(opts.context || '') || undefined;
+  const modelled = await suggestKeywords(topic, context);
+  if (modelled.keywords.length) {
+    const stamp = fallbackStamp('model', modelled, reason || 'no_semrush_data') as SemrushStamp;
+    return { hint: fallbackBriefPrompt(stamp), brief: null, stamp };
+  }
+  const derived = derivedKeywords(topic, context);
+  const stamp = fallbackStamp(derived.keywords.length ? 'derived' : 'none', derived, reason || 'no_semrush_data') as SemrushStamp;
+  return { hint: fallbackBriefPrompt(stamp) || undefined, brief: null, stamp };
 }
 
 export async function generateContentPack(
@@ -542,11 +658,14 @@ export async function generateContentPack(
     input.provider ||
     (process.env.AI_PROVIDER === 'openai' ? 'openai' : 'anthropic');
 
-  // Mandatory Semrush pre-filter (unless the caller already prepared one).
+  // Mandatory keyword research (unless the caller already did it and hands
+  // over its stamp). The ladder never leaves a topic without terms short of a
+  // topic with no words in it — and that one is refused, not written blind.
   let keywordBrief: KeywordBrief | null = null;
-  let semrush: SemrushStamp | null = null;
+  let semrush: SemrushStamp | null = input.keywordStamp ?? null;
   if (input.keywordHint === undefined) {
-    const auto = await autoKeywordBrief(input.topic);
+    const auto = await keywordLadder(input.topic, { context: input.keywordContext });
+    if (!hasKeywords(auto.stamp)) throw new NoKeywordsError(input.topic);
     input = { ...input, keywordHint: auto.hint };
     keywordBrief = auto.brief;
     semrush = auto.stamp;

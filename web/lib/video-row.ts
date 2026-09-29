@@ -27,8 +27,10 @@ export function rowKeyFor(fileName: string, link: string): string {
 /** What the sweep writes into ESTADO IA, so its state is legible in the sheet itself. */
 export const STATUS_TEXT = {
   prepared: 'Listo para revisión',
-  /** Copy was written, but with no keyword data behind it. */
+  /** Copy was written, but with no keyword data behind it. Should now be unreachable: every path has fallbacks. */
   no_keywords: 'Listo — SIN keywords',
+  /** Copy was written to keywords the model or the transcript supplied, because Semrush had no data. */
+  estimated_keywords: 'Listo — keywords estimadas (sin Semrush)',
   /** Copy is longer than a network accepts, so it was not sent. */
   too_long: 'Listo — copy muy larga, acortar',
   needs_transcript: 'Falta transcripción',
@@ -48,9 +50,10 @@ export const STATUS_TEXT = {
  * actually shaped — so the one thing this automation exists to add could stop
  * happening and nobody would see it. It says so now.
  */
-export function preparedStatus(opts: { hasKeywords: boolean; overLength: boolean }): string {
+export function preparedStatus(opts: { hasKeywords: boolean; overLength: boolean; keywordSource?: string | null }): string {
   if (opts.overLength) return STATUS_TEXT.too_long;
   if (!opts.hasKeywords) return STATUS_TEXT.no_keywords;
+  if (opts.keywordSource && opts.keywordSource !== 'semrush') return STATUS_TEXT.estimated_keywords;
   return STATUS_TEXT.prepared;
 }
 

@@ -107,6 +107,10 @@ test('a row written without keyword data does not look finished', () => {
   // one thing this automation adds would stop happening, invisibly.
   assert.equal(preparedStatus({ hasKeywords: true, overLength: false }), 'Listo para revisión');
   assert.equal(preparedStatus({ hasKeywords: false, overLength: false }), 'Listo — SIN keywords');
+  // And a row written to the fallbacks says so, rather than passing as researched.
+  assert.equal(preparedStatus({ hasKeywords: true, keywordSource: 'semrush', overLength: false }), 'Listo para revisión');
+  assert.equal(preparedStatus({ hasKeywords: true, keywordSource: 'model', overLength: false }), 'Listo — keywords estimadas (sin Semrush)');
+  assert.equal(preparedStatus({ hasKeywords: true, keywordSource: 'derived', overLength: false }), 'Listo — keywords estimadas (sin Semrush)');
 });
 
 test('copy too long for its network is flagged, not quietly sent', () => {

@@ -51,7 +51,7 @@ const NOISE = new Set([
 ]);
 
 /** Significant, de-duplicated words, in order — the subject's own first. */
-function terms(text: string): string[] {
+export function terms(text: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   // PascalCase split before lowercasing. lib/video-copy.ts's videoSubject()

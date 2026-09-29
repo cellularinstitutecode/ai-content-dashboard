@@ -20,6 +20,7 @@ import 'server-only';
 import { complianceGate } from '@/lib/compliance-gate';
 import { claimSupportOf } from '@/lib/citation-gate';
 import { autoFixCitation } from '@/lib/citation-autofix';
+import { ensureKeywords } from '@/lib/keyword-guard';
 import { MediaNotNormalisedError, metricoolConfigured, metricoolSchedulePost, readPostId, type Provider } from '@/lib/metricool';
 import { publishMode } from '@/lib/publish-mode';
 import { preflightPost } from '@/lib/post-preflight';
@@ -85,7 +86,9 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
   // swapped for a study that backs it when the judge finds one. Fails open.
   const fixed = await autoFixCitation({ userId: input.userId, draftId: input.draftId, text: input.text, pack: (input.pack as Record<string, unknown> | undefined) ?? null, budgetMs: 45_000 });
   const text = fixed.text;
-  const pack = (fixed.pack ?? input.pack ?? null) as PackLike | null;
+  // And keywords: a post never goes out without them (lib/keyword-guard.ts).
+  const kw = await ensureKeywords({ userId: input.userId, draftId: input.draftId, text, pack: fixed.pack ?? (input.pack as Record<string, unknown> | undefined) ?? null });
+  const pack = (kw.pack ?? fixed.pack ?? input.pack ?? null) as PackLike | null;
 
   const gate = await complianceGate(input.userId, text, network, { claimSupport: claimSupportOf(pack) });
   if (!gate.ok) {

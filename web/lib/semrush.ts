@@ -129,6 +129,16 @@ function cacheTtlMs(): number {
   return (Number.isFinite(d) ? d : 30) * 24 * 60 * 60 * 1000;
 }
 
+/**
+ * How old a cache entry may be when it is the ONLY data there is.
+ *
+ * The 30-day TTL above is for freshness: past it, a live lookup is preferred.
+ * When the live lookup cannot happen — no key, unit floor, Semrush down — an
+ * entry a year old is still real search data for this phrase, and a post
+ * written to it is better than one written to nothing.
+ */
+const STALE_TTL_MS = 400 * 24 * 60 * 60 * 1000;
+
 // ---------------------------------------------------------------------------
 // Parsing helpers
 // ---------------------------------------------------------------------------
@@ -501,15 +511,24 @@ async function runReport(
     return { ok: true, rowsCached: cached, source: 'cache', reason: 'ok', unitsSpent: 0 };
   }
 
+  // 1b) an expired entry, when nothing fresher can be had. Checked lazily —
+  // only on the way out of a failure — so a healthy lookup never reads twice.
+  const stale = async (fail: { ok: false; source: SemSource; reason: SemReportResult['reason']; note?: string; unitsSpent: number }) => {
+    const old = await cacheGet(report, database, seed, STALE_TTL_MS);
+    if (!old) return fail;
+    void logUsage(report, seed, 0, 'cache');
+    return { ok: true, rowsCached: old, source: 'cache' as SemSource, reason: 'ok' as const, note: 'expired cache entry served: ' + (fail.note || fail.reason), unitsSpent: 0 };
+  };
+
   // 2) live — only with a key and inside budget
   const key = process.env.SEMRUSH_API_KEY;
-  if (!key) return { ok: false, source: 'none', reason: 'no_token', note: 'SEMRUSH_API_KEY not set — cache/link-out only', unitsSpent: 0 };
+  if (!key) return stale({ ok: false, source: 'none', reason: 'no_token', note: 'SEMRUSH_API_KEY not set — cache/link-out only', unitsSpent: 0 });
 
   const limit = Math.max(1, Math.min(opts.limit ?? 12, 50));
   const estUnits = (UNIT_COST[report] ?? 40) * limit;
   const decision = await budgetDecision(estUnits);
   if (!decision.allow) {
-    return { ok: false, source: 'none', ...refusalReason(decision), unitsSpent: 0 };
+    return stale({ ok: false, source: 'none', ...refusalReason(decision), unitsSpent: 0 });
   }
 
   const params: Record<string, string> = {
@@ -526,15 +545,15 @@ async function runReport(
       const code = parseInt(text.replace(/^ERROR\s+/i, ''), 10);
       const reason = reasonForCode(code);
       if (reason === 'empty') return { ok: true, body: '', source: 'live', reason: 'ok', unitsSpent: 0 };
-      return { ok: false, source: 'none', reason, note: text.slice(0, 100), unitsSpent: 0 };
+      return stale({ ok: false, source: 'none', reason, note: text.slice(0, 100), unitsSpent: 0 });
     }
     if (status < 200 || status >= 300) {
       const reason = reasonForHttpStatus(status);
-      return { ok: false, source: 'none', reason, note: 'HTTP ' + status, unitsSpent: 0 };
+      return stale({ ok: false, source: 'none', reason, note: 'HTTP ' + status, unitsSpent: 0 });
     }
     return { ok: true, body: text, source: 'live', reason: 'ok', unitsSpent: estUnits };
   } catch (e: any) {
-    return { ok: false, source: 'none', reason: 'network', note: e?.name || 'fetch failed', unitsSpent: 0 };
+    return stale({ ok: false, source: 'none', reason: 'network', note: e?.name || 'fetch failed', unitsSpent: 0 });
   }
 }
 
