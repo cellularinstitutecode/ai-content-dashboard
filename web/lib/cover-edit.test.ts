@@ -118,6 +118,10 @@ test('the route retitles from the clean photo, keeps the notes, counts takes —
   assert.match(route, /const retitle = typeof body\?\.retitle === 'string' \? body\.retitle : body\?\.noTitle === true \? '' : null/, 'retitle, and "no title"');
   assert.match(route, /retitleImage\(existing, cleanCoverTitle\(retitle\)/);
   assert.match(route, /suggestTitles/, 'title suggestions');
+  assert.match(route, /if \(suggestTitles\) \{[\s\S]{0,200}?checkRateLimit\(user\.id, 'title'\)/, 'a text-model call, capped like /api/title');
+  // Retitling fetches the clean photo on the server: only from the app's own bucket.
+  assert.match(src('lib/retitle.ts'), /import \{ fetchPhoto \} from '@\/lib\/library-hero'/);
+  assert.match(src('lib/library-hero.ts'), /if \(!ownBucketUrl\(url, process\.env\.NEXT_PUBLIC_SUPABASE_URL, IMAGE_BUCKET\)\) throw/);
   assert.match(route, /const effectiveDirection = directionGiven \? direction : notesOf\(existing\)/, 'notes are reused until replaced');
   assert.match(route, /direction: effectiveDirection/, 'and reach generation');
   assert.match(route, /typeof body\?\.direction === 'string'/, 'the panel sends `direction`');

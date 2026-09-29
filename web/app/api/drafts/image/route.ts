@@ -174,6 +174,14 @@ export async function POST(req: NextRequest) {
 
     // OTHER WORDS FOR THE COVER: a text call, never an image one.
     if (suggestTitles) {
+      // A text-model call: capped with the other title suggestions (/api/title).
+      const rlTitle = await checkRateLimit(user.id, 'title');
+      if (!rlTitle.ok) {
+        return NextResponse.json(
+          { error: 'rate_limited', limit: rlTitle.limit },
+          { status: 429, headers: { 'Retry-After': String(rlTitle.retryAfterSec) } },
+        );
+      }
       const planner = plannerImageFor(pack);
       const current = existing?.titled ? existing.titled.title : coverTitleFor(pack, topic);
       const titles = await suggestCoverTitles({
