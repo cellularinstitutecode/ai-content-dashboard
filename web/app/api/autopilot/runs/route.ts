@@ -1,7 +1,7 @@
 // web/app/api/autopilot/runs/route.ts
 // The reviewer's API for the Autopilot queue.
 //   GET  → the signed-in user's runs (joined with template name + draft pack).
-//   POST → { id, action: 'approve' | 'skip' | 'run_now' | 'regenerate' | 'fix' }
+//   POST → { id, action: 'approve' | 'skip' | 'run_now' | 'regenerate' | 'fix' | 'reschedule' (with scheduled_for) }
 // Approve is the only path toward publishing, and it only ever creates a
 // Metricool DRAFT (autoPublish: false) plus a pending_review posts row.
 import { isAllowedEmail } from '@/lib/access';
@@ -9,7 +9,7 @@ import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse, after } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { advanceRuns, approveRun, fixRunInBackground, regenerateRun, skipRun, startFix } from '@/lib/autopilot';
+import { advanceRuns, approveRun, fixRunInBackground, regenerateRun, skipRun, rescheduleRun, startFix } from '@/lib/autopilot';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { bucketRuns, DEFAULT_LIMITS, FAILED_WINDOW_DAYS } from '@/lib/review-queue';
 import { wantsBlog } from '@/lib/metricool-networks';
@@ -217,6 +217,13 @@ export async function POST(req: NextRequest) {
     const result = await approveRun(id, user.id, { schedule: body?.schedule === true, redate: body?.redate === true });
     if (!result.ok) return NextResponse.json({ error: result.note }, { status: 400 });
     return NextResponse.json({ ok: true, note: result.note });
+  }
+  if (action === 'reschedule') {
+    const when = typeof body.scheduled_for === 'string' ? body.scheduled_for : '';
+    if (!when || isNaN(new Date(when).getTime())) return NextResponse.json({ error: 'scheduled_for must be a valid ISO date' }, { status: 400 });
+    const result = await rescheduleRun(id, user.id, when);
+    if (!result.ok) return NextResponse.json({ error: 'not_moved', message: result.note }, { status: 409 });
+    return NextResponse.json({ ok: true });
   }
   if (action === 'skip') {
     const ok = await skipRun(id, user.id);

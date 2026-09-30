@@ -98,7 +98,7 @@ export default function CalendarPage() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
   /** "Reschedule": the post whose date-and-time box is open, and what it reads (on the schedule clock). */
-  const [rescheduleFor, setRescheduleFor] = useState<{ id: string; value: string } | null>(null);
+  const [rescheduleFor, setRescheduleFor] = useState<{ id: string; value: string; kind: 'post' | 'run' } | null>(null);
   /** What "Verify / fix" concluded about the post it was pressed on (shown in that post's preview only). */
   const [fixNote, setFixNote] = useState<{ id: string; note: string; changed: boolean } | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -409,7 +409,15 @@ export default function CalendarPage() {
     const current = p.publication_date && !isNaN(new Date(p.publication_date).getTime())
       ? scheduleInputValue(p.publication_date)
       : scheduleInputValue(new Date(today.getTime() + 86400000).toISOString()).slice(0, 11) + '09:00';
-    setRescheduleFor({ id: String(p.id), value: current });
+    setRescheduleFor({ id: String(p.id), value: current, kind: 'post' });
+  }
+
+  /** The same box for an Autopilot draft (a missed one, usually): its time moves, its draft and state stay. */
+  function openRescheduleRun(r: ReviewRun) {
+    const current = r.scheduled_for && !isNaN(new Date(r.scheduled_for).getTime())
+      ? scheduleInputValue(r.scheduled_for)
+      : scheduleInputValue(new Date(today.getTime() + 86400000).toISOString()).slice(0, 11) + '09:00';
+    setRescheduleFor({ id: r.id, value: current, kind: 'run' });
   }
 
   /** The box's Save: the value read on the schedule clock, sent like a drag. */
@@ -417,9 +425,28 @@ export default function CalendarPage() {
     if (!rescheduleFor) return;
     const iso = scheduleInstantFromInput(rescheduleFor.value);
     if (!iso) { setErr('Pick a date and a time first.'); return; }
-    const id = rescheduleFor.id;
+    const { id, kind } = rescheduleFor;
     setRescheduleFor(null);
-    await rescheduleTo(id, iso);
+    if (kind === 'run') await rescheduleRunTo(id, iso);
+    else await rescheduleTo(id, iso);
+  }
+
+  /** Move an Autopilot run: POST /api/autopilot/runs { action: 'reschedule' }; the queue reloads, or the refusal is said. */
+  async function rescheduleRunTo(id: string, iso: string) {
+    setRunBusy(id);
+    setErr(null);
+    try {
+      const r = await fetch('/api/autopilot/runs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, action: 'reschedule', scheduled_for: iso }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(friendlyError(j, 'We could not move that draft.'));
+      setPreviewRunId(null);
+      await loadRuns();
+      announce('autopilot', 'drafts');
+    } catch (e: any) {
+      setErr(friendlyError(e, 'We could not move that draft.'));
+    } finally {
+      setRunBusy(null);
+    }
   }
 
   /**
@@ -970,6 +997,7 @@ export default function CalendarPage() {
                       </button>
                       <div className="mt-1 flex gap-1.5">
                         <button type="button" onClick={() => setPreviewRunId(r.id)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Preview</button>
+                        <button type="button" disabled={runBusy === r.id} onClick={() => openRescheduleRun(r)} title="Pick any date and time" className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Reschedule</button>
                         <button type="button" disabled={runBusy === r.id} onClick={() => skipRun(r)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-50">{runBusy === r.id ? 'Working…' : 'Skip'}</button>
                       </div>
                     </div>
@@ -1121,29 +1149,33 @@ export default function CalendarPage() {
       {/* RESCHEDULE: any date and time, read on the schedule clock (the clinic's),
           sent exactly as a drag to another day is — Metricool moves with it. */}
       {rescheduleFor && (() => {
-        const post = posts.find((p) => String(p.id) === rescheduleFor.id);
+        const post = rescheduleFor.kind === 'post' ? posts.find((p) => String(p.id) === rescheduleFor.id) : null;
+        const run = rescheduleFor.kind === 'run' ? runs.find((r) => r.id === rescheduleFor.id) : null;
+        const subjectText = post ? (post.text || 'Untitled post') : run ? (run.angle?.query || runText(run.pack) || run.template_name) : '';
+        const currentIso = post ? post.publication_date : run ? run.scheduled_for : null;
         const iso = scheduleInstantFromInput(rescheduleFor.value);
         return (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-4" onClick={() => setRescheduleFor(null)} role="dialog" aria-modal="true" aria-label="Reschedule this post">
             <form className="w-full max-w-sm rounded-2xl bg-surface p-5 shadow-2xl ring-1 ring-black/10" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); void saveReschedule(); }}>
               <div className="text-[15px] font-semibold text-ink">Reschedule</div>
-              {post && <p className="mt-1 line-clamp-2 text-[12px] text-ink/60">{post.text || 'Untitled post'}</p>}
+              {subjectText && <p className="mt-1 line-clamp-2 text-[12px] text-ink/60">{subjectText}</p>}
+              {run && <p className="mt-1 text-[11px] text-ink/50">An Autopilot draft: its time moves, the draft and its approval status stay. Approve it once it is where you want it.</p>}
               <label className="mt-4 block text-[11px] font-semibold uppercase tracking-wide text-ink/50">New date and time · {scheduleTzLabel()}</label>
               <input
                 type="datetime-local"
                 autoFocus
                 value={rescheduleFor.value}
-                onChange={(e) => setRescheduleFor({ id: rescheduleFor.id, value: e.target.value })}
+                onChange={(e) => setRescheduleFor({ ...rescheduleFor, value: e.target.value })}
                 className="mt-1 w-full rounded-xl bg-canvas px-3 py-2 text-[14px] text-ink ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-accent"
               />
               <p className="mt-1.5 text-[11px] text-ink/50">
-                {post?.publication_date ? 'Now ' + fmtScheduleDateTime(post.publication_date) + '. ' : ''}
+                {currentIso ? 'Now ' + fmtScheduleDateTime(currentIso) + '. ' : ''}
                 {iso ? 'Goes out ' + fmtScheduleDateTime(iso) + '.' : 'Pick a date and a time.'}
                 {iso && new Date(iso).getTime() < Date.now() ? ' That is in the past.' : ''}
               </p>
               <div className="mt-4 flex items-center justify-end gap-2">
                 <button type="button" onClick={() => setRescheduleFor(null)} className="rounded-full px-3 py-1.5 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Cancel</button>
-                <button type="submit" disabled={!iso || saving === rescheduleFor.id} className="rounded-full bg-accent px-4 py-1.5 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{saving === rescheduleFor.id ? 'Moving…' : 'Reschedule'}</button>
+                <button type="submit" disabled={!iso || saving === rescheduleFor.id || runBusy === rescheduleFor.id} className="rounded-full bg-accent px-4 py-1.5 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{saving === rescheduleFor.id || runBusy === rescheduleFor.id ? 'Moving…' : 'Reschedule'}</button>
               </div>
             </form>
           </div>
@@ -1227,6 +1259,7 @@ export default function CalendarPage() {
           onApprove={() => approveRunScheduled(previewRun)}
           onApproveDraft={() => approveRunDraft(previewRun)}
           onSkip={() => skipRun(previewRun)}
+          onReschedule={() => openRescheduleRun(previewRun)}
           onFix={() => fixRun(previewRun)}
           imageControls={
             <HeroImageControls
