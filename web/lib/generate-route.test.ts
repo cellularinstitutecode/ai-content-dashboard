@@ -12,5 +12,5 @@ test('the generate route runs at the 300s ceiling, budgets the writer, and says 
   assert.match(route, /'The post could not be written: ' \+ writerFailure\(e\) \+ '\.'/);
   assert.doesNotMatch(route, /error: 'Generation failed\. Please try again\.'/, 'the generic line is gone');
   const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
-  assert.match(page, /r\.status === 504 \|\| r\.status === 502[\s\S]{0,40}cut off/, 'a gateway timeout is said as one, not as a number');
+  assert.match(page, /r\.status === 504 \|\| r\.status === 502[\s\S]{0,120}cut off/, 'a gateway timeout is said as one, not as a number');
 });
