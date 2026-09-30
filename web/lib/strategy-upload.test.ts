@@ -240,3 +240,18 @@ test('an empty first reading is asked again, firmly, and a short upload is refus
   assert.match(route, /buf\.length !== expectedSize/, 'a cut-off storage upload is never read as the strategy');
   assert.match(src('components/StrategyDrop.tsx'), /action: 'read', path, size: file\.size/);
 });
+
+test('a slot can be written for real from the panel: the whole post, its picture, saved under Recent Drafts', () => {
+  const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  const route = src('app/api/templates/strategy-upload/route.ts');
+  const draft = route.slice(route.indexOf("if (body.action === 'draft') {"), route.indexOf("if (body.action !== 'apply')"));
+  assert.match(draft, /strategyTopicPrompt\(\{ angle, pillarName: slot\.pillar, rule: ruleFor\(slot, plan\.direction\)/, 'the strategy’s own brief');
+  assert.match(draft, /strategyBrand\(brand, \{ citation: 'if-health-claim' \}\)/, 'the strategy’s voice');
+  assert.match(draft, /competitiveBrief\(/, 'against the top three');
+  assert.match(draft, /\.from\('drafts'\)[\s\S]{0,80}\.insert\(/, 'saved like any other draft');
+  assert.match(draft, /ensureDraftImage\(draftId, auth\.userId/, 'with its picture');
+  const panel = src('components/StrategyDrop.tsx');
+  assert.match(panel, /Write a preview post/);
+  assert.match(panel, /action: 'draft', slot: plain, direction/);
+  assert.match(panel, /Open in Recent Drafts/);
+});

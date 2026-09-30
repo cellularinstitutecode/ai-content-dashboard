@@ -20,7 +20,13 @@ import { readAnthropicStream } from '@/lib/sse-stream';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
+import { generateContentPack } from '@/lib/ai';
+import { loadBrandContext } from '@/lib/brand-context';
+import { competitiveBrief } from '@/lib/competitive-brief';
+import { ensureDraftImage } from '@/lib/images';
+import { strategyBrand, strategyTopicPrompt } from '@/lib/strategy-voice';
 import {
+  ruleFor,
   UPLOAD_MAX_BYTES,
   DIRECT_MAX_BYTES,
   STRATEGY_BUCKET,
@@ -160,6 +166,59 @@ export async function POST(req: Request) {
       }
     }
 
+    // ---- One post of a slot, written for real ----------------------------
+    //
+    // The week is a plan; a person reviewing it wants to see a post, not a
+    // list of titles. This writes one occurrence of the slot exactly as the
+    // Autopilot will — the strategy's voice, the slot's rule and day theme,
+    // keywords, the competition, a REF line only when a health claim is made
+    // — saves it under Recent Drafts like any other draft, makes its picture,
+    // and hands the whole thing back to show in the panel.
+    if (body.action === 'draft') {
+      const b = body as { slot?: unknown; direction?: unknown; angle?: unknown };
+      const plan = normalizeUpload({ slots: [b.slot], direction: String(b.direction || '') });
+      const slot = plan.slots[0];
+      if (!slot) return fail(400, 'bad_request', 'That post has no pillar or day yet.');
+      const wanted = String(b.angle || '').trim();
+      const angle = (wanted && slot.angles.find((a) => a === wanted)) || slot.angles[0] || slot.pillar;
+      const admin = supabaseAdmin();
+      let brand;
+      try { brand = await loadBrandContext(admin, auth.userId); } catch (e) { reportError('templates:draft-brand', e); }
+      const topic = strategyTopicPrompt({ angle, pillarName: slot.pillar, rule: ruleFor(slot, plan.direction), dayTheme: slot.theme || undefined });
+      let landscapeHint: string | undefined;
+      try { landscapeHint = (await competitiveBrief(slot.pillar + ' ' + angle)).hint || undefined; } catch (e) { reportError('templates:draft-rivals', e); }
+      let pack: Record<string, unknown>;
+      try {
+        const out = await generateContentPack({
+          topic,
+          brand: strategyBrand(brand, { citation: 'if-health-claim' }),
+          contentType: slot.format === 'blog' ? 'blog' : 'social',
+          channels: slot.providers,
+          citationPolicy: 'if-health-claim',
+          landscapeHint,
+          budgetMs: 90_000,
+        });
+        pack = out.pack as unknown as Record<string, unknown>;
+      } catch (e) {
+        reportError('templates:draft-write', e);
+        return fail(502, 'write_failed', 'The post could not be written just now: ' + (e instanceof Error ? e.message : 'the writer did not answer') + '. Try again in a moment.');
+      }
+      pack._strategyPreview = { pillar: slot.pillar, angle, weekday: slot.weekday, time: slot.time, theme: slot.theme };
+      const { data: made, error: saveError } = await admin
+        .from('drafts')
+        .insert({ user_id: auth.userId, topic: slot.pillar + ' — ' + angle, pack, provider: 'anthropic' })
+        .select('id')
+        .single();
+      if (saveError || !made) {
+        reportError('templates:draft-save', saveError || new Error('no row'));
+        return NextResponse.json({ draftId: null, pack, image: null, note: 'Written, but it could not be saved to Recent Drafts just now.' });
+      }
+      const draftId = String((made as { id: string }).id);
+      let image: { url: string; alt?: string | null } | null = null;
+      try { image = (await ensureDraftImage(draftId, auth.userId, { budgetMs: 50_000 })) as { url: string; alt?: string | null } | null; } catch (e) { reportError('templates:draft-image', e, { draftId }); }
+      return NextResponse.json({ draftId, pack: image ? { ...pack, _image: image } : pack, image, note: 'Saved to Recent Drafts.' });
+    }
+
     if (body.action !== 'apply') return fail(400, 'bad_request', 'Unknown action.');
     const plan = normalizeUpload(body.plan);
     if (!plan.slots.length) return fail(400, 'empty', 'There are no slots to create.');
@@ -246,7 +305,7 @@ async function readIntoPlan(buf: Buffer, userId: string): Promise<NextResponse> 
     const about = [String(said.title || '').trim(), String(said.summary || '').trim()].filter(Boolean).join(' — ').slice(0, 240);
     return fail(422, 'no_slots',
       'No weekly posting plan was found in that PDF, on two readings. It should list what to post on each day.' +
-      (about ? ' The reader took it for: \u201c' + about + '\u201d.' : '') +
+      (about ? ' The reader took it for: “' + about + '”.' : '') +
       ' If this is the weekly strategy, try again in a moment; if it keeps happening, export the PDF as text (not scanned pages) and drop it again.');
   }
 
