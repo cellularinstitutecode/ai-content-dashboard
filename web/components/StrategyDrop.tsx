@@ -12,7 +12,8 @@
 import { useRef, useState } from 'react';
 import { announce } from '@/components/refreshBus';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
-import { DAY_LABELS, UPLOAD_MAX_BYTES, type UploadPlan, type UploadSlot } from '@/lib/strategy-upload';
+import { supabaseBrowser } from '@/lib/supabase';
+import { DAY_LABELS, DIRECT_MAX_BYTES, STRATEGY_BUCKET, UPLOAD_MAX_BYTES, mbLabel, type UploadPlan, type UploadSlot } from '@/lib/strategy-upload';
 
 type Preview = { create: number; already: number; clashes: { slot: string; with: string }[] } | null;
 
@@ -72,13 +73,25 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
   async function read(file: File) {
     setErr(null); setDone(null); setPlan(null); setPreview(null); setOff(new Set());
     if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') { setErr('Drop a PDF file — the strategy document.'); return; }
-    if (file.size > UPLOAD_MAX_BYTES) { setErr('That PDF is over 4 MB. Export a smaller copy and drop it again.'); return; }
+    if (file.size > UPLOAD_MAX_BYTES) { setErr('That PDF is over ' + mbLabel(UPLOAD_MAX_BYTES) + '. Export a smaller copy and drop it again.'); return; }
     setFileName(file.name);
     setReading(true);
     try {
-      const form = new FormData();
-      form.append('file', file);
-      const r = await fetch('/api/templates/strategy-upload', { method: 'POST', body: form });
+      let r: Response;
+      if (file.size > DIRECT_MAX_BYTES) {
+        // Too big for the request itself (Vercel's 4.5 MB): straight to
+        // storage on a signed URL, then the route reads it from there.
+        const signed = await fetch('/api/templates/strategy-upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'sign' }) });
+        if (!signed.ok) { setErr(await friendlyErrorFromResponse(signed, 'The upload could not be prepared just now.')); return; }
+        const { path, token, bucket } = await signed.json();
+        const up = await supabaseBrowser().storage.from(bucket || STRATEGY_BUCKET).uploadToSignedUrl(path, token, file, { contentType: 'application/pdf', upsert: true });
+        if (up.error) { setErr('The PDF could not be uploaded: ' + up.error.message + '. Try again in a moment.'); return; }
+        r = await fetch('/api/templates/strategy-upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'read', path }) });
+      } else {
+        const form = new FormData();
+        form.append('file', file);
+        r = await fetch('/api/templates/strategy-upload', { method: 'POST', body: form });
+      }
       if (!r.ok) { setErr(await friendlyErrorFromResponse(r, 'The strategy could not be read just now.')); return; }
       const j = await r.json();
       setPlan(j.plan);
@@ -146,7 +159,7 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
         <div className="mt-3 text-[16px] font-medium text-ink">
           {reading ? 'Reading ' + (fileName || 'the strategy') + '…' : 'Drop the strategy PDF here, or click to choose'}
         </div>
-        <div className="mt-1.5 text-[13px] text-ink-faint">{reading ? 'This takes up to a minute.' : 'PDF, up to 4 MB'}</div>
+        <div className="mt-1.5 text-[13px] text-ink-faint">{reading ? 'This takes up to a minute.' : 'PDF, up to ' + mbLabel(UPLOAD_MAX_BYTES)}</div>
         <input
           ref={input}
           type="file"

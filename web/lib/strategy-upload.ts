@@ -34,8 +34,27 @@ import { STRATEGY_PROVIDERS } from './strategy-seed.ts';
 /** The mark on every template this creates: `strategy.seeded`. */
 export const UPLOAD_MARK = 'uploaded-strategy';
 
-/** The largest PDF accepted — Vercel refuses request bodies over 4.5 MB. */
-export const UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
+/**
+ * The largest PDF accepted: what the AI reader takes in one document (its
+ * ceiling is 32 MB and a hundred pages), with a little room under it.
+ */
+export const UPLOAD_MAX_BYTES = 30 * 1024 * 1024;
+
+/**
+ * The largest PDF that may travel in the request itself — Vercel refuses
+ * request bodies over 4.5 MB. Anything bigger goes to STRATEGY_BUCKET first,
+ * through a signed upload URL the route issues, and the route reads it from
+ * there (components/StrategyDrop.tsx, app/api/templates/strategy-upload).
+ */
+export const DIRECT_MAX_BYTES = 4 * 1024 * 1024;
+
+/** The private bucket a large strategy PDF is parked in until it has been read. */
+export const STRATEGY_BUCKET = 'strategy-uploads';
+
+/** "30 MB", "4 MB": the cap as the panel prints it. */
+export function mbLabel(bytes: number): string {
+  return Math.round(bytes / (1024 * 1024)) + ' MB';
+}
 
 /** A week of three posts a day is already more than any plan asks for. */
 export const MAX_SLOTS = 21;
