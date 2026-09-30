@@ -46,7 +46,7 @@ const slotKey = () => 's_' + Date.now().toString(36) + '_' + (__slotSeq++).toStr
 const SOCIAL_NETWORKS = ['instagram', 'facebook', 'linkedin'] as const;
 
 /** One post of the week, as a compact card. "Preview & edit" opens it in the panel. */
-function SlotCard({ slot, tone, writing, written, onChange, onOpen }: { slot: EditableSlot; tone: string; writing?: Writing; written?: boolean; onChange: (next: EditableSlot) => void; onOpen: () => void }) {
+function SlotCard({ slot, tone, writing, written, held, onChange, onOpen }: { slot: EditableSlot; tone: string; writing?: Writing; written?: boolean; held?: boolean; onChange: (next: EditableSlot) => void; onOpen: () => void }) {
   return (
     <div className={'min-w-0 break-words hyphens-auto rounded-2xl p-3.5 text-[12px] ring-1 transition ' + tone + (slot.on ? '' : ' opacity-40')}>
       <div className="flex items-start justify-between gap-2">
@@ -66,7 +66,8 @@ function SlotCard({ slot, tone, writing, written, onChange, onOpen }: { slot: Ed
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button type="button" onClick={onOpen} className="rounded-md bg-white/80 px-2 py-1 text-[11px] font-medium ring-1 ring-black/10 hover:bg-white">Preview &amp; edit</button>
         {writing && <span className="inline-flex items-center gap-1 text-[11px] font-medium text-accent"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />{writing === 'picture' ? 'Making the picture…' : 'Writing the post…'}</span>}
-        {!writing && written && <span className="text-[11px] font-medium text-emerald-700">Post written</span>}
+        {!writing && written && !held && <span className="text-[11px] font-medium text-emerald-700">Post written</span>}
+        {!writing && written && held && <span className="text-[11px] font-medium text-amber-700">Written, citation held</span>}
       </div>
     </div>
   );
@@ -81,7 +82,8 @@ function SlotCard({ slot, tone, writing, written, onChange, onOpen }: { slot: Ed
  * (lib/strategy-upload.ts normalizeUpload), so nothing typed here can reach
  * a template unchecked.
  */
-type PreviewDraft = { draftId: string | null; pack: Record<string, unknown>; image: { url: string; alt?: string | null } | null; note?: string };
+type PreviewChecks = { keywords: string[]; keywordSource: string; citation: string; held: string | null };
+type PreviewDraft = { draftId: string | null; pack: Record<string, unknown>; image: { url: string; alt?: string | null } | null; note?: string; /** Keywords and the citation verdict, as every other post has them at the door. */ checks?: PreviewChecks };
 /** Which half of the work a slot is on. The work runs above the panel, so the panel can be closed and reopened. */
 type Writing = 'text' | 'picture' | null;
 const scopeFor = (k: string) => 'strategy-' + k;
@@ -197,7 +199,7 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onChange, onRemove
                 {writing === 'text' ? 'Writing…' : writing === 'picture' ? 'Making the picture…' : draft ? 'Write it again' : 'Write a preview post'}
               </button>
             </div>
-            <p className="mt-1.5 text-[11px] text-ink/50">One week&rsquo;s post for this slot, written as you open it, exactly as the Autopilot will write it &mdash; the strategy&rsquo;s voice, this note, keywords, the competition, a citation when it makes a health claim &mdash; saved to Recent Drafts, with its picture following. You can close this and carry on; the card says when it is done. Nothing is scheduled.</p>
+            <p className="mt-1.5 text-[11px] text-ink/50">One week&rsquo;s post for this slot, written as you open it, exactly as the Autopilot will write it &mdash; the strategy&rsquo;s voice, this note, keywords, the competition, a citation when it makes a health claim, checked by the judge and fixed when it fails &mdash; saved to Recent Drafts, with its picture following. You can close this and carry on; the card says when it is done. Nothing is scheduled.</p>
             {writing === 'text' && <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-[12px] text-accent">Writing the post (about half a minute). The picture follows once the copy is here.</div>}
             {writing === 'picture' && <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-[12px] text-accent">Copy is in; making the picture (up to a minute).</div>}
             {draftErr && <p role="alert" className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-900 ring-1 ring-amber-200/60">{draftErr}</p>}
@@ -217,6 +219,20 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onChange, onRemove
                     <div className="whitespace-pre-wrap rounded-xl bg-white px-3.5 py-3 text-[13px] leading-relaxed text-ink ring-1 ring-black/5">{String(draft.pack[c.key])}</div>
                   </div>
                 ))}
+                {/* APPROVED AND FIXED, like every other post: the keywords it was
+                    written around and the judge's verdict on its citation, as
+                    stamped on the draft — the same two things the door reads. */}
+                {draft.checks && (
+                  <div className={'rounded-xl px-3.5 py-3 text-[12px] leading-relaxed ring-1 ' + (draft.checks.held ? 'bg-amber-50 text-amber-900 ring-amber-200/60' : 'bg-emerald-50/70 text-emerald-900 ring-emerald-200/60')}>
+                    <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide opacity-70">Checked</div>
+                    <div>
+                      <span className="font-medium">Keywords{draft.checks.keywordSource && draft.checks.keywordSource !== 'semrush' ? ' (estimated, no Semrush data)' : ''}:</span>{' '}
+                      {draft.checks.keywords.length ? draft.checks.keywords.slice(0, 8).join(', ') : 'none could be researched'}
+                    </div>
+                    <div className="mt-1">{draft.checks.citation}</div>
+                    {draft.checks.held && <div role="alert" className="mt-1.5 font-medium">{draft.checks.held}</div>}
+                  </div>
+                )}
                 <p className="text-[12px] text-ink/60">
                   {draft.note || ''}{' '}
                   {draft.draftId && <a href={'/?draft=' + draft.draftId} className="font-medium text-accent hover:underline">Open in Recent Drafts to edit, add a picture or send it</a>}
@@ -254,6 +270,36 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
   const [previews, setPreviews] = useState<Record<string, PreviewDraft>>({});
   const [writing, setWriting] = useState<Record<string, Writing>>({});
   const [writeErr, setWriteErr] = useState<Record<string, string | null>>({});
+  /** Slots whose post has been started, so nothing is written twice. */
+  const autoStarted = useRef<Set<string>>(new Set());
+  // Mirrors for the queue below, which outlives any one render.
+  const previewsRef = useRef(previews); previewsRef.current = previews;
+  const writingRef = useRef(writing); writingRef.current = writing;
+  const [weekWriting, setWeekWriting] = useState(false);
+
+  /**
+   * THE WEEK, WRITTEN AS SOON AS IT IS READ. Every post of the week is
+   * drafted in the background, two at a time, the moment the PDF has been
+   * read — so by the time a post is opened it is built or being built,
+   * rather than starting then. Each one is the same work "Preview & edit"
+   * does: the strategy's voice, keywords, the competition, a citation when
+   * a health claim is made, saved to Recent Drafts, picture following.
+   */
+  async function writeWeek(list: EditableSlot[]) {
+    const pending = list.filter((sl) => sl.on && sl.pillar.trim() && sl.pillar !== 'New post');
+    if (!pending.length) return;
+    setWeekWriting(true);
+    let i = 0;
+    const worker = async () => {
+      while (i < pending.length) {
+        const sl = pending[i++];
+        if (previewsRef.current[sl._k] || writingRef.current[sl._k]) continue;
+        autoStarted.current.add(sl._k);
+        await writePreview(sl, sl.angles[0] || '');
+      }
+    };
+    try { await Promise.all([worker(), worker()]); } finally { setWeekWriting(false); }
+  }
 
   async function writePreview(sl: EditableSlot, angle: string) {
     const k = sl._k;
@@ -312,8 +358,12 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
       if (!r.ok) { setErr(await friendlyErrorFromResponse(r, 'The strategy could not be read just now.')); return; }
       const j = await r.json();
       setPlan(j.plan);
-      setSlots(((j.plan?.slots || []) as UploadSlot[]).map((sl) => ({ ...sl, _k: slotKey(), on: true })));
+      const laidOut = ((j.plan?.slots || []) as UploadSlot[]).map((sl) => ({ ...sl, _k: slotKey(), on: true }));
+      setSlots(laidOut);
       setPreview(j.preview ?? null);
+      setPreviews({}); setWriting({}); setWriteErr({}); autoStarted.current.clear();
+      // The moment the week is on screen, its posts start being written.
+      void writeWeek(laidOut);
     } catch (e) {
       setErr(friendlyError(e, 'The strategy could not be read just now.'));
     } finally {
@@ -366,7 +416,6 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
   const openSlot = openKey ? slots.find((sl) => sl._k === openKey) || null : null;
   // Opening a post writes it, once: the panel is for reading the post, not
   // for pressing another button first. "Write it again" stays for a redo.
-  const autoStarted = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!openSlot) return;
     const k = openSlot._k;
@@ -419,6 +468,24 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
       {plan && (
         <div className="mt-10">
           <div className="text-[18px] font-semibold text-ink">{plan.title}</div>
+          {(() => {
+            const listed = slots.filter((sl) => sl.on);
+            const done = listed.filter((sl) => previews[sl._k]).length;
+            const busy = listed.filter((sl) => writing[sl._k]).length;
+            if (!listed.length || (!done && !busy && !weekWriting)) return null;
+            const all = done === listed.length;
+            return (
+              <div className={'mt-3 rounded-xl px-3 py-2 text-[12px] ring-1 ' + (all ? 'bg-emerald-50 text-emerald-800 ring-emerald-200' : 'bg-accent/5 text-accent ring-accent/30')} role="status" aria-live="polite">
+                <div className="flex items-center gap-2">
+                  {!all && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />}
+                  <span className="font-medium">{all ? 'All ' + listed.length + ' posts are written — open any to read it.' : 'Writing the week’s posts: ' + done + ' of ' + listed.length + ' ready' + (busy ? ', ' + busy + ' being written' : '') + '.'}</span>
+                </div>
+                <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-black/5">
+                  <div className="h-full rounded-full bg-accent transition-[width]" style={{ width: Math.round((done / listed.length) * 100) + '%' }} />
+                </div>
+              </div>
+            );
+          })()}
           {plan.summary && <p className="mt-1.5 text-[13px] leading-relaxed text-ink-muted">{plan.summary}</p>}
           {plan.direction && <p className="mt-1.5 text-[13px] leading-relaxed text-ink-muted"><span className="font-medium">Editorial direction:</span> {plan.direction}</p>}
           {plan.mix && <p className="mt-1.5 text-[13px] leading-relaxed text-ink-muted"><span className="font-medium">Weekly mix:</span> {plan.mix}</p>}
@@ -438,6 +505,7 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
                         tone={toneFor(sl.pillar, pillars)}
                         writing={writing[sl._k] || null}
                         written={Boolean(previews[sl._k])}
+                        held={Boolean(previews[sl._k]?.checks?.held)}
                         onChange={(next) => updateSlot(sl._k, next)}
                         onOpen={() => setOpenKey(sl._k)}
                       />

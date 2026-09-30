@@ -71,6 +71,7 @@ import { refTitle, verifyDoi } from '@/lib/citation';
 import { findByDoi, findEvidence } from '@/lib/evidence';
 import { claimSupportRefusal } from '@/lib/citation-gate';
 import { autoFixCitation } from '@/lib/citation-autofix';
+import { strategyClaimSupport } from '@/lib/strategy-claim-support';
 import { ensureKeywords } from '@/lib/keyword-guard';
 import { competitiveBrief } from '@/lib/competitive-brief';
 import { evidenceBriefFrom, type EvidenceItem } from '@/lib/evidence-brief';
@@ -1168,34 +1169,6 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
 
 // The rubric itself lives in lib/score-pack.ts, where it can be run by a test.
 
-/**
- * Does the paper in a strategy post's REF line support what the post says?
- *
- * Asked only of papers fetched for this post (pack._evidence) — the judge
- * reads their abstracts, and cannot judge a paper it has never seen, so a DOI
- * the writer recalled from elsewhere is 'unchecked', not a failure. The judge
- * picking a DIFFERENT paper, or none, is 'unsupported'. A post with no REF
- * line has nothing to judge (null). Never throws.
- */
-async function strategyClaimSupport(pack: ContentPack): Promise<ClaimSupportStamp | null> {
-  try {
-    const items = (pack as ContentPack & { _evidence?: EvidenceItem[] })._evidence || [];
-    const caption = String((pack as unknown as Record<string, unknown>).instagram || (pack as unknown as Record<string, unknown>).facebook || '');
-    const cited = checkCompliance(caption).doi;
-    if (!cited) return null;
-    const index = items.findIndex((i) => String(i.doi || '').toLowerCase() === cited.toLowerCase());
-    if (index < 0 || !items.length) return { status: 'unchecked', doi: cited };
-    const claim = claimFrom(caption);
-    const verdict = await judgeClaimSupport({ claim, items });
-    if (verdict.status === 'unchecked') return { status: 'unchecked', doi: cited };
-    if (verdict.status === 'supported' && verdict.index === index) return { status: 'supported', doi: cited };
-    return { status: 'unsupported', doi: cited };
-  } catch (err) {
-    reportError('autopilot:claim-support', err);
-    return null;
-  }
-}
-
 async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateStrategy): Promise<Partial<RunRow>> {
   const db = supabaseAdmin();
   const angle = run.angle as Angle;
@@ -1284,7 +1257,7 @@ async function stepScore(run: RunRow, template: TemplateRow, strategy: TemplateS
   // fetched at draft time. The verdict is stamped on the draft, shown on the
   // card, and read by autoScheduleVerdict (an 'unsupported' holds the post).
   if (strategySlot) {
-    let stamp = await strategyClaimSupport(pack);
+    let stamp = await strategyClaimSupport(pack as unknown as Record<string, unknown>);
     // "Verify / fix", by default (lib/citation-autofix.ts): a citation the
     // judge did not accept is repaired NOW, before the card is shown, so the
     // reviewer sees the corrected study rather than a warning about the wrong

@@ -20,7 +20,12 @@ import { readAnthropicStream } from '@/lib/sse-stream';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
-import { generateContentPack } from '@/lib/ai';
+import { generateContentPack, NoKeywordsError } from '@/lib/ai';
+import { autoFixCitation } from '@/lib/citation-autofix';
+import { claimSupportOf, claimSupportRefusal } from '@/lib/citation-gate';
+import { checkCompliance } from '@/lib/compliance';
+import { ensureKeywords } from '@/lib/keyword-guard';
+import { citationVerdictLine, strategyClaimSupport } from '@/lib/strategy-claim-support';
 import { loadBrandContext } from '@/lib/brand-context';
 import { competitiveBrief } from '@/lib/competitive-brief';
 import { ensureDraftImage } from '@/lib/images';
@@ -105,8 +110,6 @@ async function existingTemplates(userId: string) {
 export async function POST(req: Request) {
   const auth = await requireAllowlistedUser();
   if (!auth.ok) return auth.response;
-  const rl = await checkRateLimit(auth.userId, 'templates');
-  if (!rl.ok) return fail(429, 'rate_limited', 'Too many strategy uploads in the last hour — try again shortly.');
 
   const type = req.headers.get('content-type') || '';
 
@@ -114,6 +117,11 @@ export async function POST(req: Request) {
   if (type.includes('application/json')) {
     let body: { action?: unknown; plan?: unknown; path?: unknown };
     try { body = await req.json(); } catch { return fail(400, 'bad_request', 'The plan could not be read.'); }
+    // Writing the week's posts has its own, larger allowance: fourteen posts
+    // are twenty-eight requests, started as soon as the week is read.
+    const writingPosts = body.action === 'draft' || body.action === 'picture';
+    const rl = await checkRateLimit(auth.userId, writingPosts ? 'strategy-draft' : 'templates');
+    if (!rl.ok) return fail(429, 'rate_limited', writingPosts ? 'Too many posts written in the last hour — the rest can be written shortly.' : 'Too many strategy uploads in the last hour — try again shortly.');
 
     // ---- A large PDF: park it in storage first ---------------------------
     //
@@ -201,6 +209,12 @@ export async function POST(req: Request) {
         });
         pack = out.pack as unknown as Record<string, unknown>;
       } catch (e) {
+        // No keywords, no post: the ladder (Semrush, the cache, the model's own
+        // terms, the brief's words) found nothing to write around. Said as such,
+        // not as "the writer did not answer".
+        if (e instanceof NoKeywordsError) {
+          return fail(422, 'no_keywords', 'Not written: no keywords could be researched for "' + angle + '". Every post is written around researched keywords, so this one waits until Semrush or the fallbacks have something for it. Give the angle a clearer subject and write it again.');
+        }
         reportError('templates:draft-write', e);
         return fail(502, 'write_failed', 'The post could not be written just now: ' + (e instanceof Error ? e.message : 'the writer did not answer') + '. Try again in a moment.');
       }
@@ -215,9 +229,44 @@ export async function POST(req: Request) {
         return NextResponse.json({ draftId: null, pack, image: null, note: 'Written, but it could not be saved to Recent Drafts just now.' });
       }
       const draftId = String((made as { id: string }).id);
+
+      // APPROVED AND FIXED, like every other post — here, at draft time, not
+      // later at the door. The same three steps the Autopilot's score step
+      // runs on a strategy post (lib/autopilot.ts):
+      //   1. the judge: does the cited study back what the post says?
+      //   2. "Verify / fix", by default: a citation the judge did not accept
+      //      is swapped for a study that backs the claim (lib/citation-autofix.ts);
+      //   3. keywords, last check: the ladder already stamped `_semrush` on
+      //      the pack, or refused above; this backfills a stamp an edit lost.
+      // Each fails open — the post is shown with whatever the step concluded —
+      // and the verdict is written on the draft, so the card, the door and
+      // this panel all read the same one.
+      const caption = String(pack.instagram || pack.facebook || pack.blog || pack.linkedin || '');
+      let stamp = await strategyClaimSupport(pack);
+      let fixNote = '';
+      if (stamp && stamp.status !== 'supported') {
+        const fixed = await autoFixCitation({ userId: auth.userId, draftId, text: caption, pack, budgetMs: 60_000 });
+        if (fixed.pack) pack = fixed.pack;
+        if (fixed.swapped) { fixNote = fixed.note; stamp = null; /* stamped and saved by the repair */ }
+      }
+      if (stamp) {
+        pack._claimSupport = stamp;
+        const { error: stampError } = await admin.from('drafts').update({ pack }).eq('id', draftId).eq('user_id', auth.userId);
+        if (stampError) reportError('templates:draft-claim-support-save', stampError, { draftId });
+      }
+      const kw = await ensureKeywords({ userId: auth.userId, draftId, text: caption, pack });
+      if (kw.pack) pack = kw.pack;
+      const status = claimSupportOf(pack);
+      const held = claimSupportRefusal(status);
+      const checks = {
+        keywords: kw.keywords,
+        keywordSource: String((pack._semrush as { source?: unknown } | undefined)?.source || ''),
+        citation: citationVerdictLine(status, Boolean(checkCompliance(caption).doi)) + (fixNote ? ' ' + fixNote : ''),
+        held,
+      };
       // The copy goes back now; the picture is a second request (action
       // 'picture'), so the person reads the post while it is being made.
-      return NextResponse.json({ draftId, pack, image: null, note: 'Saved to Recent Drafts.' });
+      return NextResponse.json({ draftId, pack, image: null, note: held ? 'Saved to Recent Drafts, held.' : 'Saved to Recent Drafts.', checks });
     }
     if (body.action === 'picture') {
       const draftId = String((body as { draftId?: unknown }).draftId || '').trim();
@@ -272,6 +321,8 @@ export async function POST(req: Request) {
   //
   // A small PDF comes in the request itself; a large one arrives through
   // storage (action 'sign' then 'read' above). The panel picks which.
+  const rl = await checkRateLimit(auth.userId, 'templates');
+  if (!rl.ok) return fail(429, 'rate_limited', 'Too many strategy uploads in the last hour — try again shortly.');
   let form: FormData;
   try { form = await req.formData(); } catch { return fail(400, 'bad_request', 'Drop a PDF file.'); }
   const file = form.get('file');

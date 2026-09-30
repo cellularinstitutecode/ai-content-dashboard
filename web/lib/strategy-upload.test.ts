@@ -160,7 +160,11 @@ test('the route reads the PDF with Claude, then inserts only — and the panel i
   assert.match(route, /requireAllowlistedUser\(\)/);
   assert.match(route, /normalizeUpload\(body\.plan\)/, 'the plan sent back is never trusted as it arrives');
   assert.match(route, /\.insert\(insert\)/);
-  assert.doesNotMatch(route, /\.update\(|\.delete\(|\.upsert\(/, 'additive: nothing existing is changed');
+  assert.doesNotMatch(route, /\.delete\(|\.upsert\(/, 'additive: nothing existing is changed');
+  assert.doesNotMatch(route, /from\('templates'\)[\s\S]{0,300}?\.update\(/, 'no template is ever updated');
+  // The one update the route makes is to the draft it has itself just inserted: the judge's stamp on it.
+  assert.equal(route.split('.update(').length, 2);
+  assert.match(route, /\.update\(\{ pack \}\)\.eq\('id', draftId\)\.eq\('user_id', auth\.userId\)/);
   const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /\{!isDraft && <StrategyDrop \/>\}/);
   // The top panel on the overview: above the panels grid and every other panel.
@@ -265,4 +269,44 @@ test('a slot can be written for real from the panel: the whole post, its picture
   // At the document root, and written as it opens.
   assert.match(panel, /createPortal\(\s*<SlotPanel/, 'a fixed dialog inside the dashboard’s animated panels is otherwise positioned off-screen');
   assert.match(panel, /autoStarted\.current\.add\(k\);\s*void writePreview\(openSlot, openSlot\.angles\[0\] \|\| ''\);/);
+});
+
+test('the week is written as soon as it is read, two posts at a time, on its own allowance', () => {
+  const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  const panel = src('components/StrategyDrop.tsx');
+  assert.match(panel, /void writeWeek\(laidOut\);/, 'starts the moment the week is on screen');
+  assert.match(panel, /await Promise\.all\(\[worker\(\), worker\(\)\]\)/, 'two at a time');
+  assert.match(panel, /if \(previewsRef\.current\[sl\._k\] \|\| writingRef\.current\[sl\._k\]\) continue;/, 'never twice');
+  assert.match(panel, /Writing the week/);
+  const route = src('app/api/templates/strategy-upload/route.ts');
+  assert.match(route, /writingPosts \? 'strategy-draft' : 'templates'/);
+  assert.match(src('lib/rate-limit.ts'), /'strategy-draft': \{ limit: 150, windowSec: 3600 \}/);
+});
+
+test('a previewed post is approved and fixed at draft time like every other post: keywords in place, citation judged and repaired', () => {
+  const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  const route = src('app/api/templates/strategy-upload/route.ts');
+  const draft = route.slice(route.indexOf("if (body.action === 'draft') {"), route.indexOf("if (body.action === 'picture') {"));
+  // No keywords, no post — said as such.
+  assert.match(draft, /if \(e instanceof NoKeywordsError\) \{\s*return fail\(422, 'no_keywords'/);
+  // The judge, then the automatic fix when it did not approve, then the stamp on the draft.
+  assert.match(draft, /let stamp = await strategyClaimSupport\(pack\);/);
+  assert.match(draft, /if \(stamp && stamp\.status !== 'supported'\) \{\s*const fixed = await autoFixCitation\(\{ userId: auth\.userId, draftId, text: caption, pack, budgetMs: 60_000 \}\);/);
+  assert.match(draft, /pack\._claimSupport = stamp;[\s\S]{0,200}\.from\('drafts'\)\.update\(\{ pack \}\)/);
+  // Keywords, last check, and the same refusal the door uses.
+  assert.match(draft, /await ensureKeywords\(\{ userId: auth\.userId, draftId, text: caption, pack \}\)/);
+  assert.match(draft, /const held = claimSupportRefusal\(status\);/);
+  assert.match(draft, /checks \}\);\s*$/m, 'the verdict goes back to the panel');
+  // One judge for the Autopilot and the preview.
+  const shared = src('lib/strategy-claim-support.ts');
+  assert.match(shared, /export async function strategyClaimSupport\(/);
+  assert.match(shared, /if \(index < 0 \|\| !items\.length\) return \{ status: 'unchecked', doi: cited \};/);
+  const autopilot = src('lib/autopilot.ts');
+  assert.match(autopilot, /import \{ strategyClaimSupport \} from '@\/lib\/strategy-claim-support';/);
+  assert.doesNotMatch(autopilot, /async function strategyClaimSupport\(/, 'moved, not copied');
+  // The panel shows what was checked, and a held post says so on its card.
+  const panel = src('components/StrategyDrop.tsx');
+  assert.match(panel, /draft\.checks\.keywords\.length \? draft\.checks\.keywords\.slice\(0, 8\)\.join\(', '\) : 'none could be researched'/);
+  assert.match(panel, /\{draft\.checks\.citation\}/);
+  assert.match(panel, /Written, citation held/);
 });
