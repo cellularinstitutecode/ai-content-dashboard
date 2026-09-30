@@ -9,7 +9,8 @@
 // approved posts go to the calendar and Metricool as they already do. Nothing
 // here deletes or changes anything.
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { announce } from '@/components/refreshBus';
 import { PanelLoader } from '@/components/LoadingScreen';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
@@ -196,7 +197,7 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onChange, onRemove
                 {writing === 'text' ? 'Writing…' : writing === 'picture' ? 'Making the picture…' : draft ? 'Write it again' : 'Write a preview post'}
               </button>
             </div>
-            <p className="mt-1.5 text-[11px] text-ink/50">Writes one week&rsquo;s post for this slot exactly as the Autopilot will &mdash; the strategy&rsquo;s voice, this note, keywords, the competition &mdash; saves it to Recent Drafts, then makes its picture. You can close this and carry on; the card says when it is done. Nothing is scheduled.</p>
+            <p className="mt-1.5 text-[11px] text-ink/50">One week&rsquo;s post for this slot, written as you open it, exactly as the Autopilot will write it &mdash; the strategy&rsquo;s voice, this note, keywords, the competition, a citation when it makes a health claim &mdash; saved to Recent Drafts, with its picture following. You can close this and carry on; the card says when it is done. Nothing is scheduled.</p>
             {writing === 'text' && <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-[12px] text-accent">Writing the post (about half a minute). The picture follows once the copy is here.</div>}
             {writing === 'picture' && <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-[12px] text-accent">Copy is in; making the picture (up to a minute).</div>}
             {draftErr && <p role="alert" className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-900 ring-1 ring-amber-200/60">{draftErr}</p>}
@@ -363,6 +364,17 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
     return k;
   };
   const openSlot = openKey ? slots.find((sl) => sl._k === openKey) || null : null;
+  // Opening a post writes it, once: the panel is for reading the post, not
+  // for pressing another button first. "Write it again" stays for a redo.
+  const autoStarted = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!openSlot) return;
+    const k = openSlot._k;
+    if (autoStarted.current.has(k) || previews[k] || writing[k] || !openSlot.pillar.trim() || openSlot.pillar === 'New post') return;
+    autoStarted.current.add(k);
+    void writePreview(openSlot, openSlot.angles[0] || '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openKey]);
   // Every slot is already there from an earlier upload: nothing to press.
   const nothingNew = Boolean(preview && preview.create === 0);
 
@@ -464,7 +476,12 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
         </div>
       )}
 
-      {openSlot && (
+      {/* At the document root, like the dashboard's own draft modal: the
+          dashboard's panels animate in with a transform, and a fixed dialog
+          inside a transformed ancestor is positioned against THAT box — it
+          was centred far down the page, leaving only the grey backdrop in
+          view (the "grey screen that lasts forever"). */}
+      {openSlot && typeof document !== 'undefined' ? createPortal(
         <SlotPanel
           slot={openSlot}
           draft={previews[openSlot._k] || null}
@@ -474,8 +491,9 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
           onChange={(next) => updateSlot(openSlot._k, next)}
           onRemove={() => { removeSlot(openSlot._k); setOpenKey(null); }}
           onClose={() => setOpenKey(null)}
-        />
-      )}
+        />,
+        document.body,
+      ) : null}
     </section>
   );
 }
