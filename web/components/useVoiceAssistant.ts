@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useRef, useState } from "react";
+import { getFocus } from "@/components/aiFocus";
 
 export function useVoiceAssistant(getSession: () => any, applyResult: (data: any, command?: string) => void) {
   const [active, setActive] = useState(false);
@@ -90,7 +91,7 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
           method: "POST",
           headers: { "Content-Type": "application/json" },
           // With the page, so the text assistant answers about the screen in front of the user.
-          body: JSON.stringify({ session: getSession(), text: command, page: window.location.pathname }),
+          body: JSON.stringify({ session: getSession(), text: command, page: window.location.pathname, focus: getFocus() }),
         })).json();
         applyResult(data, command);
         reply(data.message ?? "done - ask the user to review on screen");

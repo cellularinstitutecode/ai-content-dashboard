@@ -1,3 +1,4 @@
+import { focusBlock, type AiFocus } from '@/components/aiFocus';
 import { complianceGate } from '@/lib/compliance-gate';
 import {reportError, redact} from '@/lib/report';
 import { NextResponse } from "next/server";
@@ -434,7 +435,18 @@ function schemaNotes(missing: SchemaProbe[]): HealthNote[] {
  * session, and the reason the whole thing is wrapped rather than awaited
  * hopefully.
  */
-async function liveSituation(userId: string, page?: string | null): Promise<{ snapshot: ReturnType<typeof summarise>; prompt: string; brand?: BrandContext }> {
+/** The pointed-at item as the browser sent it, or null. Every field is cut to size. */
+function readFocus(raw: unknown): AiFocus | null {
+  if (!raw || typeof raw !== "object") return null;
+  const f = raw as Record<string, unknown>;
+  const label = String(f.label || "").slice(0, 200).trim();
+  const text = String(f.text || "").slice(0, 1000).trim();
+  if (!label && !text) return null;
+  const id = typeof f.id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(f.id) ? f.id : null;
+  return { kind: String(f.kind || "element").slice(0, 20), id, label, text };
+}
+
+async function liveSituation(userId: string, page?: string | null, focus?: AiFocus | null): Promise<{ snapshot: ReturnType<typeof summarise>; prompt: string; brand?: BrandContext }> {
   const [runsOutcome, report, brand] = await Promise.all([
     // NOT .catch(() => []).
     //
@@ -499,7 +511,7 @@ async function liveSituation(userId: string, page?: string | null): Promise<{ sn
   // Where the user is, so the answer is about the screen in front of them.
   const where = pageContext(page);
   const here = "WHERE THE USER IS: " + where.label + " (" + String(page || "/") + ") \u2014 " + where.doing + ".";
-  const prompt = [brandBlock(brand), here, renderSnapshot(snapshot), workspace, worked].filter(Boolean).join("\n\n");
+  const prompt = [brandBlock(brand), here, focusBlock(focus ?? null), renderSnapshot(snapshot), workspace, worked].filter(Boolean).join("\n\n");
   return { snapshot, prompt, brand };
 }
 
@@ -1413,12 +1425,15 @@ export async function POST(req: Request) {
   // Guarded like every other route in the repo: an unparseable body used to
   // throw above the handler's try block and surface as an opaque 500 that the
   // assistant widget rendered as "unexpected response (status 500)".
-  const parsed = (await req.json().catch(() => null)) as { session?: Session; text?: string; page?: string } | null;
+  const parsed = (await req.json().catch(() => null)) as { session?: Session; text?: string; page?: string; focus?: unknown } | null;
   if (!parsed || typeof parsed !== 'object') {
     return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 });
   }
   const { session: incoming, text } = parsed;
   const page = typeof parsed.page === "string" ? parsed.page.slice(0, 200) : null;
+  // What the user clicked on with the panel open (components/aiFocus.ts):
+  // kept short and shaped here, since it arrives from the browser.
+  const focus = readFocus(parsed.focus);
   const fresh = (): Session => ({ step: "greet", links: [], confirmations: [] });
   // A session the server did not sign is not a session - it is caller input
   // shaped like one. Start over rather than acting on it. (A first request
@@ -1468,7 +1483,7 @@ export async function POST(req: Request) {
   // The clock this request answers to. maxDuration is 300; the margin is what
   // composing and returning the answer costs after the last tool has run.
   const deadlineAt = Date.now() + 250_000;
-  const live = await liveSituation(userId, page);
+  const live = await liveSituation(userId, page, focus);
 
   try {
     // STANDBY, decided before anything below can act. "standby" parks the

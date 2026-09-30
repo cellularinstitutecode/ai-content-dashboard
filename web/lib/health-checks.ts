@@ -74,6 +74,9 @@ function has(name: string): boolean {
  * and still turns the optional `images` check amber — it simply does not
  * declare the deployment broken.
  */
+/** How long a transient image failure (a timeout, a 5xx) is worth mentioning. */
+const HICCUP_WINDOW_MS = 15 * 60 * 1000;
+
 function blocksWork(outcome: { ok: boolean; reason: string | null } | null): boolean {
   if (!outcome || outcome.ok) return false;
   return outcome.reason === 'bad_key' || outcome.reason === 'no_credit';
@@ -156,7 +159,12 @@ export async function runHealthChecks(): Promise<HealthReport> {
     textConfigured ? lastProviderOutcome(textProvider) : Promise.resolve(null),
     metricoolConfigured ? lastProviderOutcome('metricool') : Promise.resolve(null),
   ]);
-  const imagesFailing = Boolean(lastImage && !lastImage.ok);
+  // A refused key or an empty wallet keeps the banner up (24h window, as
+  // before). A timeout or a one-off 5xx does not: it showed "AI images are
+  // not being generated" for a day after a single slow call, and stayed up
+  // through a whole week of pictures that came from the library and never
+  // touched the generator. A hiccup is reported only while it is fresh.
+  const imagesFailing = blocksWork(lastImage) || Boolean(lastImage && !lastImage.ok && Date.now() - lastImage.at < HICCUP_WINDOW_MS);
   const textFailing = blocksWork(lastText);
   const metricoolFailing = blocksWork(lastMetricool);
 

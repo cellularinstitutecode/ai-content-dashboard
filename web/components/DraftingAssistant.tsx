@@ -6,6 +6,7 @@ import { useVoiceAssistant } from "@/components/useVoiceAssistant";
 import { useLiveContent } from "@/components/LiveContentProvider";
 import { PanelLoader } from '@/components/LoadingScreen';
 import { OPENING_LINE, pageContext, splitNextStep } from '@/lib/assistant-standby';
+import { clearFocus, getFocus, isPointing, resolveFocus, setFocus, setPointing, subscribeFocus, type AiFocus } from '@/components/aiFocus';
 
 // The conversation survives a page change and a reload: the panel used to
 // be remounted empty by every full navigation (the nav links were plain
@@ -47,6 +48,33 @@ export default function DraftingAssistant() {
     applyAssistantResult(data);
   });
   const [busy, setBusy] = useState(false);
+  // WHAT THE USER IS POINTING AT (components/aiFocus.ts). With the panel open,
+  // Alt-click anywhere — or "Point at something", then a click — picks the
+  // card under the pointer, outlines it in blue, and it goes with the next
+  // message. The click itself is swallowed, so pointing at a button does not
+  // press it.
+  const [focus, setFocusState] = useState<AiFocus | null>(null);
+  const [pointing, setPointingState] = useState(false);
+  useEffect(() => subscribeFocus(() => { setFocusState(getFocus()); setPointingState(isPointing()); }), []);
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (!(e.altKey || isPointing())) return;
+      const target = e.target as Element | null;
+      if (target?.closest?.('[data-ai-panel]')) return; // the panel itself is never the subject
+      const hit = resolveFocus(target);
+      e.preventDefault(); e.stopPropagation();
+      if (hit) setFocus(hit.focus, hit.el); else setPointing(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { if (isPointing()) setPointing(false); else if (getFocus()) clearFocus(); } };
+    document.addEventListener('click', onClick, true);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('click', onClick, true); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+  useEffect(() => {
+    if (pointing) document.documentElement.setAttribute('data-ai-pointing', '1'); else document.documentElement.removeAttribute('data-ai-pointing');
+    return () => document.documentElement.removeAttribute('data-ai-pointing');
+  }, [pointing]);
   /** What the assistant is doing right now, as the route reports it (in blue, as it goes). */
   const [steps, setSteps] = useState<string[]>([]);
   // This widget used to carry its own copy of the dashboard's Content
@@ -79,7 +107,7 @@ export default function DraftingAssistant() {
         headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
         // Where the user is goes with every message, so the answer is about
         // the screen in front of them (lib/assistant-standby.ts pageContext).
-        body: JSON.stringify({ session, text: clean, page: pathname }),
+        body: JSON.stringify({ session, text: clean, page: pathname, focus: getFocus() }),
       });
       let _raw = "";
       let data: any = null;
@@ -164,7 +192,7 @@ export default function DraftingAssistant() {
       {open && (
         <div className={"fixed bottom-6 right-6 z-50 flex h-[560px] w-[380px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-surface shadow-2xl transition-shadow " +
           // Outlined in blue while a turn is in flight; quiet otherwise.
-          (busy ? "ring-2 ring-accent shadow-[0_0_0_6px_rgba(0,113,227,0.18)]" : onStandby ? "ring-1 ring-amber-300" : "ring-1 ring-black/10")}>
+          (busy ? "ring-2 ring-accent shadow-[0_0_0_6px_rgba(0,113,227,0.18)]" : onStandby ? "ring-1 ring-amber-300" : "ring-1 ring-black/10")} data-ai-panel="1">
           <PanelLoader scope="assistant" rounded="rounded-2xl" />
           <header className="flex items-center justify-between gap-2 border-b border-black/5 px-4 py-3">
             <div className="flex min-w-0 items-center gap-3">
@@ -183,6 +211,15 @@ export default function DraftingAssistant() {
             </div>
             <button
               type="button"
+              onClick={() => setPointing(!pointing)}
+              title={pointing ? "Click anything on the page to point the assistant at it (Esc to stop)" : "Point at something on the page, so “this” means it. Alt-click does the same any time."}
+              aria-pressed={pointing}
+              className={"shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium ring-1 transition " + (pointing ? "bg-accent text-white ring-accent" : focus ? "bg-accent/10 text-accent ring-accent/30" : "text-ink/60 ring-black/10 hover:bg-black/5")}
+            >
+              {pointing ? "Click it…" : "Point at something"}
+            </button>
+            <button
+              type="button"
               disabled={busy}
               onClick={() => send(onStandby ? "resume" : "standby")}
               title={onStandby ? "Put the assistant back to work" : "Park the assistant: it keeps watching, and does nothing until you say resume"}
@@ -195,6 +232,15 @@ export default function DraftingAssistant() {
             </button>
           </header>
 
+          {focus && (
+            // The subject, in blue, until it is cleared or another is pointed at.
+            <div className="flex items-center gap-2 border-b border-accent/20 bg-accent/5 px-4 py-2 text-[12px] text-accent" role="status">
+              <span className="h-2 w-2 shrink-0 rounded-full bg-accent" aria-hidden />
+              <span className="min-w-0 truncate"><span className="font-semibold">Pointing at:</span> {focus.label || focus.kind}</span>
+              <span className="flex-1" />
+              <button type="button" onClick={clearFocus} aria-label="Stop pointing at this" className="shrink-0 rounded-full px-1.5 text-accent/70 hover:bg-accent/10">×</button>
+            </div>
+          )}
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
                         {msgs.map((m) => (
                               <div key={m.id}>

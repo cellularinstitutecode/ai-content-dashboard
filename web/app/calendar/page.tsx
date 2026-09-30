@@ -813,6 +813,7 @@ export default function CalendarPage() {
                   {dayPosts.map((p) => (
                     <div
                       key={p.id}
+                      data-ai-target="post" data-ai-id={String(p.id)}
                       draggable
                       onClick={(e) => { e.stopPropagation(); setPreviewId(String(p.id)); }}
                       onDragStart={() => setDragId(p.id || null)}
@@ -863,6 +864,7 @@ export default function CalendarPage() {
                   {(runsByDay[k] || []).map((r) => (
                     <div
                       key={r.id}
+                      data-ai-target="run" data-ai-id={r.id}
                       onClick={(e) => { e.stopPropagation(); setPreviewRunId(r.id); }}
                       title={runText(r.pack) || r.template_name}
                       className={'cursor-pointer rounded-lg border border-amber-300/60 bg-amber-50 px-2 py-1 text-[11px] leading-tight text-ink transition hover:bg-amber-100 ' + (runBusy === r.id ? 'opacity-50 ' : '')}
@@ -1030,7 +1032,7 @@ export default function CalendarPage() {
                 const pending = p.videoPending === true;
                 const d = p.publication_date ? new Date(p.publication_date) : null;
                 return (
-                  <li key={p.id} className={'flex gap-2 rounded-xl border p-3 text-[12px] ' + (picked.has(String(p.id)) ? 'border-red-300 bg-red-50' : waiting ? 'border-amber-200 bg-amber-50/60' : 'border-black/5 bg-canvas')}>
+                  <li key={p.id} data-ai-target="post" data-ai-id={String(p.id)} className={'flex gap-2 rounded-xl border p-3 text-[12px] ' + (picked.has(String(p.id)) ? 'border-red-300 bg-red-50' : waiting ? 'border-amber-200 bg-amber-50/60' : 'border-black/5 bg-canvas')}>
                     <input
                       type="checkbox"
                       checked={picked.has(String(p.id))}

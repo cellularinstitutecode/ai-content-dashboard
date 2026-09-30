@@ -36,7 +36,7 @@ import type { BrandContext } from '@/lib/ai';
 import { normalizeVisual, visualPromptBlock, brandFitRubric, type BrandVisual } from '@/lib/brand-visual';
 import { classifyVerdict, imageUnshippable } from './image-verdict.ts';
 import { supersededKeys } from './storage-prune.ts';
-import { recordImageOutcome } from '@/lib/provider-status';
+import { noteSameAccountSuccess, recordImageOutcome } from '@/lib/provider-status';
 
 // Machine verification: every generated image is inspected by a vision model
 // before it is accepted, so hallucinated output (garbled text, warped
@@ -599,6 +599,8 @@ async function verifyGeneratedImage(
       ...(planner || mode.headroom ? { minHeadTopPct: PLANNER_MIN_HEAD_TOP_PCT } : {}),
     });
     const verdict = mode.photograph ? photographVerdict(measured) : measured;
+    // The account answered: a stale "out of credit" on record is cleared.
+    noteSameAccountSuccess();
     return {
       status: verdict.status,
       score: verdict.score,
