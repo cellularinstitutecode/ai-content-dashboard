@@ -17,13 +17,13 @@ import 'server-only';
 import type { BrandContext } from '@/lib/ai';
 import { libraryHero } from '@/lib/library-hero';
 import { candidatesFrom, indexLibrary, libraryPhotoUrl, loadLibraryRows, touchLibraryUse, type LibraryRow } from '@/lib/library-index';
-import { pickFresh, pillarsForText, type FreshMatch } from '@/lib/library-topic';
+import { GENERAL_PILLARS, pickFresh, pillarsForText, type FreshMatch } from '@/lib/library-topic';
 import type { PackImage } from '@/lib/images';
 import { plannerImageFor } from '@/lib/planner-image';
 import { reportError } from '@/lib/report';
 
 /** How many unread photographs one picture step may index on the way, so the folder gets read over the first posts. */
-const TOP_UP = 3;
+const TOP_UP = 6;
 
 export type LibraryPick = { image: PackImage; match: FreshMatch; notes: string[] };
 
@@ -41,7 +41,10 @@ export async function libraryPhotoFor(opts: {
   /** Never offer a photograph used in the window — not even as the last resort (the default allows the least recent one). */
   freshOnly?: boolean;
   budgetMs?: number;
+  /** Told, in one line, why no photograph was offered — shown under a generated picture so the choice is explained. */
+  explain?: (reason: string) => void;
 }): Promise<LibraryPick | null> {
+  const why = (reason: string) => { try { opts.explain?.(reason); } catch { /* a note, never a failure */ } };
   const started = Date.now();
   let rows: LibraryRow[];
   try {
@@ -52,18 +55,26 @@ export async function libraryPhotoFor(opts: {
     if (top && top.added) rows = await loadLibraryRows();
   } catch (e) {
     reportError('library-pick:load', e);
+    why('the library index could not be read');
     return null;
   }
-  if (!rows.length) return null;
+  if (!rows.length) { why('no photographs of the library have been read yet (it reads itself, thirty every twenty minutes)'); return null; }
 
+  // The post's own pillar first (the planner's, or its words), then the
+  // pillars the clinic's own rooms serve: a photograph of the clinic before a
+  // generated picture, whatever the post is about.
   const planner = plannerImageFor(opts.pack);
-  const pillars = [...(planner ? [planner.pillarId] : []), ...pillarsForText(textOf(opts.pack, opts.topic))].filter((p, i, a) => a.indexOf(p) === i);
-  if (!pillars.length) return null;
+  const own = [...(planner ? [planner.pillarId] : []), ...pillarsForText(textOf(opts.pack, opts.topic))];
+  const pillars = [...own, ...GENERAL_PILLARS].filter((p, i, a) => a.indexOf(p) === i);
 
-  const match = pickFresh(candidatesFrom(rows), pillars, Date.now(), { exclude: opts.excludeFileId ? [opts.excludeFileId] : [] });
-  if (!match || (opts.freshOnly && match.repeated)) return null;
+  const candidates = candidatesFrom(rows);
+  const match = pickFresh(candidates, pillars, Date.now(), { exclude: opts.excludeFileId ? [opts.excludeFileId] : [] });
+  if (!match || (opts.freshOnly && match.repeated)) {
+    why(rows.length + ' photograph' + (rows.length === 1 ? '' : 's') + ' read, none the cover rules allow for this post (text, a procedure, a device on a person, or a patient without a release)');
+    return null;
+  }
   const row = rows.find((r) => r.file_id === match.id);
-  if (!row) return null;
+  if (!row) { why('the chosen photograph is no longer in the index'); return null; }
   if (Date.now() - started > (opts.budgetMs ?? 120_000) - 40_000) return null;
 
   try {
@@ -75,6 +86,7 @@ export async function libraryPhotoFor(opts: {
     return { image: { ...made.image, alt: made.image.alt || row.caption || row.name }, match, notes };
   } catch (e) {
     reportError('library-pick:hero', e, { fileId: row.file_id });
+    why('the photograph "' + row.name + '" could not be prepared (' + (e instanceof Error ? e.message : 'unknown error') + ')');
     return null;
   }
 }

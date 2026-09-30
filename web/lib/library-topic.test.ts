@@ -1,7 +1,7 @@
 // web/lib/library-topic.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { REUSE_WINDOW_DAYS, pickFresh, pillarsForText, type LibraryCandidate } from './library-topic.ts';
+import { GENERAL_PILLARS, REUSE_WINDOW_DAYS, pickFresh, pillarsForText, type LibraryCandidate } from './library-topic.ts';
 import { BRAND_TARGET } from './palette.ts';
 
 const cap = (subjects: string[], blockers: string[] = []) => ({ caption: 'x', subjects: subjects as never, blockers: blockers as never });
@@ -37,7 +37,7 @@ test('the best pillar wins, and within it a fresh photograph beats a better one 
   assert.equal(pickFresh(photos, ['sleep'], now), null, 'no near-miss');
 });
 
-test('the cover rules, consent and colour still refuse a photograph, and the current one can be excluded', () => {
+test('the cover rules and consent still refuse a photograph; an unmeasured one ranks below a measured one but is not refused', () => {
   const now = Date.now();
   const photos = [
     { ...photo('text', ['movement']), caption: cap(['movement'], ['text']) },
@@ -45,7 +45,16 @@ test('the cover rules, consent and colour still refuse a photograph, and the cur
     photo('unmeasured', ['movement'], { stats: null }),
     photo('ok', ['movement']),
   ];
-  assert.equal(pickFresh(photos, ['movement'], now)?.id, 'ok');
-  assert.equal(pickFresh(photos, ['movement'], now, { exclude: ['ok'] }), null, '"make it again" never hands back the same photo');
+  assert.equal(pickFresh(photos, ['movement'], now)?.id, 'ok', 'the measured one first');
+  assert.equal(pickFresh(photos, ['movement'], now, { exclude: ['ok'] })?.id, 'unmeasured', 'then the unmeasured one — the brand filter grades it at use');
+  assert.equal(pickFresh(photos, ['movement'], now, { exclude: ['ok', 'unmeasured'] }), null, 'never a photo the cover rules refuse');
   assert.equal(pickFresh([{ ...photos[1], consentCleared: true }], ['movement'], now)?.id, 'patient', 'a release clears a patient');
+});
+
+test('a post whose words name no pillar still gets a photograph of the clinic', () => {
+  const photos = [photo('consult', ['consultation']), photo('room', ['treatment-room'])];
+  const pillars = [...pillarsForText('Three things to know before you visit'), ...GENERAL_PILLARS];
+  // Either photograph of the clinic serves; the more focused one (fewer pillars) wins the tie.
+  assert.ok(['consult', 'room'].includes(String(pickFresh(photos, pillars, Date.now())?.id)), 'a photograph of the clinic, not a generated picture');
+  assert.equal(pickFresh([], pillars, Date.now()), null);
 });

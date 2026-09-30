@@ -84,6 +84,16 @@ export type FreshMatch = {
 const MIN_SCORE = 0.35;
 
 /**
+ * The pillars the clinic's own rooms serve — consultation, portrait, team,
+ * treatment room, reception, exterior, lab, equipment (lib/library-caption.ts
+ * SUBJECT_PILLARS) — in the order to try them when a post's words name no
+ * pillar, or name one the folder has nothing for. A post about the clinic
+ * gets a photograph of the clinic before anything is generated: "I want them
+ * picked up from the library."
+ */
+export const GENERAL_PILLARS = ['protocols', 'diagnosis', 'follow-up', 'recovery', 'prevention', 'supplementation', 'cancun'] as const;
+
+/**
  * The best real photograph for a post, among the pillars its words name, that
  * has NOT been used in the last REUSE_WINDOW_DAYS — and only when every
  * fitting one has, the least recently used of them, said as a repeat.
@@ -107,15 +117,17 @@ export function pickFresh(candidates: readonly LibraryCandidate[], pillars: read
       if (safe.needsConsent && !c.consentCleared) continue;
       const served = pillarsFor(c.caption);
       if (!served.includes(pillar)) continue;
-      if (!c.stats) continue;
-      const g = gradeFor(c.stats);
-      if (g.verdict === 'outside') continue;
-      const fit = g.verdict === 'ready' ? 1 : Math.max(0, 1 - g.distance / 2);
+      // Not yet colour-measured (ffmpeg was not there when it was read): not
+      // refused. The brand filter measures and grades the photo at use
+      // (lib/library-hero.ts) anyway; it merely ranks below one known to fit.
+      const g = c.stats ? gradeFor(c.stats) : null;
+      if (g && g.verdict === 'outside') continue;
+      const fit = !g ? 0.6 : g.verdict === 'ready' ? 1 : Math.max(0, 1 - g.distance / 2);
       const score = Math.round((fit + (1 / served.length) * 0.25) * 100) / 100;
       if (score < MIN_SCORE) continue;
       const match: FreshMatch = {
-        id: c.id, name: c.name, pillar, score, filters: g.filters, repeated: false,
-        why: `${c.caption.subjects.join(', ')} — ${g.verdict === 'ready' ? 'already in the palette' : 'graded into the palette'}`,
+        id: c.id, name: c.name, pillar, score, filters: g ? g.filters : [], repeated: false,
+        why: `${c.caption.subjects.join(', ')} — ${!g ? 'graded at use' : g.verdict === 'ready' ? 'already in the palette' : 'graded into the palette'}`,
       };
       const usedAt = c.lastUsedAt ?? null;
       if (usedAt != null && usedAt > recent) {

@@ -26,3 +26,15 @@ test('the Content Generator: no separate Keyword research button, the picture fr
   const picker = readFileSync(new URL('../components/HeroImagePicker.tsx', import.meta.url), 'utf8');
   assert.match(picker, /\{!loading && loaded && !images\.length && /, '"no photographs" only after the folder was read');
 });
+
+test('the library is asked for a photograph of the clinic before anything is generated, and says why when it declines', () => {
+  const pick = readFileSync(new URL('./library-pick.ts', import.meta.url), 'utf8');
+  assert.match(pick, /const pillars = \[\.\.\.own, \.\.\.GENERAL_PILLARS\]/, 'the post’s pillar first, then the clinic’s rooms');
+  assert.match(pick, /const TOP_UP = 6;/);
+  assert.match(pick, /why\(rows\.length \+ ' photograph'/);
+  const topic = readFileSync(new URL('./library-topic.ts', import.meta.url), 'utf8');
+  assert.match(topic, /const fit = !g \? 0\.6 :/, 'an unmeasured photograph is ranked, not refused');
+  const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /From the clinic\\'s own library/);
+  assert.match(page, /An AI picture was made instead; pick a library photo above to replace it\./);
+});
