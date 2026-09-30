@@ -89,7 +89,8 @@ export function useVoiceAssistant(getSession: () => any, applyResult: (data: any
         const data = await (await fetch("/api/assistant", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session: getSession(), text: command }),
+          // With the page, so the text assistant answers about the screen in front of the user.
+          body: JSON.stringify({ session: getSession(), text: command, page: window.location.pathname }),
         })).json();
         applyResult(data, command);
         reply(data.message ?? "done - ask the user to review on screen");

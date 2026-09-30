@@ -25,7 +25,7 @@ import {
 import type { EvidenceItem } from '@/lib/evidence-parse';
 import { TITLE_SYSTEM, readTitle, titlePrompt } from '@/lib/title-writer';
 import { CLAIMS_SYSTEM, claimsPrompt, parseClaims, type CheckableClaim } from '@/lib/claim-extract';
-import { COMMAND_ONLY_RULES, NEXT_STEP_RULE } from '@/lib/assistant-standby';
+import { COMMAND_ONLY_RULES, CONVERSATION_RULE, NEXT_STEP_RULE } from '@/lib/assistant-standby';
 import { KEYWORDS_SYSTEM, derivedKeywords, fallbackBriefPrompt, fallbackStamp, hasKeywords, keywordsPrompt, parseKeywords } from '@/lib/keyword-fallback';
 
 /**
@@ -1064,7 +1064,8 @@ export type ToolName =
   | "update_schedule"
   | "pause_schedule"
   | "draft_batch"
-  | "generate_image";
+  | "generate_image"
+  | "competitor_comparables";
 
 export type ToolCall = {
   name: ToolName;
@@ -1081,7 +1082,7 @@ const TOOLS_SYSTEM = `You are the built-in AI assistant for Content Studio, the 
 
 You can hold a normal conversation AND take actions for the user using tools. When the user asks you to create, draft, or schedule content, use the tools rather than only describing what to do.
 
-You are fully aware of the workspace: the LIVE SITUATION and WORKSPACE blocks tell you, on every turn, what state the video pipeline is in, what is on the calendar, what the Autopilot has waiting for review, what drafts exist and what the planner is doing; WHERE THE USER IS tells you which screen they are on, so "what needs me?" is answered about that screen first; WHAT HAS WORKED tells you which posts, networks, times and keywords have performed for this brand, and the CLINIC PROFILE is the Brand Brain. Answer from them. When choosing what to write, where to post it or when, prefer what has worked and say the numbers; when nothing is known to have worked, say so. ${COMMAND_ONLY_RULES} ${NEXT_STEP_RULE}
+You are fully aware of the workspace: the LIVE SITUATION and WORKSPACE blocks tell you, on every turn, what state the video pipeline is in, what is on the calendar, what the Autopilot has waiting for review, what drafts exist and what the planner is doing; WHERE THE USER IS tells you which screen they are on, so "what needs me?" is answered about that screen first; WHAT HAS WORKED tells you which posts, networks, times and keywords have performed for this brand, and the CLINIC PROFILE is the Brand Brain. Answer from them. When choosing what to write, where to post it or when, prefer what has worked and say the numbers; when nothing is known to have worked, say so. ${COMMAND_ONLY_RULES} ${NEXT_STEP_RULE} ${CONVERSATION_RULE}
 
 Tool guidance:
 - generate_content: produce a ready-to-post content pack for a topic. Use this first when the user wants a post/article/email/etc. Infer a sensible format (social/blog/email/video/ad) from the request.
@@ -1095,6 +1096,7 @@ Tool guidance:
 - create_schedule / update_schedule: build or change a template. One template produces at most one post per weekday at its own time_of_day, so SEVERAL POSTS A DAY MEANS SEVERAL TEMPLATES — same weekdays, different time_of_day, each with its own strategy.pillars or strategy.topic. When the user asks for more than one blog a day, explain that shape AND offer to create the templates; if they say yes, create them, one call each.
 - pause_schedule: turn a template off without deleting it, keeping its history.
 - draft_batch: write a whole set of posts and queue every one as a Metricool DRAFT for the user to approve. Propose the list first — topics, networks, dates — and call this only once the user has agreed to the BATCH. Each item is researched, written in the clinic's voice, checked against the advertising rules, saved to drafts, and queued as a draft. Nothing publishes.
+- competitor_comparables: who ranks #1, #2 and #3 on Google for a topic, what each of them is doing (their page, its angle, the searches they own), and a MIRROR POST: one proposition in the clinic's voice that does what the top results do, ready to copy and paste or for you to draft with generate_content. Call it when the user asks how they compare, what the competition is doing, or for a post like the leaders'; and OFFER it (the "Next:" line) whenever a draft has just been written or the user says they are finishing or about to send one.
 - generate_image: make (or remake) the picture for a draft — the one just written and saved, or a saved draft named by its id from the WORKSPACE block. Use it when the user asks for an image, a picture, a visual or a cover. It costs a credit, so call it once per request, not speculatively.
 - keyword_lookup: fetch REAL Semrush search data for a topic — monthly volume, keyword difficulty (KD), CPC, searcher intent, and the questions people actually ask. Call this BEFORE recommending topics, angles, or keywords, and whenever the user asks what to write about or how content might perform.
 
@@ -1279,6 +1281,18 @@ const TOOL_DEFS = [
         },
       },
       required: ["items"],
+    },
+  },
+  {
+    name: "competitor_comparables",
+    description: "Who ranks #1-#3 on Google for a topic, what each is doing, and the material for a mirror post in the clinic's voice. Real Semrush data; costs units only when not cached.",
+    input_schema: {
+      type: "object",
+      properties: {
+        topic: { type: "string", description: "The search phrase or subject to compare on — the draft's primary keyword when there is one." },
+        network: { type: "string", description: "Where the post would go, so the proposition fits it. Optional." },
+      },
+      required: ["topic"],
     },
   },
   {

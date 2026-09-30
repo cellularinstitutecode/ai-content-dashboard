@@ -13,7 +13,9 @@ import {
   type BrandContext,
 } from "@/lib/ai";
 import { opusCreateClipProject } from "@/lib/opus";
-import { researchBundle, briefPromptFrom, getUnitsBalance, recordDraftKeywords, type SemKeyword } from "@/lib/semrush";
+import { researchBundle, briefPromptFrom, getUnitsBalance, recordDraftKeywords, serpCompetitors, type SemKeyword } from "@/lib/semrush";
+import { primaryDomain, topOrganicKeywords } from "@/lib/semrush-domain";
+import { classifyDomain, serpLandscapeFrom, themesFrom } from "@/lib/serp-landscape";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { isAllowedEmail } from "@/lib/access";
 import { parseVideoUrl } from "@/lib/composer";
@@ -37,7 +39,7 @@ import { describeTemplates, listTemplates, saveTemplate, setTemplateActive, upco
 import { normalizeStrategy } from "@/lib/autopilot";
 import { ensureDraftImage } from "@/lib/images";
 import { performanceBlock, workspaceBlock } from "@/lib/workspace-snapshot";
-import { RESUME_ACK, STANDBY_ACK, STANDBY_RULES, pageContext, standbyCommand } from "@/lib/assistant-standby";
+import { RESUME_ACK, STANDBY_ACK, STANDBY_RULES, THINKING_LABEL, pageContext, standbyCommand, stepLabel } from "@/lib/assistant-standby";
 
 // Compact, chat-friendly rendering of Semrush keyword rows.
 function fmtKw(k: SemKeyword): string {
@@ -250,13 +252,16 @@ function sessionIsAuthentic(session: Session): boolean {
   try { return timingSafeEqual(Buffer.from(expect), Buffer.from(got)); } catch { return false; }
 }
 
-function reply(session: Session, message: string, options?: string[]) {
+function replyPayload(session: Session, message: string, options?: string[]) {
   // Stamp (or clear) the signature so only server-created pending actions survive the round-trip.
   session._sig = signPending(session.pendingSchedule);
   session._bsig = session.pendingBatch ? signBatch(session.pendingBatch) : null;
   // Stamp the whole-session signature LAST, so it covers every mutation above.
   session._ssig = signSession(session);
-  return NextResponse.json({ session, message, options: options || null });
+  return { session, message, options: options || null };
+}
+function reply(session: Session, message: string, options?: string[]) {
+  return NextResponse.json(replyPayload(session, message, options));
 }
 
 /**
@@ -851,7 +856,7 @@ async function runBatch(
   return { message: lines.join("\n"), queued: queued.length, note };
 }
 
-async function runAgent(session: Session, input: string, userId: string | null, situation: string, deadlineAt: number, brand?: BrandContext) {
+async function runAgent(session: Session, input: string, userId: string | null, situation: string, deadlineAt: number, brand?: BrandContext, onStep: (label: string) => void = () => {}) {
   const tm: ToolMessage[] = boundToolMessages(session.toolMessages);
   tm.push({ role: "user", content: input });
   // On standby the model is told so AND has no tools to call (lib/ai.ts).
@@ -872,6 +877,7 @@ async function runAgent(session: Session, input: string, userId: string | null, 
         "I ran out of time in this request. Anything I finished is saved; ask me again to carry on.";
       break;
     }
+    if (i === 0) onStep(THINKING_LABEL);
     const turn = await chatWithTools(tm, snapshot, { tools: !standby });
     // Record the assistant turn (text and/or tool_use) so the model keeps context.
     const assistantBlocks: any[] = [];
@@ -885,6 +891,8 @@ async function runAgent(session: Session, input: string, userId: string | null, 
 
     const call = turn.toolCall;
     let toolResult = "";
+    // The trail: what is being done, as it starts (lib/assistant-standby.ts stepLabel).
+    onStep(stepLabel(call.name, call.input));
 
     if (call.name === "generate_content") {
       const topic = String(call.input.topic || "").trim();
@@ -1042,6 +1050,53 @@ async function runAgent(session: Session, input: string, userId: string | null, 
         }
       } catch (e: any) {
         toolResult = "Research failed: " + (e?.message || "unknown error");
+      }
+    } else if (call.name === "competitor_comparables") {
+      // Who owns this search, what they are doing, and what a mirror post
+      // would need. The model writes the proposition from this; nothing here
+      // is invented — the domains, URLs and keywords are Semrush's.
+      try {
+        const topic = String(call.input.topic || "").trim();
+        if (!topic) {
+          toolResult = "No topic given. Ask what search or subject to compare on.";
+        } else {
+          const serp = await serpCompetitors(topic, { limit: 10 });
+          if (!serp.ok || !serp.rows.length) {
+            toolResult = "Semrush has no ranking data for \"" + topic + "\" right now (" + (serp.reason || "no data") + "). Say so; do not name competitors from memory.";
+          } else {
+            const mine = primaryDomain();
+            const rows = serp.rows.filter((r) => r && r.domain);
+            const top = rows.slice(0, 3);
+            const lines: string[] = ["TOP OF GOOGLE for \"" + topic + "\" (Semrush, " + serp.source + "):"];
+            for (let i = 0; i < top.length; i++) {
+              const r = top[i];
+              const domain = r.domain.replace(/^www\./, "");
+              let owns = "";
+              try {
+                const kw = await topOrganicKeywords(domain, 6);
+                owns = kw.rows.slice(0, 6).map((k) => '"' + k.keyword + '"' + (k.position ? " #" + k.position : "") + (k.volume ? " (" + k.volume + "/mo)" : "")).join(", ");
+              } catch { owns = ""; }
+              const slug = String(r.url || "").replace(/^https?:\/\/[^/]+/, "").replace(/[?#].*$/, "");
+              lines.push(
+                "#" + (i + 1) + " " + domain + (domain === mine ? " (THIS CLINIC)" : "") + " — " + classifyDomain(r.domain) +
+                "; page: " + (r.url || "?") + (slug ? " (its angle from the slug: " + slug.replace(/[-_/]+/g, " ").trim() + ")" : "") +
+                (themesFrom([r]).length ? "; theme: " + themesFrom([r]).join(", ") : "") +
+                (owns ? "; searches it owns: " + owns : ""),
+              );
+            }
+            const landscape = serpLandscapeFrom(topic, rows);
+            if (landscape) lines.push("", landscape);
+            lines.push(
+              "",
+              "Now answer in three parts, short: (1) who ranks 1-3 and what each is doing; (2) THE MIRROR POST — one proposition in the clinic's own voice that does what the leaders do (their angle, their format, their promise) with this clinic's facts and a REF line, written out ready to copy and paste" +
+              (call.input.network ? " for " + String(call.input.network) : "") +
+              "; (3) offer to draft and save it. Never copy their words; never invent a claim, a number or a citation.",
+            );
+            toolResult = lines.join("\n");
+          }
+        }
+      } catch (e: any) {
+        toolResult = "The comparison could not be run: " + (e?.message || "unknown error");
       }
     } else if (call.name === "generate_image") {
       // The picture for a draft: the one this conversation wrote (saved first
@@ -1603,19 +1658,44 @@ export async function POST(req: Request) {
 
     // Default: agentic chat that can take actions via tools.
     if (input && !inGuided) {
-      try {
-        const out = await runAgent(session, input, userId, live.prompt, deadlineAt, live.brand);
-        return reply({ ...session, mode: "chat", step: "greet" }, out.message, out.options);
-      } catch (e: any) {
-        // Fall back to plain conversational answer if tool loop fails.
-        const history = Array.isArray(session.history) ? session.history.slice(-11) : [];
-        history.push({ role: "user", content: input });
-        let answer = "";
-        try { answer = await chatAssistant(history, session.provider as any); }
-        catch { answer = "I had trouble reaching the AI just now. Please try again in a moment."; }
-        const newHistory = [...history, { role: "assistant" as const, content: answer }];
-        return reply({ ...session, mode: "chat", step: "greet", history: newHistory }, answer);
-      }
+      const run = async (onStep: (label: string) => void) => {
+        try {
+          const out = await runAgent(session, input, userId, live.prompt, deadlineAt, live.brand, onStep);
+          return replyPayload({ ...session, mode: "chat", step: "greet" }, out.message, out.options);
+        } catch (e: any) {
+          // Fall back to plain conversational answer if tool loop fails.
+          reportError("assistant:agent", e);
+          const history = Array.isArray(session.history) ? session.history.slice(-11) : [];
+          history.push({ role: "user", content: input });
+          let answer = "";
+          try { answer = await chatAssistant(history, session.provider as any); }
+          catch { answer = "I had trouble reaching the AI just now. Please try again in a moment."; }
+          const newHistory = [...history, { role: "assistant" as const, content: answer }];
+          return replyPayload({ ...session, mode: "chat", step: "greet", history: newHistory }, answer);
+        }
+      };
+      // THE TRAIL. A panel that asks for newline-delimited JSON is told each
+      // step as it starts — "Writing the draft…", "Comparing with the top 3…"
+      // — and the answer last, so a person watches the work rather than a
+      // spinner. Anything else gets the answer alone, as before.
+      const wantsTrail = (req.headers.get("accept") || "").includes("application/x-ndjson");
+      if (!wantsTrail) return NextResponse.json(await run(() => {}));
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const emit = (o: unknown) => { try { controller.enqueue(encoder.encode(JSON.stringify(o) + "\n")); } catch { /* closed */ } };
+          try {
+            const payload = await run((label) => emit({ step: label }));
+            emit({ done: payload });
+          } catch (e: any) {
+            emit({ error: e?.message || "The assistant could not finish." });
+          }
+          try { controller.close(); } catch { /* already closed */ }
+        },
+      });
+      return new Response(stream, {
+        headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store", "x-accel-buffering": "no" },
+      });
     }
 
     switch (session.step) {
