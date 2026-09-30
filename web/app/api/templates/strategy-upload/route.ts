@@ -25,6 +25,9 @@ import { autoFixCitation } from '@/lib/citation-autofix';
 import { claimSupportOf, claimSupportRefusal } from '@/lib/citation-gate';
 import { checkCompliance } from '@/lib/compliance';
 import { ensureKeywords } from '@/lib/keyword-guard';
+import { avisoForUser } from '@/lib/compliance-gate';
+import { fixPostCitation } from '@/lib/post-citation-fix';
+import { imagesEnabled } from '@/lib/images';
 import { citationVerdictLine, strategyClaimSupport } from '@/lib/strategy-claim-support';
 import { loadBrandContext } from '@/lib/brand-context';
 import { competitiveBrief } from '@/lib/competitive-brief';
@@ -48,6 +51,30 @@ export const runtime = 'nodejs';
 export const maxDuration = 180;
 
 const fail = (status: number, error: string, message: string) => NextResponse.json({ error, message }, { status });
+
+/** The caption the judge, the fix and the keyword guard all read: the first channel with copy. */
+const captionOf = (pack: Record<string, unknown>) => String(pack.instagram || pack.facebook || pack.blog || pack.linkedin || '');
+
+/**
+ * What the panel shows under a post as "Checked": the keywords it was written
+ * around and the judge's verdict on its citation, both read off the draft's
+ * own stamps — the same two things the door reads.
+ */
+function checksFor(pack: Record<string, unknown>, fixNote = '') {
+  const semrush = (pack._semrush || null) as { keywords?: unknown; source?: unknown } | null;
+  const status = claimSupportOf(pack);
+  return {
+    keywords: Array.isArray(semrush?.keywords) ? semrush.keywords.map(String).filter(Boolean) : [],
+    keywordSource: String(semrush?.source || ''),
+    citation: citationVerdictLine(status, Boolean(checkCompliance(captionOf(pack)).doi)) + (fixNote ? ' ' + fixNote : ''),
+    held: claimSupportRefusal(status),
+  };
+}
+
+/** How long the picture may take: the function has 180s, and the picture is all this request does. */
+const PICTURE_BUDGET_MS = 150_000;
+/** "Verify / fix" from the panel, on the draft alone (no post row exists yet). */
+const FIX_BUDGET_MS = 120_000;
 
 /**
  * The second ask, when the first came back with no posts. The first prompt
@@ -119,7 +146,7 @@ export async function POST(req: Request) {
     try { body = await req.json(); } catch { return fail(400, 'bad_request', 'The plan could not be read.'); }
     // Writing the week's posts has its own, larger allowance: fourteen posts
     // are twenty-eight requests, started as soon as the week is read.
-    const writingPosts = body.action === 'draft' || body.action === 'picture';
+    const writingPosts = body.action === 'draft' || body.action === 'picture' || body.action === 'fix';
     const rl = await checkRateLimit(auth.userId, writingPosts ? 'strategy-draft' : 'templates');
     if (!rl.ok) return fail(429, 'rate_limited', writingPosts ? 'Too many posts written in the last hour — the rest can be written shortly.' : 'Too many strategy uploads in the last hour — try again shortly.');
 
@@ -241,7 +268,7 @@ export async function POST(req: Request) {
       // Each fails open — the post is shown with whatever the step concluded —
       // and the verdict is written on the draft, so the card, the door and
       // this panel all read the same one.
-      const caption = String(pack.instagram || pack.facebook || pack.blog || pack.linkedin || '');
+      const caption = captionOf(pack);
       let stamp = await strategyClaimSupport(pack);
       let fixNote = '';
       if (stamp && stamp.status !== 'supported') {
@@ -256,24 +283,65 @@ export async function POST(req: Request) {
       }
       const kw = await ensureKeywords({ userId: auth.userId, draftId, text: caption, pack });
       if (kw.pack) pack = kw.pack;
-      const status = claimSupportOf(pack);
-      const held = claimSupportRefusal(status);
-      const checks = {
-        keywords: kw.keywords,
-        keywordSource: String((pack._semrush as { source?: unknown } | undefined)?.source || ''),
-        citation: citationVerdictLine(status, Boolean(checkCompliance(caption).doi)) + (fixNote ? ' ' + fixNote : ''),
-        held,
-      };
+      const checks = checksFor(pack, fixNote);
       // The copy goes back now; the picture is a second request (action
       // 'picture'), so the person reads the post while it is being made.
-      return NextResponse.json({ draftId, pack, image: null, note: held ? 'Saved to Recent Drafts, held.' : 'Saved to Recent Drafts.', checks });
+      return NextResponse.json({ draftId, pack, image: null, note: checks.held ? 'Saved to Recent Drafts, held.' : 'Saved to Recent Drafts.', checks });
     }
     if (body.action === 'picture') {
       const draftId = String((body as { draftId?: unknown }).draftId || '').trim();
       if (!draftId) return fail(400, 'bad_request', 'Which draft?');
+      // The whole function's time, less a margin: a 60s allowance left the
+      // Images call 30s, which is why a week's previews came back with "no
+      // picture was made this time" and no reason. When it still fails, the
+      // reason goes back, so the panel can say it instead of shrugging.
+      if (!imagesEnabled()) return NextResponse.json({ draftId, image: null, reason: 'Pictures are switched off on this deployment (IMAGE_GEN=off or no OPENAI_API_KEY).' });
       let image: { url: string; alt?: string | null } | null = null;
-      try { image = (await ensureDraftImage(draftId, auth.userId, { budgetMs: 60_000 })) as { url: string; alt?: string | null } | null; } catch (e) { reportError('templates:draft-image', e, { draftId }); }
-      return NextResponse.json({ draftId, image });
+      let reason = '';
+      try {
+        image = (await ensureDraftImage(draftId, auth.userId, { force: Boolean((body as { again?: unknown }).again), budgetMs: PICTURE_BUDGET_MS })) as { url: string; alt?: string | null } | null;
+        if (!image) reason = 'That draft could not be found to make a picture for.';
+      } catch (e) {
+        reportError('templates:draft-image', e, { draftId });
+        reason = 'The picture could not be made: ' + (e instanceof Error ? e.message : 'the image service did not answer') + '.';
+      }
+      return NextResponse.json({ draftId, image, reason: reason || undefined });
+    }
+
+    // ---- "Verify / fix", pressed on a previewed post -----------------------
+    //
+    // The same ladder the calendar's button runs on a scheduled post
+    // (lib/post-citation-fix.ts), on the draft alone: no post row exists yet.
+    // The judge reads the cited study against the copy; when it does not back
+    // it, a study that does is searched for and the REF line swapped on every
+    // channel. The verdict is stamped on the draft and handed back with the
+    // pack, so the panel shows the corrected post and the new "Checked" box.
+    if (body.action === 'fix') {
+      const draftId = String((body as { draftId?: unknown }).draftId || '').trim();
+      if (!draftId) return fail(400, 'bad_request', 'Which draft?');
+      const admin = supabaseAdmin();
+      const { data: row } = await admin.from('drafts').select('pack').eq('id', draftId).eq('user_id', auth.userId).maybeSingle();
+      const pack = ((row as { pack?: Record<string, unknown> } | null)?.pack || null) as Record<string, unknown> | null;
+      if (!pack) return fail(404, 'not_found', 'That draft could not be found.');
+      let fix: Awaited<ReturnType<typeof fixPostCitation>>;
+      try {
+        fix = await fixPostCitation({ text: captionOf(pack), pack, aviso: await avisoForUser(auth.userId), budgetMs: FIX_BUDGET_MS });
+      } catch (e) {
+        reportError('templates:draft-fix', e, { draftId });
+        return fail(502, 'fix_failed', 'The citation could not be checked just now. Nothing was changed — try again in a moment.');
+      }
+      let next = pack;
+      if (Object.keys(fix.packPatch).length) {
+        // Merged over a fresh read: the picture may have landed since the read above.
+        const { data: fresh } = await admin.from('drafts').select('pack').eq('id', draftId).eq('user_id', auth.userId).maybeSingle();
+        next = { ...(((fresh as { pack?: Record<string, unknown> } | null)?.pack) || pack), ...fix.packPatch };
+        const { error } = await admin.from('drafts').update({ pack: next }).eq('id', draftId).eq('user_id', auth.userId);
+        if (error) {
+          reportError('templates:draft-fix-save', error, { draftId });
+          return fail(503, 'draft_update_failed', 'The check ran, but the draft could not be updated. Nothing was changed — try again in a moment.');
+        }
+      }
+      return NextResponse.json({ draftId, pack: next, swapped: fix.swapped, note: fix.note, checks: checksFor(next) });
     }
 
     if (body.action !== 'apply') return fail(400, 'bad_request', 'Unknown action.');

@@ -162,8 +162,8 @@ test('the route reads the PDF with Claude, then inserts only — and the panel i
   assert.match(route, /\.insert\(insert\)/);
   assert.doesNotMatch(route, /\.delete\(|\.upsert\(/, 'additive: nothing existing is changed');
   assert.doesNotMatch(route, /from\('templates'\)[\s\S]{0,300}?\.update\(/, 'no template is ever updated');
-  // The one update the route makes is to the draft it has itself just inserted: the judge's stamp on it.
-  assert.equal(route.split('.update(').length, 2);
+  // The only updates the route makes are to the drafts it writes itself (the judge's stamp, a fixed citation), by id and owner.
+  for (const m of route.matchAll(/\.update\(([^)]*)\)/g)) assert.match(route.slice(m.index, m.index + 120), /\.eq\('id', draftId\)\.eq\('user_id', auth\.userId\)/, m[0]);
   assert.match(route, /\.update\(\{ pack \}\)\.eq\('id', draftId\)\.eq\('user_id', auth\.userId\)/);
   const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /\{!isDraft && <StrategyDrop \/>\}/);
@@ -295,7 +295,8 @@ test('a previewed post is approved and fixed at draft time like every other post
   assert.match(draft, /pack\._claimSupport = stamp;[\s\S]{0,200}\.from\('drafts'\)\.update\(\{ pack \}\)/);
   // Keywords, last check, and the same refusal the door uses.
   assert.match(draft, /await ensureKeywords\(\{ userId: auth\.userId, draftId, text: caption, pack \}\)/);
-  assert.match(draft, /const held = claimSupportRefusal\(status\);/);
+  assert.match(draft, /const checks = checksFor\(pack, fixNote\);/);
+  assert.match(route, /held: claimSupportRefusal\(status\),/, 'the same refusal the door uses');
   assert.match(draft, /checks \}\);\s*$/m, 'the verdict goes back to the panel');
   // One judge for the Autopilot and the preview.
   const shared = src('lib/strategy-claim-support.ts');
@@ -309,4 +310,33 @@ test('a previewed post is approved and fixed at draft time like every other post
   assert.match(panel, /draft\.checks\.keywords\.length \? draft\.checks\.keywords\.slice\(0, 8\)\.join\(', '\) : 'none could be researched'/);
   assert.match(panel, /\{draft\.checks\.citation\}/);
   assert.match(panel, /Written, citation held/);
+});
+
+test('a previewed post has an editor, a Verify / fix button and its picture, like every other preview', () => {
+  const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  const route = src('app/api/templates/strategy-upload/route.ts');
+  // The picture gets the function's time, and a failure comes back with its reason.
+  const picture = route.slice(route.indexOf("if (body.action === 'picture') {"), route.indexOf("if (body.action === 'fix') {"));
+  assert.match(picture, /budgetMs: PICTURE_BUDGET_MS/);
+  assert.match(route, /const PICTURE_BUDGET_MS = 150_000;/);
+  assert.match(picture, /force: Boolean\(\(body as \{ again\?: unknown \}\)\.again\)/, 'make it again');
+  assert.match(picture, /reason = 'The picture could not be made: '/);
+  assert.match(picture, /if \(!imagesEnabled\(\)\) return NextResponse\.json\(\{ draftId, image: null, reason:/);
+  // Verify / fix on the draft: the same ladder as the calendar's button, saved on the draft, checks handed back.
+  const fix = route.slice(route.indexOf("if (body.action === 'fix') {"), route.indexOf("if (body.action !== 'apply')"));
+  assert.match(fix, /fixPostCitation\(\{ text: captionOf\(pack\), pack, aviso: await avisoForUser\(auth\.userId\), budgetMs: FIX_BUDGET_MS \}\)/);
+  assert.match(fix, /checks: checksFor\(next\)/);
+  assert.match(route, /body\.action === 'draft' \|\| body\.action === 'picture' \|\| body\.action === 'fix'/, 'on the writing allowance');
+  const panel = src('components/StrategyDrop.tsx');
+  // The editor: one box per channel, saved through the drafts API like Recent Drafts saves.
+  assert.match(panel, /<textarea aria-label=\{c\.label \+ ' copy'\}/);
+  assert.match(panel, /fetch\('\/api\/drafts', \{ method: 'PATCH'/);
+  assert.match(panel, /Save changes/);
+  // The buttons, and the reason when there is no picture.
+  assert.match(panel, /\{writing === 'fix' \? 'Checking…' : 'Verify \/ fix'\}/);
+  assert.match(panel, /draft\.image\?\.url \? 'Make the picture again' : 'Make the picture'/);
+  assert.match(panel, /action: 'picture', draftId, again/);
+  assert.match(panel, /action: 'fix', draftId/);
+  assert.match(panel, /imageNote: reason \|\| 'The picture could not be made just now\.'/);
+  assert.match(panel, /makePicture\(sl, false, \{ draftId: made\.draftId, keepBusy: true \}\)/, 'the id is passed, not read off stale state');
 });
