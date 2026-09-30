@@ -216,6 +216,8 @@ const [approvingId, setApprovingId] = useState<string | null>(null);
 const [attachingId, setAttachingId] = useState<string | null>(null);
 /** Recent Drafts: the ones ticked for "Delete selected". */
 const [pickedDrafts, setPickedDrafts] = useState<Set<string>>(() => new Set());
+/** What the last bulk delete did — shown IN the Recent Drafts panel, beside the buttons, not at the top of the page. */
+const [draftsMsg, setDraftsMsg] = useState<{ text: string; bad: boolean } | null>(null);
 const [bulkDeleting, setBulkDeleting] = useState(false);
 /**
  * The pack as the writer returned it — each channel's own words.
@@ -1148,24 +1150,46 @@ setPickedDrafts((prev) => { const next = new Set(prev); if (next.has(id)) next.d
 }
 
 /** Every ticked draft, in one request; the list reloads with whatever is left. */
-async function deleteSelectedDrafts() {
+/** The route takes at most this many ids per request; a bigger selection goes in rounds. */
+const BULK_DELETE_CHUNK = 100;
+
+/**
+ * Delete the ticked drafts. 'keep-approved' leaves every draft a person has
+ * approved (its post said yes, or went out) and says how many; 'all' deletes
+ * them too. A selection over a hundred goes in rounds — one request of 141
+ * was refused whole, and the page said only "could not delete".
+ */
+async function deleteSelectedDrafts(mode: 'keep-approved' | 'all') {
 const ids = Array.from(pickedDrafts).filter(Boolean);
 if (!ids.length || bulkDeleting) return;
-if (typeof window !== 'undefined' && !window.confirm('Delete ' + ids.length + (ids.length === 1 ? ' draft' : ' drafts') + '? This cannot be undone.')) return;
+// Drafts a person has approved (the list marks them): kept by 'keep-approved'.
+const approvedDraftIds = new Set<string>((Array.isArray(drafts) ? drafts : []).filter((d: any) => d && d.approved).map((d: any) => String(d.id || d._id || '')));
+const approvedCount = ids.filter((id) => approvedDraftIds.has(id)).length;
+const ask = mode === 'all'
+? 'Delete ' + ids.length + (ids.length === 1 ? ' draft' : ' drafts') + (approvedCount ? ', including ' + approvedCount + ' approved' : '') + '? This cannot be undone.'
+: 'Delete ' + (ids.length - approvedCount) + (ids.length - approvedCount === 1 ? ' draft' : ' drafts') + (approvedCount ? ' and keep the ' + approvedCount + ' approved' : '') + '? This cannot be undone.';
+if (typeof window !== 'undefined' && !window.confirm(ask)) return;
 setBulkDeleting(true);
+setDraftsMsg(null);
+const deleted: string[] = []; const failed: { id: string; error: string }[] = []; const kept: string[] = [];
 try {
-const r = await fetch('/api/drafts?ids=' + encodeURIComponent(ids.join(',')), { method: 'DELETE' });
+for (let i = 0; i < ids.length; i += BULK_DELETE_CHUNK) {
+const chunk = ids.slice(i, i + BULK_DELETE_CHUNK);
+const r = await fetch('/api/drafts?ids=' + encodeURIComponent(chunk.join(',')) + (mode === 'keep-approved' ? '&keepApproved=1' : ''), { method: 'DELETE' });
 const j = await r.json().catch(() => ({}));
-if (!r.ok) { setActionMsg(await friendlyErrorFromResponse(r, 'We could not delete those drafts.')); return; }
-const failed: { id: string; error: string }[] = Array.isArray(j?.failed) ? j.failed : [];
-const deleted: string[] = Array.isArray(j?.deleted) ? j.deleted : ids;
+if (!r.ok && !Array.isArray(j?.deleted)) { failed.push(...chunk.map((id) => ({ id, error: 'not deleted' }))); setDraftsMsg({ text: await friendlyErrorFromResponse(r, 'We could not delete those drafts.'), bad: true }); break; }
+deleted.push(...(Array.isArray(j?.deleted) ? j.deleted.map(String) : []));
+failed.push(...(Array.isArray(j?.failed) ? j.failed : []));
+kept.push(...(Array.isArray(j?.kept) ? j.kept.map(String) : []));
+}
 // Only what the server could not delete stays ticked, so a second press retries exactly those.
 setPickedDrafts(new Set(failed.map((f) => String(f.id))));
-setActionMsg(failed.length
-? 'Deleted ' + deleted.length + ' of ' + ids.length + ' drafts. ' + failed.length + ' could not be deleted — they are still selected; try again in a moment.'
-: null);
+const parts = [deleted.length + (deleted.length === 1 ? ' draft' : ' drafts') + ' deleted.'];
+if (kept.length) parts.push(kept.length + ' approved kept.');
+if (failed.length) parts.push(failed.length + ' could not be deleted — still selected; try again in a moment.');
+setDraftsMsg({ text: parts.join(' '), bad: failed.length > 0 });
 announce('drafts', 'stats', 'images');
-} catch (e) { setActionMsg(friendlyError(e, 'We could not delete those drafts.')); }
+} catch (e) { setDraftsMsg({ text: friendlyError(e, 'We could not delete those drafts.'), bad: true }); }
 finally { setBulkDeleting(false); }
 }
 
@@ -2716,6 +2740,7 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 {/* Several at once: tick the drafts, then one Delete. The per-row Delete stays. */}
 {safeDrafts.length > 0 && (() => {
 const listed = safeDrafts.map((d: any) => String((d && (d.id || d._id)) || '')).filter(Boolean);
+const approvedDraftIds = new Set<string>(safeDrafts.filter((d: any) => d && d.approved).map((d: any) => String(d.id || d._id || '')));
 const pickedHere = listed.filter((id) => pickedDrafts.has(id));
 const allPicked = listed.length > 0 && pickedHere.length === listed.length;
 return (
@@ -2726,15 +2751,40 @@ onChange={() => setPickedDrafts((prev) => { const next = new Set(prev); if (allP
 className="h-4 w-4 accent-rose-600" />
 {allPicked ? 'All ' + listed.length + ' shown selected' : pickedHere.length ? pickedHere.length + ' selected' : 'Select all shown'}
 </label>
-{pickedHere.length > 0 && (
+{pickedHere.length > 0 && (() => {
+const approvedPicked = pickedHere.filter((id) => approvedDraftIds.has(id)).length;
+const scope = allPicked ? 'all' : 'selected';
+return (
 <>
-<button type="button" onClick={() => void deleteSelectedDrafts()} disabled={bulkDeleting}
+{approvedPicked > 0 ? (
+<>
+<button type="button" onClick={() => void deleteSelectedDrafts('keep-approved')} disabled={bulkDeleting}
+title="Approved posts are the ones a person said yes to; they stay."
 className="rounded-lg bg-red-600 px-3 py-1 text-[12px] font-semibold text-white transition hover:opacity-90 disabled:opacity-50">
-{bulkDeleting ? 'Deleting…' : 'Delete selected (' + pickedHere.length + ')'}
+{bulkDeleting ? 'Deleting…' : 'Delete ' + scope + ' except approved (' + (pickedHere.length - approvedPicked) + ')'}
 </button>
+<button type="button" onClick={() => void deleteSelectedDrafts('all')} disabled={bulkDeleting}
+className="rounded-lg px-3 py-1 text-[12px] font-semibold text-red-700 ring-1 ring-red-300 transition hover:bg-red-50 disabled:opacity-50">
+{'Delete ' + scope + ', approved included (' + pickedHere.length + ')'}
+</button>
+</>
+) : (
+<button type="button" onClick={() => void deleteSelectedDrafts('all')} disabled={bulkDeleting}
+className="rounded-lg bg-red-600 px-3 py-1 text-[12px] font-semibold text-white transition hover:opacity-90 disabled:opacity-50">
+{bulkDeleting ? 'Deleting…' : 'Delete ' + scope + ' (' + pickedHere.length + ')'}
+</button>
+)}
 <button type="button" onClick={() => setPickedDrafts(new Set())} disabled={bulkDeleting}
 className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-white disabled:opacity-50">Clear</button>
 </>
+);
+})()}
+{draftsMsg && (
+// Said HERE, where the buttons are — not at the top of the page, where nobody would know what it was about.
+<div className={'basis-full rounded-lg px-3 py-2 text-[12px] ring-1 ' + (draftsMsg.bad ? 'bg-red-50 text-red-900 ring-red-200' : 'bg-emerald-50 text-emerald-900 ring-emerald-200')} role={draftsMsg.bad ? 'alert' : 'status'}>
+<span>{draftsMsg.text}</span>
+<button type="button" onClick={() => setDraftsMsg(null)} className="ml-3 font-medium underline">Dismiss</button>
+</div>
 )}
 </div>
 );
@@ -2830,6 +2880,9 @@ className="mt-3 h-4 w-4 shrink-0 cursor-pointer accent-rose-600" />
 <div className="min-w-0">
 <div className="flex min-w-0 items-center gap-2">
 <span className="truncate text-[14px] font-medium text-ink">{String(title)}</span>
+{d?.approved && (
+<span title="A person approved this post (or it went out). “Delete … except approved” keeps it." className="inline-flex shrink-0 items-center rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">Approved</span>
+)}
 {d?.pack?._semrush?.source === 'semrush' && (
 <span title={'Semrush keyword research applied — primary: ' + (d.pack._semrush.primary || 'n/a')} className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-emerald-200">🔑 Semrush ✓</span>
 )}
