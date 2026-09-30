@@ -788,10 +788,10 @@ export default function CalendarPage() {
         <PageNav current="/calendar" />
       </header>
 
-      <div className="mx-auto grid max-w-[1500px] gap-6 px-6 py-8 lg:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="mx-auto grid max-w-[1500px] gap-6 px-4 py-5 sm:px-6 sm:py-8 lg:grid-cols-[minmax(0,1fr)_380px]">
       <div className="min-w-0">
-        <div className="mb-5 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button onClick={prevMonth} className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5">&lsaquo; Prev</button>
             <button onClick={goToday} className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5">Today</button>
             <button onClick={nextMonth} className="rounded-full border border-black/10 bg-surface px-4 py-2 text-sm text-ink transition hover:bg-black/5">Next &rsaquo;</button>
@@ -827,7 +827,8 @@ export default function CalendarPage() {
           <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">Error: {err}</div>
         )}
 
-        <div className="grid grid-cols-7 gap-2">
+        {/* cal-month: on a phone the seven columns keep a readable width and the month is swiped sideways (app/globals.css). */}
+        <div className="cal-month grid grid-cols-7 gap-2">
           {DOW.map((d, i) => (
             <div key={d} className="py-1 text-center text-xs font-medium text-ink/40">
               {d}

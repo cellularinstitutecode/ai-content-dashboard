@@ -190,7 +190,7 @@ export default function DraftingAssistant() {
         <button
           onClick={start}
           aria-label="Open drafting assistant"
-          className="fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-accent text-white shadow-lg transition hover:scale-105 active:scale-95"
+          className="fixed bottom-4 right-4 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-accent text-white shadow-lg transition hover:scale-105 active:scale-95 sm:bottom-6 sm:right-6"
         >
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
@@ -199,7 +199,7 @@ export default function DraftingAssistant() {
       )}
 
       {open && (
-        <div className={"fixed bottom-6 right-6 z-50 flex h-[560px] w-[380px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-surface shadow-2xl transition-shadow " +
+        <div className={"fixed bottom-4 right-4 z-50 flex h-[560px] max-h-[calc(100dvh-2rem)] w-[380px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl bg-surface shadow-2xl transition-shadow sm:bottom-6 sm:right-6 " +
           // Outlined in blue while a turn is in flight; quiet otherwise.
           (busy ? "ring-2 ring-accent shadow-[0_0_0_6px_rgba(0,113,227,0.18)]" : onStandby ? "ring-1 ring-amber-300" : "ring-1 ring-black/10")} data-ai-panel="1">
           <PanelLoader scope="assistant" rounded="rounded-2xl" />

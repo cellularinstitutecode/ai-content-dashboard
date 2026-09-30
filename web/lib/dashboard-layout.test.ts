@@ -9,7 +9,8 @@ const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
 
 test('the guide and the counts sit in a right-hand panel the width of the menu', () => {
   assert.match(page, /<aside className="hidden w-60 shrink-0 lg:block">/, 'the menu is w-60');
-  assert.match(page, /<div className="xl:flex xl:flex-row-reverse xl:items-start xl:gap-8">\n<aside aria-label="Guide and counts" className="xl:sticky xl:top-8 xl:w-60 xl:shrink-0">/);
+  // Reversed both ways: a row on the right at xl, and below the work on a phone (flex-col-reverse).
+  assert.match(page, /<div className="flex flex-col-reverse xl:flex-row-reverse xl:items-start xl:gap-8">\n<aside aria-label="Guide and counts" className="xl:sticky xl:top-8 xl:w-60 xl:shrink-0">/);
   const panel = page.slice(page.indexOf('<aside aria-label="Guide and counts"'), page.indexOf('</aside>', page.indexOf('<aside aria-label="Guide and counts"')));
   assert.match(panel, />How this works</, 'the guide');
   assert.match(panel, /statCards\.map/, 'the counts');

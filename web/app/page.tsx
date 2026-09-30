@@ -703,6 +703,8 @@ const [savingEdit, setSavingEdit] = useState(false);
   useEffect(() => {
     try {
       if (typeof window !== 'undefined' && window.localStorage.getItem(ONBOARD_KEY) === '0') setOnboardOpen(false);
+      // Nothing remembered and a narrow screen: the tour starts folded. One tap opens it.
+      else if (typeof window !== 'undefined' && window.localStorage.getItem(ONBOARD_KEY) == null && window.innerWidth < 1024) setOnboardOpen(false);
     } catch {}
   }, []);
   function toggleOnboard() {
@@ -1688,7 +1690,7 @@ const nav = [
 
 return (
 <div className="glow min-h-screen bg-canvas text-ink">
-<div className="relative z-10 mx-auto flex max-w-[2100px] gap-8 px-6 py-8 lg:px-10">
+<div className="relative z-10 mx-auto flex max-w-[2100px] gap-8 px-4 py-5 sm:px-6 sm:py-8 lg:px-10">
 {/* Sidebar */}
 <aside className="hidden w-60 shrink-0 lg:block">
 <div className="sticky top-8">
@@ -1722,10 +1724,12 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 <h1 className="text-title font-semibold">{isDraft ? 'Draft' : 'Good to see you'}</h1>
 <p className="mt-1 text-[15px] text-ink-muted">{isDraft ? 'Create, picture, repurpose and send for review — everything before a post is approved.' : 'What is coming up, what needs your approval, and how the site is doing.'}</p>
 </div>
-<div className="flex items-center gap-2 lg:hidden">
+{/* The menu on a phone: one swipeable row of pills (it wrapped into four lines before), with Sign out, which only the desktop sidebar had. */}
+<div className="-mx-4 flex w-[calc(100%+2rem)] items-center gap-2 overflow-x-auto px-4 pb-1 lg:hidden [scrollbar-width:none]">
 {nav.map(n => (
-<Link key={n.href} href={n.href} className={'rounded-full px-3.5 py-1.5 text-[13px] font-medium ' + (n.current ? 'bg-ink text-white' : 'bg-white text-ink-muted shadow-soft')}>{n.label}</Link>
+<Link key={n.href} href={n.href} className={'shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-[13px] font-medium ' + (n.current ? 'bg-ink text-white' : 'bg-white text-ink-muted shadow-soft')}>{n.label}</Link>
 ))}
+<a href="/sign-out" className="shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line">Sign out</a>
 </div>
 </header>
 
@@ -1735,7 +1739,8 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
     (w-60), that stays in view while the page scrolls.
     It comes FIRST in the markup and the row is reversed, so below 1280px,
     where a side column would squeeze the panels, it stacks on top as before. */}
-<div className="xl:flex xl:flex-row-reverse xl:items-start xl:gap-8">
+{/* On a phone the guide and the counts come AFTER the work (flex-col-reverse), not before it: the tour was the first screen and a half of every visit. */}
+<div className="flex flex-col-reverse xl:flex-row-reverse xl:items-start xl:gap-8">
 <aside aria-label="Guide and counts" className="xl:sticky xl:top-8 xl:w-60 xl:shrink-0">
 {/* Onboarding "How this works" strip — dismissible, remembered per browser.
 
