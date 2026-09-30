@@ -83,6 +83,16 @@ export async function captionOne(bytes: Buffer, contentType: string): Promise<Ca
   }
 }
 
+/** Has supabase/library-photos.sql been run? A read that fails on the table itself says no; nothing is captioned into a table that cannot hold it. */
+export async function libraryTableReady(): Promise<boolean> {
+  try {
+    const { error } = await supabaseAdmin().from('library_photos').select('file_id').limit(1);
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
 /** Every indexed photograph. Empty (never a throw) when the table is missing. */
 export async function loadLibraryRows(): Promise<LibraryRow[]> {
   try {
@@ -135,6 +145,7 @@ export async function indexLibrary(opts: { max?: number; budgetMs?: number; refr
   const max = Math.max(0, opts.max ?? 25);
   const report: IndexReport = { total: 0, already: 0, added: 0, skipped: 0, outOfTime: false, configured: sourcesConfigured() };
   if (!report.configured || !process.env.OPENAI_API_KEY) return report;
+  if (!(await libraryTableReady())) return report;
   let files: Awaited<ReturnType<typeof listFolderImages>>;
   try { files = await listFolderImages(); } catch (e) { reportError('library-index:list', e); return report; }
   report.total = files.length;
