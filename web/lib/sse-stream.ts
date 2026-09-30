@@ -105,3 +105,82 @@ export async function readAnthropicStream(res: Response): Promise<string> {
   }
   return text;
 }
+
+/** What a streamed tool turn resolves to: the text, and the one tool call the model made, if any. */
+export type StreamedToolTurn = {
+  text: string;
+  toolCall: { id: string; name: string; input: Record<string, unknown> } | null;
+  stopReason: string;
+};
+
+/**
+ * A Messages stream that may carry a tool call, read as it arrives.
+ *
+ * The assistant's answer used to reach the panel whole, after the model had
+ * finished — up to twenty seconds of "Working…" for a paragraph that was
+ * being written the entire time. This hands every text delta to `onText` as
+ * it lands, and assembles a tool_use block from its input_json_delta frames
+ * so the caller sees exactly what the non-streaming call would have returned.
+ */
+export async function readAnthropicToolStream(res: Response, onText: (delta: string) => void): Promise<StreamedToolTurn> {
+  const body = res.body;
+  if (!body) throw new Error('anthropic: the response carried no stream');
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  let text = '';
+  let stopReason = '';
+  let sawStop = false;
+  // The block being built, by index: text, or a tool_use with its JSON in pieces.
+  const blocks = new Map<number, { type: string; id?: string; name?: string; json: string }>();
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffered += decoder.decode(value, { stream: true });
+    const frames = buffered.split('\n\n');
+    buffered = frames.pop() ?? '';
+    for (const frame of frames) {
+      for (const line of frame.split('\n')) {
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        let event: {
+          type?: string; index?: number;
+          content_block?: { type?: string; id?: string; name?: string };
+          delta?: { type?: string; text?: string; partial_json?: string; stop_reason?: string };
+          error?: { message?: string };
+        };
+        try { event = JSON.parse(payload); } catch { continue; }
+        if (event.type === 'error') throw new Error('anthropic stream error: ' + (event.error?.message || 'unknown'));
+        if (event.type === 'content_block_start' && event.content_block) {
+          blocks.set(event.index ?? 0, { type: String(event.content_block.type || ''), id: event.content_block.id, name: event.content_block.name, json: '' });
+        } else if (event.type === 'content_block_delta' && event.delta) {
+          if (event.delta.type === 'text_delta') {
+            const piece = event.delta.text ?? '';
+            if (piece) { text += piece; onText(piece); }
+          } else if (event.delta.type === 'input_json_delta') {
+            const b = blocks.get(event.index ?? 0);
+            if (b) b.json += event.delta.partial_json ?? '';
+          }
+        } else if (event.type === 'message_delta' && event.delta?.stop_reason) {
+          stopReason = String(event.delta.stop_reason);
+        } else if (event.type === 'message_stop') {
+          sawStop = true;
+        }
+      }
+    }
+  }
+  if (!sawStop && !stopReason) throw new Error('anthropic: the stream ended before the answer did');
+
+  let toolCall: StreamedToolTurn['toolCall'] = null;
+  for (const b of blocks.values()) {
+    if (b.type !== 'tool_use' || toolCall) continue;
+    let input: Record<string, unknown> = {};
+    if (b.json.trim()) {
+      try { input = JSON.parse(b.json) as Record<string, unknown>; } catch { throw new Error('anthropic: the tool call arrived malformed'); }
+    }
+    toolCall = { id: String(b.id || ''), name: String(b.name || ''), input };
+  }
+  return { text, toolCall, stopReason };
+}

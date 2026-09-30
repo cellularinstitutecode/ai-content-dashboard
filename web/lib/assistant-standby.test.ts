@@ -41,7 +41,7 @@ test('the route puts the assistant on standby before anything else, and withhold
   const agentAt = route.indexOf('const out = await runAgent(');
   assert.ok(standbyAt > 0 && standbyAt < agentAt, 'standby is decided before the model is asked anything');
   assert.match(route, /session\.standby = true/);
-  assert.match(route, /chatWithTools\(tm, snapshot, \{ tools: !standby \}\)/, 'no tools on a standby turn');
+  assert.match(route, /chatWithTools\(tm, snapshot, \{ tools: !standby, /, 'no tools on a standby turn');
   assert.match(route, /STANDBY_RULES/);
   // The standing orders: command only, and the image tool.
   const ai = src('lib/ai.ts');

@@ -15,6 +15,7 @@ import { jsonDiagnostic, repairJsonText } from '@/lib/json-repair';
 import { reportError } from '@/lib/report';
 import { PLAYBOOK } from '@/lib/playbook';
 import { recordProviderOutcome } from '@/lib/provider-status';
+import { readAnthropicToolStream } from '@/lib/sse-stream';
 import {
   JUDGE_SYSTEM,
   MAX_CANDIDATES,
@@ -1330,10 +1331,24 @@ export type ToolMessage = { role: "user" | "assistant"; content: any };
  *   cached later without a rewrite), and the model sees a clearly delimited
  *   "here is the situation right now" rather than a prompt that looks edited.
  */
-export async function chatWithTools(messages: ToolMessage[], systemExtra?: string, opts: { tools?: boolean } = {}): Promise<ToolTurn> {
+export async function chatWithTools(
+  messages: ToolMessage[],
+  systemExtra?: string,
+  opts: {
+    tools?: boolean;
+    /**
+     * Given, the answer is streamed and each piece of its text is handed here
+     * as it arrives, so the panel shows the sentence being written instead
+     * of "Working…" until the whole paragraph is done. The turn returned is
+     * the same either way.
+     */
+    onText?: (delta: string) => void;
+  } = {},
+): Promise<ToolTurn> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error("ANTHROPIC_API_KEY missing");
   const model = process.env.ANTHROPIC_MODEL || "claude-sonnet-5";
+  const streaming = typeof opts.onText === "function";
   const res = await fetchWithRetry("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -1356,15 +1371,27 @@ export async function chatWithTools(messages: ToolMessage[], systemExtra?: strin
       system: [
         { type: 'text', text: TOOLS_SYSTEM },
         { type: 'text', text: PLAYBOOK, cache_control: { type: 'ephemeral' } },
-        ...(systemExtra ? [{ type: 'text', text: systemExtra }] : []),
+        // A second break after the live block: it changes every MESSAGE, but
+        // not between the up-to-four model calls one message's tool loop
+        // makes, and those were re-reading it in full each time.
+        ...(systemExtra ? [{ type: 'text', text: systemExtra, cache_control: { type: 'ephemeral' } }] : []),
       ],
       // On standby the tools are withheld, not merely forbidden in prose: a
       // model that cannot call retry_video cannot retry a video.
       ...(opts.tools === false ? {} : { tools: TOOL_DEFS }),
       messages,
+      ...(streaming ? { stream: true } : {}),
     }),
   });
   await noteProvider('anthropic', res);
+  if (streaming) {
+    const turn = await readAnthropicToolStream(res, opts.onText!);
+    return {
+      message: turn.text.trim(),
+      toolCall: turn.toolCall ? { name: turn.toolCall.name as ToolName, input: turn.toolCall.input as Record<string, any> } : null,
+      toolUseId: turn.toolCall ? turn.toolCall.id : null,
+    };
+  }
   const data = await res.json();
   const blocks: any[] = Array.isArray(data?.content) ? data.content : [];
   let message = "";
