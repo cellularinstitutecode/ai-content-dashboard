@@ -194,11 +194,14 @@ test('a strategy PDF may be 30 MB: anything over the request limit goes through 
 test('every post of the uploaded week can be previewed, edited and added to before it is created', () => {
   const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
   const panel = src('components/StrategyDrop.tsx');
-  assert.match(panel, /Preview & edit/);
-  assert.match(panel, /aria-label=\{'Angle ' \+ \(i \+ 1\)\}/, 'every angle is a field');
-  assert.match(panel, /placeholder="Add an angle…"/);
+  assert.match(panel, /Preview &amp; edit/);
+  assert.match(panel, /role="dialog" aria-label="Post preview"/, 'opens in the same kind of panel the calendar uses');
+  assert.match(panel, /aria-label=\{'Angle ' \+ \(i \+ 1\)\}/, 'every angle is a field, in full');
+  assert.match(panel, /aria-label="Day"/);
   assert.match(panel, /\+ Add a post/);
   assert.match(panel, /Remove post/);
+  // Curly quotes are characters, never the text "\\u201c" on screen.
+  assert.doesNotMatch(panel, /\\u201c/);
   // What was edited is what is created, minus the editor's own fields.
   assert.match(panel, /slots\.filter\(\(sl\) => sl\.on\)\.map\(\(\{ _k: _key, on: _on, \.\.\.rest \}\) => rest\)/);
   assert.match(panel, /plan: \{ \.\.\.plan, slots: chosen \}/);
