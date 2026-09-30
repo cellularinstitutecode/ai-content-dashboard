@@ -142,6 +142,17 @@ const PLANNER_RETRY_BUDGET_MS = 100_000;
 // live attempt failed with "This operation was aborted". Planner calls get
 // 110s (the routes that run them allow 300s).
 const PLANNER_IMAGE_CALL_MS = 110_000;
+// Every other draft got 50s — the allowance of the sixty-second function this
+// began in — and gpt-image-1 at `high` takes 40-100s for a 1536x1024
+// photograph. So the first rung was cut off on most calls, and since a timeout
+// never fell through to the rung below, a whole week of strategy previews came
+// back "[gpt-image-1#1] This operation was aborted" with no picture at all.
+// The call now gets the same 110s (every route that makes pictures runs for
+// 300s; a caller with less time says so through budgetMs and gets what fits).
+const IMAGE_CALL_MS = 110_000;
+// After a timeout, the next rung (medium quality, much faster) is still tried
+// when at least this much of the caller's time is left for it.
+const FALLBACK_AFTER_TIMEOUT_MIN_MS = 45_000;
 // The title band covers roughly the top quarter of the cover; the photo is
 // cropped from the top (lib/title-cover.ts), so heads must start below this.
 // One number for planner covers and titled library photos.
@@ -150,7 +161,8 @@ const PLANNER_MIN_HEAD_TOP_PCT = COVER_MIN_HEAD_TOP_PCT;
 // FIX runs inside a 300 s function, and a planner take (brief + generation +
 // check) needs about this long; the Images call itself is shortened to fit.
 const PLANNER_ATTEMPT_MS = 120_000;
-const ATTEMPT_MS = 60_000;
+// The same for every draft now that the call itself may take 110s.
+const ATTEMPT_MS = 120_000;
 
 // Kill switch: set IMAGE_GEN=off to disable image generation everywhere
 // without redeploying callers. Default is ON whenever OPENAI_API_KEY exists.
@@ -280,12 +292,24 @@ async function callImagesApi(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch('https://api.openai.com/v1/images/generations', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
+    let res: Response;
+    try {
+      res = await fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (e) {
+      // Our own timer, said as such: "This operation was aborted" told the
+      // team nothing about what to do, and read like OpenAI had refused.
+      if (controller.signal.aborted) {
+        const err = new Error('no picture within ' + Math.round(timeoutMs / 1000) + 's');
+        (err as Error & { timedOut?: boolean }).timedOut = true;
+        throw err;
+      }
+      throw e;
+    }
     if (!res.ok) {
       const txt = await res.text().catch(() => '');
       const err = new Error(`openai images ${res.status}: ${txt.slice(0, 300)}`);
@@ -331,7 +355,13 @@ type GeneratedImage = { bytes: Buffer; contentType: string; ext: string; model: 
 // where a second slow call would bust the serverless budget). Every rung's
 // error is kept so a total failure surfaces the full story, not just the
 // last fallback's complaint.
-async function generateImageBytes(prompt: string, size: '1536x1024' | '1024x1024' | '1024x1536' = '1536x1024', callMs = 50_000): Promise<GeneratedImage> {
+async function generateImageBytes(
+  prompt: string,
+  size: '1536x1024' | '1024x1024' | '1024x1536' = '1536x1024',
+  callMs = IMAGE_CALL_MS,
+  /** When the caller's time runs out, as a clock reading; null when it has the whole function. */
+  deadline: number | null = null,
+): Promise<GeneratedImage> {
   const attempts: { model: string; body: Record<string, unknown> }[] = [
     // HIGH, not medium.
     //
@@ -386,9 +416,11 @@ async function generateImageBytes(prompt: string, size: '1536x1024' | '1024x1024
   ];
 
   const errors: string[] = [];
+  /** The time a rung may take: the usual allowance, or what is left of the deadline minus the check. */
+  const rungMs = (): number => (deadline == null ? callMs : Math.max(20_000, Math.min(callMs, deadline - Date.now() - 30_000)));
   for (let i = 0; i < attempts.length; i++) {
     try {
-      const out = await callImagesApi(attempts[i].body, callMs);
+      const out = await callImagesApi(attempts[i].body, rungMs());
       const bytes = out.b64 ? Buffer.from(out.b64, 'base64') : await fetchImageBytes(out.url as string, 30_000);
       if (!bytes.length) throw new Error('empty image payload');
       return { bytes, ...sniffImage(bytes), model: attempts[i].model };
@@ -396,9 +428,15 @@ async function generateImageBytes(prompt: string, size: '1536x1024' | '1024x1024
       const msg = e instanceof Error ? e.message : 'unknown error';
       errors.push(`[${attempts[i].model}#${i + 1}] ${msg}`);
       const status = (e as Error & { apiStatus?: number }).apiStatus;
+      const timedOut = Boolean((e as Error & { timedOut?: boolean }).timedOut);
       const isLast = i === attempts.length - 1;
-      // Only API-level rejections fall through to the next rung.
-      if (isLast || !(status && status >= 400 && status < 500)) {
+      // API-level rejections fall through to the next rung. So does a timeout,
+      // when there is time for the rung below — `high` running long is the
+      // ordinary case, and the medium rung under it is several times faster —
+      // never when a second slow call would bust the caller's budget.
+      const timeForAnother = deadline == null || deadline - Date.now() >= FALLBACK_AFTER_TIMEOUT_MIN_MS;
+      const rejected = Boolean(status && status >= 400 && status < 500);
+      if (isLast || !(rejected || (timedOut && timeForAnother))) {
         throw new Error('image generation failed: ' + errors.join(' | '));
       }
     }
@@ -740,7 +778,7 @@ async function generateBestPackImage(opts: {
   const fits = (): boolean => deadline == null || deadline - Date.now() >= attemptMs;
   /** The Images call gets the usual allowance, or what is left of the deadline minus the check. */
   const callMs = (): number => {
-    const usual = planner ? PLANNER_IMAGE_CALL_MS : 50_000;
+    const usual = planner ? PLANNER_IMAGE_CALL_MS : IMAGE_CALL_MS;
     if (deadline == null) return usual;
     return Math.max(20_000, Math.min(usual, deadline - Date.now() - 30_000));
   };
@@ -769,7 +807,7 @@ async function generateBestPackImage(opts: {
     // approveRun that surfaced as a post shipping with no image at all.
     let img: GeneratedImage;
     try {
-      img = await generateImageBytes(prompt, planner?.size, callMs());
+      img = await generateImageBytes(prompt, planner?.size, callMs(), deadline);
     } catch (e) {
       lastError = e;
       // With a usable candidate in hand, stop and store it. With nothing in

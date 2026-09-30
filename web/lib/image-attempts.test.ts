@@ -48,13 +48,35 @@ test('the route outlives the attempts it is allowed to make', () => {
   // The default per-call timeout, and the longer one weekly-planner covers get
   // (portrait, high quality, a long prompt). The route must outlive two of the longest.
   const images = src('lib/images.ts');
-  const byDefault = Number(/callMs = (\d+)_000\)/.exec(images)?.[1] || 0);
+  const byDefault = Number(/const IMAGE_CALL_MS = (\d+)_000;/.exec(images)?.[1] || 0);
   const planner = Number(/PLANNER_IMAGE_CALL_MS = (\d+)_000;/.exec(images)?.[1] || 0);
   const perAttempt = Math.max(byDefault, planner);
-  assert.match(images, /callImagesApi\(attempts\[i\]\.body, callMs\)/, 'every rung uses the per-call timeout');
+  assert.match(images, /callImagesApi\(attempts\[i\]\.body, rungMs\(\)\)/, 'every rung uses the per-call timeout, cut to what is left of the deadline');
   assert.ok(perAttempt > 0, 'the per-attempt timeout must be readable');
   assert.ok(
     declared >= perAttempt * 2,
     'the route allows ' + declared + 's for attempts of ' + perAttempt + 's each',
   );
+});
+
+test('a high-quality picture gets the time it takes, and a timeout steps down instead of failing', () => {
+  // A week of strategy previews came back "[gpt-image-1#1] This operation was
+  // aborted": every draft's Images call had 50s, gpt-image-1 at high takes
+  // 40-100s, and a timeout never fell through to the medium rung below.
+  const images = src('lib/images.ts');
+  assert.match(images, /const IMAGE_CALL_MS = 110_000;/, 'the same 110s planner covers get');
+  assert.match(images, /const usual = planner \? PLANNER_IMAGE_CALL_MS : IMAGE_CALL_MS;/);
+  assert.match(images, /const ATTEMPT_MS = 120_000;/, 'a retry is sized for a call that long');
+  // The timeout is our own timer, and is said as such.
+  assert.match(images, /if \(controller\.signal\.aborted\) \{\s*const err = new Error\('no picture within ' \+ Math\.round\(timeoutMs \/ 1000\) \+ 's'\);/);
+  assert.match(images, /\.timedOut = true;/);
+  // After a timeout the next rung runs when there is time for it — and never when there is not.
+  assert.match(images, /const timeForAnother = deadline == null \|\| deadline - Date\.now\(\) >= FALLBACK_AFTER_TIMEOUT_MIN_MS;/);
+  assert.match(images, /if \(isLast \|\| !\(rejected \|\| \(timedOut && timeForAnother\)\)\)/);
+  assert.match(images, /generateImageBytes\(prompt, planner\?\.size, callMs\(\), deadline\)/, 'the deadline travels down to the ladder');
+  // Every route that makes a picture outlives a high call, a medium fallback and the check.
+  for (const route of ['app/api/templates/strategy-upload/route.ts', 'app/api/drafts/image/route.ts', 'app/api/posts/route.ts', 'app/api/assistant/route.ts', 'app/api/autopilot/tick/route.ts']) {
+    const declared = Number(/export const maxDuration = (\d+)/.exec(src(route))?.[1] || 0);
+    assert.ok(declared >= 300, route + ' allows ' + declared + 's');
+  }
 });
