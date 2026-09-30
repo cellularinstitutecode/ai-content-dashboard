@@ -276,7 +276,7 @@ test('the week is written as soon as it is read, two posts at a time, on its own
   const panel = src('components/StrategyDrop.tsx');
   assert.match(panel, /void writeWeek\(laidOut\);/, 'starts the moment the week is on screen');
   assert.match(panel, /await Promise\.all\(\[worker\(\), worker\(\)\]\)/, 'two at a time');
-  assert.match(panel, /if \(previewsRef\.current\[sl\._k\] \|\| writingRef\.current\[sl\._k\]\) continue;/, 'never twice');
+  assert.match(panel, /if \(!sl \|\| previewsRef\.current\[sl\._k\] \|\| writingRef\.current\[sl\._k\]\) continue;/, 'never twice');
   assert.match(panel, /Writing the week/);
   const route = src('app/api/templates/strategy-upload/route.ts');
   assert.match(route, /writingPosts \? 'strategy-draft' : 'templates'/);
@@ -320,7 +320,7 @@ test('a previewed post has an editor, a Verify / fix button and its picture, lik
   assert.match(picture, /budgetMs: PICTURE_BUDGET_MS/);
   assert.match(route, /const PICTURE_BUDGET_MS = 240_000;/);
   assert.match(route, /export const maxDuration = 300;/);
-  assert.match(picture, /force: Boolean\(\(body as \{ again\?: unknown \}\)\.again\)/, 'make it again');
+  assert.match(picture, /const again = Boolean\(\(body as \{ again\?: unknown \}\)\.again\);[\s\S]{0,400}force: again,/, 'make it again');
   assert.match(picture, /reason = 'The picture could not be made: '/);
   assert.match(picture, /if \(!imagesEnabled\(\)\) return NextResponse\.json\(\{ draftId, image: null, reason:/);
   // Verify / fix on the draft: the same ladder as the calendar's button, saved on the draft, checks handed back.
@@ -340,4 +340,24 @@ test('a previewed post has an editor, a Verify / fix button and its picture, lik
   assert.match(panel, /action: 'fix', draftId/);
   assert.match(panel, /imageNote: reason \|\| 'The picture could not be made just now\.'/);
   assert.match(panel, /makePicture\(sl, false, \{ draftId: made\.draftId, keepBusy: true \}\)/, 'the id is passed, not read off stale state');
+});
+
+test('the week can be paused from the page, and its pictures cost a quarter', () => {
+  const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  const panel = src('components/StrategyDrop.tsx');
+  // Pause: on the badge (lib/pause-bus.test.ts) and beside the progress line; pictures can be switched off.
+  assert.match(panel, /\{paused \? 'Resume' : 'Pause'\}/);
+  assert.match(panel, /Nothing new is started until you resume\./);
+  assert.match(panel, /Pictures while writing/);
+  assert.match(panel, /localStorage\.setItem\(PICTURES_KEY/);
+  // A preview's first picture is medium quality with one take; "again" is the real thing.
+  const route = src('app/api/templates/strategy-upload/route.ts');
+  assert.match(route, /quality: again \? 'high' : 'medium', maxAttempts: again \? 2 : 1/);
+  const images = src('lib/images.ts');
+  assert.match(images, /const attempts = quality === 'medium' \? ladder\.filter\(\(a\) => a\.body\.quality !== 'high'\) : ladder;/);
+  assert.match(images, /const maxAttempts = Math\.max\(1, Math\.min\(MAX_GEN_ATTEMPTS, Math\.round\(opts\.maxAttempts \?\? MAX_GEN_ATTEMPTS\)\)\);/);
+  assert.match(images, /generateImageBytes\(prompt, planner\?\.size, callMs\(\), deadline, opts\.quality \?\? 'high'\)/);
+  // Every other caller is unchanged: high, three takes.
+  assert.doesNotMatch(src('lib/autopilot.ts'), /quality: 'medium'/);
+  assert.match(panel, /Preview picture at medium quality/);
 });

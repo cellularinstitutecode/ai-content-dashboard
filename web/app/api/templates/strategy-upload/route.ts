@@ -303,13 +303,20 @@ export async function POST(req: Request) {
       let image: { url: string; alt?: string | null } | null = null;
       let reason = '';
       try {
-        image = (await ensureDraftImage(draftId, auth.userId, { force: Boolean((body as { again?: unknown }).again), budgetMs: PICTURE_BUDGET_MS })) as { url: string; alt?: string | null } | null;
+        // WHAT A PREVIEW PICTURE COSTS. The first picture of a preview is made
+        // at medium quality — about a quarter of the price of `high` — and gets
+        // one take: it is there for a person to look at, and a week of them may
+        // never be used (the Autopilot writes the posts that ship, with their
+        // own high-quality pictures). "Make the picture again" is a person
+        // asking for the real thing, and gets `high`.
+        const again = Boolean((body as { again?: unknown }).again);
+        image = (await ensureDraftImage(draftId, auth.userId, { force: again, budgetMs: PICTURE_BUDGET_MS, quality: again ? 'high' : 'medium', maxAttempts: again ? 2 : 1 })) as { url: string; alt?: string | null } | null;
         if (!image) reason = 'That draft could not be found to make a picture for.';
       } catch (e) {
         reportError('templates:draft-image', e, { draftId });
         reason = 'The picture could not be made: ' + (e instanceof Error ? e.message : 'the image service did not answer') + '.';
       }
-      return NextResponse.json({ draftId, image, reason: reason || undefined });
+      return NextResponse.json({ draftId, image, reason: reason || undefined, quality: Boolean((body as { again?: unknown }).again) ? 'high' : 'medium' });
     }
 
     // ---- "Verify / fix", pressed on a previewed post -----------------------

@@ -73,7 +73,7 @@ test('a high-quality picture gets the time it takes, and a timeout steps down in
   // After a timeout the next rung runs when there is time for it — and never when there is not.
   assert.match(images, /const timeForAnother = deadline == null \|\| deadline - Date\.now\(\) >= FALLBACK_AFTER_TIMEOUT_MIN_MS;/);
   assert.match(images, /if \(isLast \|\| !\(rejected \|\| \(timedOut && timeForAnother\)\)\)/);
-  assert.match(images, /generateImageBytes\(prompt, planner\?\.size, callMs\(\), deadline\)/, 'the deadline travels down to the ladder');
+  assert.match(images, /generateImageBytes\(prompt, planner\?\.size, callMs\(\), deadline, /, 'the deadline travels down to the ladder');
   // Every route that makes a picture outlives a high call, a medium fallback and the check.
   for (const route of ['app/api/templates/strategy-upload/route.ts', 'app/api/drafts/image/route.ts', 'app/api/posts/route.ts', 'app/api/assistant/route.ts', 'app/api/autopilot/tick/route.ts']) {
     const declared = Number(/export const maxDuration = (\d+)/.exec(src(route))?.[1] || 0);
