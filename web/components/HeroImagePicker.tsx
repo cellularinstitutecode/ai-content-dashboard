@@ -19,7 +19,7 @@
 //   Drop a file   the photo on your desk, downscaled in the browser and stored
 //                 beside the generated ones.
 //   Describe it   the prompt, prefilled from the post and yours to edit.
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import ImportingLabel from '@/components/ImportingLabel';
 import { creditLabel } from '@/lib/cover-edit';
@@ -71,17 +71,23 @@ export default function HeroImagePicker({
   draftId,
   topic,
   currentPrompt,
+  only,
   onPicked,
 }: {
   draftId: string | null;
   /** What the post is about, so the prompt box starts from something real. */
   topic: string;
   currentPrompt?: string | null;
+  /** Show only these tabs (the Content Generator keeps just "Drop a file" here; the library and the editor come from HeroImageControls). */
+  only?: Tab[];
   onPicked: (image: { url: string; alt?: string; model?: string; verification?: unknown }) => void;
 }) {
-  const [tab, setTab] = useState<Tab>('library');
+  const tabs: Tab[] = only && only.length ? only : ['library', 'upload', 'prompt'];
+  const [tab, setTab] = useState<Tab>(tabs[0]);
   const [images, setImages] = useState<DriveImage[]>([]);
   const [loading, setLoading] = useState(false);
+  /** The folder has been read at least once — before that, "no photographs" would be a lie. */
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState('');
   const [status, setStatus] = useState<string | null>(null);
   /**
@@ -108,14 +114,24 @@ export default function HeroImagePicker({
    */
   function openLibrary() {
     setTab('library');
-    if (images.length || loading) return;
+    if (images.length || loading || loaded) return;
     setLoading(true);
     fetch('/api/sources?kind=images')
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => setImages(Array.isArray(j?.images) ? j.images : []))
       .catch(() => setStatus('The image library could not be read just now.'))
-      .finally(() => setLoading(false));
+      .finally(() => { setLoading(false); setLoaded(true); });
   }
+  // The library tab is the first one: it used to read the folder only on a
+  // CLICK, so opening on it showed "The Drive folder has no photographs in it
+  // yet" for a folder of 175. Read it as soon as the tab is on screen.
+  const readOnShow = useRef(false);
+  useEffect(() => {
+    if (tab !== 'library' || readOnShow.current) return;
+    readOnShow.current = true;
+    openLibrary();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   async function send(body: Record<string, unknown>, label: string) {
     if (!draftId) { setStatus('Save the draft first — there is nothing to attach the picture to yet.'); return; }
@@ -186,8 +202,8 @@ export default function HeroImagePicker({
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[13px] font-semibold text-ink">The picture</span>
         <button type="button" className={tabStyle('library')} onClick={openLibrary}>📁 Our library</button>
-        <button type="button" className={tabStyle('upload')} onClick={() => setTab('upload')}>⬆ Drop a file</button>
-        <button type="button" className={tabStyle('prompt')} onClick={() => setTab('prompt')}>✏️ Describe it</button>
+        {tabs.includes('upload') && <button type="button" className={tabStyle('upload')} onClick={() => setTab('upload')}>⬆ Drop a file</button>}
+        {tabs.includes('prompt') && <button type="button" className={tabStyle('prompt')} onClick={() => setTab('prompt')}>✏️ Describe it</button>}
       </div>
 
       {tab === 'library' && (
@@ -214,7 +230,8 @@ export default function HeroImagePicker({
               </button>
             ))}
           </div>
-          {!loading && !images.length && <p className="mt-2 text-[12px] text-ink-muted">The Drive folder has no photographs in it yet.</p>}
+          {loading && !images.length && <p className="mt-2 text-[12px] text-ink-muted">Reading the library…</p>}
+          {!loading && loaded && !images.length && <p className="mt-2 text-[12px] text-ink-muted">The Drive folder has no photographs in it yet.</p>}
         </div>
       )}
 
