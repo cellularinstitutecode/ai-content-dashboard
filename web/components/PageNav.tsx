@@ -1,5 +1,7 @@
 'use client';
 
+import Link from 'next/link';
+
 // One nav, four sections. The sub-pages used to render nothing but a
 // "Back to dashboard" link, so getting from Calendar to Templates meant two
 // clicks through a page you didn't want. This is the shared horizontal
@@ -22,7 +24,7 @@ export default function PageNav({ current }: { current: string }) {
       {SECTIONS.map((s) => {
         const active = s.href === current;
         return (
-          <a
+          <Link
             key={s.href}
             href={s.href}
             aria-current={active ? 'page' : undefined}
@@ -39,7 +41,7 @@ export default function PageNav({ current }: { current: string }) {
             }}
           >
             {s.label}
-          </a>
+          </Link>
         );
       })}
     </nav>
