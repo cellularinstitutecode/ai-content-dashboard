@@ -13,9 +13,8 @@ import {
   type BrandContext,
 } from "@/lib/ai";
 import { opusCreateClipProject } from "@/lib/opus";
-import { researchBundle, briefPromptFrom, getUnitsBalance, recordDraftKeywords, serpCompetitors, type SemKeyword } from "@/lib/semrush";
-import { primaryDomain, topOrganicKeywords } from "@/lib/semrush-domain";
-import { classifyDomain, serpLandscapeFrom, themesFrom } from "@/lib/serp-landscape";
+import { researchBundle, briefPromptFrom, getUnitsBalance, recordDraftKeywords, type SemKeyword } from "@/lib/semrush";
+import { competitiveBrief, leadersLine } from "@/lib/competitive-brief";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { isAllowedEmail } from "@/lib/access";
 import { parseVideoUrl } from "@/lib/composer";
@@ -897,6 +896,11 @@ async function runAgent(session: Session, input: string, userId: string | null, 
     if (call.name === "generate_content") {
       const topic = String(call.input.topic || "").trim();
       const provider = call.input.provider === "openai" ? "openai" : "anthropic";
+      // EVERY DRAFT KNOWS THE COMPETITION. The top three for the subject and
+      // what they are doing go to the writer, with the instruction to do the
+      // same job in the Brand Brain's voice (lib/competitive-brief.ts).
+      onStep(stepLabel("competitor_comparables", { topic }));
+      const rivals = await competitiveBrief(topic);
       // Semrush pre-filter runs automatically inside generateContentPack and
       // stamps the pack with `_semrush` provenance (visible on saved drafts).
       const result = await generateContentPack({
@@ -906,6 +910,7 @@ async function runAgent(session: Session, input: string, userId: string | null, 
         provider: provider as any,
         model: MODELS[provider],
         contentType: (call.input.format || "social") as any,
+        landscapeHint: rivals.hint || undefined,
         // The Brand Brain. The dashboard's own generator has always passed
         // this and the assistant never did, so the same request typed into
         // the chat window came back in a default voice — and without the
@@ -923,7 +928,10 @@ async function runAgent(session: Session, input: string, userId: string | null, 
           ? "\n\n[Semrush keyword research applied" + (result.semrush.fromCache ? " (cached)" : "") + " — primary: " + (result.semrush.primary || "n/a") + (result.semrush.volume != null ? " (" + result.semrush.volume + "/mo)" : "") + "; tell the user their draft was optimized with real search data.]"
           : "\n\n[Semrush keyword data was unavailable for this topic (" + (result.semrush?.reason || "unknown") + ") — the draft was generated without live keyword research; mention this briefly.]";
       const preview = textFromPack(pack, "instagram").slice(0, 500);
-      toolResult = "Generated content for topic: " + topic + "\n\n" + preview + kwNote;
+      const rivalNote = rivals.leaders.length
+        ? "\n\n[Written against the top of Google for this subject — " + leadersLine(rivals) + ". The draft does the job the leaders do, in the clinic's voice; say so in one line, naming them.]"
+        : "";
+      toolResult = "Generated content for topic: " + topic + "\n\n" + preview + kwNote + rivalNote;
     } else if (call.name === "save_draft") {
       if (!session.lastPack) {
         toolResult = "No generated content to save yet. Call generate_content first.";
@@ -1053,46 +1061,22 @@ async function runAgent(session: Session, input: string, userId: string | null, 
       }
     } else if (call.name === "competitor_comparables") {
       // Who owns this search, what they are doing, and what a mirror post
-      // would need. The model writes the proposition from this; nothing here
-      // is invented — the domains, URLs and keywords are Semrush's.
+      // would need — the same brief every draft is written to
+      // (lib/competitive-brief.ts). The model writes the proposition from it;
+      // nothing here is invented: the domains, URLs and keywords are Semrush's.
       try {
         const topic = String(call.input.topic || "").trim();
         if (!topic) {
           toolResult = "No topic given. Ask what search or subject to compare on.";
         } else {
-          const serp = await serpCompetitors(topic, { limit: 10 });
-          if (!serp.ok || !serp.rows.length) {
-            toolResult = "Semrush has no ranking data for \"" + topic + "\" right now (" + (serp.reason || "no data") + "). Say so; do not name competitors from memory.";
+          const rivals = await competitiveBrief(topic);
+          if (!rivals.leaders.length) {
+            toolResult = "Semrush has no ranking data for \"" + topic + "\" right now (" + (rivals.reason || "no data") + "). Say so; do not name competitors from memory.";
           } else {
-            const mine = primaryDomain();
-            const rows = serp.rows.filter((r) => r && r.domain);
-            const top = rows.slice(0, 3);
-            const lines: string[] = ["TOP OF GOOGLE for \"" + topic + "\" (Semrush, " + serp.source + "):"];
-            for (let i = 0; i < top.length; i++) {
-              const r = top[i];
-              const domain = r.domain.replace(/^www\./, "");
-              let owns = "";
-              try {
-                const kw = await topOrganicKeywords(domain, 6);
-                owns = kw.rows.slice(0, 6).map((k) => '"' + k.keyword + '"' + (k.position ? " #" + k.position : "") + (k.volume ? " (" + k.volume + "/mo)" : "")).join(", ");
-              } catch { owns = ""; }
-              const slug = String(r.url || "").replace(/^https?:\/\/[^/]+/, "").replace(/[?#].*$/, "");
-              lines.push(
-                "#" + (i + 1) + " " + domain + (domain === mine ? " (THIS CLINIC)" : "") + " — " + classifyDomain(r.domain) +
-                "; page: " + (r.url || "?") + (slug ? " (its angle from the slug: " + slug.replace(/[-_/]+/g, " ").trim() + ")" : "") +
-                (themesFrom([r]).length ? "; theme: " + themesFrom([r]).join(", ") : "") +
-                (owns ? "; searches it owns: " + owns : ""),
-              );
-            }
-            const landscape = serpLandscapeFrom(topic, rows);
-            if (landscape) lines.push("", landscape);
-            lines.push(
-              "",
+            toolResult = rivals.hint + "\n\n" +
               "Now answer in three parts, short: (1) who ranks 1-3 and what each is doing; (2) THE MIRROR POST — one proposition in the clinic's own voice that does what the leaders do (their angle, their format, their promise) with this clinic's facts and a REF line, written out ready to copy and paste" +
               (call.input.network ? " for " + String(call.input.network) : "") +
-              "; (3) offer to draft and save it. Never copy their words; never invent a claim, a number or a citation.",
-            );
-            toolResult = lines.join("\n");
+              "; (3) offer to draft and save it. Never copy their words; never invent a claim, a number or a citation.";
           }
         }
       } catch (e: any) {

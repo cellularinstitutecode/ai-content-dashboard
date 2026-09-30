@@ -10,6 +10,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { recordDraftKeywords } from '@/lib/semrush';
+import { competitiveBrief } from '@/lib/competitive-brief';
 import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
@@ -106,6 +107,9 @@ export async function POST(req: NextRequest) {
     // Semrush pre-filter: generateContentPack() now runs the Keyword Brief
     // itself (cache-first, budget-guarded, never blocking) and stamps the pack
     // with `_semrush` provenance — this route just surfaces the result.
+    // Every draft knows the competition (lib/competitive-brief.ts): the top
+    // three for the subject, mirrored in the Brand Brain's voice.
+    const rivals = await competitiveBrief(topic);
     const { provider: used, pack, keywordBrief, semrush } = await generateContentPack({
       topic,
       audience,
@@ -116,6 +120,7 @@ export async function POST(req: NextRequest) {
       contentType,
       brand,
       performanceHint,
+      landscapeHint: rivals.hint || undefined,
     });
     const keywordSource: string = semrush?.source ?? 'none';
     const keywordsApplied: string[] = semrush?.keywords ?? [];
