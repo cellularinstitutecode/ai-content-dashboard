@@ -37,23 +37,93 @@ function toneFor(pillar: string, all: string[]): string {
   return TONES[(i < 0 ? 0 : i) % TONES.length];
 }
 
-function SlotCard({ slot, tone, on, onToggle }: { slot: UploadSlot; tone: string; on: boolean; onToggle: () => void }) {
+/** A slot as the editor holds it: the document's slot plus a stable key and an on/off. */
+type EditableSlot = UploadSlot & { _k: string; on: boolean };
+let __slotSeq = 0;
+const slotKey = () => 's_' + Date.now().toString(36) + '_' + (__slotSeq++).toString(36);
+const SOCIAL_NETWORKS = ['instagram', 'facebook', 'linkedin'] as const;
+
+/**
+ * One post of the week, previewable and editable like any other draft.
+ *
+ * Collapsed, it is the card the document produced. Open, every angle is
+ * listed and editable, angles can be added or removed, and the pillar, time,
+ * channels, article-or-post and the document's note can all be changed —
+ * before "Create schedules" turns it into a template. The server normalises
+ * whatever comes back (lib/strategy-upload.ts normalizeUpload), so nothing
+ * typed here can reach a template unchecked.
+ */
+function SlotCard({ slot, tone, onChange, onRemove }: { slot: EditableSlot; tone: string; onChange: (next: EditableSlot) => void; onRemove: () => void }) {
+  const [openCard, setOpenCard] = useState(false);
+  const [newAngle, setNewAngle] = useState('');
+  const set = (patch: Partial<EditableSlot>) => onChange({ ...slot, ...patch });
+  const setAngle = (i: number, v: string) => set({ angles: slot.angles.map((a, j) => (j === i ? v : a)) });
+  const removeAngle = (i: number) => set({ angles: slot.angles.filter((_, j) => j !== i) });
+  const addAngle = () => { const t = newAngle.trim(); if (!t) return; set({ angles: [...slot.angles, t] }); setNewAngle(''); };
+  const toggleNetwork = (n: string) => {
+    const has = slot.providers.includes(n);
+    const next = has ? slot.providers.filter((p) => p !== n) : [...slot.providers, n];
+    set({ providers: next.length ? next : slot.providers });
+  };
+  const field = 'w-full rounded-lg bg-white/80 px-2 py-1 text-[12px] text-ink ring-1 ring-black/10 focus:outline-none focus:ring-accent/40';
   return (
-    <div className={'min-w-0 break-words hyphens-auto rounded-2xl p-3.5 text-[12px] ring-1 transition ' + tone + (on ? '' : ' opacity-40')}>
+    <div className={'min-w-0 break-words hyphens-auto rounded-2xl p-3.5 text-[12px] ring-1 transition ' + tone + (slot.on ? '' : ' opacity-40')}>
       <div className="flex items-start justify-between gap-2">
-        <span className="text-[13px] font-semibold tabular-nums">{slot.time}</span>
-        <input type="checkbox" checked={on} onChange={onToggle} aria-label={'Include ' + slot.pillar + ' on ' + DAY_LABELS[slot.weekday]} className="mt-0.5" />
+        {openCard
+          ? <input aria-label="Time" value={slot.time} onChange={(e) => set({ time: e.target.value })} placeholder="09:00" className={field + ' max-w-[80px] tabular-nums'} />
+          : <span className="text-[13px] font-semibold tabular-nums">{slot.time}</span>}
+        <input type="checkbox" checked={slot.on} onChange={() => set({ on: !slot.on })} aria-label={'Include ' + slot.pillar + ' on ' + DAY_LABELS[slot.weekday]} className="mt-0.5" />
       </div>
-      <div className="mt-2 text-[14px] font-semibold leading-snug">{slot.pillar}</div>
+      {openCard
+        ? <input aria-label="Pillar" value={slot.pillar} onChange={(e) => set({ pillar: e.target.value })} className={field + ' mt-2 text-[14px] font-semibold'} />
+        : <div className="mt-2 text-[14px] font-semibold leading-snug">{slot.pillar}</div>}
       <div className="mt-2.5 flex flex-wrap gap-1.5">
-        {slot.format === 'blog' && <span className="rounded-md bg-white/70 px-1.5 py-0.5 font-medium">Article</span>}
-        {slot.providers.map((p) => <span key={p} className="rounded-md bg-white/70 px-1.5 py-0.5">{NETWORK_LABEL[p] || p}</span>)}
+        {openCard ? (
+          <>
+            <button type="button" onClick={() => set(slot.format === 'blog' ? { format: 'social', providers: [...SOCIAL_NETWORKS] } : { format: 'blog', providers: ['blog'] })}
+              className={'rounded-md px-1.5 py-0.5 font-medium ring-1 ' + (slot.format === 'blog' ? 'bg-ink text-white ring-ink' : 'bg-white/70 ring-black/10')}>Article</button>
+            {slot.format !== 'blog' && SOCIAL_NETWORKS.map((n) => (
+              <button key={n} type="button" onClick={() => toggleNetwork(n)} className={'rounded-md px-1.5 py-0.5 ring-1 ' + (slot.providers.includes(n) ? 'bg-ink text-white ring-ink' : 'bg-white/70 ring-black/10')}>{NETWORK_LABEL[n] || n}</button>
+            ))}
+          </>
+        ) : (
+          <>
+            {slot.format === 'blog' && <span className="rounded-md bg-white/70 px-1.5 py-0.5 font-medium">Article</span>}
+            {slot.providers.map((p) => <span key={p} className="rounded-md bg-white/70 px-1.5 py-0.5">{NETWORK_LABEL[p] || p}</span>)}
+          </>
+        )}
       </div>
-      <div className="mt-3 leading-relaxed opacity-80" title={slot.angles.join('\n')}>
-        {slot.angles.length} angle{slot.angles.length === 1 ? '' : 's'} · e.g. “{slot.angles[0]}”
-      </div>
+      {openCard ? (
+        <div className="mt-3">
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide opacity-70">Angles — one post each week draws on one of these</div>
+          <ul className="space-y-1.5">
+            {slot.angles.map((a, i) => (
+              <li key={i} className="flex items-start gap-1.5">
+                <textarea aria-label={'Angle ' + (i + 1)} value={a} onChange={(e) => setAngle(i, e.target.value)} rows={2} className={field + ' resize-y leading-snug'} />
+                <button type="button" onClick={() => removeAngle(i)} aria-label="Remove angle" className="mt-1 shrink-0 rounded-md px-1.5 text-[12px] text-red-600 ring-1 ring-red-200 hover:bg-red-50">×</button>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-2 flex items-center gap-1.5">
+            <input aria-label="New angle" value={newAngle} onChange={(e) => setNewAngle(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addAngle(); } }} placeholder="Add an angle…" className={field} />
+            <button type="button" onClick={addAngle} disabled={!newAngle.trim()} className="shrink-0 rounded-md bg-accent px-2 py-1 text-[12px] font-semibold text-white disabled:opacity-40">Add</button>
+          </div>
+          <div className="mt-3 text-[11px] font-semibold uppercase tracking-wide opacity-70">Note for the writer</div>
+          <textarea aria-label="Note" value={slot.rule} onChange={(e) => set({ rule: e.target.value })} rows={2} placeholder="e.g. mention the recovery lounge without promoting it" className={field + ' mt-1 resize-y leading-snug'} />
+        </div>
+      ) : (
+        <div className="mt-3 leading-relaxed opacity-80" title={slot.angles.join('\n')}>
+          {slot.angles.length} angle{slot.angles.length === 1 ? '' : 's'} · e.g. \u201c{slot.angles[0]}\u201d
+        </div>
+      )}
       {/* The document's note for this post, shown so the team can see it was read. */}
-      {slot.rule && <div className="mt-2 rounded-lg bg-white/70 px-2 py-1.5 text-[11px] leading-snug"><span className="font-semibold">Note:</span> {slot.rule}</div>}
+      {!openCard && slot.rule && <div className="mt-2 rounded-lg bg-white/70 px-2 py-1.5 text-[11px] leading-snug"><span className="font-semibold">Note:</span> {slot.rule}</div>}
+      <div className="mt-3 flex items-center gap-2">
+        <button type="button" onClick={() => setOpenCard((v) => !v)} className="rounded-md bg-white/80 px-2 py-1 text-[11px] font-medium ring-1 ring-black/10 hover:bg-white">
+          {openCard ? 'Done' : 'Preview & edit'}
+        </button>
+        {openCard && <button type="button" onClick={onRemove} className="rounded-md px-2 py-1 text-[11px] font-medium text-red-600 ring-1 ring-red-200 hover:bg-red-50">Remove post</button>}
+      </div>
     </div>
   );
 }
@@ -66,12 +136,13 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
   const [creating, setCreating] = useState(false);
   const [plan, setPlan] = useState<UploadPlan | null>(null);
   const [preview, setPreview] = useState<Preview>(null);
-  const [off, setOff] = useState<Set<number>>(new Set());
+  /** The week as the editor holds it: every slot previewable, editable, addable and removable. */
+  const [slots, setSlots] = useState<EditableSlot[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
 
   async function read(file: File) {
-    setErr(null); setDone(null); setPlan(null); setPreview(null); setOff(new Set());
+    setErr(null); setDone(null); setPlan(null); setPreview(null); setSlots([]);
     if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') { setErr('Drop a PDF file — the strategy document.'); return; }
     if (file.size > UPLOAD_MAX_BYTES) { setErr('That PDF is over ' + mbLabel(UPLOAD_MAX_BYTES) + '. Export a smaller copy and drop it again.'); return; }
     setFileName(file.name);
@@ -95,6 +166,7 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
       if (!r.ok) { setErr(await friendlyErrorFromResponse(r, 'The strategy could not be read just now.')); return; }
       const j = await r.json();
       setPlan(j.plan);
+      setSlots(((j.plan?.slots || []) as UploadSlot[]).map((sl) => ({ ...sl, _k: slotKey(), on: true })));
       setPreview(j.preview ?? null);
     } catch (e) {
       setErr(friendlyError(e, 'The strategy could not be read just now.'));
@@ -105,20 +177,22 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
 
   async function create() {
     if (!plan) return;
-    const slots = plan.slots.filter((_, i) => !off.has(i));
-    if (!slots.length) { setErr('Tick at least one slot to create.'); return; }
+    // What was edited is what is created; the server normalises it again.
+    const chosen = slots.filter((sl) => sl.on).map(({ _k: _key, on: _on, ...rest }) => rest);
+    if (!chosen.length) { setErr('Tick at least one slot to create.'); return; }
     setErr(null);
     setCreating(true);
     try {
       const r = await fetch('/api/templates/strategy-upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'apply', plan: { ...plan, slots } }),
+        body: JSON.stringify({ action: 'apply', plan: { ...plan, slots: chosen } }),
       });
       if (!r.ok) { setErr(await friendlyErrorFromResponse(r, 'The schedules could not be created just now.')); return; }
       const j = await r.json();
       setDone(j.message || 'Schedules created.');
       setPlan(null);
+      setSlots([]);
       setPreview(null);
       announce('templates', 'autopilot');
       onCreated?.();
@@ -129,8 +203,16 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
     }
   }
 
-  const pillars = plan ? [...new Set(plan.slots.map((s) => s.pillar.toLowerCase()))] : [];
-  const chosen = plan ? plan.slots.length - off.size : 0;
+  const pillars = plan ? [...new Set(slots.map((sl) => sl.pillar.toLowerCase()))] : [];
+  const chosen = slots.filter((sl) => sl.on).length;
+  const updateSlot = (k: string, next: EditableSlot) => setSlots((prev) => prev.map((sl) => (sl._k === k ? next : sl)));
+  const removeSlot = (k: string) => setSlots((prev) => prev.filter((sl) => sl._k !== k));
+  const addSlot = (weekday: number) => setSlots((prev) => {
+    const sameDay = prev.filter((sl) => sl.weekday === weekday);
+    const theme = sameDay.find((sl) => sl.theme)?.theme || '';
+    const time = sameDay.some((sl) => sl.time === '09:00') ? (sameDay.some((sl) => sl.time === '18:00') ? '13:00' : '18:00') : '09:00';
+    return [...prev, { _k: slotKey(), on: true, weekday, time, pillar: 'New post', theme, angles: [], format: 'social', providers: [...SOCIAL_NETWORKS], rule: '' }];
+  });
   // Every slot is already there from an earlier upload: nothing to press.
   const nothingNew = Boolean(preview && preview.create === 0);
 
@@ -181,21 +263,25 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
 
           <div className="mt-6 grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
             {WEEK_ORDER.map((d) => {
-              const day = plan.slots.map((s, i) => ({ s, i })).filter(({ s }) => s.weekday === d);
+              const day = slots.filter((sl) => sl.weekday === d);
               return (
                 <div key={d} className="min-w-0 rounded-2xl bg-canvas/60 p-3 ring-1 ring-line/50">
                   <div className="mb-3 px-1 text-[12px] font-semibold uppercase tracking-wider text-ink-faint">{DAY_LABELS[d].slice(0, 3)}</div>
-                  {day.find(({ s }) => s.theme) && <div className="-mt-2 mb-3 px-1 text-[12px] italic text-ink-muted">{day.find(({ s }) => s.theme)!.s.theme}</div>}
+                  {day.find((sl) => sl.theme) && <div className="-mt-2 mb-3 px-1 text-[12px] italic text-ink-muted">{day.find((sl) => sl.theme)!.theme}</div>}
                   <div className="grid gap-3">
-                    {day.length ? day.map(({ s, i }) => (
+                    {day.length ? day.map((sl) => (
                       <SlotCard
-                        key={i}
-                        slot={s}
-                        tone={toneFor(s.pillar, pillars)}
-                        on={!off.has(i)}
-                        onToggle={() => setOff((prev) => { const n = new Set(prev); if (n.has(i)) n.delete(i); else n.add(i); return n; })}
+                        key={sl._k}
+                        slot={sl}
+                        tone={toneFor(sl.pillar, pillars)}
+                        onChange={(next) => updateSlot(sl._k, next)}
+                        onRemove={() => removeSlot(sl._k)}
                       />
                     )) : <div className="text-[11px] text-ink-faint">No posts</div>}
+                    {/* Add to the week: a new post on this day, edited in place. */}
+                    <button type="button" onClick={() => addSlot(d)} className="rounded-xl border border-dashed border-line px-2 py-2 text-[12px] font-medium text-ink-muted transition hover:border-accent/60 hover:text-accent">
+                      + Add a post
+                    </button>
                   </div>
                 </div>
               );
@@ -220,8 +306,8 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
             >
               {creating ? 'Creating…' : nothingNew ? 'Already created' : 'Create ' + chosen + ' schedule' + (chosen === 1 ? '' : 's')}
             </button>
-            <button type="button" onClick={() => { setPlan(null); setPreview(null); }} className="text-[12px] font-medium text-ink-muted hover:underline">Discard</button>
-            <span className="text-[12px] text-ink-faint">Every post waits for your approval before it is scheduled or published.</span>
+            <button type="button" onClick={() => { setPlan(null); setSlots([]); setPreview(null); }} className="text-[12px] font-medium text-ink-muted hover:underline">Discard</button>
+            <span className="text-[12px] text-ink-faint">Open any card to see and edit every angle, or add a post to a day. Every post waits for your approval before it is scheduled or published.</span>
           </div>
         </div>
       )}
