@@ -83,9 +83,9 @@ function SlotCard({ slot, tone, writing, written, held, onChange, onOpen }: { sl
  * a template unchecked.
  */
 type PreviewChecks = { keywords: string[]; keywordSource: string; citation: string; held: string | null };
-type PreviewDraft = { draftId: string | null; pack: Record<string, unknown>; image: { url: string; alt?: string | null } | null; note?: string; /** Keywords and the citation verdict, as every other post has them at the door. */ checks?: PreviewChecks };
+type PreviewDraft = { draftId: string | null; pack: Record<string, unknown>; image: { url: string; alt?: string | null } | null; note?: string; /** Keywords and the citation verdict, as every other post has them at the door. */ checks?: PreviewChecks; /** Why there is no picture, when the picture step said. */ imageNote?: string; /** What the last Verify / fix concluded. */ fixNote?: string };
 /** Which half of the work a slot is on. The work runs above the panel, so the panel can be closed and reopened. */
-type Writing = 'text' | 'picture' | null;
+type Writing = 'text' | 'picture' | 'fix' | 'saving' | null;
 const scopeFor = (k: string) => 'strategy-' + k;
 const CHANNEL_KEYS: { key: string; label: string }[] = [
   { key: 'instagram', label: 'Instagram' },
@@ -94,17 +94,34 @@ const CHANNEL_KEYS: { key: string; label: string }[] = [
   { key: 'blog', label: 'Article' },
 ];
 
-function SlotPanel({ slot, draft, writing, draftErr, onWrite, onChange, onRemove, onClose }: {
+function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, onSave, onChange, onRemove, onClose }: {
   slot: EditableSlot;
   draft: PreviewDraft | null;
   writing: Writing;
   draftErr: string | null;
   onWrite: (angle: string) => void;
+  /** Make (or remake) the post's picture. */
+  onPicture: (again: boolean) => void;
+  /** "Verify / fix": check the cited study against the copy; swap it when it does not back it. */
+  onFix: () => void;
+  /** Save the copy as edited, per channel. Resolves true when saved. */
+  onSave: (edits: Record<string, string>) => Promise<boolean>;
   onChange: (next: EditableSlot) => void;
   onRemove: () => void;
   onClose: () => void;
 }) {
   const [newAngle, setNewAngle] = useState('');
+  // THE EDITOR, like every other preview's: the copy of each channel in a box
+  // you can type in, saved to the same draft the post was written to.
+  const [editing, setEditing] = useState(false);
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const startEditing = () => {
+    if (!draft) return;
+    const next: Record<string, string> = {};
+    for (const c of CHANNEL_KEYS) if (typeof draft.pack[c.key] === 'string' && String(draft.pack[c.key]).trim()) next[c.key] = String(draft.pack[c.key]);
+    setEdits(next); setEditing(true);
+  };
+  const saveEditing = async () => { if (await onSave(edits)) setEditing(false); };
   const [angleChoice, setAngleChoice] = useState<string>('');
   const drafting = Boolean(writing);
   const set = (patch: Partial<EditableSlot>) => onChange({ ...slot, ...patch });
@@ -201,22 +218,42 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onChange, onRemove
             </div>
             <p className="mt-1.5 text-[11px] text-ink/50">One week&rsquo;s post for this slot, written as you open it, exactly as the Autopilot will write it &mdash; the strategy&rsquo;s voice, this note, keywords, the competition, a citation when it makes a health claim, checked by the judge and fixed when it fails &mdash; saved to Recent Drafts, with its picture following. You can close this and carry on; the card says when it is done. Nothing is scheduled.</p>
             {writing === 'text' && <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-[12px] text-accent">Writing the post (about half a minute). The picture follows once the copy is here.</div>}
-            {writing === 'picture' && <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-[12px] text-accent">Copy is in; making the picture (up to a minute).</div>}
+            {writing === 'picture' && <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-[12px] text-accent">Copy is in; making the picture (up to two minutes).</div>}
+            {writing === 'fix' && <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-[12px] text-accent">Checking the cited study against the post, and looking for a better one if it does not back it (up to two minutes).</div>}
             {draftErr && <p role="alert" className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-900 ring-1 ring-amber-200/60">{draftErr}</p>}
             {draft && (
               <div className="mt-4 space-y-4">
+                {/* Edit, Verify / fix, the picture: the same controls every other preview has. */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {editing ? (
+                    <>
+                      <button type="button" onClick={() => void saveEditing()} disabled={writing === 'saving'} className="rounded-full bg-accent px-3 py-1 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{writing === 'saving' ? 'Saving…' : 'Save changes'}</button>
+                      <button type="button" onClick={() => setEditing(false)} disabled={writing === 'saving'} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Cancel</button>
+                    </>
+                  ) : (
+                    <button type="button" onClick={startEditing} disabled={drafting || !draft.draftId} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">Edit</button>
+                  )}
+                  <button type="button" onClick={onFix} disabled={drafting || editing || !draft.draftId} title="Check that the cited study supports this post; replace it with one that does if not" className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">{writing === 'fix' ? 'Checking…' : 'Verify / fix'}</button>
+                  <button type="button" onClick={() => onPicture(Boolean(draft.image?.url))} disabled={drafting || editing || !draft.draftId} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">{writing === 'picture' ? 'Making the picture…' : draft.image?.url ? 'Make the picture again' : 'Make the picture'}</button>
+                </div>
                 {draft.image?.url ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={draft.image.url} alt={draft.image.alt || 'Post picture'} className="max-h-80 w-full rounded-xl object-cover ring-1 ring-black/10" />
                 ) : writing === 'picture' ? (
                   <div className="flex h-40 items-center justify-center rounded-xl bg-white/60 text-[12px] text-accent ring-1 ring-accent/20"><span className="mr-2 h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />Making the picture…</div>
                 ) : (
-                  <p className="text-[12px] text-ink/50">No picture was made this time &mdash; the draft&rsquo;s Image section can make one.</p>
+                  <p role={draft.imageNote ? 'alert' : undefined} className={'rounded-xl px-3 py-2 text-[12px] ' + (draft.imageNote ? 'bg-amber-50 text-amber-900 ring-1 ring-amber-200/60' : 'text-ink/50')}>
+                    {draft.imageNote || 'No picture yet.'} Press &ldquo;Make the picture&rdquo; to try again.
+                  </p>
                 )}
                 {CHANNEL_KEYS.filter((c) => typeof draft.pack[c.key] === 'string' && String(draft.pack[c.key]).trim()).map((c) => (
                   <div key={c.key}>
                     <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink/50">{c.label}</div>
-                    <div className="whitespace-pre-wrap rounded-xl bg-white px-3.5 py-3 text-[13px] leading-relaxed text-ink ring-1 ring-black/5">{String(draft.pack[c.key])}</div>
+                    {editing ? (
+                      <textarea aria-label={c.label + ' copy'} value={edits[c.key] ?? ''} onChange={(e) => setEdits((cur) => ({ ...cur, [c.key]: e.target.value }))} rows={Math.min(24, Math.max(6, (edits[c.key] ?? '').split('\n').length + 2))} className="w-full resize-y rounded-xl bg-white px-3.5 py-3 text-[13px] leading-relaxed text-ink ring-1 ring-accent/40 focus:outline-none focus:ring-2 focus:ring-accent" />
+                    ) : (
+                      <div className="whitespace-pre-wrap rounded-xl bg-white px-3.5 py-3 text-[13px] leading-relaxed text-ink ring-1 ring-black/5">{String(draft.pack[c.key])}</div>
+                    )}
                   </div>
                 ))}
                 {/* APPROVED AND FIXED, like every other post: the keywords it was
@@ -230,12 +267,13 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onChange, onRemove
                       {draft.checks.keywords.length ? draft.checks.keywords.slice(0, 8).join(', ') : 'none could be researched'}
                     </div>
                     <div className="mt-1">{draft.checks.citation}</div>
+                    {draft.fixNote && <div className="mt-1" role="status">{draft.fixNote}</div>}
                     {draft.checks.held && <div role="alert" className="mt-1.5 font-medium">{draft.checks.held}</div>}
                   </div>
                 )}
                 <p className="text-[12px] text-ink/60">
                   {draft.note || ''}{' '}
-                  {draft.draftId && <a href={'/?draft=' + draft.draftId} className="font-medium text-accent hover:underline">Open in Recent Drafts to edit, add a picture or send it</a>}
+                  {draft.draftId && <a href={'/?draft=' + draft.draftId} className="font-medium text-accent hover:underline">Open in Recent Drafts to send it</a>}
                 </p>
               </div>
             )}
@@ -315,21 +353,88 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
       setPreviews((p) => ({ ...p, [k]: made }));
       announce('drafts', 'stats');
       // 2) the picture — a second, quieter request, while the copy is read
-      if (made.draftId) {
-        setWriting((w) => ({ ...w, [k]: 'picture' }));
-        const pr = await fetch('/api/templates/strategy-upload', { method: 'POST', headers: { ...headers, 'x-chi-progress': 'quiet' }, body: JSON.stringify({ action: 'picture', draftId: made.draftId }) });
-        if (pr.ok) {
-          const { image } = (await pr.json()) as { image: PreviewDraft['image'] };
-          if (image?.url) setPreviews((p) => ({ ...p, [k]: { ...(p[k] || made), image, pack: { ...(p[k] || made).pack, _image: image } } }));
-          announce('drafts', 'images');
-        }
-      }
+      // The id is passed, not read back: the state set a line above is not on the ref yet.
+      if (made.draftId) await makePicture(sl, false, { draftId: made.draftId, keepBusy: true });
     } catch (e) {
       setWriteErr((er) => ({ ...er, [k]: friendlyError(e, 'The post could not be written just now.') }));
     } finally {
       setWriting((w) => ({ ...w, [k]: null }));
     }
   }
+
+  /**
+   * The post's picture, made (or made again) as its own request. A failure is
+   * SAID on the post — "no picture was made this time" with no reason is what
+   * the team saw for a whole week of previews — and the button offers a retry.
+   */
+  async function makePicture(sl: EditableSlot, again: boolean, opts: { draftId?: string | null; keepBusy?: boolean } = {}) {
+    const k = sl._k;
+    const draftId = opts.draftId || previewsRef.current[k]?.draftId;
+    if (!draftId) return;
+    const headers = { 'Content-Type': 'application/json', 'x-chi-progress': 'quiet', 'x-chi-progress-scope': scopeFor(k) };
+    setWriting((w) => ({ ...w, [k]: 'picture' }));
+    try {
+      const pr = await fetch('/api/templates/strategy-upload', { method: 'POST', headers, body: JSON.stringify({ action: 'picture', draftId, again }) });
+      if (!pr.ok) throw new Error(await friendlyErrorFromResponse(pr, 'The picture could not be made just now.'));
+      const { image, reason } = (await pr.json()) as { image: PreviewDraft['image']; reason?: string };
+      setPreviews((p) => {
+        const cur = p[k]; if (!cur) return p;
+        return image?.url
+          ? { ...p, [k]: { ...cur, image, imageNote: undefined, pack: { ...cur.pack, _image: image } } }
+          : { ...p, [k]: { ...cur, imageNote: reason || 'The picture could not be made just now.' } };
+      });
+      if (image?.url) announce('drafts', 'images');
+    } catch (e) {
+      const note = friendlyError(e, 'The picture could not be made just now.');
+      setPreviews((p) => (p[k] ? { ...p, [k]: { ...p[k], imageNote: note } } : p));
+    } finally {
+      if (!opts.keepBusy) setWriting((w) => ({ ...w, [k]: null }));
+    }
+  }
+
+  /** "Verify / fix" on a previewed post: the same check the calendar's button runs, on the draft. */
+  async function verifyFix(sl: EditableSlot) {
+    const k = sl._k;
+    const draftId = previewsRef.current[k]?.draftId;
+    if (!draftId) return;
+    setWriting((w) => ({ ...w, [k]: 'fix' }));
+    setWriteErr((e) => ({ ...e, [k]: null }));
+    try {
+      const r = await fetch('/api/templates/strategy-upload', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-chi-progress': 'loud', 'x-chi-progress-scope': scopeFor(k) }, body: JSON.stringify({ action: 'fix', draftId }) });
+      if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'The citation could not be checked just now.'));
+      const out = (await r.json()) as { pack: Record<string, unknown>; note: string; swapped: boolean; checks: PreviewChecks };
+      setPreviews((p) => (p[k] ? { ...p, [k]: { ...p[k], pack: { ...p[k].pack, ...out.pack }, checks: out.checks, fixNote: out.note } } : p));
+      announce('drafts', 'stats');
+    } catch (e) {
+      setWriteErr((er) => ({ ...er, [k]: friendlyError(e, 'The citation could not be checked just now.') }));
+    } finally {
+      setWriting((w) => ({ ...w, [k]: null }));
+    }
+  }
+
+  /** The copy as edited in the panel, saved to the draft it was written to (PATCH /api/drafts, as Recent Drafts saves). */
+  async function saveEdits(sl: EditableSlot, edits: Record<string, string>): Promise<boolean> {
+    const k = sl._k;
+    const cur = previewsRef.current[k];
+    if (!cur?.draftId) return false;
+    setWriting((w) => ({ ...w, [k]: 'saving' }));
+    setWriteErr((e) => ({ ...e, [k]: null }));
+    try {
+      const pack = { ...cur.pack, ...edits };
+      const r = await fetch('/api/drafts', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: cur.draftId, pack }) });
+      if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'We could not save those changes.'));
+      const j = (await r.json().catch(() => null)) as { draft?: { pack?: Record<string, unknown> } } | null;
+      setPreviews((p) => (p[k] ? { ...p, [k]: { ...p[k], pack: j?.draft?.pack || pack } } : p));
+      announce('drafts', 'stats');
+      return true;
+    } catch (e) {
+      setWriteErr((er) => ({ ...er, [k]: friendlyError(e, 'We could not save those changes.') }));
+      return false;
+    } finally {
+      setWriting((w) => ({ ...w, [k]: null }));
+    }
+  }
+
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
 
@@ -556,6 +661,9 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
           writing={writing[openSlot._k] || null}
           draftErr={writeErr[openSlot._k] || null}
           onWrite={(angle) => void writePreview(openSlot, angle)}
+          onPicture={(again) => void makePicture(openSlot, again)}
+          onFix={() => void verifyFix(openSlot)}
+          onSave={(edits) => saveEdits(openSlot, edits)}
           onChange={(next) => updateSlot(openSlot._k, next)}
           onRemove={() => { removeSlot(openSlot._k); setOpenKey(null); }}
           onClose={() => setOpenKey(null)}
