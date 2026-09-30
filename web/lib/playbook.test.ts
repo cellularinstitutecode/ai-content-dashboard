@@ -71,5 +71,8 @@ test('it stays dense enough to prompt-cache without dominating the window', () =
   // words of clinic background would cost more than the conversation.
   const words = PLAYBOOK.split(/\s+/).length;
   assert.ok(words > 600, 'too thin to be a brain: ' + words);
-  assert.ok(words < 1600, 'too long to send every turn: ' + words);
+  // Raised from 1,600 for the lead history (lib/growth-history.ts): some two
+  // hundred words of the numbers that decide what to write and where, which
+  // earn their place on every turn. Still cached, still one block.
+  assert.ok(words < 1900, 'too long to send every turn: ' + words);
 });

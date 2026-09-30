@@ -3,6 +3,7 @@ import { redact } from "@/lib/report";
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { GROWTH_HISTORY } from "@/lib/growth-history";
 import { getUnitsBalance } from "@/lib/semrush";
 import {
   domainOverview,
@@ -73,11 +74,19 @@ matter, or how they are ranking, answer from the snapshot and say the numbers ou
 For anything keyword-specific that is NOT in the snapshot, call the keyword_lookup tool to
 fetch real volume/difficulty/questions before recommending — never invent metrics; if data
 is unavailable, say so plainly.
-You NEVER publish or finalize scheduling yourself. To act (draft, schedule, templates), call
-the run_command tool with a plain-English command; the text assistant stages it and asks the
-user to confirm ON SCREEN. Always read drafts back aloud and ask the user to review before
-anything is scheduled. Keep spoken replies short and natural — a sentence or two. Never make
-medical claims; keep language compliant and non-exaggerated.`;
+You NEVER publish or finalize scheduling yourself. To act, call the run_command tool with the
+user's request in full, in plain English: drafting, saving, scheduling, retrying a video,
+checking the pipeline or the calendar, making a picture, comparing with the competitors that
+rank first, second and third, anything at all — the text assistant does it and asks the user
+to confirm ON SCREEN where a confirmation is needed. Whenever the user asks for something to
+be done, call run_command at once, throughout the conversation, then read back what happened;
+never say you will do it later and never only describe it. When a draft has just been written
+or the user says they are finishing one, offer to compare it with the top three ranking
+competitors and propose a mirror post — and do it through run_command when they say yes.
+Keep spoken replies short and natural — a sentence or two. Never make medical claims; keep
+language compliant and non-exaggerated.
+
+${GROWTH_HISTORY}`;
 
 const VOICE_TOOLS = [
   {

@@ -20,7 +20,7 @@ function writeStore(s: Stored) {
   try { window.sessionStorage.setItem(STORE_KEY, JSON.stringify({ ...s, msgs: s.msgs.slice(-60) })); } catch { /* private mode, full storage: the panel still works for this page */ }
 }
 
-type Msg = { id: string; role: "assistant" | "user"; text: string; options?: string[] | null; image?: { url: string; alt?: string | null } | null };
+type Msg = { id: string; role: "assistant" | "user"; text: string; options?: string[] | null; image?: { url: string; alt?: string | null } | null; /** The trail of what was done to answer, kept with the answer as a guide. */ steps?: string[] | null };
 let __msgSeq = 0;
 const uid = () => `m_${Date.now().toString(36)}_${(__msgSeq++).toString(36)}`;
 
@@ -47,6 +47,8 @@ export default function DraftingAssistant() {
     applyAssistantResult(data);
   });
   const [busy, setBusy] = useState(false);
+  /** What the assistant is doing right now, as the route reports it (in blue, as it goes). */
+  const [steps, setSteps] = useState<string[]>([]);
   // This widget used to carry its own copy of the dashboard's Content
   // Generator — the same model buttons, format pills, idea box and Generate
   // button, a second time, in a 380px panel. Two places to do the identical
@@ -67,18 +69,44 @@ export default function DraftingAssistant() {
         if (clean) setMsgs((m) => [...m, { id: uid(), role: "user", text: clean }]);
     setInput("");
     setBusy(true);
+    setSteps([]);
+    const trail: string[] = [];
     try {
       setStatus("thinking");
       const res = await fetch("/api/assistant", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        // Newline-delimited JSON: each step as it starts, the answer last.
+        headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
         // Where the user is goes with every message, so the answer is about
         // the screen in front of them (lib/assistant-standby.ts pageContext).
         body: JSON.stringify({ session, text: clean, page: pathname }),
       });
-      const _raw = await res.text();
+      let _raw = "";
       let data: any = null;
-      try { data = _raw ? JSON.parse(_raw) : null; } catch { data = null; }
+      if ((res.headers.get("content-type") || "").includes("application/x-ndjson") && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        const take = (line: string) => {
+          if (!line.trim()) return;
+          let evt: any = null;
+          try { evt = JSON.parse(line); } catch { return; }
+          if (evt && typeof evt.step === "string") { trail.push(evt.step); setSteps([...trail]); }
+          else if (evt && evt.done) data = evt.done;
+          else if (evt && evt.error) data = { error: String(evt.error) };
+        };
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let nl = buffer.indexOf("\n");
+          while (nl >= 0) { take(buffer.slice(0, nl)); buffer = buffer.slice(nl + 1); nl = buffer.indexOf("\n"); }
+        }
+        take(buffer);
+      } else {
+        _raw = await res.text();
+        try { data = _raw ? JSON.parse(_raw) : null; } catch { data = null; }
+      }
       if (!data) {
         const _timedOut = res.status === 504 || /FUNCTION_INVOCATION_TIMEOUT/i.test(_raw);
         throw new Error(
@@ -99,13 +127,14 @@ export default function DraftingAssistant() {
         const chips = Array.isArray(data.options) ? data.options : [];
         setMsgs((m) => [
           ...m,
-          { id: uid(), role: "assistant", text: shown, options: next ? [next, ...chips] : (chips.length ? chips : null), image },
+          { id: uid(), role: "assistant", text: shown, options: next ? [next, ...chips] : (chips.length ? chips : null), image, steps: trail.length ? [...trail] : null },
         ]);
       }
     } catch (e: any) {
       setMsgs((m) => [...m, { id: uid(), role: "assistant", text: "\u26a0\ufe0f " + (e?.message || "Network error") }]);
     } finally {
       setBusy(false);
+      setSteps([]);
     }
   }
 
@@ -169,6 +198,12 @@ export default function DraftingAssistant() {
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
                         {msgs.map((m) => (
                               <div key={m.id}>
+                {m.role === "assistant" && m.steps && m.steps.length > 0 && (
+                  // The guide: what was done to get this answer, kept with it.
+                  <ol className="mb-1.5 ml-1 space-y-0.5 border-l-2 border-accent/40 pl-2.5 text-[11px] leading-snug text-accent/80">
+                    {m.steps.map((s, i) => <li key={i}>{s}</li>)}
+                  </ol>
+                )}
                 <div className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
                   <div className={(m.role === "user" ? "bg-accent text-white" : "bg-canvas text-ink") + " max-w-[85%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed"}>
                     {m.text}
@@ -192,7 +227,22 @@ export default function DraftingAssistant() {
             {voice.active && (<div className="flex items-center gap-2 text-xs text-red-500"><span className="h-2 w-2 animate-pulse rounded-full bg-red-500" /><span>Listening… speak your request.</span></div>)}
             {voice.connecting && (<div className="flex items-center gap-2 text-xs text-amber-600"><span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" /><span>Connecting… allow microphone access if your browser prompts you.</span></div>)}
             {voice.error && (<div className="rounded-md bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-700 ring-1 ring-red-200">{voice.error}</div>)}
-            {busy && (<div className="flex items-center gap-2 text-xs text-accent"><span className="flex gap-1"><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent" /></span><span>Working on it…</span></div>)}
+            {busy && (
+              // The trail, live and in blue: each step as it starts, the current one pulsing.
+              <div className="rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-accent" role="status" aria-live="polite">
+                <ol className="space-y-1">
+                  {steps.map((s, i) => (
+                    <li key={i} className="flex items-center gap-2">
+                      <span className={"h-1.5 w-1.5 shrink-0 rounded-full bg-accent " + (i === steps.length - 1 ? "animate-pulse" : "opacity-50")} />
+                      <span className={i === steps.length - 1 ? "font-medium" : "opacity-70"}>{s}</span>
+                    </li>
+                  ))}
+                  {steps.length === 0 && (
+                    <li className="flex items-center gap-2"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" /><span>Working on it…</span></li>
+                  )}
+                </ol>
+              </div>
+            )}
             <div ref={endRef} />
           </div>
 

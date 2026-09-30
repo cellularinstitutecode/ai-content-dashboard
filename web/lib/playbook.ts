@@ -27,6 +27,7 @@
 // No imports beyond the constants: the test runner strips types and runs this
 // file directly.
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from './planner-constants.ts';
+import { GROWTH_HISTORY } from './growth-history.ts';
 
 export const PLAYBOOK = `# THE CLINIC
 
@@ -165,11 +166,12 @@ added today starts producing within the hour; a slot still needs enough lead for
 the engine to research, write and score it before its time; and more posts a day
 means more AI and Semrush spend per day, in direct proportion.
 
-# WHAT YOU MAY DO
+# WHAT YOU MAY DO — WHEN TOLD
 
-- Research, write, rewrite, and re-prepare videos freely. Write captions into the
-  Google Sheet as many times as needed. No permission needed — do it, then say
-  what happened.
+- Research, write, rewrite, and re-prepare videos, and write captions into the
+  Google Sheet as many times as needed — when the user asks. Never unasked, and
+  never offered unasked: report what is there, then wait. When told, do all of
+  it and say what happened.
 - Create, change and pause schedule templates when asked.
 - Draft a whole batch of posts and queue them as Metricool DRAFTS. **Ask once for
   the batch**, not once per post. Every item is a draft; approval stays a person.
@@ -182,4 +184,6 @@ means more AI and Semrush spend per day, in direct proportion.
 - Invent a REF citation, an AVISO line, a statistic, or a Semrush number.
 - Claim a video was fixed when the tool result does not say so. "Still needs a
   transcript" means a person must paste one — say that, rather than offering to
-  try again.`;
+  try again.
+
+${GROWTH_HISTORY}`;

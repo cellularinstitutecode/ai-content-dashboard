@@ -112,3 +112,40 @@ export function splitNextStep(message: string | null | undefined): { text: strin
   const text = raw.slice(0, m.index).replace(/\s+$/, '');
   return { text: text || raw, next: next || null };
 }
+
+// --- the activity trail --------------------------------------------------------
+
+export const THINKING_LABEL = 'Thinking it through';
+
+/**
+ * What the assistant is doing right now, in a few words, for the blue trail
+ * under the conversation. One line per tool call, named from the call's own
+ * input so "Writing the draft" says which draft.
+ */
+export function stepLabel(name: string, input: Record<string, unknown> | null | undefined): string {
+  const i = input || {};
+  const q = (k: string) => { const v = String(i[k] ?? '').replace(/\s+/g, ' ').trim(); return v ? ' \u201c' + (v.length > 48 ? v.slice(0, 47) + '\u2026' : v) + '\u201d' : ''; };
+  switch (name) {
+    case 'generate_content': return 'Writing the draft' + q('topic');
+    case 'save_draft': return 'Saving the draft';
+    case 'schedule_post': return 'Staging the post for review';
+    case 'clip_video': return 'Sending the video to be clipped';
+    case 'research_topic': return 'Researching' + q('topic');
+    case 'keyword_lookup': return 'Looking up Semrush data for' + q('topic');
+    case 'pipeline_status': return 'Reading the video pipeline';
+    case 'retry_video': return 'Re-preparing the video';
+    case 'list_schedule': return 'Reading the planner';
+    case 'create_schedule': return 'Creating the schedule' + q('name');
+    case 'update_schedule': return 'Changing the schedule';
+    case 'pause_schedule': return 'Pausing the schedule';
+    case 'draft_batch': return 'Proposing the batch';
+    case 'generate_image': return 'Making the picture';
+    case 'competitor_comparables': return 'Comparing with the top 3 on Google for' + q('topic');
+    default: return 'Working on ' + String(name || 'it').replace(/_/g, ' ');
+  }
+}
+
+/** The tone: a colleague working toward the goal, fast. */
+export const CONVERSATION_RULE =
+  'Work like a colleague at the next desk, toward the goal: say what you did, what you found and what you suggest, in that order and briefly; ' +
+  'keep the momentum (the next step is a chip away); no lectures, no lists of everything you could do, no restating the question.';

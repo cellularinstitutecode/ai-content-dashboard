@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { COMMAND_ONLY_RULES, NEXT_STEP_RULE, OPENING_CHIPS, OPENING_LINE, STANDBY_ACK, pageContext, splitNextStep, standbyCommand } from './assistant-standby.ts';
+import { COMMAND_ONLY_RULES, CONVERSATION_RULE, NEXT_STEP_RULE, OPENING_CHIPS, OPENING_LINE, STANDBY_ACK, pageContext, splitNextStep, standbyCommand, stepLabel } from './assistant-standby.ts';
 
 const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 
@@ -85,4 +85,27 @@ test('the conversation survives a page change: the panel persists itself and the
   assert.match(route, /WHERE THE USER IS: /);
   assert.match(route, /performanceBlock\(userId\)/, 'what has worked reaches every turn');
   assert.match(src('lib/ai.ts'), /NEXT_STEP_RULE/);
+});
+
+test('every activity has a label for the blue trail, named from its own input', () => {
+  assert.equal(stepLabel('generate_content', { topic: 'NK cell therapy for immune support' }), 'Writing the draft \u201cNK cell therapy for immune support\u201d');
+  assert.equal(stepLabel('competitor_comparables', { topic: 'stem cell treatment' }), 'Comparing with the top 3 on Google for \u201cstem cell treatment\u201d');
+  assert.equal(stepLabel('pipeline_status', {}), 'Reading the video pipeline');
+  assert.equal(stepLabel('generate_image', null), 'Making the picture');
+  assert.match(stepLabel('generate_content', { topic: 'x'.repeat(80) }), /\u2026\u201d$/, 'a long topic is cut');
+  assert.equal(stepLabel('some_new_tool', {}), 'Working on some new tool');
+  assert.match(CONVERSATION_RULE, /colleague/);
+});
+
+test('the trail is streamed as it happens and shown in blue', () => {
+  const route = src('app/api/assistant/route.ts');
+  assert.match(route, /onStep\(stepLabel\(call\.name, call\.input\)\)/, 'each tool call is announced as it starts');
+  assert.match(route, /application\/x-ndjson/);
+  assert.match(route, /emit\(\{ step: label \}\)/);
+  assert.match(route, /emit\(\{ done: payload \}\)/, 'and the answer comes last');
+  const panel = src('components/DraftingAssistant.tsx');
+  assert.match(panel, /Accept: "application\/x-ndjson"/);
+  assert.match(panel, /res\.body\.getReader\(\)/);
+  assert.match(panel, /text-accent/, 'in blue');
+  assert.match(panel, /steps: trail\.length \? \[\.\.\.trail\] : null/, 'kept with the answer as a guide');
 });
