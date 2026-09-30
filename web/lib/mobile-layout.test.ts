@@ -34,3 +34,10 @@ test('the calendar and the assistant fit a phone', () => {
   assert.match(panel, /max-h-\[calc\(100dvh-2rem\)\] w-\[380px\] max-w-\[calc\(100vw-2rem\)\]/);
   assert.match(panel, /bottom-4 right-4 z-50[^"]*sm:bottom-6 sm:right-6/);
 });
+
+test('on the Draft page the scheduler and the publishing queue are stacked, each the full width', () => {
+  const page = src('app/page.tsx');
+  assert.match(page, /isDraft \? "lg:col-span-5 border-b border-line" : "border-b border-line lg:col-span-3 lg:border-b-0 lg:border-r"/);
+  assert.match(page, /<div className="p-6 sm:p-8 lg:col-span-5">/, 'the queue takes the full width');
+  assert.match(page, /<ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">/, 'the channels are a band of tiles, not a column');
+});

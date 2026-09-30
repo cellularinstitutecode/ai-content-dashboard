@@ -2225,7 +2225,9 @@ return (
 </div>
 <div className="grid gap-0 lg:grid-cols-5">
 {isDraft && (
-<div className="border-b border-line p-6 sm:p-8 lg:col-span-3 lg:border-b-0 lg:border-r">
+{/* On the Draft page the scheduler and the queue are stacked, each the full width: side by side the
+    month was squeezed into two-fifths of the panel. On the Dashboard the scheduler is not shown. */}
+<div className={"p-6 sm:p-8 " + (isDraft ? "lg:col-span-5 border-b border-line" : "border-b border-line lg:col-span-3 lg:border-b-0 lg:border-r")}>
 <div className="mb-3 flex items-center justify-between gap-2">
 <h3 className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Schedule a post</h3>
 {mBusy && <span className="text-[11px] text-ink-faint">Sending…</span>}
@@ -2371,7 +2373,7 @@ Too long for {networkLabel(mLimit.network)} by {mOverBy.toLocaleString()} charac
 <p className="mt-3 text-[11px] text-ink-muted">Scheduled on arrival: each post goes out at its own time without another press. Delete or reschedule it here before then if you change your mind.</p>
 </div>
 )}
-<div className={"p-6 sm:p-8 " + (isDraft ? "lg:col-span-2" : "lg:col-span-5")}>
+<div className="p-6 sm:p-8 lg:col-span-5">
 <div className="mb-3 flex items-center justify-between gap-2">
 <h3 className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Connection health</h3>
 <button type="button" onClick={() => { loadAnalytics(false); loadInsights(activeBlogId); }} className="text-[12px] font-medium text-accent hover:underline">{(mLoading || insightsLoading) ? 'Checking…' : 'Refresh'}</button>
@@ -2396,7 +2398,7 @@ return <div className="rounded-2xl bg-amber-50 p-4 text-center ring-1 ring-amber
 }
 return (
 <div>
-<ul className="space-y-2">
+<ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
 {channels.map((c) => (
 <li key={c.id} className="flex items-center justify-between rounded-2xl bg-white px-3 py-2 ring-1 ring-line">
 <span className="flex items-center gap-2 text-[13px] text-ink"><span aria-hidden className="text-[16px]">{c.emoji}</span><span className="font-medium">{c.label}</span>{c.handle && c.handle !== 'Connected' && <span className="text-[12px] text-ink-faint">{c.handle}</span>}</span>
