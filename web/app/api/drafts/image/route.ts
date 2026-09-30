@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { generatePackImage, imagesEnabled, removeSuperseded, storeBytes, type PackImage } from '@/lib/images';
 import { libraryHero } from '@/lib/library-hero';
+import { pictureForDraft } from '@/lib/draft-picture';
 import { touchLibraryUse } from '@/lib/library-index';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { plannerImageFor } from '@/lib/planner-image';
@@ -314,6 +315,16 @@ export async function POST(req: NextRequest) {
     // A SET is always a request for new pictures — the draft having a hero
     // already is the normal case, and returning it unchanged made the whole
     // feature a no-op.
+    // auto: true — the Content Generator's first picture. The clinic's own
+    // photograph first (lib/draft-picture.ts), a generated one only when the
+    // library has nothing that fits: the same door the Autopilot and the
+    // strategy preview go through. Every explicit request below (a new take,
+    // a set, a direction) still generates, as asked.
+    if (body?.auto === true) {
+      const picked = await pictureForDraft(id, user.id, { quality: 'high' });
+      if (picked.image?.url) return NextResponse.json({ image: picked.image, source: picked.source, notes: picked.notes });
+      return NextResponse.json({ error: 'no_image', message: picked.notes.join(' ') || 'No picture could be made just now.' }, { status: 502 });
+    }
     if (existing?.url && !regenerate && !asOption && !wantSet && !existingHasText && !direction && !plannerNeedsCover) {
       return NextResponse.json({ image: existing, cached: true });
     }

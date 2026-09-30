@@ -1409,7 +1409,8 @@ procAdvanceLater('verify', 20000); // generation ~20s, then the vision check
 fetch('/api/drafts/image', {
 method: 'POST',
 headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'create' },
-body: JSON.stringify({ id: draftId }),
+// auto: the clinic's own photograph first (lib/draft-picture.ts), a generated one only when none fits — the same door the Autopilot and the strategy preview use.
+body: JSON.stringify({ id: draftId, auto: true }),
 })
 .then(async (ir) => {
 const ij = await ir.json().catch(() => ({}));
@@ -1940,13 +1941,7 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 tex
 {loading ? (<><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />Generating…</>) : 'Generate'}
 </button>
 {err && <span className="text-[13px] text-danger">{err}</span>}
-<a
-href={semrushUrl(prompt)}
-target="_blank"
-rel="noopener noreferrer"
-className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">
-🔑 Keyword research
-</a>
+{/* The "Keyword research" button that sat here is gone: the research is the first step of Generate itself, and the keywords applied are shown under the output. */}
 </div>
 </div>
 
@@ -1977,12 +1972,26 @@ className="inline-flex items-center gap-1 rounded-full px-4 py-2.5 text-[13px] f
   <p className="mb-3 text-[11px] text-ink-faint">{semrushDraftNote(keywordReason as any)}</p>
 )}
 {output && lastDraftId && (
-  <HeroImagePicker
-    draftId={lastDraftId}
-    topic={prompt}
-    currentPrompt={genImage?.prompt || null}
-    onPicked={(img) => setGenImage({ url: img.url, alt: img.alt, model: img.model, verification: img.verification as never })}
-  />
+  <>
+    {/* THE SAME CONTROLS EVERY DRAFT HAS (components/HeroImageControls.tsx): the
+        library, the library photo with the brand filter and the post title, the
+        Edit image panel (title, notes, suggestions) and a new AI take, last. */}
+    <HeroImageControls
+      key={lastDraftId}
+      draftId={lastDraftId}
+      hasImage={Boolean(genImage?.url)}
+      note="The picture was chosen from the clinic's own library first; an AI picture is made only when no photograph fits."
+      onChanged={(img) => setGenImage((cur: any) => ({ ...(cur || {}), ...img }))}
+    />
+    {/* And a file from your desk, which only this picker offers. */}
+    <HeroImagePicker
+      draftId={lastDraftId}
+      topic={prompt}
+      currentPrompt={genImage?.prompt || null}
+      only={['upload']}
+      onPicked={(img) => setGenImage({ url: img.url, alt: img.alt, model: img.model, verification: img.verification as never })}
+    />
+  </>
 )}
 {output && genPack && (
   <SchedulePack
