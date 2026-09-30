@@ -2760,7 +2760,7 @@ const ready = d?.pack?.status === 'ready' && clipsOf(d).length > 0;
 const failed = d?.pack?.status === 'failed';
 const count = clipsOf(d).length;
 return (
-<button key={(d?.id || d?._id || i) + '-opus'} onClick={() => openDraft(d)}
+<button key={(d?.id || d?._id || i) + '-opus'} data-ai-target="draft" data-ai-id={String(d?.id || d?._id || '')} data-ai-label={String(d?.topic || d?.title || d?.name || 'Clip')} onClick={() => openDraft(d)}
 className="group overflow-hidden rounded-2xl text-left ring-1 ring-line/60 transition hover:ring-black/20">
 <div className="relative">
 {d?.pack?.thumb ? (
@@ -2811,7 +2811,7 @@ className="group overflow-hidden rounded-2xl text-left ring-1 ring-line/60 trans
 const title = draftLabel(d && (d.title || d.topic || d.name));
 const body = (d && (d.body || d.instagram || d.text || d.content)) || '';
 return (
-<li onClick={() => openDraft(d)} role="button" tabIndex={0} key={(d && (d.id || d._id)) || i} className={"cursor-pointer rounded-xl transition hover:bg-subtle/60 flex items-start gap-4 py-4" + (pickedDrafts.has(String((d && (d.id || d._id)) || '')) ? " bg-rose-50/60" : "")}>
+<li onClick={() => openDraft(d)} role="button" tabIndex={0} key={(d && (d.id || d._id)) || i} data-ai-target="draft" data-ai-id={String((d && (d.id || d._id)) || '')} data-ai-label={String((d && (d.topic || d.title || d.name)) || 'Draft')} className={"cursor-pointer rounded-xl transition hover:bg-subtle/60 flex items-start gap-4 py-4" + (pickedDrafts.has(String((d && (d.id || d._id)) || '')) ? " bg-rose-50/60" : "")}>
 <input type="checkbox" aria-label="Select this draft" checked={pickedDrafts.has(String((d && (d.id || d._id)) || ''))} disabled={bulkDeleting}
 onClick={(e) => e.stopPropagation()} onChange={() => togglePickedDraft(String((d && (d.id || d._id)) || ''))}
 className="mt-3 h-4 w-4 shrink-0 cursor-pointer accent-rose-600" />

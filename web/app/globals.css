@@ -53,3 +53,13 @@ input::placeholder, textarea::placeholder { color: #6f6f78; } /* AA on white 4.9
   to { opacity: 1; transform: translateY(0); }
 }
 .animate-in { animation: fadeInUp 0.4s cubic-bezier(0.28,0.11,0.32,1) both; }
+
+/* What the user is pointing at for the Drafting Assistant (components/aiFocus.ts): outlined in blue. */
+[data-ai-focused] {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 12px;
+  box-shadow: 0 0 0 6px rgba(0, 113, 227, 0.14);
+}
+/* While "Point at something" is on, the whole page says so. */
+[data-ai-pointing] * { cursor: crosshair !important; }

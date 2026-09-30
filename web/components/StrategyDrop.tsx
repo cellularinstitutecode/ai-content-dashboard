@@ -50,7 +50,7 @@ const SOCIAL_NETWORKS = ['instagram', 'facebook', 'linkedin'] as const;
 /** One post of the week, as a compact card. "Preview & edit" opens it in the panel. */
 function SlotCard({ slot, tone, writing, written, held, onChange, onOpen }: { slot: EditableSlot; tone: string; writing?: Writing; written?: boolean; held?: boolean; onChange: (next: EditableSlot) => void; onOpen: () => void }) {
   return (
-    <div className={'min-w-0 break-words hyphens-auto rounded-2xl p-3.5 text-[12px] ring-1 transition ' + tone + (slot.on ? '' : ' opacity-40')}>
+    <div data-ai-target="slot" data-ai-label={DAY_LABELS[slot.weekday] + ' ' + slot.time + ' — ' + slot.pillar} className={'min-w-0 break-words hyphens-auto rounded-2xl p-3.5 text-[12px] ring-1 transition ' + tone + (slot.on ? '' : ' opacity-40')}>
       <div className="flex items-start justify-between gap-2">
         <span className="text-[13px] font-semibold tabular-nums">{slot.time}</span>
         <input type="checkbox" checked={slot.on} onChange={() => onChange({ ...slot, on: !slot.on })} aria-label={'Include ' + slot.pillar + ' on ' + DAY_LABELS[slot.weekday]} className="mt-0.5" />

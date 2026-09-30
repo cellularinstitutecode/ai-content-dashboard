@@ -92,6 +92,24 @@ export function recordProviderOutcome(
   })();
 }
 
+/**
+ * A vision call (the image checker, the library captioner) just succeeded on
+ * the same OpenAI account. If the last IMAGE outcome on record was a billing
+ * or key refusal, that refusal is no longer true — the wallet was topped up —
+ * and the banner saying "out of credit" would otherwise stay for a day, or
+ * until a generation ran, which a week of library photographs never does.
+ */
+export function noteSameAccountSuccess(): void {
+  const last = lastSeen.get(IMAGE_PROVIDER);
+  const check = async () => {
+    const known = last ?? (await lastProviderOutcome(IMAGE_PROVIDER).catch(() => null));
+    if (known && !known.ok && (known.reason === 'no_credit' || known.reason === 'bad_key')) {
+      recordProviderOutcome(IMAGE_PROVIDER, { ok: true, message: 'a vision call succeeded on the same account' });
+    }
+  };
+  void check();
+}
+
 /** Remember how an image generation went. Never throws, never awaited. */
 export function recordImageOutcome(input: { ok: boolean; message?: string }): void {
   recordProviderOutcome(IMAGE_PROVIDER, input);

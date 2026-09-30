@@ -572,7 +572,7 @@ export default function AutopilotQueue() {
               const channels = CHANNEL_KEYS.filter((k) => r.pack && typeof r.pack[k] === 'string' && r.pack[k].trim());
               const open = openChannel[r.id] || channels[0] || 'instagram';
               return (
-                <article key={r.id} className="relative overflow-hidden rounded-2xl ring-1 ring-line">
+                <article key={r.id} data-ai-target="run" data-ai-id={r.id} data-ai-label={r.angle?.query || 'Autopilot draft'} className="relative overflow-hidden rounded-2xl ring-1 ring-line">
                   <PanelLoader scope={runScope(r.id)} rounded="rounded-2xl" />
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-subtle/40 px-5 py-3">
                     <div className="flex flex-wrap items-center gap-2 text-[13px]">
