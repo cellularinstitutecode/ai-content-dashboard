@@ -43,18 +43,39 @@ let __slotSeq = 0;
 const slotKey = () => 's_' + Date.now().toString(36) + '_' + (__slotSeq++).toString(36);
 const SOCIAL_NETWORKS = ['instagram', 'facebook', 'linkedin'] as const;
 
+/** One post of the week, as a compact card. "Preview & edit" opens it in the panel. */
+function SlotCard({ slot, tone, onChange, onOpen }: { slot: EditableSlot; tone: string; onChange: (next: EditableSlot) => void; onOpen: () => void }) {
+  return (
+    <div className={'min-w-0 break-words hyphens-auto rounded-2xl p-3.5 text-[12px] ring-1 transition ' + tone + (slot.on ? '' : ' opacity-40')}>
+      <div className="flex items-start justify-between gap-2">
+        <span className="text-[13px] font-semibold tabular-nums">{slot.time}</span>
+        <input type="checkbox" checked={slot.on} onChange={() => onChange({ ...slot, on: !slot.on })} aria-label={'Include ' + slot.pillar + ' on ' + DAY_LABELS[slot.weekday]} className="mt-0.5" />
+      </div>
+      <button type="button" onClick={onOpen} className="mt-2 text-left text-[14px] font-semibold leading-snug hover:underline">{slot.pillar}</button>
+      <div className="mt-2.5 flex flex-wrap gap-1.5">
+        {slot.format === 'blog' && <span className="rounded-md bg-white/70 px-1.5 py-0.5 font-medium">Article</span>}
+        {slot.providers.map((p) => <span key={p} className="rounded-md bg-white/70 px-1.5 py-0.5">{NETWORK_LABEL[p] || p}</span>)}
+      </div>
+      <div className="mt-3 leading-relaxed opacity-80" title={slot.angles.join('\n')}>
+        {slot.angles.length} angle{slot.angles.length === 1 ? '' : 's'}{slot.angles[0] ? ' · e.g. “' + slot.angles[0] + '”' : ''}
+      </div>
+      {/* The document's note for this post, shown so the team can see it was read. */}
+      {slot.rule && <div className="mt-2 rounded-lg bg-white/70 px-2 py-1.5 text-[11px] leading-snug"><span className="font-semibold">Note:</span> {slot.rule}</div>}
+      <button type="button" onClick={onOpen} className="mt-3 rounded-md bg-white/80 px-2 py-1 text-[11px] font-medium ring-1 ring-black/10 hover:bg-white">Preview &amp; edit</button>
+    </div>
+  );
+}
+
 /**
- * One post of the week, previewable and editable like any other draft.
- *
- * Collapsed, it is the card the document produced. Open, every angle is
- * listed and editable, angles can be added or removed, and the pillar, time,
- * channels, article-or-post and the document's note can all be changed —
- * before "Create schedules" turns it into a template. The server normalises
- * whatever comes back (lib/strategy-upload.ts normalizeUpload), so nothing
- * typed here can reach a template unchecked.
+ * The post, opened: the same preview panel the calendar uses for a post,
+ * with every angle in full and everything editable at full width — the
+ * pillar, day and time, channels (or Article), the angles (add, edit,
+ * remove), the writer's note. Changes apply as they are typed; "Done"
+ * closes. The server normalises whatever comes back
+ * (lib/strategy-upload.ts normalizeUpload), so nothing typed here can reach
+ * a template unchecked.
  */
-function SlotCard({ slot, tone, onChange, onRemove }: { slot: EditableSlot; tone: string; onChange: (next: EditableSlot) => void; onRemove: () => void }) {
-  const [openCard, setOpenCard] = useState(false);
+function SlotPanel({ slot, onChange, onRemove, onClose }: { slot: EditableSlot; onChange: (next: EditableSlot) => void; onRemove: () => void; onClose: () => void }) {
   const [newAngle, setNewAngle] = useState('');
   const set = (patch: Partial<EditableSlot>) => onChange({ ...slot, ...patch });
   const setAngle = (i: number, v: string) => set({ angles: slot.angles.map((a, j) => (j === i ? v : a)) });
@@ -65,64 +86,79 @@ function SlotCard({ slot, tone, onChange, onRemove }: { slot: EditableSlot; tone
     const next = has ? slot.providers.filter((p) => p !== n) : [...slot.providers, n];
     set({ providers: next.length ? next : slot.providers });
   };
-  const field = 'w-full rounded-lg bg-white/80 px-2 py-1 text-[12px] text-ink ring-1 ring-black/10 focus:outline-none focus:ring-accent/40';
+  const field = 'w-full rounded-xl bg-canvas px-3 py-2 text-[13px] text-ink ring-1 ring-black/10 focus:outline-none focus:ring-accent/40';
+  const label = 'mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink/50';
   return (
-    <div className={'min-w-0 break-words hyphens-auto rounded-2xl p-3.5 text-[12px] ring-1 transition ' + tone + (slot.on ? '' : ' opacity-40')}>
-      <div className="flex items-start justify-between gap-2">
-        {openCard
-          ? <input aria-label="Time" value={slot.time} onChange={(e) => set({ time: e.target.value })} placeholder="09:00" className={field + ' max-w-[80px] tabular-nums'} />
-          : <span className="text-[13px] font-semibold tabular-nums">{slot.time}</span>}
-        <input type="checkbox" checked={slot.on} onChange={() => set({ on: !slot.on })} aria-label={'Include ' + slot.pillar + ' on ' + DAY_LABELS[slot.weekday]} className="mt-0.5" />
-      </div>
-      {openCard
-        ? <input aria-label="Pillar" value={slot.pillar} onChange={(e) => set({ pillar: e.target.value })} className={field + ' mt-2 text-[14px] font-semibold'} />
-        : <div className="mt-2 text-[14px] font-semibold leading-snug">{slot.pillar}</div>}
-      <div className="mt-2.5 flex flex-wrap gap-1.5">
-        {openCard ? (
-          <>
-            <button type="button" onClick={() => set(slot.format === 'blog' ? { format: 'social', providers: [...SOCIAL_NETWORKS] } : { format: 'blog', providers: ['blog'] })}
-              className={'rounded-md px-1.5 py-0.5 font-medium ring-1 ' + (slot.format === 'blog' ? 'bg-ink text-white ring-ink' : 'bg-white/70 ring-black/10')}>Article</button>
-            {slot.format !== 'blog' && SOCIAL_NETWORKS.map((n) => (
-              <button key={n} type="button" onClick={() => toggleNetwork(n)} className={'rounded-md px-1.5 py-0.5 ring-1 ' + (slot.providers.includes(n) ? 'bg-ink text-white ring-ink' : 'bg-white/70 ring-black/10')}>{NETWORK_LABEL[n] || n}</button>
-            ))}
-          </>
-        ) : (
-          <>
-            {slot.format === 'blog' && <span className="rounded-md bg-white/70 px-1.5 py-0.5 font-medium">Article</span>}
-            {slot.providers.map((p) => <span key={p} className="rounded-md bg-white/70 px-1.5 py-0.5">{NETWORK_LABEL[p] || p}</span>)}
-          </>
-        )}
-      </div>
-      {openCard ? (
-        <div className="mt-3">
-          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide opacity-70">Angles — one post each week draws on one of these</div>
-          <ul className="space-y-1.5">
-            {slot.angles.map((a, i) => (
-              <li key={i} className="flex items-start gap-1.5">
-                <textarea aria-label={'Angle ' + (i + 1)} value={a} onChange={(e) => setAngle(i, e.target.value)} rows={2} className={field + ' resize-y leading-snug'} />
-                <button type="button" onClick={() => removeAngle(i)} aria-label="Remove angle" className="mt-1 shrink-0 rounded-md px-1.5 text-[12px] text-red-600 ring-1 ring-red-200 hover:bg-red-50">×</button>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-2 flex items-center gap-1.5">
-            <input aria-label="New angle" value={newAngle} onChange={(e) => setNewAngle(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addAngle(); } }} placeholder="Add an angle…" className={field} />
-            <button type="button" onClick={addAngle} disabled={!newAngle.trim()} className="shrink-0 rounded-md bg-accent px-2 py-1 text-[12px] font-semibold text-white disabled:opacity-40">Add</button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
+      <div className="relative flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-surface shadow-2xl ring-1 ring-black/10" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Post preview">
+        <div className="flex items-start justify-between gap-3 border-b border-black/5 px-5 py-4">
+          <div className="min-w-0">
+            <h3 className="truncate text-base font-semibold text-ink">{slot.pillar || 'New post'}</h3>
+            <p className="mt-0.5 text-[12px] text-ink/50">{DAY_LABELS[slot.weekday]} · {slot.time} · {slot.format === 'blog' ? 'Article' : slot.providers.map((p) => NETWORK_LABEL[p] || p).join(', ')} · one post a week, drawing on one of the angles below</p>
           </div>
-          <div className="mt-3 text-[11px] font-semibold uppercase tracking-wide opacity-70">Note for the writer</div>
-          <textarea aria-label="Note" value={slot.rule} onChange={(e) => set({ rule: e.target.value })} rows={2} placeholder="e.g. mention the recovery lounge without promoting it" className={field + ' mt-1 resize-y leading-snug'} />
+          <button type="button" onClick={onClose} aria-label="Close preview" className="shrink-0 rounded-full px-2 text-lg leading-none text-ink/50 hover:bg-black/5">×</button>
         </div>
-      ) : (
-        <div className="mt-3 leading-relaxed opacity-80" title={slot.angles.join('\n')}>
-          {slot.angles.length} angle{slot.angles.length === 1 ? '' : 's'} · e.g. \u201c{slot.angles[0]}\u201d
+        <div className="overflow-y-auto px-5 py-4">
+          <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_140px_110px]">
+            <div>
+              <span className={label}>Pillar</span>
+              <input aria-label="Pillar" value={slot.pillar} onChange={(e) => set({ pillar: e.target.value })} className={field + ' text-[15px] font-semibold'} />
+            </div>
+            <div>
+              <span className={label}>Day</span>
+              <select aria-label="Day" value={slot.weekday} onChange={(e) => set({ weekday: Number(e.target.value) })} className={field}>
+                {WEEK_ORDER.map((d) => <option key={d} value={d}>{DAY_LABELS[d]}</option>)}
+              </select>
+            </div>
+            <div>
+              <span className={label}>Time</span>
+              <input aria-label="Time" value={slot.time} onChange={(e) => set({ time: e.target.value })} placeholder="09:00" className={field + ' tabular-nums'} />
+            </div>
+          </div>
+          {slot.theme && <p className="mt-2 text-[12px] italic text-ink/60">Day theme: {slot.theme}</p>}
+
+          <div className="mt-4">
+            <span className={label}>Where it goes</span>
+            <div className="flex flex-wrap gap-1.5">
+              <button type="button" onClick={() => set(slot.format === 'blog' ? { format: 'social', providers: [...SOCIAL_NETWORKS] } : { format: 'blog', providers: ['blog'] })}
+                className={'rounded-full px-3 py-1 text-[12px] font-medium ring-1 ' + (slot.format === 'blog' ? 'bg-ink text-white ring-ink' : 'bg-white ring-black/10')}>Article</button>
+              {slot.format !== 'blog' && SOCIAL_NETWORKS.map((n) => (
+                <button key={n} type="button" onClick={() => toggleNetwork(n)} className={'rounded-full px-3 py-1 text-[12px] font-medium ring-1 ' + (slot.providers.includes(n) ? 'bg-ink text-white ring-ink' : 'bg-white ring-black/10')}>{NETWORK_LABEL[n] || n}</button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <span className={label}>Angles — every week’s post draws on one of these, in turn</span>
+            <ol className="space-y-2">
+              {slot.angles.map((a, i) => (
+                <li key={i} className="flex items-start gap-2">
+                  <span className="mt-2 w-5 shrink-0 text-right text-[12px] tabular-nums text-ink/40">{i + 1}.</span>
+                  <textarea aria-label={'Angle ' + (i + 1)} value={a} onChange={(e) => setAngle(i, e.target.value)} rows={2} className={field + ' resize-y leading-relaxed'} />
+                  <button type="button" onClick={() => removeAngle(i)} aria-label="Remove angle" className="mt-1.5 shrink-0 rounded-md px-2 py-1 text-[12px] text-red-600 ring-1 ring-red-200 hover:bg-red-50">Remove</button>
+                </li>
+              ))}
+              {!slot.angles.length && <li className="text-[12px] text-ink/50">No angles yet — add the first one below.</li>}
+            </ol>
+            <div className="mt-2 flex items-center gap-2 pl-7">
+              <input aria-label="New angle" value={newAngle} onChange={(e) => setNewAngle(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addAngle(); } }} placeholder="Add an angle…" className={field} />
+              <button type="button" onClick={addAngle} disabled={!newAngle.trim()} className="shrink-0 rounded-full bg-accent px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-40">Add</button>
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <span className={label}>Note for the writer</span>
+            <textarea aria-label="Note" value={slot.rule} onChange={(e) => set({ rule: e.target.value })} rows={3} placeholder="e.g. mention the recovery lounge without promoting it" className={field + ' resize-y leading-relaxed'} />
+          </div>
         </div>
-      )}
-      {/* The document's note for this post, shown so the team can see it was read. */}
-      {!openCard && slot.rule && <div className="mt-2 rounded-lg bg-white/70 px-2 py-1.5 text-[11px] leading-snug"><span className="font-semibold">Note:</span> {slot.rule}</div>}
-      <div className="mt-3 flex items-center gap-2">
-        <button type="button" onClick={() => setOpenCard((v) => !v)} className="rounded-md bg-white/80 px-2 py-1 text-[11px] font-medium ring-1 ring-black/10 hover:bg-white">
-          {openCard ? 'Done' : 'Preview & edit'}
-        </button>
-        {openCard && <button type="button" onClick={onRemove} className="rounded-md px-2 py-1 text-[11px] font-medium text-red-600 ring-1 ring-red-200 hover:bg-red-50">Remove post</button>}
+        <div className="flex flex-wrap items-center gap-2 border-t border-black/5 bg-canvas px-5 py-3">
+          <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-ink/70">
+            <input type="checkbox" checked={slot.on} onChange={() => set({ on: !slot.on })} className="h-3.5 w-3.5" /> Include this post
+          </label>
+          <span className="flex-1" />
+          <button type="button" onClick={onRemove} className="rounded-full px-3 py-1 text-[12px] font-medium text-red-600 ring-1 ring-red-200 hover:bg-red-50">Remove post</button>
+          <button type="button" onClick={onClose} className="rounded-full bg-accent px-4 py-1 text-[12px] font-semibold text-white hover:opacity-90">Done</button>
+        </div>
       </div>
     </div>
   );
@@ -138,6 +174,8 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
   const [preview, setPreview] = useState<Preview>(null);
   /** The week as the editor holds it: every slot previewable, editable, addable and removable. */
   const [slots, setSlots] = useState<EditableSlot[]>([]);
+  /** The slot open in the preview panel, by key. */
+  const [openKey, setOpenKey] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
 
@@ -207,12 +245,17 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
   const chosen = slots.filter((sl) => sl.on).length;
   const updateSlot = (k: string, next: EditableSlot) => setSlots((prev) => prev.map((sl) => (sl._k === k ? next : sl)));
   const removeSlot = (k: string) => setSlots((prev) => prev.filter((sl) => sl._k !== k));
-  const addSlot = (weekday: number) => setSlots((prev) => {
-    const sameDay = prev.filter((sl) => sl.weekday === weekday);
-    const theme = sameDay.find((sl) => sl.theme)?.theme || '';
-    const time = sameDay.some((sl) => sl.time === '09:00') ? (sameDay.some((sl) => sl.time === '18:00') ? '13:00' : '18:00') : '09:00';
-    return [...prev, { _k: slotKey(), on: true, weekday, time, pillar: 'New post', theme, angles: [], format: 'social', providers: [...SOCIAL_NETWORKS], rule: '' }];
-  });
+  const addSlot = (weekday: number): string => {
+    const k = slotKey();
+    setSlots((prev) => {
+      const sameDay = prev.filter((sl) => sl.weekday === weekday);
+      const theme = sameDay.find((sl) => sl.theme)?.theme || '';
+      const time = sameDay.some((sl) => sl.time === '09:00') ? (sameDay.some((sl) => sl.time === '18:00') ? '13:00' : '18:00') : '09:00';
+      return [...prev, { _k: k, on: true, weekday, time, pillar: 'New post', theme, angles: [], format: 'social', providers: [...SOCIAL_NETWORKS], rule: '' }];
+    });
+    return k;
+  };
+  const openSlot = openKey ? slots.find((sl) => sl._k === openKey) || null : null;
   // Every slot is already there from an earlier upload: nothing to press.
   const nothingNew = Boolean(preview && preview.create === 0);
 
@@ -275,11 +318,11 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
                         slot={sl}
                         tone={toneFor(sl.pillar, pillars)}
                         onChange={(next) => updateSlot(sl._k, next)}
-                        onRemove={() => removeSlot(sl._k)}
+                        onOpen={() => setOpenKey(sl._k)}
                       />
                     )) : <div className="text-[11px] text-ink-faint">No posts</div>}
                     {/* Add to the week: a new post on this day, edited in place. */}
-                    <button type="button" onClick={() => addSlot(d)} className="rounded-xl border border-dashed border-line px-2 py-2 text-[12px] font-medium text-ink-muted transition hover:border-accent/60 hover:text-accent">
+                    <button type="button" onClick={() => setOpenKey(addSlot(d))} className="rounded-xl border border-dashed border-line px-2 py-2 text-[12px] font-medium text-ink-muted transition hover:border-accent/60 hover:text-accent">
                       + Add a post
                     </button>
                   </div>
@@ -307,9 +350,18 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
               {creating ? 'Creating…' : nothingNew ? 'Already created' : 'Create ' + chosen + ' schedule' + (chosen === 1 ? '' : 's')}
             </button>
             <button type="button" onClick={() => { setPlan(null); setSlots([]); setPreview(null); }} className="text-[12px] font-medium text-ink-muted hover:underline">Discard</button>
-            <span className="text-[12px] text-ink-faint">Open any card to see and edit every angle, or add a post to a day. Every post waits for your approval before it is scheduled or published.</span>
+            <span className="text-[12px] text-ink-faint">Open any post to see and edit every angle, or add a post to a day. Every post waits for your approval before it is scheduled or published.</span>
           </div>
         </div>
+      )}
+
+      {openSlot && (
+        <SlotPanel
+          slot={openSlot}
+          onChange={(next) => updateSlot(openSlot._k, next)}
+          onRemove={() => { removeSlot(openSlot._k); setOpenKey(null); }}
+          onClose={() => setOpenKey(null)}
+        />
       )}
     </section>
   );
