@@ -37,24 +37,28 @@ test('one bad photograph does not fail the whole pass', () => {
 });
 
 const caption = readFileSync(new URL('../app/api/sources/caption/route.ts', import.meta.url), 'utf8');
+// The captioner itself lives in the index now (lib/library-index.ts), which
+// remembers what it read so posts can be given the clinic's own photographs.
+const index = readFileSync(new URL('./library-index.ts', import.meta.url), 'utf8');
 
-test('the caption route is read-only too', () => {
+test('the caption route writes nothing to Drive or the sheet', () => {
   assert.doesNotMatch(caption, /storeBytes|uploadFolderImage|appendRow|updateRowCells/);
   assert.doesNotMatch(caption, /export async function POST/);
   assert.match(caption, /requireAllowlistedUser/);
+  assert.match(caption, /indexLibrary\(\{ max: limit, budgetMs: 270_000, refresh \}\)/, 'it indexes, and remembers');
 });
 
 test('captioning asks for the small image, not the 30 MB original', () => {
-  assert.match(caption, /detail: 'low'/);
-  assert.match(caption, /skipped: 'too_large'/, 'an oversized file is reported, not silently dropped');
+  assert.match(index, /detail: 'low'/);
+  assert.match(index, /if \(!small && file\.size > 12 \* 1024 \* 1024\) \{ report\.skipped \+= 1; continue; \}/, 'an oversized file is counted, not silently dropped');
 });
 
 const small = readFileSync(new URL('./image-small.ts', import.meta.url), 'utf8');
 const measure2 = readFileSync(new URL('./palette-measure.ts', import.meta.url), 'utf8');
 
 test('a 30 MB camera export is scaled, not skipped', () => {
-  assert.match(caption, /smallJpeg/);
-  assert.doesNotMatch(caption, /if \(file\.bytes\.length > 12 \* 1024 \* 1024\) \{\s*rows\.push/,
+  assert.match(index, /smallJpeg/);
+  assert.doesNotMatch(index, /if \(file\.bytes\.length > 12 \* 1024 \* 1024\) \{\s*rows\.push/,
     'the size check must come after the downscale attempt, not instead of it');
 });
 

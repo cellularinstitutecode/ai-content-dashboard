@@ -21,6 +21,7 @@ import { claimSupportNote, type ClaimSupportStamp } from '@/lib/claim-support';
 import { fixPlan, fixRunning, fixStepsLabel, runFixInput, type FixStatus } from '@/lib/fix-plan';
 import FixStatusLine from '@/components/FixStatusLine';
 import ImageEditPanel, { okToSpend, type ImageAction } from '@/components/ImageEditPanel';
+import LibraryPicker from '@/components/LibraryPicker';
 import { creditLabel } from '@/lib/cover-edit';
 
 // The visible pipeline an engine run walks through. The tick call does all of
@@ -258,6 +259,8 @@ export default function AutopilotQueue() {
   // on every poll while a generation is in flight or after it failed.
   const imageAsked = useRef<Set<string>>(new Set());
 
+  /** The card whose library grid is open. */
+  const [libraryFor, setLibraryFor] = useState<string | null>(null);
   const load = useCallback(async (opts?: { quiet?: boolean }) => {
     if (!opts?.quiet) setLoading(true);
     try {
@@ -762,6 +765,21 @@ export default function AutopilotQueue() {
                           busy={regenIds.has(r.id) || optionsIds.has(r.id) || busyIds.has(r.id)}
                           onAction={(body, meta) => editImage(r, body, meta)}
                         />
+                      )}
+                      {/* FREE FIRST: a real photograph from the team's Drive folder. */}
+                      {r.draft_id && (
+                        <div className="mt-2">
+                          <button
+                            type="button"
+                            onClick={() => setLibraryFor((cur) => (cur === r.id ? null : r.id))}
+                            disabled={regenIds.has(r.id) || optionsIds.has(r.id) || busyIds.has(r.id)}
+                            title="A real photo from the team's Drive folder, with the brand's colour filter and the post title — no AI, no credits"
+                            className={'rounded-full px-3 py-1 text-[12px] font-medium ring-1 transition disabled:opacity-50 ' + (libraryFor === r.id ? 'bg-accent text-white ring-accent' : 'text-accent ring-line hover:bg-subtle')}
+                          >📁 Pick image from library · free</button>
+                          {libraryFor === r.id && (
+                            <LibraryPicker draftId={r.draft_id} title onChanged={async () => { setLibraryFor(null); await load({ quiet: true }); announce('images', 'drafts', 'autopilot'); }} onClose={() => setLibraryFor(null)} />
+                          )}
+                        </div>
                       )}
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <span className="text-[11px] text-ink-faint">These spend credits:</span>

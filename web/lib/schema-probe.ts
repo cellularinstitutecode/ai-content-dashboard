@@ -38,6 +38,13 @@ export type SchemaProbe = {
 
 export const REQUIRED_SCHEMA: SchemaProbe[] = [
   {
+    table: 'library_photos',
+    column: 'file_id',
+    kind: 'table',
+    file: 'supabase/library-photos.sql',
+    breaks: 'automatic library photographs (posts get AI pictures instead)',
+  },
+  {
     table: 'template_runs',
     column: 'id',
     kind: 'table',

@@ -1,118 +1,51 @@
 // GET /api/sources/caption
 //
-// Reads the team's Drive photo folder with the vision model and reports what is
-// in it: what each photograph shows, what the cover rules would refuse it for,
-// and — the question this was built to answer — how many usable pictures exist
-// for each weekly pillar.
+// Reads the team's Drive photo folder with the vision model and REMEMBERS what
+// is in it (lib/library-index.ts, table library_photos): what each photograph
+// shows, what the cover rules would refuse it for, and its colour against the
+// house palette — so posts can be given the clinic's own photographs instead
+// of paying for generated ones.
 //
-// Read-only. Nothing is imported, stored or changed; the captions come back in
-// the response for a person to look at before any of this is wired into
-// picture-picking.
-import { readFile } from 'node:fs/promises';
+//   ?status=1          how much of the folder is indexed (reads nothing new)
+//   ?limit=N           index up to N photographs not yet read (default 25)
+//   ?refresh=1         read them again even if indexed
+//
+// The report also carries the inventory by pillar, as it always did.
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllowlistedUser } from '@/lib/auth';
-import { LIBRARY_IMAGE_MAX_BYTES, downloadDriveFileToDisk, listFolderImages, sourcesConfigured } from '@/lib/google-sources';
-// The camera exports in the folder run 30-45 MB, some far more. Both of these
-// routes stream the file to disk and scale it down there before they look at
-// it, so the 200 MB ceiling (LIBRARY_IMAGE_MAX_BYTES) only refuses what the
-// function's disk cannot hold.
+import { sourcesConfigured } from '@/lib/google-sources';
 import { PILLARS } from '@/lib/content-strategy';
-import { captionSystemPrompt, coverSafe, inventory, parseCaption, pillarsFor, type Caption } from '@/lib/library-caption';
-import { smallJpeg } from '@/lib/image-small';
+import { coverSafe, inventory, pillarsFor, type Caption } from '@/lib/library-caption';
+import { indexLibrary, libraryIndexStatus, loadLibraryRows } from '@/lib/library-index';
 import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
 
-const VISION_MODEL = process.env.OPENAI_VISION_MODEL || 'gpt-4o-mini';
-
-async function captionOne(bytes: Buffer, contentType: string, key: string): Promise<Caption | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30_000);
-  try {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-      body: JSON.stringify({
-        model: VISION_MODEL,
-        max_tokens: 220,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: captionSystemPrompt() },
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: 'Catalogue this photograph.' },
-              // "low" detail is deliberate: the questions are what the picture
-              // is OF and whether words are visible, both of which survive a
-              // small image, and the folder holds 30 MB camera exports.
-              { type: 'image_url', image_url: { url: `data:${contentType};base64,${bytes.toString('base64')}`, detail: 'low' } },
-            ],
-          },
-        ],
-      }),
-      signal: controller.signal,
-    });
-    if (!res.ok) return null;
-    const j = await res.json();
-    return parseCaption(j?.choices?.[0]?.message?.content ?? '');
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 export async function GET(req: NextRequest) {
   const gate = await requireAllowlistedUser();
   if (!gate.ok) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   if (!sourcesConfigured()) return NextResponse.json({ error: 'sources_not_configured' }, { status: 503 });
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) return NextResponse.json({ error: 'no_openai_key' }, { status: 503 });
 
   const url = new URL(req.url);
+  if (url.searchParams.get('status')) return NextResponse.json(await libraryIndexStatus());
+  if (!process.env.OPENAI_API_KEY) return NextResponse.json({ error: 'no_openai_key' }, { status: 503 });
   const limit = Math.min(60, Math.max(1, Number(url.searchParams.get('limit')) || 25));
-  const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
+  const refresh = Boolean(url.searchParams.get('refresh'));
 
   try {
-    const all = await listFolderImages();
-    const slice = all.slice(offset, offset + limit);
-    const rows: Array<Record<string, unknown>> = [];
-    const caps: Caption[] = [];
-    for (const f of slice) {
-      try {
-        const file = await downloadDriveFileToDisk(f.id, LIBRARY_IMAGE_MAX_BYTES);
-        let c: Caption | null;
-        try {
-          // A 30 MB camera export is far more than the model needs and more than
-          // the request will carry, so it is scaled first rather than skipped —
-          // those files are the best photography in the folder.
-          const small = file.size > 2 * 1024 * 1024 ? await smallJpeg(file.path) : null;
-          if (!small && file.size > 12 * 1024 * 1024) {
-            rows.push({ id: f.id, name: f.name, skipped: 'too_large', mb: Math.round(file.size / 1048576) });
-            continue;
-          }
-          c = await captionOne(small ?? (await readFile(file.path)), small ? 'image/jpeg' : file.contentType, key);
-        } finally {
-          await file.cleanup();
-        }
-        if (!c) { rows.push({ id: f.id, name: f.name, skipped: 'unreadable' }); continue; }
-        caps.push(c);
-        const safe = coverSafe(c);
-        rows.push({ id: f.id, name: f.name, caption: c.caption, subjects: c.subjects, blockers: c.blockers,
-                    pillars: pillarsFor(c), coverSafe: safe.ok, needsConsent: safe.needsConsent });
-      } catch (e) {
-        reportError('sources-caption:one', e);
-        rows.push({ id: f.id, name: f.name, skipped: 'unreadable' });
-      }
-    }
+    const report = await indexLibrary({ max: limit, budgetMs: 270_000, refresh });
+    const rows = await loadLibraryRows();
+    const caps: Caption[] = rows.map((r) => ({ caption: r.caption, subjects: r.subjects as Caption['subjects'], blockers: r.blockers as Caption['blockers'] }));
     return NextResponse.json({
-      total: all.length,
-      offset,
-      captioned: caps.length,
-      skipped: rows.filter((r) => r.skipped).length,
+      ...report,
+      indexed: rows.length,
       inventory: inventory(caps, PILLARS.map((p) => p.id)),
-      rows,
+      rows: rows.map((r) => {
+        const c = { caption: r.caption, subjects: r.subjects as Caption['subjects'], blockers: r.blockers as Caption['blockers'] };
+        const safe = coverSafe(c);
+        return { id: r.file_id, name: r.name, caption: r.caption, subjects: r.subjects, blockers: r.blockers, pillars: pillarsFor(c), coverSafe: safe.ok, needsConsent: safe.needsConsent, measured: Boolean(r.stats), used: r.used_count, lastUsedAt: r.last_used_at };
+      }),
     });
   } catch (e) {
     reportError('sources-caption', e);

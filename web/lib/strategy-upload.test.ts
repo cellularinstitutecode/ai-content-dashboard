@@ -320,7 +320,7 @@ test('a previewed post has an editor, a Verify / fix button and its picture, lik
   assert.match(picture, /budgetMs: PICTURE_BUDGET_MS/);
   assert.match(route, /const PICTURE_BUDGET_MS = 240_000;/);
   assert.match(route, /export const maxDuration = 300;/);
-  assert.match(picture, /const again = Boolean\(\(body as \{ again\?: unknown \}\)\.again\);[\s\S]{0,400}force: again,/, 'make it again');
+  assert.match(picture, /const again = Boolean\(\(body as \{ again\?: unknown \}\)\.again\);[\s\S]{0,400}force: true,/, 'make it again');
   assert.match(picture, /reason = 'The picture could not be made: '/);
   assert.match(picture, /if \(!imagesEnabled\(\)\) return NextResponse\.json\(\{ draftId, image: null, reason:/);
   // Verify / fix on the draft: the same ladder as the calendar's button, saved on the draft, checks handed back.
@@ -335,7 +335,7 @@ test('a previewed post has an editor, a Verify / fix button and its picture, lik
   assert.match(panel, /Save changes/);
   // The buttons, and the reason when there is no picture.
   assert.match(panel, /\{writing === 'fix' \? 'Checking…' : 'Verify \/ fix'\}/);
-  assert.match(panel, /draft\.image\?\.url \? 'Make the picture again' : 'Make the picture'/);
+  assert.match(panel, /draft\.image\?\.url \? 'Make an AI picture instead' : 'Make the picture'/);
   assert.match(panel, /action: 'picture', draftId, again/);
   assert.match(panel, /action: 'fix', draftId/);
   assert.match(panel, /imageNote: reason \|\| 'The picture could not be made just now\.'/);
@@ -352,12 +352,43 @@ test('the week can be paused from the page, and its pictures cost a quarter', ()
   assert.match(panel, /localStorage\.setItem\(PICTURES_KEY/);
   // A preview's first picture is medium quality with one take; "again" is the real thing.
   const route = src('app/api/templates/strategy-upload/route.ts');
-  assert.match(route, /quality: again \? 'high' : 'medium', maxAttempts: again \? 2 : 1/);
+  // The library first; a generated preview picture (medium, one take) only when no photograph fits; "again" is a high-quality AI take.
+  assert.match(route, /pictureForDraft\(draftId, auth\.userId, \{ budgetMs: PICTURE_BUDGET_MS, quality: 'medium', maxAttempts: 1 \}\)/);
+  assert.match(route, /ensureDraftImage\(draftId, auth\.userId, \{ force: true, budgetMs: PICTURE_BUDGET_MS, quality: 'high', maxAttempts: 2 \}\)/);
   const images = src('lib/images.ts');
   assert.match(images, /const attempts = quality === 'medium' \? ladder\.filter\(\(a\) => a\.body\.quality !== 'high'\) : ladder;/);
   assert.match(images, /const maxAttempts = Math\.max\(1, Math\.min\(MAX_GEN_ATTEMPTS, Math\.round\(opts\.maxAttempts \?\? MAX_GEN_ATTEMPTS\)\)\);/);
   assert.match(images, /generateImageBytes\(prompt, planner\?\.size, callMs\(\), deadline, opts\.quality \?\? 'high'\)/);
   // Every other caller is unchanged: high, three takes.
   assert.doesNotMatch(src('lib/autopilot.ts'), /quality: 'medium'/);
-  assert.match(panel, /Preview picture at medium quality/);
+  assert.match(panel, /a preview picture was made at medium quality/);
+  assert.match(panel, /The clinic&rsquo;s own photograph, from the Image Library/);
+});
+
+test('the clinic’s own photographs come first, and no photograph is repeated within 45 days', () => {
+  const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  // One door for every automatic picture: the Autopilot's draft and approve steps, and the strategy preview.
+  const door = src('lib/draft-picture.ts');
+  assert.match(door, /const pick = await libraryPhotoFor\(\{ pack, topic: String\(row\.topic \|\| ''\), brand, budgetMs/);
+  assert.match(door, /const made = await ensureDraftImage\(draftId, ownerId, \{ budgetMs: opts\.budgetMs, quality: opts\.quality, maxAttempts: opts\.maxAttempts \}\);/, 'generated only after the library declined');
+  const autopilot = src('lib/autopilot.ts');
+  assert.match(autopilot, /await pictureForDraft\(draftId, run\.user_id\)/);
+  assert.match(autopilot, /shippable\(\(await pictureForDraft\(run\.draft_id, run\.user_id\)\)\.image\)/);
+  // The picker: the post's pillar (planner, or its words), a fresh photograph, the same grading as a manual pick, and the use remembered.
+  const pick = src('lib/library-pick.ts');
+  assert.match(pick, /pickFresh\(candidatesFrom\(rows\), pillars, Date\.now\(\), \{ exclude: opts\.excludeFileId \? \[opts\.excludeFileId\] : \[\] \}\)/);
+  assert.match(pick, /libraryHero\(\{ url, title: Boolean\(planner\), pack: opts\.pack, topic: opts\.topic, brand: opts\.brand, libraryFileId: row\.file_id, libraryName: row\.name \}\)/);
+  assert.match(pick, /await touchLibraryUse\(row\.file_id\);/);
+  assert.match(src('lib/library-topic.ts'), /export const REUSE_WINDOW_DAYS = 45;/);
+  // A manual pick counts as a use too.
+  assert.match(src('app/api/drafts/image/route.ts'), /if \(libraryFileId\) void touchLibraryUse\(libraryFileId\);/);
+  // The index: a table the health check knows, filled from the Image Library page and topped up on the way.
+  assert.match(src('supabase/library-photos.sql'), /create table if not exists public\.library_photos/);
+  assert.match(src('lib/schema-probe.ts'), /table: 'library_photos'/);
+  assert.match(src('components/SourcesView.tsx'), /Read the library for automatic pictures/);
+  assert.match(pick, /indexLibrary\(\{ max: TOP_UP/);
+  // "Pick image from library" on the strategy preview and the Autopilot card.
+  assert.match(src('components/StrategyDrop.tsx'), /📁 Pick image from library/);
+  assert.match(src('app/AutopilotQueue.tsx'), /📁 Pick image from library · free/);
+  assert.match(src('components/LibraryPicker.tsx'), /action: 'import_image', fileId: img\.id/);
 });

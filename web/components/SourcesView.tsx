@@ -1137,6 +1137,31 @@ export default function SourcesView({ kind }: { kind: Tab }) {
     router.push('/draft#section-publish' as Route);
   }
 
+  /** The library index (lib/library-index.ts): how much of the folder the automatic picker knows. */
+  const [index, setIndex] = useState<{ total: number; indexed: number; usable: number } | null>(null);
+  const [indexing, setIndexing] = useState(false);
+  const [indexNote, setIndexNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (tab !== 'images') return;
+    fetch('/api/sources/caption?status=1').then((r) => (r.ok ? r.json() : null)).then((j) => { if (j) setIndex(j); }).catch(() => undefined);
+  }, [tab]);
+  async function indexLibrary() {
+    setIndexing(true); setIndexNote(null);
+    try {
+      const r = await fetch('/api/sources/caption?limit=40');
+      if (!r.ok) { setIndexNote(await friendlyErrorFromResponse(r, 'The library could not be read just now.')); return; }
+      const j = await r.json();
+      setIndex({ total: j.total, indexed: j.indexed, usable: index?.usable ?? 0 });
+      setIndexNote('Read ' + j.added + ' new photograph' + (j.added === 1 ? '' : 's') + (j.skipped ? ', ' + j.skipped + ' could not be read' : '') + (j.outOfTime ? '. Press again for the rest.' : '.'));
+      const st = await fetch('/api/sources/caption?status=1').then((x) => (x.ok ? x.json() : null)).catch(() => null);
+      if (st) setIndex(st);
+    } catch {
+      setIndexNote('The library could not be read just now.');
+    } finally {
+      setIndexing(false);
+    }
+  }
+
   async function importImage(img: DriveImage) {
     setBusy(img.id); setErr(null);
     try {
@@ -1740,6 +1765,18 @@ export default function SourcesView({ kind }: { kind: Tab }) {
             </div>
             {uploadErr && <p role="alert" style={{ fontSize: 12, color: '#b42318', marginTop: 8 }}>{uploadErr}</p>}
             <p style={{ fontSize: 12, opacity: .65, marginTop: 8 }}>&quot;Add a photo&quot; puts it straight into the team&apos;s Drive folder — everyone sees it, not just the dashboard. &quot;Use as hero image&quot; copies one into the dashboard so Metricool can publish it; the photo itself stays in Drive.</p>
+            {/* AUTOMATIC PICTURES FROM THE LIBRARY: the folder is read once (what
+                each photo shows, its colour), and every new post gets a fitting
+                photograph of the clinic before any AI picture is paid for. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 10, padding: '8px 10px', borderRadius: 10, background: 'rgba(0,0,0,0.03)', fontSize: 12 }}>
+              <span>
+                <strong>Automatic pictures from the library:</strong>{' '}
+                {index ? index.indexed + ' of ' + index.total + ' photos read, ' + index.usable + ' usable as post pictures.' : 'reading the index…'}{' '}
+                New posts get a fitting photo of the clinic first; an AI picture is made only when none fits. No photo is repeated within 45 days.
+              </span>
+              <button type="button" style={btn} disabled={indexing} onClick={() => void indexLibrary()}>{indexing ? 'Reading photos… (a few minutes)' : (index && index.indexed >= index.total && index.total > 0) ? 'Read new photos' : 'Read the library for automatic pictures'}</button>
+              {indexNote && <span role="status" style={{ opacity: .75 }}>{indexNote}</span>}
+            </div>
             {!images ? <p style={{ fontSize: 13, opacity: .6 }}>Reading the folder…</p>
               : images.length === 0 ? <p style={{ fontSize: 13, opacity: .6 }}>No images in the folder yet.</p>
               : (

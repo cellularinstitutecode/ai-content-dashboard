@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { generatePackImage, imagesEnabled, removeSuperseded, storeBytes, type PackImage } from '@/lib/images';
 import { libraryHero } from '@/lib/library-hero';
+import { touchLibraryUse } from '@/lib/library-index';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { plannerImageFor } from '@/lib/planner-image';
 import type { BrandContext } from '@/lib/ai';
@@ -127,6 +128,9 @@ export async function POST(req: NextRequest) {
     const givenAlt = typeof body?.alt === 'string' ? body.alt.trim().slice(0, 300) : '';
     // Which Drive file a library photo came from, for the picture's provenance.
     const libraryFileId = typeof body?.libraryFileId === 'string' && /^[A-Za-z0-9_-]{10,}$/.test(body.libraryFileId) ? body.libraryFileId : null;
+    // A photograph a person chose counts as used too, so the automatic picker
+    // does not hand the same one to the next post (lib/library-topic.ts).
+    if (libraryFileId) void touchLibraryUse(libraryFileId);
 
     // Scoped explicitly to the owner as well as by RLS — every sibling route
     // (drafts, posts, templates, brand) does both, and this was the only

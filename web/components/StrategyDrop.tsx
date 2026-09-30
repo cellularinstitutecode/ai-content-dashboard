@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { announce } from '@/components/refreshBus';
 import { PanelLoader } from '@/components/LoadingScreen';
+import LibraryPicker from '@/components/LibraryPicker';
 import { beginQueue, isPaused, setPaused, subscribePause, whenResumed } from '@/components/pauseBus';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 import { supabaseBrowser } from '@/lib/supabase';
@@ -97,7 +98,7 @@ const CHANNEL_KEYS: { key: string; label: string }[] = [
   { key: 'blog', label: 'Article' },
 ];
 
-function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, onSave, onChange, onRemove, onClose }: {
+function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, onLibraryPicked, onSave, onChange, onRemove, onClose }: {
   slot: EditableSlot;
   draft: PreviewDraft | null;
   writing: Writing;
@@ -107,6 +108,8 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, 
   onPicture: (again: boolean) => void;
   /** "Verify / fix": check the cited study against the copy; swap it when it does not back it. */
   onFix: () => void;
+  /** A library photograph was made the picture (components/LibraryPicker.tsx). */
+  onLibraryPicked: (image: { url: string; alt?: string | null }, notes: string[]) => void;
   /** Save the copy as edited, per channel. Resolves true when saved. */
   onSave: (edits: Record<string, string>) => Promise<boolean>;
   onChange: (next: EditableSlot) => void;
@@ -125,6 +128,8 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, 
     setEdits(next); setEditing(true);
   };
   const saveEditing = async () => { if (await onSave(edits)) setEditing(false); };
+  /** "Pick image from library": the grid, open under the buttons. */
+  const [picking, setPicking] = useState(false);
   const [angleChoice, setAngleChoice] = useState<string>('');
   const drafting = Boolean(writing);
   const set = (patch: Partial<EditableSlot>) => onChange({ ...slot, ...patch });
@@ -237,13 +242,18 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, 
                     <button type="button" onClick={startEditing} disabled={drafting || !draft.draftId} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">Edit</button>
                   )}
                   <button type="button" onClick={onFix} disabled={drafting || editing || !draft.draftId} title="Check that the cited study supports this post; replace it with one that does if not" className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">{writing === 'fix' ? 'Checking…' : 'Verify / fix'}</button>
-                  <button type="button" onClick={() => onPicture(Boolean(draft.image?.url))} disabled={drafting || editing || !draft.draftId} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">{writing === 'picture' ? 'Making the picture…' : draft.image?.url ? 'Make the picture again' : 'Make the picture'}</button>
+                  <button type="button" onClick={() => setPicking((v) => !v)} disabled={drafting || editing || !draft.draftId} title="A real photo from the team's Drive folder, with the brand's colour filter — no AI, no credits" className={'rounded-full px-3 py-1 text-[12px] font-medium ring-1 disabled:opacity-50 ' + (picking ? 'bg-accent text-white ring-accent' : 'text-ink/70 ring-black/10 hover:bg-black/5')}>📁 Pick image from library</button>
+                  <button type="button" onClick={() => onPicture(Boolean(draft.image?.url))} disabled={drafting || editing || !draft.draftId} title="A fresh AI picture, high quality. Spends a credit." className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">{writing === 'picture' ? 'Making the picture…' : draft.image?.url ? 'Make an AI picture instead' : 'Make the picture'}</button>
                 </div>
+                {picking && draft.draftId && (
+                  <LibraryPicker draftId={draft.draftId} scope={scopeFor(slot._k)} onChanged={(image, notes) => onLibraryPicked(image, notes)} onClose={() => setPicking(false)} />
+                )}
                 {draft.image?.url ? (
                   <div>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={draft.image.url} alt={draft.image.alt || 'Post picture'} className="max-h-80 w-full rounded-xl object-cover ring-1 ring-black/10" />
-                    {draft.imageQuality === 'medium' && <p className="mt-1 text-[11px] text-ink/50">Preview picture at medium quality (about a quarter of the cost). &ldquo;Make the picture again&rdquo; makes a high-quality one.</p>}
+                    {draft.imageQuality === 'medium' && <p className="mt-1 text-[11px] text-ink/50">No library photograph fit this post, so a preview picture was made at medium quality (about a quarter of the cost). &ldquo;Make an AI picture instead&rdquo; makes a high-quality one.</p>}
+                    {draft.imageQuality === 'library' && <p className="mt-1 text-[11px] text-emerald-800">📁 The clinic&rsquo;s own photograph, from the Image Library, with the brand&rsquo;s colour filter &mdash; no AI, no credits.{draft.imageNote ? ' ' + draft.imageNote : ''}</p>}
                   </div>
                 ) : writing === 'picture' ? (
                   <div className="flex h-40 items-center justify-center rounded-xl bg-white/60 text-[12px] text-accent ring-1 ring-accent/20"><span className="mr-2 h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />Making the picture…</div>
@@ -402,11 +412,11 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
     try {
       const pr = await fetch('/api/templates/strategy-upload', { method: 'POST', headers, body: JSON.stringify({ action: 'picture', draftId, again }) });
       if (!pr.ok) throw new Error(await friendlyErrorFromResponse(pr, 'The picture could not be made just now.'));
-      const { image, reason, quality } = (await pr.json()) as { image: PreviewDraft['image']; reason?: string; quality?: string };
+      const { image, reason, quality, notes } = (await pr.json()) as { image: PreviewDraft['image']; reason?: string; quality?: string; notes?: string[] };
       setPreviews((p) => {
         const cur = p[k]; if (!cur) return p;
         return image?.url
-          ? { ...p, [k]: { ...cur, image, imageNote: undefined, imageQuality: quality, pack: { ...cur.pack, _image: image } } }
+          ? { ...p, [k]: { ...cur, image, imageNote: (notes || []).join(' ') || undefined, imageQuality: quality, pack: { ...cur.pack, _image: image } } }
           : { ...p, [k]: { ...cur, imageNote: reason || 'The picture could not be made just now.' } };
       });
       if (image?.url) announce('drafts', 'images');
@@ -703,6 +713,11 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
           onWrite={(angle) => void writePreview(openSlot, angle)}
           onPicture={(again) => void makePicture(openSlot, again)}
           onFix={() => void verifyFix(openSlot)}
+          onLibraryPicked={(image, notes) => {
+            const k = openSlot._k;
+            setPreviews((p) => (p[k] ? { ...p, [k]: { ...p[k], image, imageQuality: 'library', imageNote: notes.join(' ') || undefined, pack: { ...p[k].pack, _image: image } } } : p));
+            announce('drafts', 'images');
+          }}
           onSave={(edits) => saveEdits(openSlot, edits)}
           onChange={(next) => updateSlot(openSlot._k, next)}
           onRemove={() => { removeSlot(openSlot._k); setOpenKey(null); }}

@@ -12,7 +12,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const google = readFileSync(new URL('./google-sources.ts', import.meta.url), 'utf8');
-const caption = readFileSync(new URL('../app/api/sources/caption/route.ts', import.meta.url), 'utf8');
+// The captioner moved out of the route into the index (lib/library-index.ts): the route now only reports and remembers.
+const caption = readFileSync(new URL('./library-index.ts', import.meta.url), 'utf8');
 const palette = readFileSync(new URL('../app/api/sources/palette/route.ts', import.meta.url), 'utf8');
 
 const imports = readFileSync(new URL('../app/api/sources/route.ts', import.meta.url), 'utf8');
@@ -54,7 +55,7 @@ test('the helpers read the picture from disk', () => {
 });
 
 test('the captioner still scales before it looks, and still refuses the absurd', () => {
-  assert.match(caption, /skipped: 'too_large'/);
+  assert.match(caption, /if \(!small && file\.size > 12 \* 1024 \* 1024\) \{ report\.skipped \+= 1; continue; \}/);
 });
 
 test('import_image scales the picture down and refuses what it could not shrink', () => {
