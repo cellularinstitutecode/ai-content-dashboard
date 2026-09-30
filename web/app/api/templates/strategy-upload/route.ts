@@ -38,8 +38,19 @@ export const maxDuration = 180;
 
 const fail = (status: number, error: string, message: string) => NextResponse.json({ error, message }, { status });
 
+/**
+ * The second ask, when the first came back with no posts. The first prompt
+ * ends "if the document is not a content strategy, return an empty slots
+ * array", and a model can take that exit on a document that plainly has
+ * day pages — the same PDF read fine an hour earlier. So the retry says the
+ * opposite, and asks for the day pages by name.
+ */
+const INSIST_PROMPT =
+  'IMPORTANT: this document DOES contain a weekly posting plan — look for its day pages or day sections (Monday to Sunday), each with one or more posts, each post with a heading (the pillar) and a list of angles, questions or topics. ' +
+  'Return EVERY one of those posts as a slot, in order. Do not return an empty slots array unless the document has no days at all.';
+
 /** The document, read by Claude into UPLOAD_SCHEMA's shape. */
-async function readStrategyPdf(pdf: Buffer): Promise<unknown> {
+async function readStrategyPdf(pdf: Buffer, opts: { insist?: boolean } = {}): Promise<unknown> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw Object.assign(new Error('The AI reader is not configured (ANTHROPIC_API_KEY is missing).'), { status: 503 });
   const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
@@ -57,7 +68,7 @@ async function readStrategyPdf(pdf: Buffer): Promise<unknown> {
         content: [
           // The document first, then the question about it.
           { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf.toString('base64') } },
-          { type: 'text', text: UPLOAD_PROMPT + (json ? '' : ' Answer with JSON only, matching this schema: ' + JSON.stringify(UPLOAD_SCHEMA)) },
+          { type: 'text', text: UPLOAD_PROMPT + (opts.insist ? ' ' + INSIST_PROMPT : '') + (json ? '' : ' Answer with JSON only, matching this schema: ' + JSON.stringify(UPLOAD_SCHEMA)) },
         ],
       }],
       ...(json ? { output_config: { format: { type: 'json_schema', schema: UPLOAD_SCHEMA } } } : {}),
@@ -122,6 +133,7 @@ export async function POST(req: Request) {
     }
     if (body.action === 'read') {
       const path = String(body.path || '');
+      const expectedSize = Number((body as { size?: unknown }).size) || 0;
       // Only an object under this user's own prefix, with no way up out of it.
       if (!path.startsWith(auth.userId + '/') || path.includes('..')) return fail(400, 'bad_request', 'That upload is not yours to read.');
       const admin = supabaseAdmin();
@@ -133,6 +145,12 @@ export async function POST(req: Request) {
       } catch (e) {
         reportError('templates:upload-download', e, { path });
         return fail(502, 'download_failed', 'The uploaded PDF could not be read back from storage. Drop it again.');
+      }
+      // The browser says how big the file was; a shorter object is a cut-off
+      // upload, and reading it would be reading half a strategy.
+      if (expectedSize && buf.length !== expectedSize) {
+        void admin.storage.from(STRATEGY_BUCKET).remove([path]);
+        return fail(502, 'upload_incomplete', 'The PDF did not upload completely (' + buf.length + ' of ' + expectedSize + ' bytes arrived). Drop it again.');
       }
       // Read, then removed whatever happened: the bucket is a waiting room, not a library.
       try {
@@ -205,6 +223,14 @@ async function readIntoPlan(buf: Buffer, userId: string): Promise<NextResponse> 
   let raw: unknown;
   try {
     raw = await readStrategyPdf(buf);
+    // Nothing found: ask once more, firmly, before telling a person the plan
+    // is not there. The same PDF has read as a full week and as nothing an
+    // hour apart, and the difference was the reader, not the document.
+    if (!normalizeUpload(raw).slots.length) {
+      const first = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+      reportError('templates:upload-empty', new Error('reader returned no slots'), { keys: Object.keys(first).join(','), title: String(first.title || '').slice(0, 80), bytes: String(buf.length) });
+      raw = await readStrategyPdf(buf, { insist: true });
+    }
   } catch (e) {
     reportError('templates:upload-read-pdf', e);
     const msg = e instanceof Error ? e.message : String(e);
@@ -214,7 +240,15 @@ async function readIntoPlan(buf: Buffer, userId: string): Promise<NextResponse> 
     return fail(status, 'read_failed', status === 503 ? msg : 'The PDF could not be read just now. Try again in a moment.');
   }
   const plan = normalizeUpload(raw);
-  if (!plan.slots.length) return fail(422, 'no_slots', 'No weekly posting plan was found in that PDF. It should list what to post on each day.');
+  if (!plan.slots.length) {
+    // In the reader's own words, so the person can see what it took the document for.
+    const said = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const about = [String(said.title || '').trim(), String(said.summary || '').trim()].filter(Boolean).join(' — ').slice(0, 240);
+    return fail(422, 'no_slots',
+      'No weekly posting plan was found in that PDF, on two readings. It should list what to post on each day.' +
+      (about ? ' The reader took it for: \u201c' + about + '\u201d.' : '') +
+      ' If this is the weekly strategy, try again in a moment; if it keeps happening, export the PDF as text (not scanned pages) and drop it again.');
+  }
 
   // What "Create schedules" would do — so the preview can say it up front.
   const { rows, error } = await existingTemplates(userId);

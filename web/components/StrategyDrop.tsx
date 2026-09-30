@@ -157,7 +157,7 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
         const { path, token, bucket } = await signed.json();
         const up = await supabaseBrowser().storage.from(bucket || STRATEGY_BUCKET).uploadToSignedUrl(path, token, file, { contentType: 'application/pdf', upsert: true });
         if (up.error) { setErr('The PDF could not be uploaded: ' + up.error.message + '. Try again in a moment.'); return; }
-        r = await fetch('/api/templates/strategy-upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'read', path }) });
+        r = await fetch('/api/templates/strategy-upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'read', path, size: file.size }) });
       } else {
         const form = new FormData();
         form.append('file', file);
