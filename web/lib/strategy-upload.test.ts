@@ -190,3 +190,16 @@ test('a strategy PDF may be 30 MB: anything over the request limit goes through 
   assert.match(panel, /uploadToSignedUrl\(path, token, file/);
   assert.doesNotMatch(panel, /up to 4 MB/);
 });
+
+test('every post of the uploaded week can be previewed, edited and added to before it is created', () => {
+  const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  const panel = src('components/StrategyDrop.tsx');
+  assert.match(panel, /Preview & edit/);
+  assert.match(panel, /aria-label=\{'Angle ' \+ \(i \+ 1\)\}/, 'every angle is a field');
+  assert.match(panel, /placeholder="Add an angle…"/);
+  assert.match(panel, /\+ Add a post/);
+  assert.match(panel, /Remove post/);
+  // What was edited is what is created, minus the editor's own fields.
+  assert.match(panel, /slots\.filter\(\(sl\) => sl\.on\)\.map\(\(\{ _k: _key, on: _on, \.\.\.rest \}\) => rest\)/);
+  assert.match(panel, /plan: \{ \.\.\.plan, slots: chosen \}/);
+});
