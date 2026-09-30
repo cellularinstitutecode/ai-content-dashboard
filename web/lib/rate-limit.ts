@@ -80,6 +80,10 @@ const POLICIES: Record<string, Policy> = {
   // Writing a template is cheap, but every active one becomes automated spend
   // on the next Autopilot tick. Nobody edits a weekly cadence 60 times an hour.
   templates: { limit: 60, windowSec: 3600 },
+  // Writing the posts of a dropped strategy: a week is fourteen posts, each
+  // a copy request and a picture request, started the moment the week is
+  // read — and a person may drop the document twice in an hour.
+  'strategy-draft': { limit: 150, windowSec: 3600 },
   // Reaches a live brand account through a paid third party.
   schedule: { limit: 60, windowSec: 3600 },
   // Each call mints a spendable OpenAI Realtime credential.
