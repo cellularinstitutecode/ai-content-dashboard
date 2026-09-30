@@ -11,6 +11,7 @@
 
 import { useRef, useState } from 'react';
 import { announce } from '@/components/refreshBus';
+import { PanelLoader } from '@/components/LoadingScreen';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 import { supabaseBrowser } from '@/lib/supabase';
 import { DAY_LABELS, DIRECT_MAX_BYTES, STRATEGY_BUCKET, UPLOAD_MAX_BYTES, mbLabel, type UploadPlan, type UploadSlot } from '@/lib/strategy-upload';
@@ -44,7 +45,7 @@ const slotKey = () => 's_' + Date.now().toString(36) + '_' + (__slotSeq++).toStr
 const SOCIAL_NETWORKS = ['instagram', 'facebook', 'linkedin'] as const;
 
 /** One post of the week, as a compact card. "Preview & edit" opens it in the panel. */
-function SlotCard({ slot, tone, onChange, onOpen }: { slot: EditableSlot; tone: string; onChange: (next: EditableSlot) => void; onOpen: () => void }) {
+function SlotCard({ slot, tone, writing, written, onChange, onOpen }: { slot: EditableSlot; tone: string; writing?: Writing; written?: boolean; onChange: (next: EditableSlot) => void; onOpen: () => void }) {
   return (
     <div className={'min-w-0 break-words hyphens-auto rounded-2xl p-3.5 text-[12px] ring-1 transition ' + tone + (slot.on ? '' : ' opacity-40')}>
       <div className="flex items-start justify-between gap-2">
@@ -61,7 +62,11 @@ function SlotCard({ slot, tone, onChange, onOpen }: { slot: EditableSlot; tone: 
       </div>
       {/* The document's note for this post, shown so the team can see it was read. */}
       {slot.rule && <div className="mt-2 rounded-lg bg-white/70 px-2 py-1.5 text-[11px] leading-snug"><span className="font-semibold">Note:</span> {slot.rule}</div>}
-      <button type="button" onClick={onOpen} className="mt-3 rounded-md bg-white/80 px-2 py-1 text-[11px] font-medium ring-1 ring-black/10 hover:bg-white">Preview &amp; edit</button>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button type="button" onClick={onOpen} className="rounded-md bg-white/80 px-2 py-1 text-[11px] font-medium ring-1 ring-black/10 hover:bg-white">Preview &amp; edit</button>
+        {writing && <span className="inline-flex items-center gap-1 text-[11px] font-medium text-accent"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />{writing === 'picture' ? 'Making the picture…' : 'Writing the post…'}</span>}
+        {!writing && written && <span className="text-[11px] font-medium text-emerald-700">Post written</span>}
+      </div>
     </div>
   );
 }
@@ -76,6 +81,9 @@ function SlotCard({ slot, tone, onChange, onOpen }: { slot: EditableSlot; tone: 
  * a template unchecked.
  */
 type PreviewDraft = { draftId: string | null; pack: Record<string, unknown>; image: { url: string; alt?: string | null } | null; note?: string };
+/** Which half of the work a slot is on. The work runs above the panel, so the panel can be closed and reopened. */
+type Writing = 'text' | 'picture' | null;
+const scopeFor = (k: string) => 'strategy-' + k;
 const CHANNEL_KEYS: { key: string; label: string }[] = [
   { key: 'instagram', label: 'Instagram' },
   { key: 'facebook', label: 'Facebook' },
@@ -83,31 +91,19 @@ const CHANNEL_KEYS: { key: string; label: string }[] = [
   { key: 'blog', label: 'Article' },
 ];
 
-function SlotPanel({ slot, direction, onChange, onRemove, onClose }: { slot: EditableSlot; direction: string; onChange: (next: EditableSlot) => void; onRemove: () => void; onClose: () => void }) {
+function SlotPanel({ slot, draft, writing, draftErr, onWrite, onChange, onRemove, onClose }: {
+  slot: EditableSlot;
+  draft: PreviewDraft | null;
+  writing: Writing;
+  draftErr: string | null;
+  onWrite: (angle: string) => void;
+  onChange: (next: EditableSlot) => void;
+  onRemove: () => void;
+  onClose: () => void;
+}) {
   const [newAngle, setNewAngle] = useState('');
-  // The post, written for real: the whole copy per channel and its picture.
-  const [drafting, setDrafting] = useState(false);
-  const [draft, setDraft] = useState<PreviewDraft | null>(null);
-  const [draftErr, setDraftErr] = useState<string | null>(null);
   const [angleChoice, setAngleChoice] = useState<string>('');
-  async function writePreview() {
-    setDrafting(true); setDraftErr(null);
-    try {
-      const { _k: _key, on: _on, ...plain } = slot;
-      const r = await fetch('/api/templates/strategy-upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'draft', slot: plain, direction, angle: angleChoice || slot.angles[0] || '' }),
-      });
-      if (!r.ok) { setDraftErr(await friendlyErrorFromResponse(r, 'The post could not be written just now.')); return; }
-      setDraft(await r.json());
-      announce('drafts', 'stats');
-    } catch (e) {
-      setDraftErr(friendlyError(e, 'The post could not be written just now.'));
-    } finally {
-      setDrafting(false);
-    }
-  }
+  const drafting = Boolean(writing);
   const set = (patch: Partial<EditableSlot>) => onChange({ ...slot, ...patch });
   const setAngle = (i: number, v: string) => set({ angles: slot.angles.map((a, j) => (j === i ? v : a)) });
   const removeAngle = (i: number) => set({ angles: slot.angles.filter((_, j) => j !== i) });
@@ -184,7 +180,10 @@ function SlotPanel({ slot, direction, onChange, onRemove, onClose }: { slot: Edi
 
           {/* THE POST ITSELF. Written the way the Autopilot will write it, saved
               under Recent Drafts like any other draft, with its picture. */}
-          <div className="mt-6 rounded-2xl bg-canvas/70 p-4 ring-1 ring-line/60">
+          <div className="relative mt-6 rounded-2xl bg-canvas/70 p-4 ring-1 ring-line/60">
+            {/* The loader covers THIS box and nothing else: the page, the week
+                and the rest of the panel stay usable while it works. */}
+            {writing === 'text' && <PanelLoader scope={scopeFor(slot._k)} rounded="rounded-2xl" />}
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[13px] font-semibold text-ink">The post, written</span>
               <span className="flex-1" />
@@ -193,18 +192,21 @@ function SlotPanel({ slot, direction, onChange, onRemove, onClose }: { slot: Edi
                   {slot.angles.map((a, i) => <option key={i} value={a}>{a.length > 60 ? a.slice(0, 59) + '…' : a}</option>)}
                 </select>
               )}
-              <button type="button" onClick={() => void writePreview()} disabled={drafting || !slot.pillar.trim()} className="rounded-full bg-accent px-4 py-1.5 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">
-                {drafting ? 'Writing…' : draft ? 'Write it again' : 'Write a preview post'}
+              <button type="button" onClick={() => onWrite(angleChoice || slot.angles[0] || '')} disabled={drafting || !slot.pillar.trim()} className="rounded-full bg-accent px-4 py-1.5 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">
+                {writing === 'text' ? 'Writing…' : writing === 'picture' ? 'Making the picture…' : draft ? 'Write it again' : 'Write a preview post'}
               </button>
             </div>
-            <p className="mt-1.5 text-[11px] text-ink/50">Writes one week&rsquo;s post for this slot exactly as the Autopilot will &mdash; the strategy&rsquo;s voice, this note, keywords, the competition &mdash; saves it to Recent Drafts and makes its picture. Nothing is scheduled.</p>
-            {drafting && <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-[12px] text-accent">Writing the post, then its picture. This takes a minute or two.</div>}
+            <p className="mt-1.5 text-[11px] text-ink/50">Writes one week&rsquo;s post for this slot exactly as the Autopilot will &mdash; the strategy&rsquo;s voice, this note, keywords, the competition &mdash; saves it to Recent Drafts, then makes its picture. You can close this and carry on; the card says when it is done. Nothing is scheduled.</p>
+            {writing === 'text' && <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-[12px] text-accent">Writing the post (about half a minute). The picture follows once the copy is here.</div>}
+            {writing === 'picture' && <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-[12px] text-accent">Copy is in; making the picture (up to a minute).</div>}
             {draftErr && <p role="alert" className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-900 ring-1 ring-amber-200/60">{draftErr}</p>}
             {draft && (
               <div className="mt-4 space-y-4">
                 {draft.image?.url ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={draft.image.url} alt={draft.image.alt || 'Post picture'} className="max-h-80 w-full rounded-xl object-cover ring-1 ring-black/10" />
+                ) : writing === 'picture' ? (
+                  <div className="flex h-40 items-center justify-center rounded-xl bg-white/60 text-[12px] text-accent ring-1 ring-accent/20"><span className="mr-2 h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />Making the picture…</div>
                 ) : (
                   <p className="text-[12px] text-ink/50">No picture was made this time &mdash; the draft&rsquo;s Image section can make one.</p>
                 )}
@@ -247,6 +249,40 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
   const [slots, setSlots] = useState<EditableSlot[]>([]);
   /** The slot open in the preview panel, by key. */
   const [openKey, setOpenKey] = useState<string | null>(null);
+  /** Posts written for real, by slot key — kept here so the panel can be closed while they are written. */
+  const [previews, setPreviews] = useState<Record<string, PreviewDraft>>({});
+  const [writing, setWriting] = useState<Record<string, Writing>>({});
+  const [writeErr, setWriteErr] = useState<Record<string, string | null>>({});
+
+  async function writePreview(sl: EditableSlot, angle: string) {
+    const k = sl._k;
+    const headers = { 'Content-Type': 'application/json', 'x-chi-progress': 'loud', 'x-chi-progress-scope': scopeFor(k) };
+    setWriting((w) => ({ ...w, [k]: 'text' }));
+    setWriteErr((e) => ({ ...e, [k]: null }));
+    try {
+      const { _k: _key, on: _on, ...plain } = sl;
+      // 1) the copy — shown as soon as it is here
+      const r = await fetch('/api/templates/strategy-upload', { method: 'POST', headers, body: JSON.stringify({ action: 'draft', slot: plain, direction: plan?.direction || '', angle }) });
+      if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'The post could not be written just now.'));
+      const made = (await r.json()) as PreviewDraft;
+      setPreviews((p) => ({ ...p, [k]: made }));
+      announce('drafts', 'stats');
+      // 2) the picture — a second, quieter request, while the copy is read
+      if (made.draftId) {
+        setWriting((w) => ({ ...w, [k]: 'picture' }));
+        const pr = await fetch('/api/templates/strategy-upload', { method: 'POST', headers: { ...headers, 'x-chi-progress': 'quiet' }, body: JSON.stringify({ action: 'picture', draftId: made.draftId }) });
+        if (pr.ok) {
+          const { image } = (await pr.json()) as { image: PreviewDraft['image'] };
+          if (image?.url) setPreviews((p) => ({ ...p, [k]: { ...(p[k] || made), image, pack: { ...(p[k] || made).pack, _image: image } } }));
+          announce('drafts', 'images');
+        }
+      }
+    } catch (e) {
+      setWriteErr((er) => ({ ...er, [k]: friendlyError(e, 'The post could not be written just now.') }));
+    } finally {
+      setWriting((w) => ({ ...w, [k]: null }));
+    }
+  }
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
 
@@ -388,6 +424,8 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
                         key={sl._k}
                         slot={sl}
                         tone={toneFor(sl.pillar, pillars)}
+                        writing={writing[sl._k] || null}
+                        written={Boolean(previews[sl._k])}
                         onChange={(next) => updateSlot(sl._k, next)}
                         onOpen={() => setOpenKey(sl._k)}
                       />
@@ -429,7 +467,10 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
       {openSlot && (
         <SlotPanel
           slot={openSlot}
-          direction={plan?.direction || ''}
+          draft={previews[openSlot._k] || null}
+          writing={writing[openSlot._k] || null}
+          draftErr={writeErr[openSlot._k] || null}
+          onWrite={(angle) => void writePreview(openSlot, angle)}
           onChange={(next) => updateSlot(openSlot._k, next)}
           onRemove={() => { removeSlot(openSlot._k); setOpenKey(null); }}
           onClose={() => setOpenKey(null)}

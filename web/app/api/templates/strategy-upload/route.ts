@@ -182,11 +182,12 @@ export async function POST(req: Request) {
       const wanted = String(b.angle || '').trim();
       const angle = (wanted && slot.angles.find((a) => a === wanted)) || slot.angles[0] || slot.pillar;
       const admin = supabaseAdmin();
-      let brand;
-      try { brand = await loadBrandContext(admin, auth.userId); } catch (e) { reportError('templates:draft-brand', e); }
+      // The brand and the competition are read side by side; neither waits on the other.
+      const [brand, rivals] = await Promise.all([
+        loadBrandContext(admin, auth.userId).catch((e: unknown) => { reportError('templates:draft-brand', e); return undefined; }),
+        competitiveBrief(slot.pillar + ' ' + angle).catch((e: unknown) => { reportError('templates:draft-rivals', e); return null; }),
+      ]);
       const topic = strategyTopicPrompt({ angle, pillarName: slot.pillar, rule: ruleFor(slot, plan.direction), dayTheme: slot.theme || undefined });
-      let landscapeHint: string | undefined;
-      try { landscapeHint = (await competitiveBrief(slot.pillar + ' ' + angle)).hint || undefined; } catch (e) { reportError('templates:draft-rivals', e); }
       let pack: Record<string, unknown>;
       try {
         const out = await generateContentPack({
@@ -195,8 +196,8 @@ export async function POST(req: Request) {
           contentType: slot.format === 'blog' ? 'blog' : 'social',
           channels: slot.providers,
           citationPolicy: 'if-health-claim',
-          landscapeHint,
-          budgetMs: 90_000,
+          landscapeHint: rivals?.hint || undefined,
+          budgetMs: 60_000,
         });
         pack = out.pack as unknown as Record<string, unknown>;
       } catch (e) {
@@ -214,9 +215,16 @@ export async function POST(req: Request) {
         return NextResponse.json({ draftId: null, pack, image: null, note: 'Written, but it could not be saved to Recent Drafts just now.' });
       }
       const draftId = String((made as { id: string }).id);
+      // The copy goes back now; the picture is a second request (action
+      // 'picture'), so the person reads the post while it is being made.
+      return NextResponse.json({ draftId, pack, image: null, note: 'Saved to Recent Drafts.' });
+    }
+    if (body.action === 'picture') {
+      const draftId = String((body as { draftId?: unknown }).draftId || '').trim();
+      if (!draftId) return fail(400, 'bad_request', 'Which draft?');
       let image: { url: string; alt?: string | null } | null = null;
-      try { image = (await ensureDraftImage(draftId, auth.userId, { budgetMs: 50_000 })) as { url: string; alt?: string | null } | null; } catch (e) { reportError('templates:draft-image', e, { draftId }); }
-      return NextResponse.json({ draftId, pack: image ? { ...pack, _image: image } : pack, image, note: 'Saved to Recent Drafts.' });
+      try { image = (await ensureDraftImage(draftId, auth.userId, { budgetMs: 60_000 })) as { url: string; alt?: string | null } | null; } catch (e) { reportError('templates:draft-image', e, { draftId }); }
+      return NextResponse.json({ draftId, image });
     }
 
     if (body.action !== 'apply') return fail(400, 'bad_request', 'Unknown action.');

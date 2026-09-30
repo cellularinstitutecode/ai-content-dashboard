@@ -156,6 +156,7 @@ const LABELS: Array<[RegExp, string]> = [
   [/^POST \/api\/autopilot\/tick(?:[/?]|$)/, 'Running the Autopilot engine'],
   [/^(POST|GET) \/api\/autopilot\/runs(?:[/?]|$)/, 'Working through the Autopilot queue'],
   [/^POST \/api\/templates\/apply(?:[/?]|$)/, 'Scheduling the template'],
+  [/^POST \/api\/templates\/strategy-upload(?:[/?]|$)/, 'Working on the strategy'],
   [/^(GET|POST|DELETE) \/api\/templates(?:[/?]|$)/, 'Loading templates'],
   [/^POST \/api\/metricool\/ai-research(?:[/?]|$)/, 'Researching the topic'],
   [/^POST \/api\/metricool\/schedule(?:[/?]|$)/, 'Scheduling with Metricool'],

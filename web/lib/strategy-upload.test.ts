@@ -244,14 +244,22 @@ test('an empty first reading is asked again, firmly, and a short upload is refus
 test('a slot can be written for real from the panel: the whole post, its picture, saved under Recent Drafts', () => {
   const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
   const route = src('app/api/templates/strategy-upload/route.ts');
-  const draft = route.slice(route.indexOf("if (body.action === 'draft') {"), route.indexOf("if (body.action !== 'apply')"));
+  const draft = route.slice(route.indexOf("if (body.action === 'draft') {"), route.indexOf("if (body.action === 'picture') {"));
   assert.match(draft, /strategyTopicPrompt\(\{ angle, pillarName: slot\.pillar, rule: ruleFor\(slot, plan\.direction\)/, 'the strategy’s own brief');
   assert.match(draft, /strategyBrand\(brand, \{ citation: 'if-health-claim' \}\)/, 'the strategy’s voice');
   assert.match(draft, /competitiveBrief\(/, 'against the top three');
   assert.match(draft, /\.from\('drafts'\)[\s\S]{0,80}\.insert\(/, 'saved like any other draft');
-  assert.match(draft, /ensureDraftImage\(draftId, auth\.userId/, 'with its picture');
+  assert.doesNotMatch(draft, /ensureDraftImage\(/, 'the copy goes back first; the picture is its own request');
+  const picture = route.slice(route.indexOf("if (body.action === 'picture') {"), route.indexOf("if (body.action !== 'apply')"));
+  assert.match(picture, /ensureDraftImage\(draftId, auth\.userId/, 'with its picture, second');
   const panel = src('components/StrategyDrop.tsx');
   assert.match(panel, /Write a preview post/);
   assert.match(panel, /action: 'draft', slot: plain, direction/);
   assert.match(panel, /Open in Recent Drafts/);
+  // Only the post's own box shows the loader, the work survives closing the panel, and the card says so.
+  assert.match(panel, /PanelLoader scope=\{scopeFor\(slot\._k\)\}/);
+  assert.match(panel, /'x-chi-progress-scope': scopeFor\(k\)/);
+  assert.match(panel, /const \[previews, setPreviews\] = useState<Record<string, PreviewDraft>>/, 'kept above the panel');
+  assert.match(panel, /Writing the post…/);
+  assert.match(panel, /Post written/);
 });
