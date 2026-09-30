@@ -174,10 +174,46 @@ const SOCIAL_DEFAULT_TIMES = ['09:00', '18:00', '13:00'];
 const ARTICLE_DEFAULT_TIME = '11:00';
 
 /** Everything the model said, made safe to store — or dropped, with a note saying why. */
+/**
+ * The slots, wherever the reader put them.
+ *
+ * The schema asks for a flat `slots` array, and a model answering without
+ * schema enforcement sometimes writes the week the way the document reads —
+ * `days: [{ day, theme, posts: [...] }]`, or `week`, or `schedule` — which
+ * used to normalise to nothing and be reported as "no weekly posting plan
+ * was found" for a document that plainly had one. Every shape is flattened
+ * here, and a day's own day/theme is carried onto the posts that omit it.
+ */
+export function slotsIn(raw: unknown): unknown[] {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const out: unknown[] = [];
+  const push = (item: unknown, day?: unknown, theme?: unknown) => {
+    if (!item || typeof item !== 'object') return;
+    const s = item as Record<string, unknown>;
+    out.push({ ...s, day: s.day ?? s.weekday ?? day, theme: s.theme ?? theme });
+  };
+  for (const key of ['slots', 'posts', 'entries']) {
+    const list = o[key];
+    if (Array.isArray(list)) list.forEach((i) => push(i));
+  }
+  for (const key of ['days', 'week', 'schedule', 'plan']) {
+    const days = o[key];
+    if (!Array.isArray(days)) continue;
+    for (const d of days) {
+      if (!d || typeof d !== 'object') continue;
+      const day = d as Record<string, unknown>;
+      const posts = ['posts', 'slots', 'entries', 'items'].map((k) => day[k]).find(Array.isArray) as unknown[] | undefined;
+      if (posts) posts.forEach((p) => push(p, day.day ?? day.weekday ?? day.name, day.theme ?? day.subtitle));
+      else if (day.pillar || day.name) push(day, day.day ?? day.weekday, day.theme);
+    }
+  }
+  return out;
+}
+
 export function normalizeUpload(raw: unknown): UploadPlan {
   const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const notes: string[] = [];
-  const list = Array.isArray(o.slots) ? o.slots : [];
+  const list = slotsIn(o);
   const slots: UploadSlot[] = [];
   const seen = new Set<string>();
   const perDay = new Map<number, number>();

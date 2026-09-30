@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { MAX_ANGLES, MAX_SLOTS, UPLOAD_MARK, UPLOAD_SCHEMA, normalizeUpload, planUpload, ruleFor, timeOf, uploadRows, uploadSummary } from './strategy-upload.ts';
+import { MAX_ANGLES, MAX_SLOTS, UPLOAD_MARK, UPLOAD_SCHEMA, normalizeUpload, planUpload, ruleFor, timeOf, uploadRows, uploadSummary, slotsIn } from './strategy-upload.ts';
 import { normalizeStrategy } from './template-strategy.ts';
 import { citationPolicyFor, isStrategySlot, uploadVarietyKey, usesStrategyVoice } from './strategy-voice.ts';
 import { attachableClip } from './clip-relevance.ts';
@@ -202,4 +202,38 @@ test('every post of the uploaded week can be previewed, edited and added to befo
   // What was edited is what is created, minus the editor's own fields.
   assert.match(panel, /slots\.filter\(\(sl\) => sl\.on\)\.map\(\(\{ _k: _key, on: _on, \.\.\.rest \}\) => rest\)/);
   assert.match(panel, /plan: \{ \.\.\.plan, slots: chosen \}/);
+});
+
+test('a week the reader wrote day by day still becomes slots', () => {
+  const raw = {
+    title: 'Weekly Social Content Strategy',
+    days: [
+      { day: 'monday', theme: 'Understand before treating', posts: [
+        { time: '09:00', pillar: 'Diagnosis and assessment', angles: ['Why effective care begins with a thorough evaluation'], format: 'social', channels: ['instagram', 'facebook', 'linkedin'], rule: '' },
+        { time: '18:00', pillar: 'Personalization', angles: ['Why one protocol does not work the same way for every person'], format: 'social', channels: [], rule: '' },
+      ] },
+      { day: 'tuesday', theme: 'Support the body from within', slots: [
+        { pillar: 'Nutrition', angles: ['The role of protein in recovery'] },
+      ] },
+    ],
+  };
+  assert.equal(slotsIn(raw).length, 3);
+  const plan = normalizeUpload(raw);
+  assert.equal(plan.slots.length, 3);
+  assert.equal(plan.slots[0].weekday, 1);
+  assert.equal(plan.slots[0].theme, 'Understand before treating', 'the day’s theme is carried onto its posts');
+  assert.equal(plan.slots[2].pillar, 'Nutrition');
+  // The flat shape still works exactly as before.
+  assert.equal(normalizeUpload({ slots: [{ day: 'wed', pillar: 'Movement', angles: ['x'] }] }).slots.length, 1);
+  assert.equal(normalizeUpload({}).slots.length, 0);
+});
+
+test('an empty first reading is asked again, firmly, and a short upload is refused', () => {
+  const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  const route = src('app/api/templates/strategy-upload/route.ts');
+  assert.match(route, /if \(!normalizeUpload\(raw\)\.slots\.length\) \{[\s\S]{0,600}readStrategyPdf\(buf, \{ insist: true \}\)/);
+  assert.match(route, /INSIST_PROMPT/);
+  assert.match(route, /on two readings/, 'and the refusal says it tried twice, in the reader’s own words');
+  assert.match(route, /buf\.length !== expectedSize/, 'a cut-off storage upload is never read as the strategy');
+  assert.match(src('components/StrategyDrop.tsx'), /action: 'read', path, size: file\.size/);
 });
