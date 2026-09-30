@@ -490,6 +490,37 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
   function scrollToPublisher() {
     if (typeof document !== "undefined") { const el = document.getElementById("section-publish"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }
   }
+  // ?draft=<id>: the link every "Open draft" the assistant gives, and the
+  // "Continue in Draft" chip. It was never read — the parameter sat in the
+  // address bar and nothing opened — so on the Dashboard the draft is opened
+  // in Recent Drafts, and on the Draft page it lands in the writer.
+  const handedOff = useRef(false);
+  useEffect(() => {
+    if (handedOff.current || typeof window === 'undefined') return;
+    const id = new URLSearchParams(window.location.search).get('draft');
+    if (!id) return;
+    handedOff.current = true;
+    (async () => {
+      try {
+        const r = await fetch('/api/drafts?id=' + encodeURIComponent(id));
+        if (!r.ok) return;
+        const j = await r.json().catch(() => null);
+        const d = j && (j.draft || (j.id ? j : null));
+        if (!d) return;
+        if (isDraft) {
+          prefillComposerFromDraft(d);
+          document.getElementById('section-create')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } else {
+          await openDraft(d);
+        }
+        // Read once: a refresh must not reopen it.
+        const url = new URL(window.location.href); url.searchParams.delete('draft');
+        window.history.replaceState(null, '', url.pathname + (url.search || '') + url.hash);
+      } catch { /* the draft stays where it is */ }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDraft]);
+
   function prefillComposerFromDraft(d: any) {
     try {
       const fmt = String((d && d.pack && d.pack.format) || (d && d.format) || "social");

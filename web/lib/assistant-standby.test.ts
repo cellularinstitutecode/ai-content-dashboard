@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { COMMAND_ONLY_RULES, CONVERSATION_RULE, NEXT_STEP_RULE, OPENING_CHIPS, OPENING_LINE, STANDBY_ACK, pageContext, splitNextStep, standbyCommand, stepLabel } from './assistant-standby.ts';
+import { CAN_DO_RULE, COMMAND_ONLY_RULES, CONVERSATION_RULE, NEXT_STEP_RULE, OPENING_CHIPS, OPENING_LINE, STANDBY_ACK, pageContext, splitNextStep, standbyCommand, stepLabel } from './assistant-standby.ts';
 
 const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 
@@ -108,4 +108,20 @@ test('the trail is streamed as it happens and shown in blue', () => {
   assert.match(panel, /res\.body\.getReader\(\)/);
   assert.match(panel, /text-accent/, 'in blue');
   assert.match(panel, /steps: trail\.length \? \[\.\.\.trail\] : null/, 'kept with the answer as a guide');
+});
+
+test('the assistant knows it writes posts from scratch anywhere, and the handoff to Draft is real', () => {
+  assert.match(CAN_DO_RULE, /write posts from scratch yourself, on ANY page/);
+  assert.match(CAN_DO_RULE, /never send the user to the Draft page/);
+  assert.match(CAN_DO_RULE, /only things you cannot do are publish or approve/);
+  const ai = readFileSync(new URL('./ai.ts', import.meta.url), 'utf8');
+  assert.match(ai, /\$\{CAN_DO_RULE\} \$\{COMMAND_ONLY_RULES\}/, 'in the standing orders, before the command-only rule');
+  const panel = readFileSync(new URL('../components/DraftingAssistant.tsx', import.meta.url), 'utf8');
+  assert.match(panel, /href=\{"\/\?draft=" \+ encodeURIComponent\(m\.draftId\)\}[^>]*>Open draft<\/a>/);
+  assert.match(panel, /href=\{"\/draft\?draft=" \+ encodeURIComponent\(m\.draftId\)\}[^>]*>Continue in Draft<\/a>/);
+  const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /new URLSearchParams\(window\.location\.search\)\.get\('draft'\)/, 'the parameter is read at last');
+  assert.match(page, /if \(isDraft\) \{\s*prefillComposerFromDraft\(d\);/, 'on the Draft page it lands in the writer');
+  assert.match(page, /\} else \{\s*await openDraft\(d\);/, 'on the Dashboard it opens in Recent Drafts');
+  assert.match(page, /url\.searchParams\.delete\('draft'\)/, 'read once');
 });

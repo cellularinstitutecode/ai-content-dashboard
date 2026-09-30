@@ -21,7 +21,7 @@ function writeStore(s: Stored) {
   try { window.sessionStorage.setItem(STORE_KEY, JSON.stringify({ ...s, msgs: s.msgs.slice(-60) })); } catch { /* private mode, full storage: the panel still works for this page */ }
 }
 
-type Msg = { id: string; role: "assistant" | "user"; text: string; options?: string[] | null; image?: { url: string; alt?: string | null } | null; /** The trail of what was done to answer, kept with the answer as a guide. */ steps?: string[] | null };
+type Msg = { id: string; role: "assistant" | "user"; text: string; options?: string[] | null; image?: { url: string; alt?: string | null } | null; /** The trail of what was done to answer, kept with the answer as a guide. */ steps?: string[] | null; /** The draft this reply saved: "Open draft" and "Continue in Draft" go with it. */ draftId?: string | null };
 let __msgSeq = 0;
 const uid = () => `m_${Date.now().toString(36)}_${(__msgSeq++).toString(36)}`;
 
@@ -156,13 +156,14 @@ export default function DraftingAssistant() {
       } else {
         setSession(data.session);
         const image = data.options && !Array.isArray(data.options) && data.options.image?.url ? data.options.image : null;
+        const draftId = data.options && !Array.isArray(data.options) && typeof data.options.draftId === "string" ? data.options.draftId : null;
         // A trailing "Next: …" line is the assistant a step ahead: shown as a
         // chip to press, never taken by itself.
         const { text: shown, next } = splitNextStep(String(data.message || ''));
         const chips = Array.isArray(data.options) ? data.options : [];
         setMsgs((m) => [
           ...m,
-          { id: uid(), role: "assistant", text: shown, options: next ? [next, ...chips] : (chips.length ? chips : null), image, steps: trail.length ? [...trail] : null },
+          { id: uid(), role: "assistant", text: shown, options: next ? [next, ...chips] : (chips.length ? chips : null), image, draftId, steps: trail.length ? [...trail] : null },
         ]);
       }
     } catch (e: any) {
@@ -266,6 +267,13 @@ export default function DraftingAssistant() {
                 {m.role === "assistant" && m.image?.url && (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={m.image.url} alt={m.image.alt || "Generated picture"} className="mt-2 max-h-56 w-full rounded-xl object-cover ring-1 ring-black/10" />
+                )}
+                {m.role === "assistant" && m.draftId && (
+                  // The handoff, made real: the saved draft opens in Recent Drafts, or lands in the Draft page's writer.
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <a href={"/?draft=" + encodeURIComponent(m.draftId)} className="rounded-full bg-accent px-3 py-1 text-xs font-semibold text-white hover:opacity-90">Open draft</a>
+                    <a href={"/draft?draft=" + encodeURIComponent(m.draftId)} className="rounded-full border border-accent/30 bg-accent/5 px-3 py-1 text-xs font-medium text-accent hover:bg-accent/10">Continue in Draft</a>
+                  </div>
                 )}
                 {m.role === "assistant" && m.options && (
                   <div className="mt-2 flex flex-wrap gap-2">
