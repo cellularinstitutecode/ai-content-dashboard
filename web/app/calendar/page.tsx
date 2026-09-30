@@ -13,7 +13,7 @@ import { metricoolPlannerUrl } from '@/lib/metricool-links';
 import { isAwaitingApproval, postStatusMeta } from '@/lib/post-mode';
 import { overduePosts, weeklyPlanByDay, type PlanTemplate } from '@/lib/calendar-plan';
 import { sheetRowUrl, sheetRowLabel, sheetRowTitle, type PostSource } from '@/lib/sheet-link';
-import { fmtScheduleTime, fmtScheduleSlot, scheduleDateKey, scheduleWallClock, isoAtScheduleWallClock, scheduleTzLabel } from '@/lib/schedule-clock';
+import { fmtScheduleTime, fmtScheduleSlot, fmtScheduleDateTime, scheduleDateKey, scheduleWallClock, isoAtScheduleWallClock, scheduleTzLabel, scheduleInputValue, scheduleInstantFromInput } from '@/lib/schedule-clock';
 // Autopilot drafts waiting for approval sit in this list too, so the calendar
 // is the one place to work from. Same route and same rules as the Dashboard.
 import { mergeByDate, reviewRuns, runText } from '@/lib/publishing-list';
@@ -97,6 +97,8 @@ export default function CalendarPage() {
   // failed load read as "nothing is scheduled", which is the wrong conclusion.
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
+  /** "Reschedule": the post whose date-and-time box is open, and what it reads (on the schedule clock). */
+  const [rescheduleFor, setRescheduleFor] = useState<{ id: string; value: string } | null>(null);
   /** What "Verify / fix" concluded about the post it was pressed on (shown in that post's preview only). */
   const [fixNote, setFixNote] = useState<{ id: string; note: string; changed: boolean } | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -399,7 +401,33 @@ export default function CalendarPage() {
       w ? w.hh : 9, w ? w.mm : 0
     );
     if (postDayKey(post.publication_date) === dateKey(targetDay)) return; // no-op
+    await rescheduleTo(id, iso);
+  }
 
+  /** Open the "Reschedule" box for a post, showing the time it has now (or 9:00 tomorrow when it has none). */
+  function openReschedule(p: Post) {
+    const current = p.publication_date && !isNaN(new Date(p.publication_date).getTime())
+      ? scheduleInputValue(p.publication_date)
+      : scheduleInputValue(new Date(today.getTime() + 86400000).toISOString()).slice(0, 11) + '09:00';
+    setRescheduleFor({ id: String(p.id), value: current });
+  }
+
+  /** The box's Save: the value read on the schedule clock, sent like a drag. */
+  async function saveReschedule() {
+    if (!rescheduleFor) return;
+    const iso = scheduleInstantFromInput(rescheduleFor.value);
+    if (!iso) { setErr('Pick a date and a time first.'); return; }
+    const id = rescheduleFor.id;
+    setRescheduleFor(null);
+    await rescheduleTo(id, iso);
+  }
+
+  /**
+   * Move a post to an instant: the calendar first (optimistic), then the
+   * server — which moves it in Metricool too and refuses when it cannot, in
+   * which case the chip goes back and the reason is said.
+   */
+  async function rescheduleTo(id: string, iso: string) {
     // optimistic update
     setPosts((prev) => prev.map((p) => (p.id === id ? { ...p, publication_date: iso } : p)));
     setSaving(id);
@@ -972,6 +1000,7 @@ export default function CalendarPage() {
                         <div className="mt-1 flex gap-1.5">
                           <button type="button" onClick={() => setPreviewId(id)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Preview</button>
                           <button type="button" disabled={saving === p.id || Boolean(bulk)} onClick={() => { const t = new Date(today.getTime() + 86400000); void reschedule(id, t); }} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Move to tomorrow</button>
+                          <button type="button" disabled={saving === p.id || Boolean(bulk)} onClick={() => openReschedule(p)} title="Pick any date and time" className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">Reschedule</button>
                           <button type="button" disabled={saving === p.id || Boolean(bulk)} onClick={() => void removePost(p)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-50">Delete</button>
                         </div>
                       </div>
@@ -1075,6 +1104,7 @@ export default function CalendarPage() {
                         <button type="button" disabled={saving === p.id} onClick={() => void approve(p)} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Approve</button>
                       )}
                       <button type="button" disabled={saving === p.id} onClick={() => { const day = d ? new Date(d.getTime() + 86400000) : null; if (day) void reschedule(String(p.id), day); }} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/60 hover:bg-black/5" title="Move one day later">+1 day</button>
+                      <button type="button" disabled={saving === p.id || Boolean(bulk)} onClick={() => openReschedule(p)} title="Pick any date and time" className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">Reschedule</button>
                       <button type="button" disabled={saving === p.id || Boolean(bulk)} onClick={() => void removePost(p)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-50">Delete</button>
                     </div>
                     </div>
@@ -1088,6 +1118,37 @@ export default function CalendarPage() {
       </aside>
       </div>
 
+      {/* RESCHEDULE: any date and time, read on the schedule clock (the clinic's),
+          sent exactly as a drag to another day is — Metricool moves with it. */}
+      {rescheduleFor && (() => {
+        const post = posts.find((p) => String(p.id) === rescheduleFor.id);
+        const iso = scheduleInstantFromInput(rescheduleFor.value);
+        return (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-4" onClick={() => setRescheduleFor(null)} role="dialog" aria-modal="true" aria-label="Reschedule this post">
+            <form className="w-full max-w-sm rounded-2xl bg-surface p-5 shadow-2xl ring-1 ring-black/10" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); void saveReschedule(); }}>
+              <div className="text-[15px] font-semibold text-ink">Reschedule</div>
+              {post && <p className="mt-1 line-clamp-2 text-[12px] text-ink/60">{post.text || 'Untitled post'}</p>}
+              <label className="mt-4 block text-[11px] font-semibold uppercase tracking-wide text-ink/50">New date and time · {scheduleTzLabel()}</label>
+              <input
+                type="datetime-local"
+                autoFocus
+                value={rescheduleFor.value}
+                onChange={(e) => setRescheduleFor({ id: rescheduleFor.id, value: e.target.value })}
+                className="mt-1 w-full rounded-xl bg-canvas px-3 py-2 text-[14px] text-ink ring-1 ring-black/10 focus:outline-none focus:ring-2 focus:ring-accent"
+              />
+              <p className="mt-1.5 text-[11px] text-ink/50">
+                {post?.publication_date ? 'Now ' + fmtScheduleDateTime(post.publication_date) + '. ' : ''}
+                {iso ? 'Goes out ' + fmtScheduleDateTime(iso) + '.' : 'Pick a date and a time.'}
+                {iso && new Date(iso).getTime() < Date.now() ? ' That is in the past.' : ''}
+              </p>
+              <div className="mt-4 flex items-center justify-end gap-2">
+                <button type="button" onClick={() => setRescheduleFor(null)} className="rounded-full px-3 py-1.5 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Cancel</button>
+                <button type="submit" disabled={!iso || saving === rescheduleFor.id} className="rounded-full bg-accent px-4 py-1.5 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{saving === rescheduleFor.id ? 'Moving…' : 'Reschedule'}</button>
+              </div>
+            </form>
+          </div>
+        );
+      })()}
       {previewPost && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setPreviewId(null)}>
           <div className="relative flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-surface shadow-2xl ring-1 ring-black/10" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Post preview">
@@ -1151,6 +1212,7 @@ export default function CalendarPage() {
               ) : (
                 <button type="button" disabled={saving === previewPost.id} onClick={() => { const d = previewPost.publication_date ? new Date(new Date(previewPost.publication_date).getTime() + 86400000) : null; if (d) void reschedule(String(previewPost.id), d); }} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">+1 day</button>
               )}
+              <button type="button" disabled={saving === previewPost.id || Boolean(bulk)} onClick={() => openReschedule(previewPost)} title="Pick any date and time" className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">Reschedule</button>
               <button type="button" disabled={saving === previewPost.id || Boolean(bulk)} onClick={() => void removePost(previewPost)} className="rounded-full px-3 py-1 text-[12px] font-medium text-red-600 ring-1 ring-red-200 hover:bg-red-50 disabled:opacity-50">Delete</button>
             </div>
           </div>

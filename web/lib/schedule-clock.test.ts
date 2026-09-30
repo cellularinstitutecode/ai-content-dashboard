@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { scheduleTzLabel, schedulePresetValue, DEFAULT_SCHEDULE_TZ, scheduleInputValue, scheduleInstantFromInput } from './schedule-clock.ts';
 
@@ -32,4 +33,21 @@ test('a box value is read on the schedule clock, and an instant is shown on it',
   assert.equal(scheduleInputValue('2026-09-16T14:00:00.000Z'), '2026-09-16T09:00');
   assert.equal(scheduleInstantFromInput(''), null);
   assert.equal(scheduleInstantFromInput('not a date'), null);
+});
+
+test('the Reschedule box round-trips through the schedule clock, whatever the browser zone', () => {
+  const iso = scheduleInstantFromInput('2026-10-02T09:30');
+  assert.ok(iso, 'a valid value names an instant');
+  assert.equal(scheduleInputValue(iso), '2026-10-02T09:30', 'read back on the same clock');
+  // Cancun is UTC-5 with no DST: 09:30 there is 14:30Z.
+  assert.equal(iso, '2026-10-02T14:30:00.000Z');
+});
+
+test('Reschedule is on every post row and in the preview, and sends the instant exactly as a drag does', () => {
+  const page = readFileSync(new URL('../app/calendar/page.tsx', import.meta.url), 'utf8');
+  assert.equal((page.match(/onClick=\{\(\) => openReschedule\(/g) || []).length, 3, 'past-due rows, upcoming rows, the preview');
+  assert.match(page, /type="datetime-local"/);
+  assert.match(page, /const iso = scheduleInstantFromInput\(rescheduleFor\.value\);/);
+  assert.match(page, /await rescheduleTo\(id, iso\);/);
+  assert.match(page, /New date and time · \{scheduleTzLabel\(\)\}/, 'the clinic\'s clock, named');
 });
