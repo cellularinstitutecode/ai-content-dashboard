@@ -23,6 +23,7 @@ import StrategyDrop from "@/components/StrategyDrop";
 import { useWorkspace } from "@/components/workspace";
 import { appliesTo as complianceApplies, checkCompliance, complianceNetworksLabel, ensureAviso, DEFAULT_AVISO_NUMBER } from "@/lib/compliance";
 import { PanelLoader } from "@/components/LoadingScreen";
+import Link from 'next/link';
 import { friendlyError, friendlyErrorFromResponse, friendlyImageError } from '@/lib/friendly-error';
 import { METRICOOL_BLOG_ID, METRICOOL_USER_ID, metricoolPlannerUrl } from '@/lib/metricool-links';
 import { postStatusMeta, isAwaitingApproval } from '@/lib/post-mode';
@@ -1627,7 +1628,7 @@ const nav = [
 { href: '/sources/calendar', label: 'Social Calendar', current: false },
 { href: '/sources/videos', label: 'Video Library', current: false },
 { href: '/sources/images', label: 'Image Library', current: false },
-];
+] as const;
 
 
 return (
@@ -1647,10 +1648,10 @@ return (
 </div>
 <nav className="space-y-1">
 {nav.map(n => (
-<a key={n.href} href={n.href}
+<Link key={n.href} href={n.href}
 className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium transition-colors ' + (n.current ? 'bg-white text-ink shadow-soft' : 'text-ink-muted hover:bg-white/60 hover:text-ink')}>
 {n.label}
-</a>
+</Link>
 ))}
 </nav>
 <div className="mt-8 border-t border-line pt-6">
@@ -1668,7 +1669,7 @@ className={'flex items-center rounded-xl px-3.5 py-2.5 text-[14px] font-medium t
 </div>
 <div className="flex items-center gap-2 lg:hidden">
 {nav.map(n => (
-<a key={n.href} href={n.href} className={'rounded-full px-3.5 py-1.5 text-[13px] font-medium ' + (n.current ? 'bg-ink text-white' : 'bg-white text-ink-muted shadow-soft')}>{n.label}</a>
+<Link key={n.href} href={n.href} className={'rounded-full px-3.5 py-1.5 text-[13px] font-medium ' + (n.current ? 'bg-ink text-white' : 'bg-white text-ink-muted shadow-soft')}>{n.label}</Link>
 ))}
 </div>
 </header>

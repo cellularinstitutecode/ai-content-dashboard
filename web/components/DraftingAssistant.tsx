@@ -1,10 +1,24 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { useVoiceAssistant } from "@/components/useVoiceAssistant";
 import { useLiveContent } from "@/components/LiveContentProvider";
 import { PanelLoader } from '@/components/LoadingScreen';
-import { OPENING_CHIPS, OPENING_LINE } from '@/lib/assistant-standby';
+import { OPENING_LINE, pageContext, splitNextStep } from '@/lib/assistant-standby';
+
+// The conversation survives a page change and a reload: the panel used to
+// be remounted empty by every full navigation (the nav links were plain
+// anchors), cutting off whatever was being said. State lives in
+// sessionStorage for the tab's lifetime; a new tab starts fresh.
+const STORE_KEY = 'assistant:panel:v1';
+type Stored = { open: boolean; msgs: Msg[]; session: unknown; input: string };
+function readStore(): Stored | null {
+  try { const raw = window.sessionStorage.getItem(STORE_KEY); return raw ? (JSON.parse(raw) as Stored) : null; } catch { return null; }
+}
+function writeStore(s: Stored) {
+  try { window.sessionStorage.setItem(STORE_KEY, JSON.stringify({ ...s, msgs: s.msgs.slice(-60) })); } catch { /* private mode, full storage: the panel still works for this page */ }
+}
 
 type Msg = { id: string; role: "assistant" | "user"; text: string; options?: string[] | null; image?: { url: string; alt?: string | null } | null };
 let __msgSeq = 0;
@@ -16,6 +30,16 @@ export default function DraftingAssistant() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [session, setSession] = useState<any>(null);
   const [input, setInput] = useState("");
+  const [restored, setRestored] = useState(false);
+  const pathname = usePathname();
+  const here = pageContext(pathname);
+  // Restore once, on mount; then keep the store current.
+  useEffect(() => {
+    const s = readStore();
+    if (s) { setOpen(Boolean(s.open)); setMsgs(Array.isArray(s.msgs) ? s.msgs : []); setSession(s.session ?? null); setInput(String(s.input || '')); }
+    setRestored(true);
+  }, []);
+  useEffect(() => { if (restored) writeStore({ open, msgs, session, input }); }, [restored, open, msgs, session, input]);
   const voice = useVoiceAssistant(() => session, (data, command) => {
     if (command && command.trim()) setMsgs((m) => [...m, { id: uid(), role: "user", text: "\uD83C\uDF99\uFE0F " + command.trim() }]);
     if (data && data.session) setSession(data.session);
@@ -48,7 +72,9 @@ export default function DraftingAssistant() {
       const res = await fetch("/api/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session, text: clean }),
+        // Where the user is goes with every message, so the answer is about
+        // the screen in front of them (lib/assistant-standby.ts pageContext).
+        body: JSON.stringify({ session, text: clean, page: pathname }),
       });
       const _raw = await res.text();
       let data: any = null;
@@ -67,9 +93,13 @@ export default function DraftingAssistant() {
       } else {
         setSession(data.session);
         const image = data.options && !Array.isArray(data.options) && data.options.image?.url ? data.options.image : null;
+        // A trailing "Next: …" line is the assistant a step ahead: shown as a
+        // chip to press, never taken by itself.
+        const { text: shown, next } = splitNextStep(String(data.message || ''));
+        const chips = Array.isArray(data.options) ? data.options : [];
         setMsgs((m) => [
           ...m,
-          { id: uid(), role: "assistant", text: data.message, options: Array.isArray(data.options) ? data.options : null, image },
+          { id: uid(), role: "assistant", text: shown, options: next ? [next, ...chips] : (chips.length ? chips : null), image },
         ]);
       }
     } catch (e: any) {
@@ -84,7 +114,7 @@ export default function DraftingAssistant() {
     // One line of its own, no request: the assistant waits for a command. It
     // used to open by asking the server for a status report and an offer to
     // retry whatever was stuck (lib/assistant-standby.ts).
-    if (msgs.length === 0) setMsgs([{ id: uid(), role: "assistant", text: OPENING_LINE, options: OPENING_CHIPS }]);
+    if (msgs.length === 0) setMsgs([{ id: uid(), role: "assistant", text: OPENING_LINE, options: here.chips }]);
   }
   const onStandby = Boolean(session?.standby);
 
@@ -118,7 +148,7 @@ export default function DraftingAssistant() {
                 <p className="truncate text-sm font-semibold text-ink">Drafting Assistant</p>
                 <p className="flex items-center gap-1.5 truncate text-xs text-ink/50">
                   <span className={"inline-block h-1.5 w-1.5 shrink-0 rounded-full " + (busy ? "animate-pulse bg-accent" : onStandby ? "bg-amber-400" : "bg-emerald-500")} aria-hidden />
-                  {busy ? "Working…" : onStandby ? "On standby — say “resume”" : "Standing by for a command"}
+                  {busy ? "Working…" : onStandby ? "On standby — say “resume”" : "Watching " + here.label + " · standing by"}
                 </p>
               </div>
             </div>

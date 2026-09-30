@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { COMMAND_ONLY_RULES, OPENING_CHIPS, OPENING_LINE, STANDBY_ACK, standbyCommand } from './assistant-standby.ts';
+import { COMMAND_ONLY_RULES, NEXT_STEP_RULE, OPENING_CHIPS, OPENING_LINE, STANDBY_ACK, pageContext, splitNextStep, standbyCommand } from './assistant-standby.ts';
 
 const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 
@@ -52,4 +52,37 @@ test('the route puts the assistant on standby before anything else, and withhold
   assert.match(route, /ensureDraftImage\(/);
   // And it sees more than the video pipeline.
   assert.match(route, /workspaceBlock\(userId\)/);
+});
+
+test('the assistant knows which screen the user is on, and offers what fits it', () => {
+  assert.equal(pageContext('/sources/videos').label, 'Video Library');
+  assert.match(pageContext('/sources/videos').chips[0], /video pipeline/);
+  assert.equal(pageContext('/calendar/').label, 'Calendar / Publishing');
+  assert.equal(pageContext('/').label, 'Dashboard');
+  assert.deepEqual(pageContext(null).chips, OPENING_CHIPS);
+  for (const p of ['/', '/draft', '/templates', '/calendar', '/brand', '/sources/videos', '/sources/images', '/sources/calendar']) {
+    assert.ok(!pageContext(p).chips.some((c) => /retry|fix/i.test(c)), p + ' offers no fix');
+  }
+});
+
+test('a trailing "Next:" line is split off as the step ahead, and only a trailing one', () => {
+  assert.deepEqual(splitNextStep('Row 183 is prepared and has no Metricool draft.\n\nNext: send row 183 to Metricool for review.'), { text: 'Row 183 is prepared and has no Metricool draft.', next: 'send row 183 to Metricool for review' });
+  assert.deepEqual(splitNextStep('**Next:** prepare row 184'), { text: '**Next:** prepare row 184', next: 'prepare row 184' });
+  assert.deepEqual(splitNextStep('Nothing to suggest.'), { text: 'Nothing to suggest.', next: null });
+  assert.deepEqual(splitNextStep(''), { text: '', next: null });
+  assert.match(NEXT_STEP_RULE, /Never take that step unasked/);
+});
+
+test('the conversation survives a page change: the panel persists itself and the nav is client-side', () => {
+  const panel = src('components/DraftingAssistant.tsx');
+  assert.match(panel, /sessionStorage\.getItem\(STORE_KEY\)/);
+  assert.match(panel, /writeStore\(\{ open, msgs, session, input \}\)/);
+  assert.match(panel, /page: pathname/, 'where the user is goes with every message');
+  assert.match(panel, /splitNextStep\(/, 'the step ahead becomes a chip');
+  assert.match(src('components/PageNav.tsx'), /<Link/);
+  assert.doesNotMatch(src('components/PageNav.tsx'), /<a\s/);
+  const route = src('app/api/assistant/route.ts');
+  assert.match(route, /WHERE THE USER IS: /);
+  assert.match(route, /performanceBlock\(userId\)/, 'what has worked reaches every turn');
+  assert.match(src('lib/ai.ts'), /NEXT_STEP_RULE/);
 });

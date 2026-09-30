@@ -62,3 +62,53 @@ export const COMMAND_ONLY_RULES =
   'You act ONLY on a command. Do not retry, re-prepare, rewrite, fix, queue or schedule anything on your own initiative, ' +
   'and do not offer to. When the user asks what is going on, report it — the situation blocks tell you — and then wait. ' +
   'When the user tells you to do something, do all of it, and say what happened.';
+
+// --- where the user is ---------------------------------------------------------
+
+export type PageContext = {
+  /** The section's name as the nav prints it. */
+  label: string;
+  /** What a person does there, for the model. */
+  doing: string;
+  /** The chips worth offering there: questions and commands, never a fix. */
+  chips: string[];
+};
+
+/**
+ * Which section a path is, and what somebody is doing there.
+ *
+ * The panel sends the path with every message and the route hands the model
+ * this description, so "what needs me?" on the Video Library is answered
+ * about videos and on the Calendar about posts — without being told twice.
+ */
+export function pageContext(pathname: string | null | undefined): PageContext {
+  const p = String(pathname || '/').replace(/\/+$/, '') || '/';
+  if (p.startsWith('/sources/videos')) return { label: 'Video Library', doing: 'looking at the videos in the sheet: which are prepared, which are stuck, which have a Metricool draft', chips: ['What needs me in the video pipeline?', 'Prepare the next video that is ready', 'Which rows have no Metricool draft yet?'] };
+  if (p.startsWith('/sources/images')) return { label: 'Image Library', doing: 'looking at the library photos and generated pictures', chips: ['Which drafts have no picture?', 'Make a picture for the latest draft'] };
+  if (p.startsWith('/sources/calendar')) return { label: 'Social Calendar', doing: 'looking at the team\u2019s social calendar sheet', chips: ['What is planned this week?', 'What is on the calendar this week?'] };
+  if (p.startsWith('/calendar')) return { label: 'Calendar / Publishing', doing: 'looking at the month of scheduled posts and the ones waiting for approval', chips: ['What is waiting for approval?', 'Which posts publish this week?', 'Is anything on the calendar missing its video?'] };
+  if (p.startsWith('/templates')) return { label: 'Templates', doing: 'looking at the planner: the schedule templates and the weekly strategy slots', chips: ['Show me the planner', 'What does the Autopilot write this week?'] };
+  if (p.startsWith('/brand')) return { label: 'Brand Brain', doing: 'editing the clinic\u2019s brand profile, voice and rules', chips: ['What has performed best for this brand?', 'Which keywords have worked?'] };
+  if (p.startsWith('/draft')) return { label: 'Draft', doing: 'writing a post in the Content Generator', chips: ['Write a post about what performed best', 'Research a topic before I write'] };
+  return { label: 'Dashboard', doing: 'on the dashboard: the generator, Recent Drafts, the Autopilot queue and the publishing list', chips: OPENING_CHIPS };
+}
+
+/**
+ * The rule for being a step ahead: one short "Next:" line at the end of a
+ * reply, naming the most likely next step where the user is — a suggestion
+ * the panel turns into a chip, never an action.
+ */
+export const NEXT_STEP_RULE =
+  'Be a step ahead, in words only: when there is an obvious next step for where the user is and what they just did, end your reply with ONE line ' +
+  'beginning "Next:" that names it as a command they could give you (for example "Next: prepare row 183 now"). Choose it from what has worked ' +
+  'for this brand and the situation blocks, not from habit. Never take that step unasked, and leave the line out when there is nothing worth suggesting.';
+
+/** A reply's trailing "Next: …" line, split off so the panel can show it as a chip. */
+export function splitNextStep(message: string | null | undefined): { text: string; next: string | null } {
+  const raw = String(message || '').replace(/\s+$/, '');
+  const m = /(?:^|\n)\s*\**Next:\**\s*(.+?)\s*$/i.exec(raw);
+  if (!m) return { text: raw, next: null };
+  const next = m[1].replace(/^[\u2014\u2013\-\s]+/, '').replace(/[.\s]+$/, '').trim();
+  const text = raw.slice(0, m.index).replace(/\s+$/, '');
+  return { text: text || raw, next: next || null };
+}

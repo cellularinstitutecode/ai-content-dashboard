@@ -36,8 +36,8 @@ import { sessionKey, signBatch, batchIsAuthentic, claimBatch, newTicketId, BATCH
 import { describeTemplates, listTemplates, saveTemplate, setTemplateActive, upcomingRuns } from "@/lib/planner-admin";
 import { normalizeStrategy } from "@/lib/autopilot";
 import { ensureDraftImage } from "@/lib/images";
-import { workspaceBlock } from "@/lib/workspace-snapshot";
-import { RESUME_ACK, STANDBY_ACK, STANDBY_RULES, standbyCommand } from "@/lib/assistant-standby";
+import { performanceBlock, workspaceBlock } from "@/lib/workspace-snapshot";
+import { RESUME_ACK, STANDBY_ACK, STANDBY_RULES, pageContext, standbyCommand } from "@/lib/assistant-standby";
 
 // Compact, chat-friendly rendering of Semrush keyword rows.
 function fmtKw(k: SemKeyword): string {
@@ -430,7 +430,7 @@ function schemaNotes(missing: SchemaProbe[]): HealthNote[] {
  * session, and the reason the whole thing is wrapped rather than awaited
  * hopefully.
  */
-async function liveSituation(userId: string): Promise<{ snapshot: ReturnType<typeof summarise>; prompt: string; brand?: BrandContext }> {
+async function liveSituation(userId: string, page?: string | null): Promise<{ snapshot: ReturnType<typeof summarise>; prompt: string; brand?: BrandContext }> {
   const [runsOutcome, report, brand] = await Promise.all([
     // NOT .catch(() => []).
     //
@@ -488,8 +488,14 @@ async function liveSituation(userId: string): Promise<{ snapshot: ReturnType<typ
   // re-sent on each of up to four tool-loop iterations per message.
   // And the rest of the room — calendar, Autopilot queue, drafts, planner —
   // which the assistant could not see at all before (lib/workspace-snapshot.ts).
-  const workspace = await workspaceBlock(userId).catch((e: unknown) => { reportError("assistant:workspace", e); return ""; });
-  const prompt = [brandBlock(brand), renderSnapshot(snapshot), workspace].filter(Boolean).join("\n\n");
+  const [workspace, worked] = await Promise.all([
+    workspaceBlock(userId).catch((e: unknown) => { reportError("assistant:workspace", e); return ""; }),
+    performanceBlock(userId).catch((e: unknown) => { reportError("assistant:performance", e); return ""; }),
+  ]);
+  // Where the user is, so the answer is about the screen in front of them.
+  const where = pageContext(page);
+  const here = "WHERE THE USER IS: " + where.label + " (" + String(page || "/") + ") \u2014 " + where.doing + ".";
+  const prompt = [brandBlock(brand), here, renderSnapshot(snapshot), workspace, worked].filter(Boolean).join("\n\n");
   return { snapshot, prompt, brand };
 }
 
@@ -1368,11 +1374,12 @@ export async function POST(req: Request) {
   // Guarded like every other route in the repo: an unparseable body used to
   // throw above the handler's try block and surface as an opaque 500 that the
   // assistant widget rendered as "unexpected response (status 500)".
-  const parsed = (await req.json().catch(() => null)) as { session?: Session; text?: string } | null;
+  const parsed = (await req.json().catch(() => null)) as { session?: Session; text?: string; page?: string } | null;
   if (!parsed || typeof parsed !== 'object') {
     return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 });
   }
   const { session: incoming, text } = parsed;
+  const page = typeof parsed.page === "string" ? parsed.page.slice(0, 200) : null;
   const fresh = (): Session => ({ step: "greet", links: [], confirmations: [] });
   // A session the server did not sign is not a session - it is caller input
   // shaped like one. Start over rather than acting on it. (A first request
@@ -1422,7 +1429,7 @@ export async function POST(req: Request) {
   // The clock this request answers to. maxDuration is 300; the margin is what
   // composing and returning the answer costs after the last tool has run.
   const deadlineAt = Date.now() + 250_000;
-  const live = await liveSituation(userId);
+  const live = await liveSituation(userId, page);
 
   try {
     // STANDBY, decided before anything below can act. "standby" parks the

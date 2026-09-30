@@ -25,7 +25,7 @@ import {
 import type { EvidenceItem } from '@/lib/evidence-parse';
 import { TITLE_SYSTEM, readTitle, titlePrompt } from '@/lib/title-writer';
 import { CLAIMS_SYSTEM, claimsPrompt, parseClaims, type CheckableClaim } from '@/lib/claim-extract';
-import { COMMAND_ONLY_RULES } from '@/lib/assistant-standby';
+import { COMMAND_ONLY_RULES, NEXT_STEP_RULE } from '@/lib/assistant-standby';
 import { KEYWORDS_SYSTEM, derivedKeywords, fallbackBriefPrompt, fallbackStamp, hasKeywords, keywordsPrompt, parseKeywords } from '@/lib/keyword-fallback';
 
 /**
@@ -1081,7 +1081,7 @@ const TOOLS_SYSTEM = `You are the built-in AI assistant for Content Studio, the 
 
 You can hold a normal conversation AND take actions for the user using tools. When the user asks you to create, draft, or schedule content, use the tools rather than only describing what to do.
 
-You are fully aware of the workspace: the LIVE SITUATION and WORKSPACE blocks tell you, on every turn, what state the video pipeline is in, what is on the calendar, what the Autopilot has waiting for review, what drafts exist and what the planner is doing. Answer from them. ${COMMAND_ONLY_RULES}
+You are fully aware of the workspace: the LIVE SITUATION and WORKSPACE blocks tell you, on every turn, what state the video pipeline is in, what is on the calendar, what the Autopilot has waiting for review, what drafts exist and what the planner is doing; WHERE THE USER IS tells you which screen they are on, so "what needs me?" is answered about that screen first; WHAT HAS WORKED tells you which posts, networks, times and keywords have performed for this brand, and the CLINIC PROFILE is the Brand Brain. Answer from them. When choosing what to write, where to post it or when, prefer what has worked and say the numbers; when nothing is known to have worked, say so. ${COMMAND_ONLY_RULES} ${NEXT_STEP_RULE}
 
 Tool guidance:
 - generate_content: produce a ready-to-post content pack for a topic. Use this first when the user wants a post/article/email/etc. Infer a sensible format (social/blog/email/video/ad) from the request.
