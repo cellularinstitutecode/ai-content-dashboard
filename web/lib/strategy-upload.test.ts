@@ -376,7 +376,7 @@ test('the clinic’s own photographs come first, and no photograph is repeated w
   assert.match(autopilot, /shippable\(\(await pictureForDraft\(run\.draft_id, run\.user_id\)\)\.image\)/);
   // The picker: the post's pillar (planner, or its words), a fresh photograph, the same grading as a manual pick, and the use remembered.
   const pick = src('lib/library-pick.ts');
-  assert.match(pick, /pickFresh\(candidatesFrom\(rows\), pillars, Date\.now\(\), \{ exclude: opts\.excludeFileId \? \[opts\.excludeFileId\] : \[\] \}\)/);
+  assert.match(pick, /pickFresh\(candidates, pillars, Date\.now\(\), \{ exclude: opts\.excludeFileId \? \[opts\.excludeFileId\] : \[\] \}\)/);
   assert.match(pick, /libraryHero\(\{ url, title: Boolean\(planner\), pack: opts\.pack, topic: opts\.topic, brand: opts\.brand, libraryFileId: row\.file_id, libraryName: row\.name \}\)/);
   assert.match(pick, /await touchLibraryUse\(row\.file_id\);/);
   assert.match(src('lib/library-topic.ts'), /export const REUSE_WINDOW_DAYS = 45;/);

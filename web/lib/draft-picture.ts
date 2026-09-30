@@ -27,13 +27,14 @@ export async function pictureForDraft(draftId: string, ownerId: string, opts: { 
   const existing = (pack as { _image?: PackImage })._image;
   if (existing?.url && !unshippable(existing.verification)) return { image: existing, source: 'existing', notes: [] };
 
+  let declined = '';
   if (opts.preferLibrary !== false) {
     let brand: BrandContext | null = null;
     try {
       const { data: bp } = await db.from('brand_profiles').select('*').eq('user_id', ownerId).maybeSingle();
       if (bp) brand = bp as BrandContext;
     } catch (e) { reportError('draft-picture:brand', e); }
-    const pick = await libraryPhotoFor({ pack, topic: String(row.topic || ''), brand, budgetMs: opts.budgetMs ?? undefined });
+    const pick = await libraryPhotoFor({ pack, topic: String(row.topic || ''), brand, budgetMs: opts.budgetMs ?? undefined, explain: (r) => { declined = r; } });
     if (pick) {
       // Merged over a fresh read, like every other picture writer.
       const { data: fresh } = await db.from('drafts').select('pack').eq('id', draftId).eq('user_id', ownerId).maybeSingle();
@@ -45,7 +46,8 @@ export async function pictureForDraft(draftId: string, ownerId: string, opts: { 
       return { image: pick.image, source: 'library', notes: pick.notes };
     }
   }
-  if (!imagesEnabled()) return { image: null, source: 'none', notes: ['no library photograph fits, and pictures are switched off'] };
+  const libraryNote = declined ? 'No library photograph was used: ' + declined + '.' : '';
+  if (!imagesEnabled()) return { image: null, source: 'none', notes: [libraryNote || 'no library photograph fits', 'pictures are switched off'].filter(Boolean) };
   const made = await ensureDraftImage(draftId, ownerId, { budgetMs: opts.budgetMs, quality: opts.quality, maxAttempts: opts.maxAttempts });
-  return { image: made, source: made ? 'generated' : 'none', notes: [] };
+  return { image: made, source: made ? 'generated' : 'none', notes: libraryNote ? [libraryNote] : [] };
 }

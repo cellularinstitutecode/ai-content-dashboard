@@ -228,6 +228,8 @@ const [bulkDeleting, setBulkDeleting] = useState(false);
  * kept as well, and lib/pack-schedule.ts turns it into one post per channel.
  */
 const [genPack, setGenPack] = useState<Record<string, unknown> | null>(null);
+/** Where the generator's picture came from, and why, for the note under the image controls. */
+const [genImageFrom, setGenImageFrom] = useState<{ source: string; notes: string[] } | null>(null);
 const [genImage, setGenImage] = useState<{ url: string; alt?: string; model?: string; prompt?: string; verification?: { status?: string; score?: number | null; issues?: string[]; advisory?: string[]; textDetected?: boolean } } | null>(null);
 const [genImageLoading, setGenImageLoading] = useState(false);
 const [lastDraftId, setLastDraftId] = useState<string | null>(null);
@@ -1365,7 +1367,7 @@ announce('drafts', 'images');
 
 async function generate() {
 const runId = ++genRun.current;
-setLoading(true); setErr(null); setOutput(''); setGenPack(null); setGenImage(null); setLastDraftId(null);
+setLoading(true); setErr(null); setOutput(''); setGenPack(null); setGenImage(null); setGenImageFrom(null); setLastDraftId(null);
 // Light up the live pipeline: research → draft → save → image → verify.
 clearProcTimers();
 setProc(stepActive(makeSteps(GEN_STEPS), 'research'));
@@ -1418,6 +1420,7 @@ if (genRun.current !== runId) return; // superseded by a newer Generate
 clearProcTimers();
 if (ir.ok && ij?.image?.url) {
 setGenImage(ij.image);
+setGenImageFrom({ source: String(ij.source || ''), notes: Array.isArray(ij.notes) ? ij.notes.map(String) : [] });
 setProc((p) => (p ? stepsDone(p) : p));
 } else {
 // Say why. The text pack is saved and fine; only the picture failed, and
@@ -1980,7 +1983,11 @@ className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 tex
       key={lastDraftId}
       draftId={lastDraftId}
       hasImage={Boolean(genImage?.url)}
-      note="The picture was chosen from the clinic's own library first; an AI picture is made only when no photograph fits."
+      note={genImageFrom?.source === 'library'
+        ? '📁 From the clinic\'s own library' + (genImage?.alt ? ': ' + genImage.alt : '') + ' — with the brand filter, no AI.'
+        : genImageFrom?.source === 'generated'
+          ? (genImageFrom.notes[0] || 'No library photograph fit this post.') + ' An AI picture was made instead; pick a library photo above to replace it.'
+          : 'The picture is chosen from the clinic\'s own library first; an AI picture is made only when no photograph fits.'}
       onChanged={(img) => setGenImage((cur: any) => ({ ...(cur || {}), ...img }))}
     />
     {/* And a file from your desk, which only this picker offers. */}
