@@ -1376,7 +1376,10 @@ method: 'POST', headers: { 'content-type': 'application/json' },
 body: JSON.stringify({ topic: prompt, provider, model, type }),
 });
 const data = await r.json().catch(() => ({}));
-if (!r.ok) throw new Error(data?.error || ('Generation failed ('+r.status+')'));
+// A 504 is the platform cutting the request off, not the writer refusing: said as such, with what to do.
+if (!r.ok) throw new Error(data?.error || (r.status === 504 || r.status === 502
+  ? 'That took longer than the server allows and was cut off. Try again; a shorter format (a social post, an outline) finishes faster than a full article.'
+  : 'Generation failed (' + r.status + ')'));
 const pack = data.pack || {};
 setKeywordsApplied(Array.isArray(data.keywordsApplied) ? data.keywordsApplied : []);
 setKeywordSource(typeof data.keywordSource === 'string' ? data.keywordSource : 'none');
