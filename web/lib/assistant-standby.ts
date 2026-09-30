@@ -63,6 +63,18 @@ export const COMMAND_ONLY_RULES =
   'and do not offer to. When the user asks what is going on, report it — the situation blocks tell you — and then wait. ' +
   'When the user tells you to do something, do all of it, and say what happened.';
 
+/**
+ * What the assistant CAN do, said outright — because, left to infer it, it
+ * told a user "What it can't do: write a post from scratch. Go to Draft." on
+ * the very screen where its generate_content tool writes one, and offered a
+ * "Continue" that led nowhere.
+ */
+export const CAN_DO_RULE =
+  'You write posts from scratch yourself, on ANY page, with generate_content (then save_draft when they want it kept): never send the user to the ' +
+  'Draft page or anywhere else to have a post written, and never describe yourself as unable to write. Do not volunteer lists of what you cannot do. ' +
+  'If asked, the only things you cannot do are publish or approve — a person presses Approve. A draft you saved shows "Open draft" and "Continue in Draft" ' +
+  'buttons under your reply; point at those rather than describing a path.';
+
 // --- where the user is ---------------------------------------------------------
 
 export type PageContext = {
@@ -89,8 +101,8 @@ export function pageContext(pathname: string | null | undefined): PageContext {
   if (p.startsWith('/calendar')) return { label: 'Calendar / Publishing', doing: 'looking at the month of scheduled posts and the ones waiting for approval', chips: ['What is waiting for approval?', 'Which posts publish this week?', 'Is anything on the calendar missing its video?'] };
   if (p.startsWith('/templates')) return { label: 'Templates', doing: 'looking at the planner: the schedule templates and the weekly strategy slots', chips: ['Show me the planner', 'What does the Autopilot write this week?'] };
   if (p.startsWith('/brand')) return { label: 'Brand Brain', doing: 'editing the clinic\u2019s brand profile, voice and rules', chips: ['What has performed best for this brand?', 'Which keywords have worked?'] };
-  if (p.startsWith('/draft')) return { label: 'Draft', doing: 'writing a post in the Content Generator', chips: ['Write a post about what performed best', 'Research a topic before I write'] };
-  return { label: 'Dashboard', doing: 'on the dashboard: the generator, Recent Drafts, the Autopilot queue and the publishing list', chips: OPENING_CHIPS };
+  if (p.startsWith('/draft')) return { label: 'Draft', doing: 'writing a post in the Content Generator (you can write it for them right here, and what you write appears in the generator)', chips: ['Write a post about what performed best', 'Research a topic before I write'] };
+  return { label: 'Dashboard', doing: 'on the dashboard: the generator, Recent Drafts, the Autopilot queue and the publishing list (you can write a post for them right here)', chips: OPENING_CHIPS };
 }
 
 /**
