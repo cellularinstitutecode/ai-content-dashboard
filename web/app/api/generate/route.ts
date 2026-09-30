@@ -2,7 +2,7 @@
 // Thin route — delegates to lib/ai.ts so we can swap providers.
 import { isAllowedEmail } from '@/lib/access';
 import { NextRequest, NextResponse } from 'next/server';
-import { generateContentPack, type Provider, type ContentType } from '@/lib/ai';
+import { generateContentPack, NoKeywordsError, type Provider, type ContentType } from '@/lib/ai';
 import { loadBrandContext } from '@/lib/brand-context';
 import { reviewPack } from '@/lib/safety';
 import { supabaseServer } from '@/lib/supabase';
@@ -11,10 +11,16 @@ import { summarizeTopPerformers, type NormalizedMetric } from '@/lib/performance
 import { checkRateLimit } from '@/lib/rate-limit';
 import { recordDraftKeywords } from '@/lib/semrush';
 import { competitiveBrief } from '@/lib/competitive-brief';
+import { writerFailure } from '@/lib/writer-failure';
 import { reportError } from '@/lib/report';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+// 300, like every other route that writes a post. At 60 the Content Generator
+// was the one door with a sixty-second clock in front of a step that now
+// researches keywords, reads the competition, writes with retries and
+// verifies the citation — so it died mid-write on an ordinary social post
+// and the page said only "Generation failed. Please try again."
+export const maxDuration = 300;
 
 const ALLOWED_TYPES: ContentType[] = ['social', 'blog', 'email', 'video', 'ad'];
 
@@ -121,6 +127,8 @@ export async function POST(req: NextRequest) {
       brand,
       performanceHint,
       landscapeHint: rivals.hint || undefined,
+      // The writer's retry plan is sized to this rather than to a fixed 3 x 30s.
+      budgetMs: 200_000,
     });
     const keywordSource: string = semrush?.source ?? 'none';
     const keywordsApplied: string[] = semrush?.keywords ?? [];
@@ -150,9 +158,20 @@ export async function POST(req: NextRequest) {
     // (`anthropic 429: {...}`), which carries account and quota detail. Log it,
     // return a generic message - /api/metricool/schedule already does this.
     reportError('generate', e);
+    // No keywords, no post — said as such (lib/keyword-fallback.ts): this is a
+    // refusal by rule, not a failure to retry.
+    if (e instanceof NoKeywordsError) {
+      return NextResponse.json(
+        { error: 'Not written: no keywords could be researched for this idea, and every post is written around researched keywords. Give the idea a clearer subject and try again.' },
+        { status: 422 },
+      );
+    }
+    // The cause, in plain words and without the provider's body
+    // (lib/writer-failure.ts): a timeout, a refused key, an empty wallet and
+    // a busy minute each read differently and want different things done.
     return NextResponse.json(
-      { error: 'Generation failed. Please try again.' },
-      { status: 500 }
+      { error: 'The post could not be written: ' + writerFailure(e) + '.' },
+      { status: 502 }
     );
   }
 }
