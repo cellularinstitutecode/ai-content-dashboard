@@ -48,7 +48,9 @@ import {
 } from '@/lib/strategy-upload';
 
 export const runtime = 'nodejs';
-export const maxDuration = 180;
+// 300, the ceiling every route that makes pictures runs at: a high-quality
+// picture is a 110s call, its medium fallback another, and the check after.
+export const maxDuration = 300;
 
 const fail = (status: number, error: string, message: string) => NextResponse.json({ error, message }, { status });
 
@@ -71,8 +73,8 @@ function checksFor(pack: Record<string, unknown>, fixNote = '') {
   };
 }
 
-/** How long the picture may take: the function has 180s, and the picture is all this request does. */
-const PICTURE_BUDGET_MS = 150_000;
+/** How long the picture may take: the function has 300s, and the picture is all this request does. */
+const PICTURE_BUDGET_MS = 240_000;
 /** "Verify / fix" from the panel, on the draft alone (no post row exists yet). */
 const FIX_BUDGET_MS = 120_000;
 
@@ -295,6 +297,8 @@ export async function POST(req: Request) {
       // Images call 30s, which is why a week's previews came back with "no
       // picture was made this time" and no reason. When it still fails, the
       // reason goes back, so the panel can say it instead of shrugging.
+      // (lib/images.ts: the Images call itself now gets 110s, and a timeout
+      // steps down to medium quality while this budget allows it.)
       if (!imagesEnabled()) return NextResponse.json({ draftId, image: null, reason: 'Pictures are switched off on this deployment (IMAGE_GEN=off or no OPENAI_API_KEY).' });
       let image: { url: string; alt?: string | null } | null = null;
       let reason = '';

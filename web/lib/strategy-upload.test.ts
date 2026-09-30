@@ -318,7 +318,8 @@ test('a previewed post has an editor, a Verify / fix button and its picture, lik
   // The picture gets the function's time, and a failure comes back with its reason.
   const picture = route.slice(route.indexOf("if (body.action === 'picture') {"), route.indexOf("if (body.action === 'fix') {"));
   assert.match(picture, /budgetMs: PICTURE_BUDGET_MS/);
-  assert.match(route, /const PICTURE_BUDGET_MS = 150_000;/);
+  assert.match(route, /const PICTURE_BUDGET_MS = 240_000;/);
+  assert.match(route, /export const maxDuration = 300;/);
   assert.match(picture, /force: Boolean\(\(body as \{ again\?: unknown \}\)\.again\)/, 'make it again');
   assert.match(picture, /reason = 'The picture could not be made: '/);
   assert.match(picture, /if \(!imagesEnabled\(\)\) return NextResponse\.json\(\{ draftId, image: null, reason:/);
