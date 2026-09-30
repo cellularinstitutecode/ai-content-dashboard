@@ -20,6 +20,7 @@ import {
   installFetchProgress, subscribe, snapshot, scopedSnapshot, type Snapshot,
 } from './progressBus';
 import PercentBar from './PercentBar';
+import { isPaused, queuesRunning, setPaused, subscribePause } from './pauseBus';
 
 const SHOW_AFTER_MS = 220;   // don't flash for a request that finishes instantly
 
@@ -134,8 +135,18 @@ export function PanelLoader({ scope, rounded = 'rounded-3xl' }: { scope: string;
 // small percentage chip. Never blocks, never takes over the screen.
 export function TopProgressBar() {
   const snap = useProgress(() => snapshot());
+  // The pause (components/pauseBus.ts): shown while a queue that spends money
+  // is running — the week a dropped strategy writes — so it can be stopped
+  // from anywhere on the page, before the next post or picture is started.
+  const [pause, setPause] = useState({ paused: false, queues: 0 });
+  useEffect(() => {
+    const pull = () => setPause({ paused: isPaused(), queues: queuesRunning() });
+    pull();
+    return subscribePause(pull);
+  }, []);
   const busy = snap.running.length > 0;
-  if (!busy) return null;
+  const paused = pause.paused;
+  if (!busy && pause.queues === 0) return null;
   return (
     // Vertically centred on the right edge, not tucked under the top bar.
     // At top-4 it sat on the page header — the row carrying the nav and Sign
@@ -160,8 +171,19 @@ export function TopProgressBar() {
             {snap.label}
           </span>
         )}
+        {paused && !busy && <span className="px-1 text-[10px] font-medium text-amber-700">Paused</span>}
+        {pause.queues > 0 && (
+          <button
+            type="button"
+            onClick={() => setPaused(!paused)}
+            title={paused ? 'Start the next post and picture again' : 'Stop before the next post or picture is started; what is in flight finishes'}
+            className={'pointer-events-auto mt-0.5 rounded-full px-3 py-1 text-[11px] font-semibold ring-1 ' + (paused ? 'bg-accent text-white ring-accent' : 'bg-white text-ink ring-black/10 hover:bg-black/5')}
+          >
+            {paused ? 'Resume' : 'Pause'}
+          </button>
+        )}
       </span>
-      <span className="sr-only">{snap.label} — {snap.percent} percent complete</span>
+      <span className="sr-only">{snap.label} — {snap.percent} percent complete{paused ? ', paused' : ''}</span>
     </div>
   );
 }

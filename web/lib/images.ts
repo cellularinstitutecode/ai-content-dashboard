@@ -355,14 +355,18 @@ type GeneratedImage = { bytes: Buffer; contentType: string; ext: string; model: 
 // where a second slow call would bust the serverless budget). Every rung's
 // error is kept so a total failure surfaces the full story, not just the
 // last fallback's complaint.
+/** Where the model ladder starts: `high` for a post that ships; `medium` (about a quarter of the price) for a preview. */
+export type ImageQuality = 'high' | 'medium';
+
 async function generateImageBytes(
   prompt: string,
   size: '1536x1024' | '1024x1024' | '1024x1536' = '1536x1024',
   callMs = IMAGE_CALL_MS,
   /** When the caller's time runs out, as a clock reading; null when it has the whole function. */
   deadline: number | null = null,
+  quality: ImageQuality = 'high',
 ): Promise<GeneratedImage> {
-  const attempts: { model: string; body: Record<string, unknown> }[] = [
+  const ladder: { model: string; body: Record<string, unknown> }[] = [
     // HIGH, not medium.
     //
     // "Honestly the photos look too AI." Quality is the lever that answers that
@@ -415,6 +419,8 @@ async function generateImageBytes(
     { model: FALLBACK_MODEL, body: { model: FALLBACK_MODEL, prompt: prompt.slice(0, 3900), n: 1, size } },
   ];
 
+  // A preview does not pay for `high`: its ladder starts at the medium rung.
+  const attempts = quality === 'medium' ? ladder.filter((a) => a.body.quality !== 'high') : ladder;
   const errors: string[] = [];
   /** The time a rung may take: the usual allowance, or what is left of the deadline minus the check. */
   const rungMs = (): number => (deadline == null ? callMs : Math.max(20_000, Math.min(callMs, deadline - Date.now() - 30_000)));
@@ -717,6 +723,14 @@ export async function generatePackImage(opts: {
   budgetMs?: number | null;
   /** Planner covers: the words to set instead of the planner's own ('' = no title). Null keeps the planner's. */
   title?: string | null;
+  /**
+   * WHAT THIS PICTURE COSTS. `high` (the default) for a post that ships;
+   * `medium` for a preview — gpt-image-1 bills roughly four times less for it,
+   * and a week of previews is a week of pictures that may never be used.
+   */
+  quality?: ImageQuality;
+  /** How many takes a flagged picture may have (default 3). A preview gets one: its reviewer is a person, not a gate. */
+  maxAttempts?: number;
 }): Promise<PackImage> {
   // Record how this went before handing the result (or the failure) on, so
   // /api/health can say whether images WORK rather than whether a key is set.
@@ -748,6 +762,8 @@ async function generateBestPackImage(opts: {
   slot?: number | null;
   budgetMs?: number | null;
   title?: string | null;
+  quality?: ImageQuality;
+  maxAttempts?: number;
 }): Promise<PackImage> {
   // Weekly-planner drafts rotate through their pillar's own scenes and are
   // checked for being on topic; every other draft is unchanged.
@@ -785,7 +801,8 @@ async function generateBestPackImage(opts: {
 
   let best: { img: GeneratedImage; prompt: string; variant: number; verification: ImageVerification } | null = null;
   let lastError: unknown = null;
-  for (let attempt = 0; attempt < MAX_GEN_ATTEMPTS; attempt++) {
+  const maxAttempts = Math.max(1, Math.min(MAX_GEN_ATTEMPTS, Math.round(opts.maxAttempts ?? MAX_GEN_ATTEMPTS)));
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     // The first attempt always runs; a retry only when it can finish in time.
     if (attempt > 0 && !fits()) break;
     const variant = (baseVariant + attempt) % sceneCount;
@@ -807,7 +824,7 @@ async function generateBestPackImage(opts: {
     // approveRun that surfaced as a post shipping with no image at all.
     let img: GeneratedImage;
     try {
-      img = await generateImageBytes(prompt, planner?.size, callMs(), deadline);
+      img = await generateImageBytes(prompt, planner?.size, callMs(), deadline, opts.quality ?? 'high');
     } catch (e) {
       lastError = e;
       // With a usable candidate in hand, stop and store it. With nothing in
@@ -887,7 +904,7 @@ async function generateBestPackImage(opts: {
 // checker flagged it (lib/fix-plan.ts imageFlagged), never as a routine reroll.
 // `budgetMs` is how long the caller can wait (generatePackImage): FIX passes
 // what is left of its own budget so the step ends inside the function.
-export async function ensureDraftImage(draftId: string, ownerId: string, opts: { force?: boolean; budgetMs?: number | null } = {}): Promise<PackImage | null> {
+export async function ensureDraftImage(draftId: string, ownerId: string, opts: { force?: boolean; budgetMs?: number | null; quality?: ImageQuality; maxAttempts?: number } = {}): Promise<PackImage | null> {
   if (!imagesEnabled()) return null;
   const db = supabaseAdmin();
   const { data: d } = await db
@@ -924,6 +941,8 @@ export async function ensureDraftImage(draftId: string, ownerId: string, opts: {
     brand,
     variant: existingHasText || (opts.force && existing?.url) ? (existing?.variant ?? 0) + 1 : 0,
     budgetMs: opts.budgetMs ?? null,
+    quality: opts.quality,
+    maxAttempts: opts.maxAttempts,
     // The team's notes and their title (or "no title") outlive the take.
     direction: notesOf(existing) || null,
     title: existing?.titled?.custom ? existing.titled.title : null,

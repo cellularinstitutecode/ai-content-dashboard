@@ -32,6 +32,7 @@ import { citationVerdictLine, strategyClaimSupport } from '@/lib/strategy-claim-
 import { loadBrandContext } from '@/lib/brand-context';
 import { competitiveBrief } from '@/lib/competitive-brief';
 import { ensureDraftImage } from '@/lib/images';
+import { pictureForDraft } from '@/lib/draft-picture';
 import { strategyBrand, strategyTopicPrompt } from '@/lib/strategy-voice';
 import {
   ruleFor,
@@ -302,14 +303,33 @@ export async function POST(req: Request) {
       if (!imagesEnabled()) return NextResponse.json({ draftId, image: null, reason: 'Pictures are switched off on this deployment (IMAGE_GEN=off or no OPENAI_API_KEY).' });
       let image: { url: string; alt?: string | null } | null = null;
       let reason = '';
+      let source: 'library' | 'generated' | 'existing' | 'none' = 'generated';
+      let notes: string[] = [];
       try {
-        image = (await ensureDraftImage(draftId, auth.userId, { force: Boolean((body as { again?: unknown }).again), budgetMs: PICTURE_BUDGET_MS })) as { url: string; alt?: string | null } | null;
+        // WHAT A PREVIEW PICTURE COSTS. The first picture of a preview is made
+        // at medium quality — about a quarter of the price of `high` — and gets
+        // one take: it is there for a person to look at, and a week of them may
+        // never be used (the Autopilot writes the posts that ship, with their
+        // own high-quality pictures). "Make the picture again" is a person
+        // asking for the real thing, and gets `high`.
+        // THE CLINIC'S OWN PHOTOGRAPH FIRST (lib/draft-picture.ts): a
+        // generated picture only when the library has nothing that fits.
+        const again = Boolean((body as { again?: unknown }).again);
+        if (again) {
+          image = (await ensureDraftImage(draftId, auth.userId, { force: true, budgetMs: PICTURE_BUDGET_MS, quality: 'high', maxAttempts: 2 })) as { url: string; alt?: string | null } | null;
+        } else {
+          const picked = await pictureForDraft(draftId, auth.userId, { budgetMs: PICTURE_BUDGET_MS, quality: 'medium', maxAttempts: 1 });
+          image = picked.image as { url: string; alt?: string | null } | null;
+          source = picked.source;
+          notes = picked.notes;
+        }
         if (!image) reason = 'That draft could not be found to make a picture for.';
       } catch (e) {
         reportError('templates:draft-image', e, { draftId });
         reason = 'The picture could not be made: ' + (e instanceof Error ? e.message : 'the image service did not answer') + '.';
       }
-      return NextResponse.json({ draftId, image, reason: reason || undefined });
+      const again2 = Boolean((body as { again?: unknown }).again);
+      return NextResponse.json({ draftId, image, reason: reason || undefined, quality: again2 ? 'high' : source === 'library' ? 'library' : 'medium', source, notes });
     }
 
     // ---- "Verify / fix", pressed on a previewed post -----------------------

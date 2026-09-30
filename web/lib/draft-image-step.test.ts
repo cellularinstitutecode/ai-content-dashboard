@@ -26,7 +26,8 @@ test('the image is generated inside stepDraft', () => {
   // It used to happen only if a reviewer opened the queue, or at approve —
   // where it sits in a catch that never blocks approval. Neither runs when
   // nobody is in the loop, and Instagram refuses a post with no picture.
-  assert.match(stepDraftBody(), /await ensureDraftImage\(draftId, run\.user_id\)/);
+  // Through lib/draft-picture.ts now: the clinic's own photograph first, a generated one when none fits.
+  assert.match(stepDraftBody(), /await pictureForDraft\(draftId, run\.user_id\)/);
 });
 
 test('and only for networks that refuse a text-only post', () => {

@@ -64,6 +64,7 @@ import { metricoolNetworks, wantsBlog, type McNetwork } from '@/lib/metricool-ne
 import { professionalTitle } from '@/lib/post-title';
 import { publishArticle, wordpressConfig, wordpressConfigured } from '@/lib/wordpress';
 import { ensureDraftImage, type PackImage } from '@/lib/images';
+import { pictureForDraft } from '@/lib/draft-picture';
 import { imageUnshippable } from '@/lib/image-verdict';
 import { channelCopy, citationsIn, knownBadCitation, perNetworkPlan } from '@/lib/approve-plan';
 import { ARTICLE_LINK_PLACEHOLDER, PROMO_DELAY_MINUTES, articleLogNote, articleUrl, promoLink, readArticleLog, withArticleLink } from '@/lib/article-promo';
@@ -1136,9 +1137,11 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   ) || wantsBlog(template.providers || []);
   if (needsImage && draftId) {
     try {
-      const img = await ensureDraftImage(draftId, run.user_id);
-      imageNote = img?.url
-        ? ' — hero image ready'
+      // The clinic's own photograph first (lib/draft-picture.ts): a generated
+      // picture only when the library has nothing that fits this post.
+      const picked = await pictureForDraft(draftId, run.user_id);
+      imageNote = picked.image?.url
+        ? (picked.source === 'library' ? ' — hero image: a library photograph' + (picked.image.libraryName ? ' (' + picked.image.libraryName + ')' : '') : ' — hero image ready')
         : ' — no hero image yet (images are off, or the generator returned none)';
     } catch (err) {
       // Said out loud on the card. A picture that quietly failed is how a post
@@ -2374,7 +2377,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     (pack as ContentPack & { _image?: PackImage })._image || null
   );
   if (!packImage) {
-    try { packImage = shippable(await ensureDraftImage(run.draft_id, run.user_id)); } catch { packImage = null; }
+    try { packImage = shippable((await pictureForDraft(run.draft_id, run.user_id)).image); } catch { packImage = null; }
   }
 
   // NOTHING GOES TO INSTAGRAM WITHOUT A PICTURE. The image step above is

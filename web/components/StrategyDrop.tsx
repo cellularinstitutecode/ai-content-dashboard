@@ -13,6 +13,8 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { announce } from '@/components/refreshBus';
 import { PanelLoader } from '@/components/LoadingScreen';
+import LibraryPicker from '@/components/LibraryPicker';
+import { beginQueue, isPaused, setPaused, subscribePause, whenResumed } from '@/components/pauseBus';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
 import { supabaseBrowser } from '@/lib/supabase';
 import { DAY_LABELS, DIRECT_MAX_BYTES, STRATEGY_BUCKET, UPLOAD_MAX_BYTES, mbLabel, type UploadPlan, type UploadSlot } from '@/lib/strategy-upload';
@@ -83,7 +85,9 @@ function SlotCard({ slot, tone, writing, written, held, onChange, onOpen }: { sl
  * a template unchecked.
  */
 type PreviewChecks = { keywords: string[]; keywordSource: string; citation: string; held: string | null };
-type PreviewDraft = { draftId: string | null; pack: Record<string, unknown>; image: { url: string; alt?: string | null } | null; note?: string; /** Keywords and the citation verdict, as every other post has them at the door. */ checks?: PreviewChecks; /** Why there is no picture, when the picture step said. */ imageNote?: string; /** What the last Verify / fix concluded. */ fixNote?: string };
+type PreviewDraft = { draftId: string | null; pack: Record<string, unknown>; image: { url: string; alt?: string | null } | null; note?: string; /** Keywords and the citation verdict, as every other post has them at the door. */ checks?: PreviewChecks; /** Why there is no picture, when the picture step said. */ imageNote?: string; /** What the last Verify / fix concluded. */ fixNote?: string; /** The quality the picture was made at ('medium' for a preview's first take). */ imageQuality?: string };
+/** Remembered per browser: whether pictures are made while the week is written. */
+const PICTURES_KEY = 'strategy:pictures:v1';
 /** Which half of the work a slot is on. The work runs above the panel, so the panel can be closed and reopened. */
 type Writing = 'text' | 'picture' | 'fix' | 'saving' | null;
 const scopeFor = (k: string) => 'strategy-' + k;
@@ -94,7 +98,7 @@ const CHANNEL_KEYS: { key: string; label: string }[] = [
   { key: 'blog', label: 'Article' },
 ];
 
-function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, onSave, onChange, onRemove, onClose }: {
+function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, onLibraryPicked, onSave, onChange, onRemove, onClose }: {
   slot: EditableSlot;
   draft: PreviewDraft | null;
   writing: Writing;
@@ -104,6 +108,8 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, 
   onPicture: (again: boolean) => void;
   /** "Verify / fix": check the cited study against the copy; swap it when it does not back it. */
   onFix: () => void;
+  /** A library photograph was made the picture (components/LibraryPicker.tsx). */
+  onLibraryPicked: (image: { url: string; alt?: string | null }, notes: string[]) => void;
   /** Save the copy as edited, per channel. Resolves true when saved. */
   onSave: (edits: Record<string, string>) => Promise<boolean>;
   onChange: (next: EditableSlot) => void;
@@ -122,6 +128,8 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, 
     setEdits(next); setEditing(true);
   };
   const saveEditing = async () => { if (await onSave(edits)) setEditing(false); };
+  /** "Pick image from library": the grid, open under the buttons. */
+  const [picking, setPicking] = useState(false);
   const [angleChoice, setAngleChoice] = useState<string>('');
   const drafting = Boolean(writing);
   const set = (patch: Partial<EditableSlot>) => onChange({ ...slot, ...patch });
@@ -234,11 +242,19 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, 
                     <button type="button" onClick={startEditing} disabled={drafting || !draft.draftId} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">Edit</button>
                   )}
                   <button type="button" onClick={onFix} disabled={drafting || editing || !draft.draftId} title="Check that the cited study supports this post; replace it with one that does if not" className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">{writing === 'fix' ? 'Checking…' : 'Verify / fix'}</button>
-                  <button type="button" onClick={() => onPicture(Boolean(draft.image?.url))} disabled={drafting || editing || !draft.draftId} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">{writing === 'picture' ? 'Making the picture…' : draft.image?.url ? 'Make the picture again' : 'Make the picture'}</button>
+                  <button type="button" onClick={() => setPicking((v) => !v)} disabled={drafting || editing || !draft.draftId} title="A real photo from the team's Drive folder, with the brand's colour filter — no AI, no credits" className={'rounded-full px-3 py-1 text-[12px] font-medium ring-1 disabled:opacity-50 ' + (picking ? 'bg-accent text-white ring-accent' : 'text-ink/70 ring-black/10 hover:bg-black/5')}>📁 Pick image from library</button>
+                  <button type="button" onClick={() => onPicture(Boolean(draft.image?.url))} disabled={drafting || editing || !draft.draftId} title="A fresh AI picture, high quality. Spends a credit." className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">{writing === 'picture' ? 'Making the picture…' : draft.image?.url ? 'Make an AI picture instead' : 'Make the picture'}</button>
                 </div>
+                {picking && draft.draftId && (
+                  <LibraryPicker draftId={draft.draftId} scope={scopeFor(slot._k)} onChanged={(image, notes) => onLibraryPicked(image, notes)} onClose={() => setPicking(false)} />
+                )}
                 {draft.image?.url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={draft.image.url} alt={draft.image.alt || 'Post picture'} className="max-h-80 w-full rounded-xl object-cover ring-1 ring-black/10" />
+                  <div>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={draft.image.url} alt={draft.image.alt || 'Post picture'} className="max-h-80 w-full rounded-xl object-cover ring-1 ring-black/10" />
+                    {draft.imageQuality === 'medium' && <p className="mt-1 text-[11px] text-ink/50">No library photograph fit this post, so a preview picture was made at medium quality (about a quarter of the cost). &ldquo;Make an AI picture instead&rdquo; makes a high-quality one.</p>}
+                    {draft.imageQuality === 'library' && <p className="mt-1 text-[11px] text-emerald-800">📁 The clinic&rsquo;s own photograph, from the Image Library, with the brand&rsquo;s colour filter &mdash; no AI, no credits.{draft.imageNote ? ' ' + draft.imageNote : ''}</p>}
+                  </div>
                 ) : writing === 'picture' ? (
                   <div className="flex h-40 items-center justify-center rounded-xl bg-white/60 text-[12px] text-accent ring-1 ring-accent/20"><span className="mr-2 h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />Making the picture…</div>
                 ) : (
@@ -314,6 +330,20 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
   const previewsRef = useRef(previews); previewsRef.current = previews;
   const writingRef = useRef(writing); writingRef.current = writing;
   const [weekWriting, setWeekWriting] = useState(false);
+  // THE BRAKES. `paused` mirrors the page-wide pause (components/pauseBus.ts,
+  // the button on the right-hand badge); `pictures` is the switch for making
+  // pictures at all while the week is written — the expensive half, and the
+  // half a person may not want until they have read the posts.
+  const [paused, setPausedState] = useState(false);
+  useEffect(() => subscribePause(() => setPausedState(isPaused())), []);
+  const [pictures, setPictures] = useState(true);
+  const picturesRef = useRef(pictures); picturesRef.current = pictures;
+  useEffect(() => {
+    try { const v = window.localStorage.getItem(PICTURES_KEY); if (v === 'off') setPictures(false); } catch { /* private mode */ }
+  }, []);
+  const togglePictures = () => {
+    setPictures((v) => { try { window.localStorage.setItem(PICTURES_KEY, v ? 'off' : 'on'); } catch { /* private mode */ } return !v; });
+  };
 
   /**
    * THE WEEK, WRITTEN AS SOON AS IT IS READ. Every post of the week is
@@ -327,16 +357,19 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
     const pending = list.filter((sl) => sl.on && sl.pillar.trim() && sl.pillar !== 'New post');
     if (!pending.length) return;
     setWeekWriting(true);
+    const endQueue = beginQueue();
     let i = 0;
     const worker = async () => {
       while (i < pending.length) {
+        // Paused: nothing new starts until Resume. What is in flight finishes.
+        await whenResumed();
         const sl = pending[i++];
-        if (previewsRef.current[sl._k] || writingRef.current[sl._k]) continue;
+        if (!sl || previewsRef.current[sl._k] || writingRef.current[sl._k]) continue;
         autoStarted.current.add(sl._k);
         await writePreview(sl, sl.angles[0] || '');
       }
     };
-    try { await Promise.all([worker(), worker()]); } finally { setWeekWriting(false); }
+    try { await Promise.all([worker(), worker()]); } finally { setWeekWriting(false); endQueue(); }
   }
 
   async function writePreview(sl: EditableSlot, angle: string) {
@@ -352,9 +385,12 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
       const made = (await r.json()) as PreviewDraft;
       setPreviews((p) => ({ ...p, [k]: made }));
       announce('drafts', 'stats');
-      // 2) the picture — a second, quieter request, while the copy is read
+      // 2) the picture — a second, quieter request, while the copy is read.
+      // Not when pictures are off, and not when the pause came on while the
+      // copy was being written: the picture is the expensive half.
       // The id is passed, not read back: the state set a line above is not on the ref yet.
-      if (made.draftId) await makePicture(sl, false, { draftId: made.draftId, keepBusy: true });
+      if (made.draftId && picturesRef.current && !isPaused()) await makePicture(sl, false, { draftId: made.draftId, keepBusy: true });
+      else if (made.draftId) setPreviews((p) => (p[k] ? { ...p, [k]: { ...p[k], imageNote: isPaused() ? 'Paused before the picture was started.' : 'Pictures are switched off while the week is written.' } } : p));
     } catch (e) {
       setWriteErr((er) => ({ ...er, [k]: friendlyError(e, 'The post could not be written just now.') }));
     } finally {
@@ -376,11 +412,11 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
     try {
       const pr = await fetch('/api/templates/strategy-upload', { method: 'POST', headers, body: JSON.stringify({ action: 'picture', draftId, again }) });
       if (!pr.ok) throw new Error(await friendlyErrorFromResponse(pr, 'The picture could not be made just now.'));
-      const { image, reason } = (await pr.json()) as { image: PreviewDraft['image']; reason?: string };
+      const { image, reason, quality, notes } = (await pr.json()) as { image: PreviewDraft['image']; reason?: string; quality?: string; notes?: string[] };
       setPreviews((p) => {
         const cur = p[k]; if (!cur) return p;
         return image?.url
-          ? { ...p, [k]: { ...cur, image, imageNote: undefined, pack: { ...cur.pack, _image: image } } }
+          ? { ...p, [k]: { ...cur, image, imageNote: (notes || []).join(' ') || undefined, imageQuality: quality, pack: { ...cur.pack, _image: image } } }
           : { ...p, [k]: { ...cur, imageNote: reason || 'The picture could not be made just now.' } };
       });
       if (image?.url) announce('drafts', 'images');
@@ -579,11 +615,25 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
             const busy = listed.filter((sl) => writing[sl._k]).length;
             if (!listed.length || (!done && !busy && !weekWriting)) return null;
             const all = done === listed.length;
+            const tone = all ? 'bg-emerald-50 text-emerald-800 ring-emerald-200' : paused ? 'bg-amber-50 text-amber-900 ring-amber-200' : 'bg-accent/5 text-accent ring-accent/30';
+            const line = all
+              ? 'All ' + listed.length + ' posts are written — open any to read it.'
+              : paused
+                ? 'Paused — ' + done + ' of ' + listed.length + ' ready' + (busy ? ', ' + busy + ' finishing' : '') + '. Nothing new is started until you resume.'
+                : 'Writing the week’s posts: ' + done + ' of ' + listed.length + ' ready' + (busy ? ', ' + busy + ' being written' : '') + '.';
             return (
-              <div className={'mt-3 rounded-xl px-3 py-2 text-[12px] ring-1 ' + (all ? 'bg-emerald-50 text-emerald-800 ring-emerald-200' : 'bg-accent/5 text-accent ring-accent/30')} role="status" aria-live="polite">
-                <div className="flex items-center gap-2">
-                  {!all && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />}
-                  <span className="font-medium">{all ? 'All ' + listed.length + ' posts are written — open any to read it.' : 'Writing the week’s posts: ' + done + ' of ' + listed.length + ' ready' + (busy ? ', ' + busy + ' being written' : '') + '.'}</span>
+              <div className={'mt-3 rounded-xl px-3 py-2 text-[12px] ring-1 ' + tone} role="status" aria-live="polite">
+                <div className="flex flex-wrap items-center gap-2">
+                  {!all && !paused && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />}
+                  <span className="font-medium">{line}</span>
+                  <span className="flex-1" />
+                  {/* The brakes, beside the progress and on the right-hand badge alike. */}
+                  {weekWriting && (
+                    <button type="button" onClick={() => setPaused(!paused)} className={'rounded-full px-3 py-0.5 text-[11px] font-semibold ring-1 ' + (paused ? 'bg-accent text-white ring-accent' : 'bg-white text-ink ring-black/10 hover:bg-black/5')}>{paused ? 'Resume' : 'Pause'}</button>
+                  )}
+                  <label className="flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-ink/70" title="Pictures are the expensive half: about a quarter of a dollar each at high quality, a few cents at the preview quality used here. Off, the posts are still written and any picture can be made from its panel.">
+                    <input type="checkbox" checked={pictures} onChange={togglePictures} className="h-3.5 w-3.5" /> Pictures while writing
+                  </label>
                 </div>
                 <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-black/5">
                   <div className="h-full rounded-full bg-accent transition-[width]" style={{ width: Math.round((done / listed.length) * 100) + '%' }} />
@@ -663,6 +713,11 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
           onWrite={(angle) => void writePreview(openSlot, angle)}
           onPicture={(again) => void makePicture(openSlot, again)}
           onFix={() => void verifyFix(openSlot)}
+          onLibraryPicked={(image, notes) => {
+            const k = openSlot._k;
+            setPreviews((p) => (p[k] ? { ...p, [k]: { ...p[k], image, imageQuality: 'library', imageNote: notes.join(' ') || undefined, pack: { ...p[k].pack, _image: image } } } : p));
+            announce('drafts', 'images');
+          }}
           onSave={(edits) => saveEdits(openSlot, edits)}
           onChange={(next) => updateSlot(openSlot._k, next)}
           onRemove={() => { removeSlot(openSlot._k); setOpenKey(null); }}
