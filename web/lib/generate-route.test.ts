@@ -18,7 +18,8 @@ test('the generate route runs at the 300s ceiling, budgets the writer, and says 
 test('the Content Generator: no separate Keyword research button, the picture from the library first, the same image editor as every draft', () => {
   const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(page, /🔑 Keyword research\n<\/a>/, 'the button is gone; the research is the first step of Generate');
-  assert.match(page, /body: JSON\.stringify\(\{ id: draftId, auto: true \}\)/, 'library first');
+  // A picture dropped on the idea box is the post's picture; otherwise the library first.
+  assert.match(page, /ideaImage \? \{ id: draftId, dataUrl: ideaImage\.dataUrl, alt: ideaImage\.brief\.description \} : \{ id: draftId, auto: true \}/, 'library first, unless a picture was dropped');
   assert.match(page, /<HeroImageControls\n\s+key=\{lastDraftId\}\n\s+draftId=\{lastDraftId\}/, 'the drafts’ own controls and editor');
   assert.match(page, /only=\{\['upload'\]\}/, 'the picker keeps only the file drop');
   const route = readFileSync(new URL('../app/api/drafts/image/route.ts', import.meta.url), 'utf8');

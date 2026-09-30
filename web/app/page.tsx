@@ -14,7 +14,8 @@ import { tightestLimit, networkLabel, parseVideoUrl, draftLabel, PUBLISH_NETWORK
 import { filterQueue, matchesQueueSearch } from "@/lib/queue-search";
 import MediaPicker from "@/components/MediaPicker";
 import SchedulePack from "@/components/SchedulePack";
-import HeroImagePicker from "@/components/HeroImagePicker";
+import HeroImagePicker, { downscale } from "@/components/HeroImagePicker";
+import { topicFromPicture, type PictureBrief } from "@/lib/picture-brief";
 import HeroImageControls from "@/components/HeroImageControls";
 import YouTubeStats from "@/components/YouTubeStats";
 import QueueCalendar from "@/components/QueueCalendar";
@@ -195,6 +196,16 @@ const [provider, setProvider] = useState<Provider>('anthropic');
 const [model, setModel] = useState<string>('claude-sonnet-4-5');
 const [type, setType] = useState<ContentType>('social');
 const [prompt, setPrompt] = useState('');
+/**
+ * A PICTURE AS THE IDEA. Dropped on the idea box (or picked with the +), read
+ * by the vision model (app/api/generate/see): what it shows and the post it
+ * suggests. Generate then writes around it — keywords, the competition, the
+ * brand's voice, the citation check, as for a typed idea — and the picture
+ * becomes the post's picture instead of one being picked or made.
+ */
+const [ideaImage, setIdeaImage] = useState<{ dataUrl: string; name: string; brief: PictureBrief } | null>(null);
+const [ideaImageBusy, setIdeaImageBusy] = useState(false);
+const [ideaDrag, setIdeaDrag] = useState(false);
 const [copied, setCopied] = useState(false);
 const [loading, setLoading] = useState(false);
 const [err, setErr] = useState<string | null>(null);
@@ -1365,6 +1376,27 @@ announce('drafts', 'images');
 } catch (e) { setActionMsg(friendlyError(e, 'We could not save those changes.')); } finally { setSavingEdit(false); }
 }
 
+/** The dropped picture, shrunk in the browser and read on the server; the idea box is filled from it when empty. */
+async function takeIdeaImage(file: File | null | undefined) {
+if (!file || ideaImageBusy) return;
+if (!/^image\//i.test(file.type)) { setErr('Drop a picture (JPEG, PNG, WebP or GIF).'); return; }
+setErr(null); setIdeaImageBusy(true);
+try {
+const dataUrl = await downscale(file);
+const r = await fetch('/api/generate/see', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dataUrl }) });
+if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'The picture could not be read just now.'));
+const brief = (await r.json()) as PictureBrief;
+setIdeaImage({ dataUrl, name: file.name, brief });
+if (!prompt.trim() && brief.idea) { setPrompt(brief.idea); publishTopic(brief.idea); }
+} catch (e) {
+setErr(friendlyError(e, 'The picture could not be read just now.'));
+} finally { setIdeaImageBusy(false); }
+}
+function onIdeaDrop(e: React.DragEvent) {
+e.preventDefault(); setIdeaDrag(false);
+void takeIdeaImage(e.dataTransfer?.files?.[0]);
+}
+
 async function generate() {
 const runId = ++genRun.current;
 setLoading(true); setErr(null); setOutput(''); setGenPack(null); setGenImage(null); setGenImageFrom(null); setLastDraftId(null);
@@ -1372,10 +1404,12 @@ setLoading(true); setErr(null); setOutput(''); setGenPack(null); setGenImage(nul
 clearProcTimers();
 setProc(stepActive(makeSteps(GEN_STEPS), 'research'));
 procAdvanceLater('draft', 4000); // research + drafting happen inside one call; pace the display
+// With a picture on the idea box, the topic is the picture: what it shows leads the keywords, the competition and the copy.
+const topic = ideaImage ? topicFromPicture(prompt, ideaImage.brief) : prompt;
 try {
 const r = await fetch('/api/generate', {
 method: 'POST', headers: { 'content-type': 'application/json' },
-body: JSON.stringify({ topic: prompt, provider, model, type }),
+body: JSON.stringify({ topic, provider, model, type }),
 });
 const data = await r.json().catch(() => ({}));
 // A 504 is the platform cutting the request off, not the writer refusing: said as such, with what to do.
@@ -1395,7 +1429,7 @@ try {
 const dr = await fetch('/api/drafts', {
 method: 'POST',
 headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify({ topic: prompt, pack: { ...pack, format: type }, provider }),
+body: JSON.stringify({ topic: prompt.trim() || ideaImage?.brief.idea || topic, pack: { ...pack, format: type }, provider }),
 });
 const dj = await dr.json().catch(() => ({}));
 draftId = dj?.draft?.id || null;
@@ -1411,8 +1445,9 @@ procAdvanceLater('verify', 20000); // generation ~20s, then the vision check
 fetch('/api/drafts/image', {
 method: 'POST',
 headers: { 'content-type': 'application/json', 'x-chi-progress-scope': 'create' },
-// auto: the clinic's own photograph first (lib/draft-picture.ts), a generated one only when none fits — the same door the Autopilot and the strategy preview use.
-body: JSON.stringify({ id: draftId, auto: true }),
+// The dropped picture, when there is one: it IS the post's picture, stored like a file dropped on the picker.
+// Otherwise auto: the clinic's own photograph first (lib/draft-picture.ts), a generated one only when none fits — the same door the Autopilot and the strategy preview use.
+body: JSON.stringify(ideaImage ? { id: draftId, dataUrl: ideaImage.dataUrl, alt: ideaImage.brief.description } : { id: draftId, auto: true }),
 })
 .then(async (ir) => {
 const ij = await ir.json().catch(() => ({}));
@@ -1931,15 +1966,34 @@ className="min-w-0 flex-1 rounded-full bg-subtle px-3 py-1.5 text-[12px] text-in
 </div>
 </div>
 
-<div>
-<label htmlFor="gen-idea" className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Your idea</label>
+<div onDragOver={(e) => { e.preventDefault(); setIdeaDrag(true); }} onDragLeave={() => setIdeaDrag(false)} onDrop={onIdeaDrop}>
+<div className="mb-2 flex items-center justify-between gap-2">
+<label htmlFor="gen-idea" className="block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Your idea</label>
+{/* THE +: a picture as the idea. Read by the vision model; the post is written around what is in it and the picture becomes the post's picture. */}
+<label htmlFor="gen-idea-image" title="Add a picture: the post is written around what is in it — keywords, the competition and the brand's voice as for a typed idea — and the picture becomes the post's picture." className={'inline-flex cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium ring-1 transition-colors ' + (ideaImageBusy ? 'bg-subtle text-ink-muted ring-line' : 'bg-white text-ink ring-line hover:bg-subtle')}>
+<span className="text-[15px] leading-none">+</span>{ideaImageBusy ? 'Reading the picture…' : 'Picture'}
+<input id="gen-idea-image" type="file" accept="image/*" className="sr-only" disabled={ideaImageBusy} onChange={(e) => { void takeIdeaImage(e.target.files?.[0]); e.target.value = ''; }} />
+</label>
+</div>
 <textarea id="gen-idea" value={prompt} onChange={e => setPrompt(e.target.value)} onBlur={e => publishTopic(e.target.value)} rows={5}
-placeholder="e.g. 3 Instagram captions about exosome therapy benefits for athletes"
-className="w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 ring-line placeholder:text-ink-faint focus:ring-accent" />
+placeholder={ideaImage ? 'Anything to add? The post is written around the picture.' : 'e.g. 3 Instagram captions about exosome therapy benefits for athletes — or drop a picture here'}
+className={'w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 placeholder:text-ink-faint focus:ring-accent ' + (ideaDrag ? 'ring-2 ring-accent' : 'ring-line')} />
+{ideaImage && (
+<div className="mt-2 flex items-start gap-3 rounded-2xl bg-white p-2.5 ring-1 ring-line">
+{/* eslint-disable-next-line @next/next/no-img-element */}
+<img src={ideaImage.dataUrl} alt={ideaImage.brief.description || ideaImage.name} className="h-16 w-16 shrink-0 rounded-xl object-cover ring-1 ring-black/5" />
+<div className="min-w-0 flex-1 text-[12px] leading-relaxed text-ink/70">
+<div className="font-medium text-ink">The post will be written around this picture, and it will be the post&rsquo;s picture.</div>
+<div className="mt-0.5">{ideaImage.brief.description}</div>
+{ideaImage.brief.caution && <div className="mt-0.5 text-amber-800">{ideaImage.brief.caution}</div>}
+</div>
+<button type="button" onClick={() => setIdeaImage(null)} aria-label="Remove the picture" className="shrink-0 rounded-full px-2 text-[16px] leading-none text-ink/50 hover:bg-subtle">×</button>
+</div>
+)}
 </div>
 
 <div className="flex flex-wrap items-center gap-3">
-<button onClick={generate} disabled={loading || !prompt.trim()}
+<button onClick={generate} disabled={loading || (!prompt.trim() && !ideaImage)}
 className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">
 {loading ? (<><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />Generating…</>) : 'Generate'}
 </button>
