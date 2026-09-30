@@ -2225,8 +2225,6 @@ return (
 </div>
 <div className="grid gap-0 lg:grid-cols-5">
 {isDraft && (
-{/* On the Draft page the scheduler and the queue are stacked, each the full width: side by side the
-    month was squeezed into two-fifths of the panel. On the Dashboard the scheduler is not shown. */}
 <div className={"p-6 sm:p-8 " + (isDraft ? "lg:col-span-5 border-b border-line" : "border-b border-line lg:col-span-3 lg:border-b-0 lg:border-r")}>
 <div className="mb-3 flex items-center justify-between gap-2">
 <h3 className="text-[12px] font-medium uppercase tracking-wide text-ink-muted">Schedule a post</h3>
