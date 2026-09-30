@@ -77,6 +77,8 @@ export default function DraftingAssistant() {
   }, [pointing]);
   /** What the assistant is doing right now, as the route reports it (in blue, as it goes). */
   const [steps, setSteps] = useState<string[]>([]);
+  /** The answer so far, streamed word by word while the turn is in flight. */
+  const [liveText, setLiveText] = useState("");
   // This widget used to carry its own copy of the dashboard's Content
   // Generator — the same model buttons, format pills, idea box and Generate
   // button, a second time, in a 380px panel. Two places to do the identical
@@ -86,6 +88,7 @@ export default function DraftingAssistant() {
   // so the form was pure duplication. It is gone; the panel on the dashboard
   // is the one generator, and this is the one conversation.
   const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [liveText, steps]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -98,7 +101,9 @@ export default function DraftingAssistant() {
     setInput("");
     setBusy(true);
     setSteps([]);
+    setLiveText("");
     const trail: string[] = [];
+    let partial = "";
     try {
       setStatus("thinking");
       const res = await fetch("/api/assistant", {
@@ -120,6 +125,8 @@ export default function DraftingAssistant() {
           let evt: any = null;
           try { evt = JSON.parse(line); } catch { return; }
           if (evt && typeof evt.step === "string") { trail.push(evt.step); setSteps([...trail]); }
+          else if (evt && typeof evt.text === "string") { partial += evt.text; setLiveText(partial); }
+          else if (evt && evt.line) { partial = ""; setLiveText(""); }
           else if (evt && evt.done) data = evt.done;
           else if (evt && evt.error) data = { error: String(evt.error) };
         };
@@ -163,6 +170,7 @@ export default function DraftingAssistant() {
     } finally {
       setBusy(false);
       setSteps([]);
+      setLiveText("");
     }
   }
 
@@ -287,6 +295,14 @@ export default function DraftingAssistant() {
                     <li className="flex items-center gap-2"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" /><span>Working on it…</span></li>
                   )}
                 </ol>
+              </div>
+            )}
+            {busy && liveText && (
+              // The answer, as it is being written.
+              <div className="flex justify-start">
+                <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-canvas px-3.5 py-2.5 text-sm leading-relaxed text-ink">
+                  {liveText}<span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-accent align-middle" aria-hidden />
+                </div>
               </div>
             )}
             <div ref={endRef} />

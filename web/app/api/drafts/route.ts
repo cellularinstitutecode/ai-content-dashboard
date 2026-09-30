@@ -1,4 +1,5 @@
 // web/app/api/drafts/route.ts
+import { APPROVED_STATUS } from '@/lib/post-mode';
 import { NextRequest, NextResponse } from 'next/server';
 import { parseDriveFileId } from '@/lib/drive-url';
 import { supabaseServer } from '@/lib/supabase';
@@ -71,7 +72,29 @@ export async function GET(req: NextRequest) {
     .order('updated_at', { ascending: false })
     .range(offset, offset + limit - 1);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ drafts: data, total: count ?? 0, limit, offset });
+  // Which of these a person has approved (a post row that said yes): the list
+  // marks them, and "Delete all except approved" keeps them.
+  const approved = await approvedDraftIds(sb, user.id, (data || []).map((d) => String((d as { id: string }).id)));
+  const drafts = (data || []).map((d) => (approved.has(String((d as { id: string }).id)) ? { ...(d as Record<string, unknown>), approved: true } : d));
+  return NextResponse.json({ drafts, total: count ?? 0, limit, offset });
+}
+
+/** Post statuses that mean a person said yes (or it already went out). */
+const APPROVED_LIKE = new Set([APPROVED_STATUS, 'published', 'sent', 'live']);
+
+/** The drafts among `ids` that have an approved (or published) post. Never throws: unreadable reads as "none". */
+async function approvedDraftIds(sb: Awaited<ReturnType<typeof supabaseServer>>, userId: string, ids: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (!ids.length) return out;
+  try {
+    const { data } = await sb.from('posts').select('draft_id, status').eq('user_id', userId).in('draft_id', ids);
+    for (const row of (data || []) as { draft_id: string | null; status: string | null }[]) {
+      if (row.draft_id && APPROVED_LIKE.has(String(row.status || '').toLowerCase())) out.add(String(row.draft_id));
+    }
+  } catch (e) {
+    reportError('drafts:approved-lookup', e);
+  }
+  return out;
 }
 
 export async function POST(req: NextRequest) {
@@ -154,10 +177,17 @@ export async function DELETE(req: NextRequest) {
   if (ids.length > MAX_BULK_DELETE) {
     return NextResponse.json({ error: 'too_many', message: 'At most ' + MAX_BULK_DELETE + ' drafts can be deleted at once.' }, { status: 400 });
   }
+  // ?keepApproved=1: a draft a person approved (its post said yes, or went
+  // out) is kept and reported, not deleted. Without it, everything asked for
+  // goes — the post row keeps its copy of the text (draft_id is set null).
+  const keepApproved = ['1', 'true', 'yes'].includes(String(req.nextUrl.searchParams.get('keepApproved') || '').toLowerCase());
+  const protectedIds = keepApproved ? await approvedDraftIds(sb, user.id, ids) : new Set<string>();
 
   const deleted: string[] = [];
   const failed: { id: string; error: string }[] = [];
+  const kept: string[] = [];
   for (const id of ids) {
+    if (protectedIds.has(id)) { kept.push(id); continue; }
     // Read the pack BEFORE the row goes: its images go with it. This used to be
     // a bare row delete, which left the hero image and the whole carousel in the
     // public bucket for good — one click, several megabytes, unreachable and
@@ -184,10 +214,10 @@ export async function DELETE(req: NextRequest) {
     if (pack) await removeDraftImages(pack).catch((e) => reportError('drafts:delete-images', e, { id }));
   }
 
-  if (!deleted.length) {
-    return NextResponse.json({ error: failed[0]?.error || 'delete failed', deleted, failed }, { status: 500 });
+  if (!deleted.length && failed.length) {
+    return NextResponse.json({ error: failed[0]?.error || 'delete failed', deleted, failed, kept }, { status: 500 });
   }
-  return NextResponse.json({ ok: true, deleted, failed });
+  return NextResponse.json({ ok: true, deleted, failed, kept });
 }
 
 /**

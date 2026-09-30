@@ -867,7 +867,7 @@ async function runBatch(
   return { message: lines.join("\n"), queued: queued.length, note };
 }
 
-async function runAgent(session: Session, input: string, userId: string | null, situation: string, deadlineAt: number, brand?: BrandContext, onStep: (label: string) => void = () => {}) {
+async function runAgent(session: Session, input: string, userId: string | null, situation: string, deadlineAt: number, brand?: BrandContext, onStep: (label: string) => void = () => {}, onText?: (delta: string | null) => void) {
   const tm: ToolMessage[] = boundToolMessages(session.toolMessages);
   tm.push({ role: "user", content: input });
   // On standby the model is told so AND has no tools to call (lib/ai.ts).
@@ -889,7 +889,9 @@ async function runAgent(session: Session, input: string, userId: string | null, 
       break;
     }
     if (i === 0) onStep(THINKING_LABEL);
-    const turn = await chatWithTools(tm, snapshot, { tools: !standby });
+    // Each model call starts a fresh line in the panel (null), then streams.
+    if (onText) onText(null);
+    const turn = await chatWithTools(tm, snapshot, { tools: !standby, ...(onText ? { onText: (d: string) => onText(d) } : {}) });
     // Record the assistant turn (text and/or tool_use) so the model keeps context.
     const assistantBlocks: any[] = [];
     if (turn.message) assistantBlocks.push({ type: "text", text: turn.message });
@@ -1483,7 +1485,9 @@ export async function POST(req: Request) {
   // The clock this request answers to. maxDuration is 300; the margin is what
   // composing and returning the answer costs after the last tool has run.
   const deadlineAt = Date.now() + 250_000;
-  const live = await liveSituation(userId, page, focus);
+  // Started now, awaited only where it is needed: "standby" and "resume" are
+  // answered at once instead of after the room has been read.
+  const livePromise = liveSituation(userId, page, focus);
 
   try {
     // STANDBY, decided before anything below can act. "standby" parks the
@@ -1501,6 +1505,7 @@ export async function POST(req: Request) {
       session.standby = false;
       return reply({ ...session, mode: "chat", step: "greet" }, RESUME_ACK);
     }
+    const live = await livePromise;
 
     // The status report, on request only: the panel opens with one line of
     // its own and never asks for this unprompted (lib/assistant-standby.ts).
@@ -1657,9 +1662,9 @@ export async function POST(req: Request) {
 
     // Default: agentic chat that can take actions via tools.
     if (input && !inGuided) {
-      const run = async (onStep: (label: string) => void) => {
+      const run = async (onStep: (label: string) => void, onText?: (delta: string | null) => void) => {
         try {
-          const out = await runAgent(session, input, userId, live.prompt, deadlineAt, live.brand, onStep);
+          const out = await runAgent(session, input, userId, live.prompt, deadlineAt, live.brand, onStep, onText);
           return replyPayload({ ...session, mode: "chat", step: "greet" }, out.message, out.options);
         } catch (e: any) {
           // Fall back to plain conversational answer if tool loop fails.
@@ -1684,7 +1689,9 @@ export async function POST(req: Request) {
         async start(controller) {
           const emit = (o: unknown) => { try { controller.enqueue(encoder.encode(JSON.stringify(o) + "\n")); } catch { /* closed */ } };
           try {
-            const payload = await run((label) => emit({ step: label }));
+            // The answer as it is written: each piece of text the moment it
+            // lands, a `line` marker when a fresh one starts (after a tool).
+            const payload = await run((label) => emit({ step: label }), (delta) => emit(delta == null ? { line: true } : { text: delta }));
             emit({ done: payload });
           } catch (e: any) {
             emit({ error: e?.message || "The assistant could not finish." });
