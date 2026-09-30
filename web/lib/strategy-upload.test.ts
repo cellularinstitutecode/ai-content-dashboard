@@ -140,7 +140,7 @@ test('insert-only: an earlier upload is skipped, a clash is reported, nothing is
   const p = planUpload(plan, existing);
   assert.equal(p.already.length, 1);
   assert.equal(p.create.length, 3);
-  assert.deepEqual(p.clashes, [{ slot: 'Sunday 18:30 · Recovery in Cancun', with: 'Nutrition' }], 'a paused template is no clash');
+  assert.deepEqual(p.clashes, [{ slot: 'Sunday 6:30 PM · Recovery in Cancun', with: 'Nutrition' }], 'a paused template is no clash — and the time reads on the 12-hour clock');
   assert.deepEqual(Object.keys(p).sort(), ['already', 'clashes', 'create']);
   assert.match(uploadSummary(p), /3 weekly slots created.*review queue/);
 });
@@ -257,12 +257,15 @@ test('a slot can be written for real from the panel: the whole post, its picture
   const picture = route.slice(route.indexOf("if (body.action === 'picture') {"), route.indexOf("if (body.action !== 'apply')"));
   assert.match(picture, /ensureDraftImage\(draftId, auth\.userId/, 'with its picture, second');
   const panel = src('components/StrategyDrop.tsx');
+  const api = src('components/slotPreview.ts');
   assert.match(panel, /Write a preview post/);
-  assert.match(panel, /action: 'draft', slot: plain, direction/);
+  // The requests live in one place (components/slotPreview.ts), shared with a template's Preview.
+  assert.match(panel, /requestDraft\(plain, plan\?\.direction \|\| '', angle, scopeFor\(k\)\)/);
+  assert.match(api, /action: 'draft', slot, direction, angle/);
   assert.match(panel, /Open in Recent Drafts/);
   // Only the post's own box shows the loader, the work survives closing the panel, and the card says so.
   assert.match(panel, /PanelLoader scope=\{scopeFor\(slot\._k\)\}/);
-  assert.match(panel, /'x-chi-progress-scope': scopeFor\(k\)/);
+  assert.match(api, /'x-chi-progress-scope': scope/);
   assert.match(panel, /const \[previews, setPreviews\] = useState<Record<string, PreviewDraft>>/, 'kept above the panel');
   assert.match(panel, /Writing the post…/);
   assert.match(panel, /Post written/);
@@ -329,16 +332,19 @@ test('a previewed post has an editor, a Verify / fix button and its picture, lik
   assert.match(fix, /checks: checksFor\(next\)/);
   assert.match(route, /body\.action === 'draft' \|\| body\.action === 'picture' \|\| body\.action === 'fix'/, 'on the writing allowance');
   const panel = src('components/StrategyDrop.tsx');
+  const api = src('components/slotPreview.ts');
   // The editor: one box per channel, saved through the drafts API like Recent Drafts saves.
   assert.match(panel, /<textarea aria-label=\{c\.label \+ ' copy'\}/);
-  assert.match(panel, /fetch\('\/api\/drafts', \{ method: 'PATCH'/);
+  assert.match(api, /fetch\('\/api\/drafts', \{ method: 'PATCH'/);
+  assert.match(panel, /requestSave\(cur\.draftId, \{ \.\.\.cur\.pack, \.\.\.edits \}\)/);
   assert.match(panel, /Save changes/);
   // The buttons, and the reason when there is no picture.
   assert.match(panel, /\{writing === 'fix' \? 'Checking…' : 'Verify \/ fix'\}/);
   assert.match(panel, /draft\.image\?\.url \? 'Make an AI picture instead' : 'Make the picture'/);
-  assert.match(panel, /action: 'picture', draftId, again/);
-  assert.match(panel, /action: 'fix', draftId/);
-  assert.match(panel, /imageNote: reason \|\| 'The picture could not be made just now\.'/);
+  assert.match(api, /action: 'picture', draftId, again/);
+  assert.match(api, /action: 'fix', draftId/);
+  assert.match(api, /imageNote: out\.reason \|\| 'The picture could not be made just now\.'/);
+  assert.match(panel, /withPicture\(p\[k\], out\)/);
   assert.match(panel, /makePicture\(sl, false, \{ draftId: made\.draftId, keepBusy: true \}\)/, 'the id is passed, not read off stale state');
 });
 
@@ -391,4 +397,77 @@ test('the clinic’s own photographs come first, and no photograph is repeated w
   assert.match(src('components/StrategyDrop.tsx'), /📁 Pick image from library/);
   assert.match(src('app/AutopilotQueue.tsx'), /📁 Pick image from library · free/);
   assert.match(src('components/LibraryPicker.tsx'), /action: 'import_image', fileId: img\.id/);
+});
+
+// ---- slotFromTemplate: a saved template previewed as a strategy slot ----
+import { slotFromTemplate } from './strategy-upload.ts';
+
+test('slotFromTemplate: a pillars template becomes the slot its post is written from', () => {
+  const slot = slotFromTemplate({
+    name: 'Sleep, stress and rest', weekdays: [1, 3], time_of_day: '09:00', providers: ['instagram', 'facebook', 'linkedin'],
+    strategy: { mode: 'pillars', pillars: ['Cortisol and sleep', 'Rest as treatment'], rule: 'Never promote the lounge.', format: 'social' },
+  });
+  assert.ok(slot);
+  assert.equal(slot.pillar, 'Sleep, stress and rest');
+  assert.equal(slot.weekday, 1);
+  assert.equal(slot.time, '09:00');
+  assert.deepEqual(slot.angles, ['Cortisol and sleep', 'Rest as treatment']);
+  assert.deepEqual(slot.providers, ['instagram', 'facebook', 'linkedin']);
+  assert.equal(slot.format, 'social');
+  assert.equal(slot.rule, 'Never promote the lounge.');
+  // and the route's normaliser accepts it as it is
+  assert.equal(normalizeUpload({ slots: [slot], direction: '' }).slots.length, 1);
+});
+
+test('slotFromTemplate: a fixed topic is the one angle; full auto writes about the name', () => {
+  const fixed = slotFromTemplate({ name: 'Monday article', weekdays: [1], time_of_day: '11:00', providers: ['blog'], strategy: { mode: 'fixed_topic', topic: 'Stem cells for knees', format: 'blog' } });
+  assert.deepEqual(fixed?.angles, ['Stem cells for knees']);
+  assert.equal(fixed?.format, 'blog');
+  assert.deepEqual(fixed?.providers, ['blog']);
+  const auto = slotFromTemplate({ name: 'Recovery', weekdays: [], time_of_day: 'noon', providers: [], strategy: { mode: 'auto' } }, 4);
+  assert.deepEqual(auto?.angles, ['Recovery']);
+  assert.equal(auto?.weekday, 4, 'no days: previews as today');
+  assert.equal(auto?.time, '09:00', 'an unreadable time falls back');
+  assert.deepEqual(auto?.providers, ['instagram', 'facebook', 'linkedin'], 'no channels: the strategy channels');
+});
+
+test('slotFromTemplate: a static-text template has nothing to write', () => {
+  assert.equal(slotFromTemplate({ name: 'Hours', weekdays: [1], time_of_day: '09:00', strategy: { mode: 'off' } }), null);
+  assert.equal(slotFromTemplate({ name: 'Hours', weekdays: [1], time_of_day: '09:00' }), null);
+});
+
+// ---- "Preview" on a saved template: the same panel, the same post ----
+test('a saved template can be previewed like any other draft: one post, written as it opens, in the strategy panel', () => {
+  const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  const page = src('app/templates/page.tsx');
+  const preview = src('components/TemplatePreview.tsx');
+  const panel = src('components/StrategyDrop.tsx');
+  // The button, on every Autopilot template (a static-text one shows its text already).
+  assert.match(page, /t\.strategy && t\.strategy\.mode !== 'off' && \(\s*<button[\s\S]{0,200}onClick=\{\(\) => setPreviewing\(t\)\}/);
+  assert.match(page, /<TemplatePreview key=\{previewing\.id\} template=\{previewing\} onClose=/);
+  // The template becomes the slot its post is written from, written the moment the panel opens, picture following.
+  assert.match(preview, /slotFromTemplate\(template\)/);
+  assert.match(preview, /requestDraft\(plain, '', angle, scopeFor\(slot\._k\)\)/);
+  assert.match(preview, /void write\(slot\.angles\[0\] \|\| ''\)/, 'written as it opens');
+  assert.match(preview, /if \(made\.draftId && !isPaused\(\)\) await picture\(false, made\.draftId, true\)/, 'the picture follows, unless paused');
+  // In the same panel, with the same controls — and the template read-only in it.
+  assert.match(preview, /<SlotPanel\s+fixed/);
+  assert.match(preview, /onFix=\{\(\) => void fix\(\)\}/);
+  assert.match(preview, /onSave=\{save\}/);
+  assert.match(panel, /export function SlotPanel\(/);
+  assert.match(panel, /\{!fixed && <button type="button" onClick=\{onRemove\}/);
+  assert.match(panel, /Change the template above to change what it writes/);
+});
+
+test('every time of day on the site reads on the 12-hour clock', () => {
+  const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  assert.match(src('app/templates/page.tsx'), /at \{fmtClock12\(t\.time_of_day \|\| '09:00'\)\}/);
+  assert.match(src('components/WeeklyPlanner.tsx'), /\{fmtClock12\(t\.time_of_day\) \|\| '—'\}/);
+  assert.match(src('app/calendar/page.tsx'), /fmtClock12\(e\.time, \{ compact: true \}\)/);
+  const panel = src('components/StrategyDrop.tsx');
+  assert.match(panel, /tabular-nums">\{fmtClock12\(slot\.time\)\}<\/span>/);
+  assert.match(panel, /\{DAY_LABELS\[slot\.weekday\]\} · \{fmtClock12\(slot\.time\)\}/);
+  assert.match(panel, /aria-label="Time" type="time"/, 'the browser’s own clock picker, which reads 12-hour too');
+  assert.match(src('lib/schedule-clock.ts'), /export function fmtScheduleTime[\s\S]{0,80}hour: 'numeric'/);
+  assert.match(src('lib/planner-admin.ts'), /' at ' \+ fmtClock12\(t\.time_of_day\) \+ ' \(Cancún\)'/, 'the assistant says times the same way');
 });

@@ -16,7 +16,9 @@ import { PanelLoader } from '@/components/LoadingScreen';
 import LibraryPicker from '@/components/LibraryPicker';
 import { beginQueue, isPaused, setPaused, subscribePause, whenResumed } from '@/components/pauseBus';
 import { friendlyError, friendlyErrorFromResponse } from '@/lib/friendly-error';
+import { CHANNEL_KEYS, requestDraft, requestFix, requestPicture, requestSave, scopeFor, withPicture, type PreviewDraft, type Writing } from '@/components/slotPreview';
 import { supabaseBrowser } from '@/lib/supabase';
+import { fmtClock12 } from '@/lib/clock12';
 import { DAY_LABELS, DIRECT_MAX_BYTES, STRATEGY_BUCKET, UPLOAD_MAX_BYTES, mbLabel, type UploadPlan, type UploadSlot } from '@/lib/strategy-upload';
 
 type Preview = { create: number; already: number; clashes: { slot: string; with: string }[] } | null;
@@ -42,17 +44,17 @@ function toneFor(pillar: string, all: string[]): string {
 }
 
 /** A slot as the editor holds it: the document's slot plus a stable key and an on/off. */
-type EditableSlot = UploadSlot & { _k: string; on: boolean };
+export type EditableSlot = UploadSlot & { _k: string; on: boolean };
 let __slotSeq = 0;
-const slotKey = () => 's_' + Date.now().toString(36) + '_' + (__slotSeq++).toString(36);
+export const slotKey = () => 's_' + Date.now().toString(36) + '_' + (__slotSeq++).toString(36);
 const SOCIAL_NETWORKS = ['instagram', 'facebook', 'linkedin'] as const;
 
 /** One post of the week, as a compact card. "Preview & edit" opens it in the panel. */
 function SlotCard({ slot, tone, writing, written, held, onChange, onOpen }: { slot: EditableSlot; tone: string; writing?: Writing; written?: boolean; held?: boolean; onChange: (next: EditableSlot) => void; onOpen: () => void }) {
   return (
-    <div data-ai-target="slot" data-ai-label={DAY_LABELS[slot.weekday] + ' ' + slot.time + ' — ' + slot.pillar} className={'min-w-0 break-words hyphens-auto rounded-2xl p-3.5 text-[12px] ring-1 transition ' + tone + (slot.on ? '' : ' opacity-40')}>
+    <div data-ai-target="slot" data-ai-label={DAY_LABELS[slot.weekday] + ' ' + fmtClock12(slot.time) + ' — ' + slot.pillar} className={'min-w-0 break-words hyphens-auto rounded-2xl p-3.5 text-[12px] ring-1 transition ' + tone + (slot.on ? '' : ' opacity-40')}>
       <div className="flex items-start justify-between gap-2">
-        <span className="text-[13px] font-semibold tabular-nums">{slot.time}</span>
+        <span className="text-[13px] font-semibold tabular-nums">{fmtClock12(slot.time)}</span>
         <input type="checkbox" checked={slot.on} onChange={() => onChange({ ...slot, on: !slot.on })} aria-label={'Include ' + slot.pillar + ' on ' + DAY_LABELS[slot.weekday]} className="mt-0.5" />
       </div>
       <button type="button" onClick={onOpen} className="mt-2 text-left text-[14px] font-semibold leading-snug hover:underline">{slot.pillar}</button>
@@ -84,21 +86,11 @@ function SlotCard({ slot, tone, writing, written, held, onChange, onOpen }: { sl
  * (lib/strategy-upload.ts normalizeUpload), so nothing typed here can reach
  * a template unchecked.
  */
-type PreviewChecks = { keywords: string[]; keywordSource: string; citation: string; held: string | null };
-type PreviewDraft = { draftId: string | null; pack: Record<string, unknown>; image: { url: string; alt?: string | null } | null; note?: string; /** Keywords and the citation verdict, as every other post has them at the door. */ checks?: PreviewChecks; /** Why there is no picture, when the picture step said. */ imageNote?: string; /** What the last Verify / fix concluded. */ fixNote?: string; /** The quality the picture was made at ('medium' for a preview's first take). */ imageQuality?: string };
 /** Remembered per browser: whether pictures are made while the week is written. */
 const PICTURES_KEY = 'strategy:pictures:v1';
-/** Which half of the work a slot is on. The work runs above the panel, so the panel can be closed and reopened. */
-type Writing = 'text' | 'picture' | 'fix' | 'saving' | null;
-const scopeFor = (k: string) => 'strategy-' + k;
-const CHANNEL_KEYS: { key: string; label: string }[] = [
-  { key: 'instagram', label: 'Instagram' },
-  { key: 'facebook', label: 'Facebook' },
-  { key: 'linkedin', label: 'LinkedIn' },
-  { key: 'blog', label: 'Article' },
-];
+// The types and requests behind a previewed post live in components/slotPreview.ts, shared with a template's "Preview".
 
-function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, onLibraryPicked, onSave, onChange, onRemove, onClose }: {
+export function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, onLibraryPicked, onSave, onChange, onRemove, onClose, fixed }: {
   slot: EditableSlot;
   draft: PreviewDraft | null;
   writing: Writing;
@@ -115,6 +107,12 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, 
   onChange: (next: EditableSlot) => void;
   onRemove: () => void;
   onClose: () => void;
+  /**
+   * A saved template's preview: the slot is what the template is, so its
+   * pillar, day, time, channels, angles and note are shown rather than
+   * edited, and there is nothing to include or remove — only the post.
+   */
+  fixed?: boolean;
 }) {
   const [newAngle, setNewAngle] = useState('');
   // THE EDITOR, like every other preview's: the copy of each channel in a box
@@ -149,11 +147,19 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, 
         <div className="flex items-start justify-between gap-3 border-b border-black/5 px-5 py-4">
           <div className="min-w-0">
             <h3 className="truncate text-base font-semibold text-ink">{slot.pillar || 'New post'}</h3>
-            <p className="mt-0.5 text-[12px] text-ink/50">{DAY_LABELS[slot.weekday]} · {slot.time} · {slot.format === 'blog' ? 'Article' : slot.providers.map((p) => NETWORK_LABEL[p] || p).join(', ')} · one post a week, drawing on one of the angles below</p>
+            <p className="mt-0.5 text-[12px] text-ink/50">{DAY_LABELS[slot.weekday]} · {fmtClock12(slot.time)} · {slot.format === 'blog' ? 'Article' : slot.providers.map((p) => NETWORK_LABEL[p] || p).join(', ')} · {fixed ? 'what this template writes, one week\u2019s post at a time' : 'one post a week, drawing on one of the angles below'}</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close preview" className="shrink-0 rounded-full px-2 text-lg leading-none text-ink/50 hover:bg-black/5">×</button>
         </div>
         <div className="overflow-y-auto px-5 py-4">
+          {fixed && (
+            <div className="rounded-2xl bg-canvas/70 px-4 py-3 text-[12px] leading-relaxed text-ink/70 ring-1 ring-line/60">
+              <div><span className="font-semibold text-ink">Writes about:</span> {slot.angles.length > 1 ? slot.angles.join(' · ') : slot.angles[0] || slot.pillar}{slot.angles.length > 1 ? ' — in turn, one a week' : ''}</div>
+              {slot.rule && <div className="mt-1"><span className="font-semibold text-ink">Note for the writer:</span> {slot.rule}</div>}
+              <div className="mt-1 text-ink/50">Change the template above to change what it writes; this preview writes it as it is now.</div>
+            </div>
+          )}
+          {!fixed && <>
           <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_140px_110px]">
             <div>
               <span className={label}>Pillar</span>
@@ -167,7 +173,7 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, 
             </div>
             <div>
               <span className={label}>Time</span>
-              <input aria-label="Time" value={slot.time} onChange={(e) => set({ time: e.target.value })} placeholder="09:00" className={field + ' tabular-nums'} />
+              <input aria-label="Time" type="time" value={slot.time} onChange={(e) => set({ time: e.target.value })} placeholder="09:00" className={field + ' tabular-nums'} />
             </div>
           </div>
           {slot.theme && <p className="mt-2 text-[12px] italic text-ink/60">Day theme: {slot.theme}</p>}
@@ -205,6 +211,7 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, 
             <span className={label}>Note for the writer</span>
             <textarea aria-label="Note" value={slot.rule} onChange={(e) => set({ rule: e.target.value })} rows={3} placeholder="e.g. mention the recovery lounge without promoting it" className={field + ' resize-y leading-relaxed'} />
           </div>
+          </>}
 
           {/* THE POST ITSELF. Written the way the Autopilot will write it, saved
               under Recent Drafts like any other draft, with its picture. */}
@@ -224,7 +231,7 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, 
                 {writing === 'text' ? 'Writing…' : writing === 'picture' ? 'Making the picture…' : draft ? 'Write it again' : 'Write a preview post'}
               </button>
             </div>
-            <p className="mt-1.5 text-[11px] text-ink/50">One week&rsquo;s post for this slot, written as you open it, exactly as the Autopilot will write it &mdash; the strategy&rsquo;s voice, this note, keywords, the competition, a citation when it makes a health claim, checked by the judge and fixed when it fails &mdash; saved to Recent Drafts, with its picture following. You can close this and carry on; the card says when it is done. Nothing is scheduled.</p>
+            <p className="mt-1.5 text-[11px] text-ink/50">One week&rsquo;s post for this {fixed ? 'template' : 'slot'}, written as you open it, exactly as the Autopilot will write it &mdash; the strategy&rsquo;s voice, this note, keywords, the competition, a citation when it makes a health claim, checked by the judge and fixed when it fails &mdash; saved to Recent Drafts, with its picture following. You can close this and carry on; the card says when it is done. Nothing is scheduled.</p>
             {writing === 'text' && <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-[12px] text-accent">Writing the post (about half a minute). The picture follows once the copy is here.</div>}
             {writing === 'picture' && <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-[12px] text-accent">Copy is in; making the picture (up to two minutes).</div>}
             {writing === 'fix' && <div className="mt-3 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-[12px] text-accent">Checking the cited study against the post, and looking for a better one if it does not back it (up to two minutes).</div>}
@@ -296,11 +303,13 @@ function SlotPanel({ slot, draft, writing, draftErr, onWrite, onPicture, onFix, 
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 border-t border-black/5 bg-canvas px-5 py-3">
-          <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-ink/70">
-            <input type="checkbox" checked={slot.on} onChange={() => set({ on: !slot.on })} className="h-3.5 w-3.5" /> Include this post
-          </label>
+          {!fixed && (
+            <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-ink/70">
+              <input type="checkbox" checked={slot.on} onChange={() => set({ on: !slot.on })} className="h-3.5 w-3.5" /> Include this post
+            </label>
+          )}
           <span className="flex-1" />
-          <button type="button" onClick={onRemove} className="rounded-full px-3 py-1 text-[12px] font-medium text-red-600 ring-1 ring-red-200 hover:bg-red-50">Remove post</button>
+          {!fixed && <button type="button" onClick={onRemove} className="rounded-full px-3 py-1 text-[12px] font-medium text-red-600 ring-1 ring-red-200 hover:bg-red-50">Remove post</button>}
           <button type="button" onClick={onClose} className="rounded-full bg-accent px-4 py-1 text-[12px] font-semibold text-white hover:opacity-90">Done</button>
         </div>
       </div>
@@ -374,15 +383,12 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
 
   async function writePreview(sl: EditableSlot, angle: string) {
     const k = sl._k;
-    const headers = { 'Content-Type': 'application/json', 'x-chi-progress': 'loud', 'x-chi-progress-scope': scopeFor(k) };
     setWriting((w) => ({ ...w, [k]: 'text' }));
     setWriteErr((e) => ({ ...e, [k]: null }));
     try {
       const { _k: _key, on: _on, ...plain } = sl;
       // 1) the copy — shown as soon as it is here
-      const r = await fetch('/api/templates/strategy-upload', { method: 'POST', headers, body: JSON.stringify({ action: 'draft', slot: plain, direction: plan?.direction || '', angle }) });
-      if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'The post could not be written just now.'));
-      const made = (await r.json()) as PreviewDraft;
+      const made = await requestDraft(plain, plan?.direction || '', angle, scopeFor(k));
       setPreviews((p) => ({ ...p, [k]: made }));
       announce('drafts', 'stats');
       // 2) the picture — a second, quieter request, while the copy is read.
@@ -407,19 +413,11 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
     const k = sl._k;
     const draftId = opts.draftId || previewsRef.current[k]?.draftId;
     if (!draftId) return;
-    const headers = { 'Content-Type': 'application/json', 'x-chi-progress': 'quiet', 'x-chi-progress-scope': scopeFor(k) };
     setWriting((w) => ({ ...w, [k]: 'picture' }));
     try {
-      const pr = await fetch('/api/templates/strategy-upload', { method: 'POST', headers, body: JSON.stringify({ action: 'picture', draftId, again }) });
-      if (!pr.ok) throw new Error(await friendlyErrorFromResponse(pr, 'The picture could not be made just now.'));
-      const { image, reason, quality, notes } = (await pr.json()) as { image: PreviewDraft['image']; reason?: string; quality?: string; notes?: string[] };
-      setPreviews((p) => {
-        const cur = p[k]; if (!cur) return p;
-        return image?.url
-          ? { ...p, [k]: { ...cur, image, imageNote: (notes || []).join(' ') || undefined, imageQuality: quality, pack: { ...cur.pack, _image: image } } }
-          : { ...p, [k]: { ...cur, imageNote: reason || 'The picture could not be made just now.' } };
-      });
-      if (image?.url) announce('drafts', 'images');
+      const out = await requestPicture(draftId, again, scopeFor(k));
+      setPreviews((p) => (p[k] ? { ...p, [k]: withPicture(p[k], out) } : p));
+      if (out.image?.url) announce('drafts', 'images');
     } catch (e) {
       const note = friendlyError(e, 'The picture could not be made just now.');
       setPreviews((p) => (p[k] ? { ...p, [k]: { ...p[k], imageNote: note } } : p));
@@ -436,9 +434,7 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
     setWriting((w) => ({ ...w, [k]: 'fix' }));
     setWriteErr((e) => ({ ...e, [k]: null }));
     try {
-      const r = await fetch('/api/templates/strategy-upload', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-chi-progress': 'loud', 'x-chi-progress-scope': scopeFor(k) }, body: JSON.stringify({ action: 'fix', draftId }) });
-      if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'The citation could not be checked just now.'));
-      const out = (await r.json()) as { pack: Record<string, unknown>; note: string; swapped: boolean; checks: PreviewChecks };
+      const out = await requestFix(draftId, scopeFor(k));
       setPreviews((p) => (p[k] ? { ...p, [k]: { ...p[k], pack: { ...p[k].pack, ...out.pack }, checks: out.checks, fixNote: out.note } } : p));
       announce('drafts', 'stats');
     } catch (e) {
@@ -456,11 +452,8 @@ export default function StrategyDrop({ onCreated }: { onCreated?: () => void }) 
     setWriting((w) => ({ ...w, [k]: 'saving' }));
     setWriteErr((e) => ({ ...e, [k]: null }));
     try {
-      const pack = { ...cur.pack, ...edits };
-      const r = await fetch('/api/drafts', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: cur.draftId, pack }) });
-      if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'We could not save those changes.'));
-      const j = (await r.json().catch(() => null)) as { draft?: { pack?: Record<string, unknown> } } | null;
-      setPreviews((p) => (p[k] ? { ...p, [k]: { ...p[k], pack: j?.draft?.pack || pack } } : p));
+      const saved = await requestSave(cur.draftId, { ...cur.pack, ...edits });
+      setPreviews((p) => (p[k] ? { ...p, [k]: { ...p[k], pack: saved } } : p));
       announce('drafts', 'stats');
       return true;
     } catch (e) {

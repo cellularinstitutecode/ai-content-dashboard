@@ -30,6 +30,7 @@
 //
 // Pure: `./x.ts` imports only, so the test runner reads this file directly.
 import { STRATEGY_PROVIDERS } from './strategy-seed.ts';
+import { fmtClock12 } from './clock12.ts';
 
 /** The mark on every template this creates: `strategy.seeded`. */
 export const UPLOAD_MARK = 'uploaded-strategy';
@@ -305,6 +306,54 @@ export function ruleFor(slot: UploadSlot, direction: string): string | undefined
   return text ? text.slice(0, 800) : undefined;
 }
 
+/** A saved template, as the templates page and the planner hold one. */
+export type TemplateLike = {
+  name?: unknown;
+  weekdays?: unknown;
+  time_of_day?: unknown;
+  providers?: unknown;
+  strategy?: unknown;
+};
+
+/**
+ * THE SLOT A SAVED TEMPLATE AMOUNTS TO, so it can be previewed the way a
+ * dropped strategy's slot is ("Preview" on the templates page, which writes
+ * one post through the strategy-upload route's `draft` action: the
+ * strategy's voice, keywords, a citation when a health claim is made, the
+ * judge, the picture — saved to Recent Drafts, nothing scheduled).
+ *
+ * The angles are what the template writes about: its fixed topic, its
+ * pillars in turn, or — on full auto — its own name. The standing rule the
+ * seed wrote on it (`strategy.rule`) rides along as the note for the writer.
+ * The first weekday stands for the template; one with no days previews as
+ * today. A static-text template (mode 'off') posts its text as written and
+ * has nothing to write, so it comes back null.
+ */
+export function slotFromTemplate(t: TemplateLike, today: number = new Date().getDay()): UploadSlot | null {
+  const s = (t.strategy && typeof t.strategy === 'object' ? t.strategy : {}) as Record<string, unknown>;
+  const mode = String(s.mode || 'off');
+  if (mode === 'off') return null;
+  const pillar = clean(t.name, 80) || 'Untitled template';
+  const days = Array.isArray(t.weekdays) ? t.weekdays.map((d) => weekdayOf(d)).filter((d): d is number => d != null) : [];
+  const weekday = days.length ? days[0] : (today >= 0 && today <= 6 ? today : 1);
+  const format: 'social' | 'blog' = String(s.format) === 'blog' ? 'blog' : 'social';
+  const providersIn = Array.isArray(t.providers) ? t.providers.map((p) => String(p).trim().toLowerCase()) : [];
+  const providers = format === 'blog' ? ['blog'] : SOCIAL.filter((p) => providersIn.includes(p));
+  const topic = clean(s.topic, 200);
+  const pillars = Array.isArray(s.pillars) ? s.pillars.map((p) => clean(p, 200)).filter(Boolean) : [];
+  const angles = mode === 'fixed_topic' && topic ? [topic] : mode === 'pillars' && pillars.length ? pillars : [pillar];
+  return {
+    weekday,
+    time: timeOf(t.time_of_day) || SOCIAL_DEFAULT_TIMES[0],
+    pillar,
+    theme: '',
+    angles,
+    format,
+    providers: providers.length ? providers : [...STRATEGY_PROVIDERS],
+    rule: clean(s.rule, 800),
+  };
+}
+
 export function uploadRows(plan: UploadPlan): UploadRow[] {
   return plan.slots.map((s) => {
     const rule = ruleFor(s, plan.direction);
@@ -357,7 +406,7 @@ export function planUpload(plan: UploadPlan, existing: readonly ExistingRow[] = 
     out.create.push(row);
     for (const e of existing) {
       if (e.active === false || !daysOf(e.weekdays).includes(day) || hhmm(e.time_of_day) !== row.time_of_day) continue;
-      out.clashes.push({ slot: DAY_LABELS[day] + ' ' + row.time_of_day + ' · ' + row.name, with: String(e.name ?? 'an unnamed template') });
+      out.clashes.push({ slot: DAY_LABELS[day] + ' ' + fmtClock12(row.time_of_day) + ' · ' + row.name, with: String(e.name ?? 'an unnamed template') });
     }
   }
   return out;

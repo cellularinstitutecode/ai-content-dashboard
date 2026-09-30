@@ -15,7 +15,7 @@ import { FIX_STALLED_NOTE, fixStepsLabel, fixView, type FixStatus, type FixStep 
 function clock(iso: string): string {
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return '';
-  return new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
 export default function FixStatusLine({ angle, steps, className = '' }: {

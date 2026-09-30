@@ -12,6 +12,7 @@ import { metricoolPlannerUrl } from '@/lib/metricool-links';
 // The Approve button must agree with the API about what may go out.
 import { isAwaitingApproval, postStatusMeta } from '@/lib/post-mode';
 import { overduePosts, weeklyPlanByDay, type PlanTemplate } from '@/lib/calendar-plan';
+import { fmtClock12 } from '@/lib/clock12';
 import { sheetRowUrl, sheetRowLabel, sheetRowTitle, type PostSource } from '@/lib/sheet-link';
 import { fmtScheduleTime, fmtScheduleSlot, fmtScheduleDateTime, scheduleDateKey, scheduleWallClock, isoAtScheduleWallClock, scheduleTzLabel, scheduleInputValue, scheduleInstantFromInput } from '@/lib/schedule-clock';
 // Autopilot drafts waiting for approval sit in this list too, so the calendar
@@ -836,7 +837,7 @@ export default function CalendarPage() {
                 <div className="mt-0.5 space-y-[1px] text-left font-normal" title={'Weekly plan (edit on Templates):\n' + planByDay[i].map((e) => (e.time ? e.time + ' ' : '') + e.name).join('\n')}>
                   {planByDay[i].map((e) => (
                     <div key={e.name + e.time} className={'truncate rounded px-1 text-[9px] leading-[14px] ' + (e.fromStrategy ? 'bg-accent/10 text-accent' : 'bg-black/5 text-ink/50')}>
-                      {e.time && <span className="tabular-nums">{e.time} </span>}{e.name}
+                      {e.time && <span className="tabular-nums">{fmtClock12(e.time, { compact: true })} </span>}{e.name}
                     </div>
                   ))}
                 </div>
