@@ -75,6 +75,7 @@ export default function RunPreview({
   onApprove,
   onApproveDraft,
   onSkip,
+  onReschedule,
   onFix,
   imageControls,
 }: {
@@ -85,6 +86,8 @@ export default function RunPreview({
   onApprove: () => void;
   onApproveDraft: () => void;
   onSkip: () => void;
+  /** "Reschedule": any date and time for this draft (the caller opens the box). */
+  onReschedule?: () => void;
   /**
    * FIX — resolve every warning shown here (POST /api/autopilot/runs
    * { action: 'fix' }). It runs in the background; its progress and result
@@ -195,6 +198,9 @@ export default function RunPreview({
                 <button type="button" disabled={busy || fixing} onClick={onApproveDraft} className={btn + 'text-ink/70 ring-1 ring-black/10 hover:bg-black/5'}>Approve as draft</button>
               )}
             </>
+          )}
+          {onReschedule && (
+            <button type="button" disabled={busy || fixing} onClick={onReschedule} title="Pick any date and time" className={btn + 'text-ink/70 ring-1 ring-black/10 hover:bg-black/5'}>Reschedule</button>
           )}
           <button type="button" disabled={busy || fixing} onClick={onSkip} className={btn + 'text-red-600 ring-1 ring-red-200 hover:bg-red-50'}>{busy ? 'Working…' : 'Skip'}</button>
         </div>

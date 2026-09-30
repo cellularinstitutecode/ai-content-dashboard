@@ -3209,6 +3209,43 @@ export async function fixRunInBackground(runId: string, userId: string): Promise
   if (writeError) reportError('autopilot:fix-record', writeError, { runId });
 }
 
+/**
+ * Move an Autopilot run to another instant — "Reschedule" on a missed (or any
+ * waiting) draft. The run keeps its draft and its state; only its time moves.
+ *
+ * `angle.redatedFrom` is set, the same marker "Approve for next free slot"
+ * leaves, so the reconcile pass (lib/run-reconcile.ts) never retires the run
+ * for no longer sitting on its template's slot. A run that has been approved,
+ * skipped or superseded cannot be moved; a slot the template already has a
+ * run on is refused rather than doubled.
+ */
+export async function rescheduleRun(runId: string, userId: string, iso: string): Promise<{ ok: true } | { ok: false; note: string }> {
+  const at = new Date(iso);
+  if (!Number.isFinite(at.getTime())) return { ok: false, note: 'That is not a date.' };
+  const db = supabaseAdmin();
+  const { data: r, error: readError } = await db
+    .from('template_runs').select('id, template_id, log, state, angle, scheduled_for').eq('id', runId).eq('user_id', userId).maybeSingle();
+  if (readError) { reportError('autopilot:reschedule-read', readError, { runId }); return { ok: false, note: 'The draft could not be read just now.' }; }
+  if (!r) return { ok: false, note: 'That draft could not be found.' };
+  const row = r as RunRow;
+  if (row.state === 'approved' || row.state === 'skipped' || row.state === 'superseded' || row.state === 'failed') {
+    return { ok: false, note: 'This draft has already been ' + row.state + ', so it cannot be moved.' };
+  }
+  const { data: clash } = await db.from('template_runs').select('id').eq('template_id', row.template_id).eq('scheduled_for', at.toISOString()).neq('id', runId).limit(1);
+  if (Array.isArray(clash) && clash.length) return { ok: false, note: 'This template already has a post at that time. Pick another time.' };
+  const angle = { ...((row.angle as Record<string, unknown> | null) || {}), redatedFrom: row.scheduled_for, redatedAt: new Date().toISOString() };
+  const { data: moved, error } = await db
+    .from('template_runs')
+    .update({ scheduled_for: at.toISOString(), angle, log: logLine(row, 'reschedule', 'Moved by reviewer from ' + row.scheduled_for + ' to ' + at.toISOString() + '.') })
+    .eq('id', runId)
+    // Conditional write, like skip: an approval from another tab wins.
+    .eq('state', row.state)
+    .select('id');
+  if (error) { reportError('autopilot:reschedule', error, { runId }); return { ok: false, note: 'The draft could not be moved just now.' }; }
+  if (!Array.isArray(moved) || !moved.length) return { ok: false, note: 'This draft changed in another tab; reload and try again.' };
+  return { ok: true };
+}
+
 export async function skipRun(runId: string, userId: string): Promise<boolean> {
   const db = supabaseAdmin();
   const { data: r, error: readError } = await db
