@@ -172,3 +172,21 @@ test('the route reads the PDF with Claude, then inserts only — and the panel i
   assert.match(templates, /<StrategyDrop onCreated=/);
   assert.match(templates, /<WeeklyPlanner/, 'the built-in strategy loader stays');
 });
+
+test('a strategy PDF may be 30 MB: anything over the request limit goes through storage', () => {
+  const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  const lib = src('lib/strategy-upload.ts');
+  assert.match(lib, /export const UPLOAD_MAX_BYTES = 30 \* 1024 \* 1024;/);
+  assert.match(lib, /export const DIRECT_MAX_BYTES = 4 \* 1024 \* 1024;/, 'the request-body limit stays what Vercel allows');
+  const route = src('app/api/templates/strategy-upload/route.ts');
+  assert.match(route, /body\.action === 'sign'/, 'the route issues a signed upload URL');
+  assert.match(route, /createSignedUploadUrl\(path\)/);
+  assert.match(route, /public: false/, 'the bucket is private');
+  assert.match(route, /if \(!path\.startsWith\(auth\.userId \+ '\/'\) \|\| path\.includes\('\.\.'\)\)/, 'only the user’s own object is read');
+  assert.match(route, /\.remove\(\[path\]\)/, 'and it is removed once read');
+  assert.match(route, /buf\.length > UPLOAD_MAX_BYTES/, 'the cap is enforced on the bytes read, whichever way they came');
+  const panel = src('components/StrategyDrop.tsx');
+  assert.match(panel, /file\.size > DIRECT_MAX_BYTES/);
+  assert.match(panel, /uploadToSignedUrl\(path, token, file/);
+  assert.doesNotMatch(panel, /up to 4 MB/);
+});

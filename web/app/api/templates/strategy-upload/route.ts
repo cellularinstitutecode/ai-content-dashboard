@@ -18,9 +18,13 @@ import { normalizeStrategy } from '@/lib/autopilot';
 import { supportsJsonOutput } from '@/lib/anthropic-models';
 import { readAnthropicStream } from '@/lib/sse-stream';
 import { supabaseServer } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 import {
   UPLOAD_MAX_BYTES,
+  DIRECT_MAX_BYTES,
+  STRATEGY_BUCKET,
+  mbLabel,
   UPLOAD_PROMPT,
   UPLOAD_SCHEMA,
   normalizeUpload,
@@ -91,8 +95,53 @@ export async function POST(req: Request) {
 
   // ---- Step 2: create the schedules --------------------------------------
   if (type.includes('application/json')) {
-    let body: { action?: unknown; plan?: unknown };
+    let body: { action?: unknown; plan?: unknown; path?: unknown };
     try { body = await req.json(); } catch { return fail(400, 'bad_request', 'The plan could not be read.'); }
+
+    // ---- A large PDF: park it in storage first ---------------------------
+    //
+    // Vercel refuses request bodies over 4.5 MB, which is where the old 4 MB
+    // cap came from. A bigger document is uploaded by the browser straight to
+    // a private bucket, on a signed URL good for one object under this user's
+    // own prefix, and read from there below. The object is removed once read.
+    if (body.action === 'sign') {
+      const admin = supabaseAdmin();
+      try {
+        const { data: buckets } = await admin.storage.listBuckets();
+        if (!(buckets || []).some((b) => b.name === STRATEGY_BUCKET)) {
+          await admin.storage.createBucket(STRATEGY_BUCKET, { public: false, fileSizeLimit: String(UPLOAD_MAX_BYTES + 1024 * 1024), allowedMimeTypes: ['application/pdf'] });
+        }
+      } catch (e) { reportError('templates:upload-bucket', e); }
+      const path = auth.userId + '/' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8) + '.pdf';
+      const { data, error } = await admin.storage.from(STRATEGY_BUCKET).createSignedUploadUrl(path);
+      if (error || !data?.token) {
+        reportError('templates:upload-sign', error || new Error('no token'));
+        return fail(503, 'sign_failed', 'A place to upload the PDF could not be prepared just now. Try again in a moment.');
+      }
+      return NextResponse.json({ path, token: data.token, bucket: STRATEGY_BUCKET });
+    }
+    if (body.action === 'read') {
+      const path = String(body.path || '');
+      // Only an object under this user's own prefix, with no way up out of it.
+      if (!path.startsWith(auth.userId + '/') || path.includes('..')) return fail(400, 'bad_request', 'That upload is not yours to read.');
+      const admin = supabaseAdmin();
+      let buf: Buffer;
+      try {
+        const { data, error } = await admin.storage.from(STRATEGY_BUCKET).download(path);
+        if (error || !data) throw error || new Error('empty download');
+        buf = Buffer.from(await data.arrayBuffer());
+      } catch (e) {
+        reportError('templates:upload-download', e, { path });
+        return fail(502, 'download_failed', 'The uploaded PDF could not be read back from storage. Drop it again.');
+      }
+      // Read, then removed whatever happened: the bucket is a waiting room, not a library.
+      try {
+        return await readIntoPlan(buf, auth.userId);
+      } finally {
+        void admin.storage.from(STRATEGY_BUCKET).remove([path]).then(({ error }) => { if (error) reportError('templates:upload-remove', error, { path }); });
+      }
+    }
+
     if (body.action !== 'apply') return fail(400, 'bad_request', 'Unknown action.');
     const plan = normalizeUpload(body.plan);
     if (!plan.slots.length) return fail(400, 'empty', 'There are no slots to create.');
@@ -135,12 +184,21 @@ export async function POST(req: Request) {
   }
 
   // ---- Step 1: read the PDF into a week ----------------------------------
+  //
+  // A small PDF comes in the request itself; a large one arrives through
+  // storage (action 'sign' then 'read' above). The panel picks which.
   let form: FormData;
   try { form = await req.formData(); } catch { return fail(400, 'bad_request', 'Drop a PDF file.'); }
   const file = form.get('file');
   if (!file || typeof file === 'string') return fail(400, 'bad_request', 'Drop a PDF file.');
-  if (file.size > UPLOAD_MAX_BYTES) return fail(413, 'too_large', 'That PDF is over 4 MB. Export a smaller copy (text, not scanned pages) and drop it again.');
+  if (file.size > DIRECT_MAX_BYTES) return fail(413, 'too_large', 'A PDF over ' + mbLabel(DIRECT_MAX_BYTES) + ' has to be uploaded through storage — reload the page and drop it again.');
   const buf = Buffer.from(await file.arrayBuffer());
+  return readIntoPlan(buf, auth.userId);
+}
+
+/** The document into a week: size and shape checks, the AI reader, the preview. */
+async function readIntoPlan(buf: Buffer, userId: string): Promise<NextResponse> {
+  if (buf.length > UPLOAD_MAX_BYTES) return fail(413, 'too_large', 'That PDF is over ' + mbLabel(UPLOAD_MAX_BYTES) + '. Export a smaller copy (text, not scanned pages) and drop it again.');
   // By content, not by name: "%PDF" opens every PDF.
   if (buf.subarray(0, 4).toString('latin1') !== '%PDF') return fail(415, 'not_pdf', 'That file is not a PDF.');
 
@@ -159,7 +217,7 @@ export async function POST(req: Request) {
   if (!plan.slots.length) return fail(422, 'no_slots', 'No weekly posting plan was found in that PDF. It should list what to post on each day.');
 
   // What "Create schedules" would do — so the preview can say it up front.
-  const { rows, error } = await existingTemplates(auth.userId);
+  const { rows, error } = await existingTemplates(userId);
   const preview = error ? null : planUpload(plan, rows);
   return NextResponse.json({
     plan,
