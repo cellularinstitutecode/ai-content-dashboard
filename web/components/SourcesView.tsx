@@ -1772,7 +1772,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
               <span>
                 <strong>Automatic pictures from the library:</strong>{' '}
                 {index ? index.indexed + ' of ' + index.total + ' photos read, ' + index.usable + ' usable as post pictures.' : 'reading the index…'}{' '}
-                New posts get a fitting photo of the clinic first; an AI picture is made only when none fits. No photo is repeated within 45 days.
+                New posts get a fitting photo of the clinic first; an AI picture is made only when none fits. No photo is repeated within 45 days. The folder reads itself, thirty photos every twenty minutes; the button reads it now.
               </span>
               <button type="button" style={btn} disabled={indexing} onClick={() => void indexLibrary()}>{indexing ? 'Reading photos… (a few minutes)' : (index && index.indexed >= index.total && index.total > 0) ? 'Read new photos' : 'Read the library for automatic pictures'}</button>
               {indexNote && <span role="status" style={{ opacity: .75 }}>{indexNote}</span>}

@@ -25,6 +25,12 @@
       "path": "/api/maintenance/prune",
       "cronExpression": "0 5 * * *",
       "command": "node scripts/cron-tick.mjs maintenance/prune"
+    },
+    {
+      "name": "library-index",
+      "path": "/api/library/index",
+      "cronExpression": "*/20 * * * *",
+      "command": "node scripts/cron-tick.mjs library/index"
     }
   ]
 }

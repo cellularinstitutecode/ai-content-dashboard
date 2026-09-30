@@ -60,6 +60,7 @@ Dokploy → the application → **Schedules → Create**, one per entry in
 | Name | Cron (UTC) | Command |
 |---|---|---|
 | `maintenance-prune` | `0 5 * * *` | `node scripts/cron-tick.mjs maintenance/prune` |
+| `library-index` | `*/20 * * * *` | `node scripts/cron-tick.mjs library/index` |
 | `metricool-sync` | `0 6 * * *` | `node scripts/cron-tick.mjs metricool/sync` |
 | `autopilot-tick` | `0 * * * *` | `node scripts/cron-tick.mjs autopilot/tick` |
 | `videos-watch` | `*/15 * * * *` | `node scripts/cron-tick.mjs videos/watch` |
