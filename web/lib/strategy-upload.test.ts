@@ -262,4 +262,7 @@ test('a slot can be written for real from the panel: the whole post, its picture
   assert.match(panel, /const \[previews, setPreviews\] = useState<Record<string, PreviewDraft>>/, 'kept above the panel');
   assert.match(panel, /Writing the post…/);
   assert.match(panel, /Post written/);
+  // At the document root, and written as it opens.
+  assert.match(panel, /createPortal\(\s*<SlotPanel/, 'a fixed dialog inside the dashboard’s animated panels is otherwise positioned off-screen');
+  assert.match(panel, /autoStarted\.current\.add\(k\);\s*void writePreview\(openSlot, openSlot\.angles\[0\] \|\| ''\);/);
 });
