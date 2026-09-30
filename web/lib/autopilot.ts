@@ -72,6 +72,7 @@ import { findByDoi, findEvidence } from '@/lib/evidence';
 import { claimSupportRefusal } from '@/lib/citation-gate';
 import { autoFixCitation } from '@/lib/citation-autofix';
 import { ensureKeywords } from '@/lib/keyword-guard';
+import { competitiveBrief } from '@/lib/competitive-brief';
 import { evidenceBriefFrom, type EvidenceItem } from '@/lib/evidence-brief';
 import { MAX_CANDIDATES, claimFrom, claimQuery, supportedItem, type ClaimSupportStamp, type SupportVerdict } from '@/lib/claim-support';
 import { pickCitation, refLineFrom } from '@/lib/citation-from-evidence';
@@ -978,10 +979,17 @@ async function stepDraft(run: RunRow, template: TemplateRow, strategy: TemplateS
   }
   const evidenceHint = evidence.length ? evidenceBriefFrom(evidence) : undefined;
 
+  // Every draft knows the competition (lib/competitive-brief.ts) — except a
+  // weekly-strategy slot, whose voice keeps search copy out on purpose.
+  let landscapeHint: string | undefined;
+  if (!strategySlot) {
+    try { landscapeHint = (await competitiveBrief(angle.query)).hint || undefined; } catch (err) { reportError('autopilot:competitive-brief', err, { runId: run.id }); }
+  }
   const { provider, pack } = await generateContentPack({
     topic: topicPromptFor(angle, strategy, template.name),
     contentType: strategy.format || 'social',
     channels: template.providers,
+    landscapeHint,
     // Strategy slots swap the Brand Brain's promotional guidelines for the
     // strategy's editorial direction, and skip the top-performer hint — the
     // top performers are procedure posts, and imitating them is the problem.

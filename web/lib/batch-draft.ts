@@ -14,6 +14,7 @@
 import 'server-only';
 
 import { generateContentPack, type BrandContext, type ContentType } from '@/lib/ai';
+import { competitiveBrief } from '@/lib/competitive-brief';
 import { complianceGate } from '@/lib/compliance-gate';
 import { ensureAviso } from '@/lib/compliance';
 import { apiBase as metricoolApiBase, normalizeMediaList } from '@/lib/metricool';
@@ -104,9 +105,13 @@ export async function draftAndQueue(
   let text = '';
   let pack: Record<string, any> | null = null;
   try {
+    // Every draft knows the competition (lib/competitive-brief.ts): the top
+    // three for the subject, mirrored in the Brand Brain's voice.
+    const rivals = await competitiveBrief(topic);
     const result = await generateContentPack({
       topic,
       brand,
+      landscapeHint: rivals.hint || undefined,
       contentType: (item.format || 'social') as ContentType,
       // Sized to the clock the caller has left, so a batch that is running out
       // of time stops retrying rather than dying mid-write. The field is
