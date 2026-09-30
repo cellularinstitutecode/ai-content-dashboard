@@ -53,9 +53,9 @@ export function fmtScheduleSlot(input: unknown): string {
   return fmt(input, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
-/** "09:00 AM" — the time alone, for a calendar cell. */
+/** "9:00 AM" — the time alone, for a calendar cell. 12-hour, as every clock on the site reads. */
 export function fmtScheduleTime(input: unknown): string {
-  return fmt(input, { hour: '2-digit', minute: '2-digit' });
+  return fmt(input, { hour: 'numeric', minute: '2-digit' });
 }
 
 /** "2026-09-01" in the schedule zone — the key a calendar grid buckets by. */

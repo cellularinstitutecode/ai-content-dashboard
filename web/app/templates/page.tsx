@@ -5,8 +5,10 @@ import PageNav from '@/components/PageNav';
 import WeeklyPlanner, { type PlannerTemplate } from '@/components/WeeklyPlanner';
 import StrategyPerformance from '@/components/StrategyPerformance';
 import StrategyDrop from '@/components/StrategyDrop';
+import TemplatePreview from '@/components/TemplatePreview';
 import { announce, onRefresh } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
+import { fmtClock12 } from '@/lib/clock12';
 
 type Provider = 'instagram' | 'facebook' | 'linkedin' | 'blog';
 type AiProvider = 'anthropic' | 'openai';
@@ -125,6 +127,8 @@ export default function TemplatesPage() {
   const [compareResults, setCompareResults] = useState<CompareResults | null>(null);
   const [applyingId, setApplyingId] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  /** The template open in the preview panel — one post written for it, as the Autopilot would (components/TemplatePreview.tsx). */
+  const [previewing, setPreviewing] = useState<Template | null>(null);
 
   const workspace = useWorkspace();
   const loadSeq = useRef(0);
@@ -551,7 +555,7 @@ export default function TemplatesPage() {
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 15, marginBottom: 4 }}>{t.name || 'Untitled template'}</div>
                   <div style={{ fontSize: 12, opacity: .7 }}>
-                    {(t.weekdays || []).map((w) => DOW[w]).join(', ') || 'no days'} at {t.time_of_day || '09:00'} · {(t.providers || []).join(', ') || 'no providers'}
+                    {(t.weekdays || []).map((w) => DOW[w]).join(', ') || 'no days'} at {fmtClock12(t.time_of_day || '09:00')} · {(t.providers || []).join(', ') || 'no providers'}
                   </div>
                   {t.strategy && t.strategy.mode !== 'off' && (
                     <div style={{ display: 'inline-block', marginTop: 6, fontSize: 11, fontWeight: 600, color: '#0b57d0', background: '#e8f0fe', borderRadius: 999, padding: '3px 10px' }}>
@@ -561,6 +565,16 @@ export default function TemplatesPage() {
                   {t.text && <div style={{ fontSize: 13, opacity: .85, marginTop: 6, whiteSpace: 'pre-wrap' }}>{t.text}</div>}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {t.strategy && t.strategy.mode !== 'off' && (
+                    <button
+                      type="button"
+                      style={ghost}
+                      onClick={() => setPreviewing(t)}
+                      title="Write one post for this template now, as the Autopilot would, and read it — with the editor, Verify / fix and its picture. Saved to Recent Drafts; nothing is scheduled."
+                    >
+                      Preview
+                    </button>
+                  )}
                   <button
                     style={{ ...btn, opacity: applyingId === t.id ? 0.6 : 1 }}
                     onClick={() => apply(t.id)}
@@ -581,6 +595,7 @@ export default function TemplatesPage() {
           </div>
         </section>
       </div>
+      {previewing && <TemplatePreview key={previewing.id} template={previewing} onClose={() => setPreviewing(null)} />}
     </main>
   );
 }

@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { nextOccurrence, plannedMix, slotLabel, type NextOccurrence } from '@/lib/strategy-mix';
 import { fmtScheduleSlot, scheduleTz } from '@/lib/schedule-clock';
+import { fmtClock12 } from '@/lib/clock12';
 
 export type PlannerTemplate = {
   id?: string;
@@ -227,7 +228,7 @@ export default function WeeklyPlanner({
                   <div key={t.id} style={{ background: '#fff', borderRadius: 8, padding: 8, border: '1px solid rgba(0,0,0,0.08)', opacity: t.active === false ? .55 : 1 }}>
                     <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.3 }}>{t.strategy?.topic || t.name || 'Untitled'}</div>
                     <div style={{ fontSize: 10, opacity: .6, marginTop: 3 }}>
-                      {t.time_of_day || '—'} · {FORMATS.find((f) => f.id === (t.strategy?.format || 'social'))?.label || 'Social post'}
+                      {fmtClock12(t.time_of_day) || '—'} · {FORMATS.find((f) => f.id === (t.strategy?.format || 'social'))?.label || 'Social post'}
                       {auto ? (t.strategy?.mode === 'pillars' && (t.strategy?.pillars || []).length
                         ? ' · ' + (t.strategy?.pillars || []).length + ' angles, one a week'
                         : ' · fresh angle weekly') : ' · fixed text'}

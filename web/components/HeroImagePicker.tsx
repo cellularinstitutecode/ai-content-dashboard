@@ -40,7 +40,7 @@ const JPEG_QUALITY = 0.86;
  * that, so without this the drop box would refuse exactly the pictures somebody
  * most wants to use — the ones taken at the clinic that morning.
  */
-async function downscale(file: File): Promise<string> {
+export async function downscale(file: File): Promise<string> {
   const dataUrl: string = await new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ''));

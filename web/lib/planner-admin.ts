@@ -21,6 +21,7 @@ import { normalizeStrategy, reconcileTemplateRuns } from '@/lib/autopilot';
 import { cleanTime, cleanWeekdays, isUsableTime } from '@/lib/template-input';
 import { reportError } from '@/lib/report';
 import { leadProblem, retryBudgetProblem } from '@/lib/lead-window';
+import { fmtClock12 } from '@/lib/clock12';
 
 
 export type PlannerTemplate = {
@@ -317,7 +318,7 @@ export function describeTemplates(
     const planned = byTemplate.get(t.id) || 0;
     return (
       '- [' + t.id + '] "' + t.name + '" — ' + (t.active ? 'active' : 'PAUSED') +
-      ', ' + days + ' at ' + t.time_of_day + ' (Cancún)' +
+      ', ' + days + ' at ' + fmtClock12(t.time_of_day) + ' (Cancún)' +
       ', format ' + s.format + ', goal ' + s.goal +
       ', ' + subject +
       (t.providers.length ? ', to ' + t.providers.join(', ') : '') +
@@ -327,6 +328,6 @@ export function describeTemplates(
 
   // The times, said explicitly, because this is the fact that answers "how do I
   // post more than one blog a day" without any further reasoning.
-  const times = [...new Set(templates.filter((t) => t.active).map((t) => t.time_of_day))].sort();
-  return lines.join('\n') + '\n\nActive times of day: ' + (times.length ? times.join(', ') : 'none') + '.';
+  const times = [...new Set(templates.filter((t) => t.active).map((t) => t.time_of_day))].sort().map((v) => fmtClock12(v));
+  return lines.join('\n') + '\n\nActive times of day: ' + (times.length ? times.join(', ') : 'none') + '. Say times this way, on the 12-hour clock; time_of_day itself is stored as 24-hour HH:MM.';
 }
