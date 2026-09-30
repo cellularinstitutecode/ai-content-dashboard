@@ -11,7 +11,7 @@ import { attemptPlan } from '@/lib/ai-attempts';
 import { packKeyContract } from '@/lib/pack-keys';
 import { readAnthropicStream } from '@/lib/sse-stream';
 import { PACK_SCHEMA, supportsJsonOutput } from '@/lib/anthropic-models';
-import { jsonDiagnostic, repairJsonText } from '@/lib/json-repair';
+import { jsonDiagnostic, extractPackFields, repairJsonText } from '@/lib/json-repair';
 import { reportError } from '@/lib/report';
 import { PLAYBOOK } from '@/lib/playbook';
 import { recordProviderOutcome } from '@/lib/provider-status';
@@ -449,10 +449,15 @@ function parseJsonStrict(text: string): ContentPack {
   let obj: any;
   try { obj = JSON.parse(cleaned); }
   catch {
-    // A raw line break inside a string, a trailing comma: the copy is all
-    // there. Read it anyway before calling the whole answer garbled.
+    // A raw line break inside a string, a trailing comma, a study title in
+    // straight quotes that was not escaped: the copy is all there. Read it
+    // anyway before calling the whole answer garbled — and when even the
+    // repaired text will not parse, read the four fields by their keys.
     try { obj = JSON.parse(repairJsonText(cleaned)); }
-    catch { throw new Error('AI returned malformed JSON; please try again. (' + jsonDiagnostic(cleaned) + ')'); }
+    catch {
+      obj = extractPackFields(cleaned);
+      if (!obj) throw new Error('AI returned malformed JSON; please try again. (' + jsonDiagnostic(cleaned) + ')');
+    }
   }
   const pack = {
     instagram: String(obj.instagram ?? ''),
