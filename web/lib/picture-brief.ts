@@ -44,18 +44,30 @@ export function parsePictureBrief(raw: unknown): PictureBrief | null {
   return { description, idea: idea || description, caution: clean(o.caution, 300) };
 }
 
+/** How many pictures one post may be built around: the first is the post's picture; the rest tell the writer the scene. */
+export const MAX_IDEA_PICTURES = 4;
+
 /**
  * The topic the writer gets: what the person typed (if anything), then the
- * picture, so the keywords, the competition and the copy are all about the
+ * picture(s), so the keywords, the competition and the copy are all about the
  * thing in the photograph — and the copy never describes what is not there.
+ * With several pictures, the first is the post's picture and the others set
+ * the scene.
  */
-export function topicFromPicture(typed: string, brief: PictureBrief): string {
-  const idea = typed.trim() || brief.idea;
-  const lines = [
-    idea,
-    'The post is built around a photograph the team supplied, which is its picture. The photograph shows: ' + brief.description,
-    'Write so the copy matches what is in the photograph; do not describe anything that is not in it.',
-  ];
-  if (brief.caution) lines.push('About the photograph: ' + brief.caution);
+export function topicFromPicture(typed: string, briefs: PictureBrief | readonly PictureBrief[]): string {
+  const list = (Array.isArray(briefs) ? briefs : [briefs]).slice(0, MAX_IDEA_PICTURES) as PictureBrief[];
+  const first = list[0];
+  if (!first) return typed.trim().slice(0, 2000);
+  const idea = typed.trim() || first.idea;
+  const lines = [idea];
+  if (list.length === 1) {
+    lines.push('The post is built around a photograph the team supplied, which is its picture. The photograph shows: ' + first.description);
+  } else {
+    lines.push('The post is built around ' + list.length + ' photographs the team supplied. The first is the post\'s picture; the others show the same scene or story.');
+    list.forEach((b, i) => lines.push('Photograph ' + (i + 1) + ' shows: ' + b.description));
+  }
+  lines.push('Write so the copy matches what is in the photograph' + (list.length > 1 ? 's' : '') + '; do not describe anything that is not in ' + (list.length > 1 ? 'them' : 'it') + '.');
+  const cautions = list.map((b) => b.caution).filter(Boolean);
+  if (cautions.length) lines.push('About the photograph' + (cautions.length > 1 ? 's' : '') + ': ' + [...new Set(cautions)].join(' '));
   return lines.join('\n').slice(0, 2000);
 }
