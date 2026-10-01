@@ -284,10 +284,14 @@ export async function POST(req: NextRequest) {
     // maxDuration), and its progress and result land on the run (angle.fix),
     // which the card polls. Holding the request open instead is what left the
     // card behind a loader at 94% for the whole of it.
-    const started = await startFix(id, user.id);
+    // Two buttons, two scopes: "Fix citation" repairs the citation and only
+    // the citation (never a redraft, never a new picture); FIX repairs the
+    // copy and the picture.
+    const scope: 'citation' | 'general' = body.scope === 'citation' ? 'citation' : 'general';
+    const started = await startFix(id, user.id, scope === 'citation' ? ['citation'] : ['copy', 'image']);
     if (!started.ok) return NextResponse.json({ error: 'fix_refused', message: started.note }, { status: 400 });
-    after(() => fixRunInBackground(id, user.id));
-    return NextResponse.json({ ok: true, started: true, note: 'FIX is working on it. The card updates when it is done (usually one to four minutes).' }, { status: 202 });
+    after(() => fixRunInBackground(id, user.id, scope));
+    return NextResponse.json({ ok: true, started: true, note: (scope === 'citation' ? 'Fixing the citation' : 'FIX is working on it') + '. The card updates when it is done (usually one to four minutes).' }, { status: 202 });
   }
   return NextResponse.json({ error: 'unknown action' }, { status: 400 });
 }

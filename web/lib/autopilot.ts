@@ -47,7 +47,9 @@ import {
   stampFromBrief,
   keywordLadder,
   type SemrushStamp,
+  rewriteClaimToStudy,
 } from '@/lib/ai';
+import { fixPostCitation } from '@/lib/post-citation-fix';
 import {
   buildKeywordBrief,
   briefPromptFrom,
@@ -2964,7 +2966,11 @@ async function fixCitation(db: ReturnType<typeof supabaseAdmin>, run: RunRow, pa
  * Only what is flagged is touched. The result names what was fixed and what
  * still needs a person, and the run's log says what changed.
  */
-export async function fixRun(runId: string, userId: string): Promise<FixResult> {
+export async function fixRun(runId: string, userId: string, opts: { only?: readonly FixStep[] } = {}): Promise<FixResult> {
+  // The scope this press covers. FIX on the card is the copy and the picture;
+  // the citation has its own button ("Fix citation", fixCitationOnly), so a
+  // citation problem never sends the whole post — and its picture — back.
+  const want = (step: FixStep) => !opts.only || opts.only.includes(step);
   const db = supabaseAdmin();
   const startedAt = Date.now();
   const left = () => FIX_BUDGET_MS - (Date.now() - startedAt);
@@ -2992,8 +2998,9 @@ export async function fixRun(runId: string, userId: string): Promise<FixResult> 
   const fixed: string[] = [];
   const remaining: string[] = [];
   const changes: string[] = [];
-  const initial = fixPlan(runFixInput({ score: run.score, pack: pack as unknown as Record<string, unknown> }));
-  if (!initial.steps.length) return { ok: true, fixed, remaining, note: 'Nothing needed fixing — this post has no warnings.' };
+  const planned = fixPlan(runFixInput({ score: run.score, pack: pack as unknown as Record<string, unknown> }));
+  const initial = { ...planned, steps: planned.steps.filter(want) };
+  if (!initial.steps.length) return { ok: true, fixed, remaining, note: planned.steps.includes('citation') ? 'Nothing else needed fixing. Press "Fix citation" for the citation.' : 'Nothing needed fixing — this post has no warnings.' };
   const aviso = await avisoForUser(run.user_id);
   // The step in progress goes on the run as each one starts, so the card can
   // say what FIX is doing and a kill mid-way leaves a trace of where it was.
@@ -3014,14 +3021,14 @@ export async function fixRun(runId: string, userId: string): Promise<FixResult> 
     }
   };
   let input = runFixInput({ score: run.score, pack: pack as unknown as Record<string, unknown> });
-  if (fixPlan(input).steps.includes('citation')) { await onStep('citation'); await citationPass(); }
+  if (want('citation') && fixPlan(input).steps.includes('citation')) { await onStep('citation'); await citationPass(); }
   input = runFixInput({ score: run.score, pack: pack as unknown as Record<string, unknown> });
 
   // --- COPY: the redraft path "Ask for changes" uses, with a note quoting each flag.
   let redrafted = false;
   let copyReason = '';
   for (let attempt = 0; attempt < FIX_REDRAFT_ATTEMPTS; attempt++) {
-    const wantsCopy = fixPlan(input).steps.includes('copy');
+    const wantsCopy = want('copy') && fixPlan(input).steps.includes('copy');
     if (!wantsCopy && !cit.claimHelp) break;
     if (left() < FIX_REDRAFT_MS) { copyReason = 'ran out of time before the copy could be redrafted — press FIX again'; break; }
     await onStep('copy');
@@ -3052,19 +3059,19 @@ export async function fixRun(runId: string, userId: string): Promise<FixResult> 
     const wrote = help ? [help.item] : [];
     cit.claimHelp = null;
     cit.reason = '';
-    if (fixPlan(input).steps.includes('citation')) await citationPass(wrote);
+    if (want('citation') && fixPlan(input).steps.includes('citation')) await citationPass(wrote);
     input = runFixInput({ score: run.score, pack: pack as unknown as Record<string, unknown> });
   }
 
   // --- VERDICTS on the copy and the citation, from the stamps as they stand now.
   const finalPlan = fixPlan(input);
-  if (finalPlan.steps.includes('copy')) {
+  if (want('copy') && finalPlan.steps.includes('copy')) {
     const still = finalPlan.reasons.filter((r) => /compliance|promotion|opens like/.test(r));
     remaining.push('the copy — ' + (copyReason || 'still flagged after ' + FIX_REDRAFT_ATTEMPTS + ' redrafts: ' + still.join(', ') + ' — edit it or ask for changes'));
   } else if (redrafted && initial.steps.includes('copy')) {
     fixed.push('copy');
   }
-  if (finalPlan.steps.includes('citation')) {
+  if (want('citation') && finalPlan.steps.includes('citation')) {
     remaining.push('the citation — ' + (cit.reason || copyReason || finalPlan.reasons.filter((r) => /cit|DOI|study|reference/i.test(r)).join(', ')));
   } else if (initial.steps.includes('citation')) {
     fixed.push('citation');
@@ -3078,7 +3085,7 @@ export async function fixRun(runId: string, userId: string): Promise<FixResult> 
   // replaced by an AI image too — FIX cannot choose a photo — and the note
   // says so, so a person can pick another real one instead.
   const image = (pack as ContentPack & { _image?: PackImage })._image;
-  const imageMode = fixImageMode(image);
+  const imageMode = want('image') ? fixImageMode(image) : null;
   if (imageMode) {
     if (left() < FIX_IMAGE_MS) {
       remaining.push('the image — ran out of time; press FIX again');
@@ -3114,6 +3121,123 @@ export async function fixRun(runId: string, userId: string): Promise<FixResult> 
     .eq('id', run.id);
   if (logError) reportError('autopilot:fix-log', logError, { runId });
   return { ok: true, fixed, remaining, note };
+}
+
+/**
+ * "Fix citation": the citation, and only the citation.
+ *
+ * FIX used to handle a citation the study did not back by sending the whole
+ * post back for a redraft — a new post, and with it a new picture — so the
+ * button the reviewer pressed for the citation changed the image and often
+ * left the citation as it was. This never redrafts and never touches the
+ * picture:
+ *
+ *   1. the claim-support ladder FIX already climbs (fixCitation): the papers
+ *      in hand, then a search at the claim; cite the one that backs it;
+ *   2. the post's own statements one at a time (fixPostCitation), the ladder
+ *      the calendar's "Verify / fix" uses, which finds what (1) misses;
+ *   3. nothing backs the wording: the sentences that claim more than the best
+ *      real study shows are rewritten to what it reports, on every channel,
+ *      and the result is judged and stamped again (lib/claim-rewrite.ts).
+ */
+export async function fixCitationOnly(runId: string, userId: string): Promise<FixResult> {
+  const db = supabaseAdmin();
+  const startedAt = Date.now();
+  const left = () => FIX_BUDGET_MS - (Date.now() - startedAt);
+  const refuse = (note: string): FixResult => ({ ok: false, fixed: [], remaining: [], note });
+  const { data, error } = await db.from('template_runs').select('*').eq('id', runId).eq('user_id', userId).maybeSingle();
+  if (error) { reportError('autopilot:fix-citation-read', error, { runId }); return refuse('Could not read that post just now. Nothing was changed; try again in a moment.'); }
+  const run = data as RunRow | null;
+  if (!run) return refuse('run not found');
+  if (run.state !== 'ready_for_review') return refuse('This post is not waiting for review, so there is nothing to fix.');
+  if (!run.draft_id) return refuse('This post has no draft to fix.');
+  const readPack = async (): Promise<ContentPack | null> => {
+    const { data: d, error: e } = await db.from('drafts').select('pack').eq('id', run.draft_id).eq('user_id', run.user_id).maybeSingle();
+    if (e) { reportError('autopilot:fix-citation-draft', e, { runId }); return null; }
+    return ((d as { pack?: ContentPack } | null)?.pack as ContentPack) || null;
+  };
+  let pack = await readPack();
+  if (!pack) return refuse('Could not read that draft just now. Nothing was changed; try again in a moment.');
+  const stillBad = (pk: ContentPack) => fixPlan(runFixInput({ score: run.score, pack: pk as unknown as Record<string, unknown> })).steps.includes('citation');
+  if (!stillBad(pack)) return { ok: true, fixed: [], remaining: [], note: 'The citation has no warning — nothing to fix.' };
+  const aviso = await avisoForUser(run.user_id);
+  await markFixStep(db, runId, userId, 'citation', ['citation']);
+  const changes: string[] = [];
+  const finish = async (fixedIt: boolean, why: string): Promise<FixResult> => {
+    const fixed = fixedIt ? ['citation'] : [];
+    const remaining = fixedIt ? [] : ['the citation — ' + why];
+    const note = fixNote({ fixed, remaining });
+    const { error: logError } = await db.from('template_runs')
+      .update({ log: logLine(run, 'fix', 'Fix citation: ' + (changes.length ? changes.join('; ') + '. ' : 'nothing changed. ') + note) })
+      .eq('id', run.id);
+    if (logError) reportError('autopilot:fix-citation-log', logError, { runId });
+    return { ok: true, fixed, remaining, note };
+  };
+
+  // RUNG 1 — the ladder FIX climbs: the papers in hand, then a search at the claim.
+  let help: ClaimHelp | null = null;
+  let reason = '';
+  try {
+    const r = await fixCitation(db, run, pack, aviso);
+    pack = r.pack;
+    if (r.change) changes.push(r.change);
+    help = r.claimHelp;
+    reason = r.reason;
+  } catch (err) {
+    reportError('autopilot:fix-citation', err, { runId });
+    reason = 'the citation could not be repaired just now';
+  }
+  if (!stillBad(pack)) return finish(true, '');
+
+  // RUNG 2 — the post's own statements, one at a time.
+  if (left() > 60_000) {
+    try {
+      const p = pack as unknown as Record<string, unknown>;
+      const caption = String(p.instagram || p.facebook || p.linkedin || p.blog || '');
+      const out = await fixPostCitation({ text: caption, pack: p, aviso, budgetMs: Math.min(120_000, left() - 45_000) });
+      if (out.swapped && Object.keys(out.packPatch).length) {
+        const texts: Record<string, unknown> = {};
+        if (out.ref) for (const key of PACK_TEXT_KEYS) { const t = p[key]; if (typeof t === 'string' && t.trim()) texts[key] = swapRefLine(t, out.ref); }
+        pack = await saveFixedPack(db, run, { ...texts, ...out.packPatch });
+        changes.push('cited ' + (out.ref || 'a study that backs the post'));
+        // The swapped study is verified and judged again by the ladder, so the stamps agree.
+        const again = await fixCitation(db, run, pack, aviso);
+        pack = again.pack;
+        if (!stillBad(pack)) return finish(true, '');
+      }
+    } catch (err) {
+      reportError('autopilot:fix-citation-claims', err, { runId });
+    }
+  }
+
+  // RUNG 3 — nothing backs the wording: rewrite only what claims too much, to the best real study.
+  if (help && left() > 50_000) {
+    const p = pack as unknown as Record<string, unknown>;
+    const study = { title: help.item.title, year: help.item.year, abstract: help.item.abstract, ref: help.ref };
+    const texts: Record<string, string> = {};
+    for (const key of PACK_TEXT_KEYS) {
+      const t = p[key];
+      if (typeof t !== 'string' || !t.trim()) continue;
+      const next = await rewriteClaimToStudy(t, study, Math.min(45_000, left() - 30_000));
+      if (next) texts[key] = next;
+    }
+    if (Object.keys(texts).length) {
+      pack = await saveFixedPack(db, run, texts);
+      changes.push('rewrote the claim to what ' + help.ref.replace(/^REF:\s*/, '') + ' reports (' + Object.keys(texts).join(', ') + ')');
+      try {
+        const r = await fixCitation(db, run, pack, aviso, [help.item]);
+        pack = r.pack;
+        if (r.change) changes.push(r.change);
+        reason = r.reason || reason;
+      } catch (err) {
+        reportError('autopilot:fix-citation-recheck', err, { runId });
+      }
+      if (!stillBad(pack)) return finish(true, '');
+    } else {
+      reason = 'the claim could not be rewritten to the study just now — edit the sentence, or press Fix citation again';
+    }
+  }
+  return finish(false, reason || 'no real study could be found for what this post claims — edit the claim or the REF line');
 }
 
 /** Write the step FIX is on to `angle.fix`. Best-effort: a failed stamp never stops the repair. */
@@ -3159,7 +3283,7 @@ export async function expireStaleFixes(scopeUserId?: string): Promise<number> {
  * second press is refused while it works. The route then runs
  * fixRunInBackground after answering (next/server `after`).
  */
-export async function startFix(runId: string, userId: string): Promise<{ ok: true } | { ok: false; note: string }> {
+export async function startFix(runId: string, userId: string, steps?: readonly FixStep[]): Promise<{ ok: true } | { ok: false; note: string }> {
   const db = supabaseAdmin();
   const { data, error } = await db.from('template_runs').select('id, state, draft_id, angle').eq('id', runId).eq('user_id', userId).maybeSingle();
   if (error) { reportError('autopilot:fix-start', error, { runId }); return { ok: false, note: 'Could not read that post just now. Nothing was changed; try again in a moment.' }; }
@@ -3168,7 +3292,7 @@ export async function startFix(runId: string, userId: string): Promise<{ ok: tru
   if (run.state !== 'ready_for_review') return { ok: false, note: 'This post is not waiting for review, so there is nothing to fix.' };
   if (!run.draft_id) return { ok: false, note: 'This post has no draft to fix.' };
   if (fixRunning(run.angle)) return { ok: false, note: 'FIX is already working on this post.' };
-  const fix: FixStatus = { state: 'running', startedAt: new Date().toISOString(), step: null };
+  const fix: FixStatus = { state: 'running', startedAt: new Date().toISOString(), step: null, ...(steps?.length ? { steps: [...steps] } : {}) };
   const { data: claimed, error: claimError } = await db
     .from('template_runs')
     .update({ angle: { ...(run.angle || {}), fix } })
@@ -3183,10 +3307,10 @@ export async function startFix(runId: string, userId: string): Promise<{ ok: tru
  * Run FIX and write its result onto the run (`angle.fix`), whatever happens.
  * Called after the response, so nothing waits on it; the card polls the run.
  */
-export async function fixRunInBackground(runId: string, userId: string): Promise<void> {
+export async function fixRunInBackground(runId: string, userId: string, scope: 'citation' | 'general' = 'general'): Promise<void> {
   let result: FixResult;
   try {
-    result = await fixRun(runId, userId);
+    result = scope === 'citation' ? await fixCitationOnly(runId, userId) : await fixRun(runId, userId, { only: ['copy', 'image'] });
   } catch (err) {
     reportError('autopilot:fix', err, { runId });
     result = { ok: false, fixed: [], remaining: [], note: 'FIX stopped on an error; what it finished is saved. Press FIX again.' };

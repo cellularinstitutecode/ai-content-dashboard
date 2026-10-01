@@ -119,6 +119,19 @@ export function fixPlan(input: FixInput | null | undefined): FixPlan {
   return { steps: order.filter((s) => steps.includes(s)), reasons };
 }
 
+/**
+ * The two buttons a card shows: FIX for the copy and the picture, and "Fix
+ * citation" for the citation alone (lib/autopilot.ts fixCitationOnly) — so
+ * pressing for the citation never redrafts the post or changes its picture.
+ */
+export function splitFixPlan(plan: FixPlan): { general: FixPlan; citation: FixPlan } {
+  const citationWhy = /cit|DOI|study|reference/i;
+  return {
+    general: { steps: plan.steps.filter((s) => s !== 'citation'), reasons: plan.reasons.filter((r) => !citationWhy.test(r) || /image|photo/i.test(r)) },
+    citation: { steps: plan.steps.filter((s) => s === 'citation'), reasons: plan.reasons.filter((r) => citationWhy.test(r) && !/image|photo/i.test(r)) },
+  };
+}
+
 /** True when the card shows any warning FIX can act on. */
 export function needsFix(input: FixInput | null | undefined): boolean {
   return fixPlan(input).steps.length > 0;
