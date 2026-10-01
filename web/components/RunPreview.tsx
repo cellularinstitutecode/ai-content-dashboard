@@ -9,7 +9,7 @@
 import { useState, type ReactNode } from 'react';
 import { citationLabel, type CitationCheck } from '@/lib/citation';
 import { claimSupportNote, type ClaimSupportStamp } from '@/lib/claim-support';
-import { fixPlan, fixRunning, fixStepsLabel, runFixInput, splitFixPlan, type FixStatus } from '@/lib/fix-plan';
+import { fixButtons, fixPlan, fixRunning, fixStepsLabel, runFixInput, type FixStatus, type FixStep } from '@/lib/fix-plan';
 import { imageUnshippable } from '@/lib/image-verdict';
 import { complianceLines, runChannels } from '@/lib/publishing-list';
 import { fmtScheduleSlot } from '@/lib/schedule-clock';
@@ -77,7 +77,6 @@ export default function RunPreview({
   onSkip,
   onReschedule,
   onFix,
-  onFixCitation,
   imageControls,
 }: {
   run: ReviewRun;
@@ -94,9 +93,8 @@ export default function RunPreview({
    * { action: 'fix' }). It runs in the background; its progress and result
    * are on the run (angle.fix), shown by FixStatusLine.
    */
-  onFix?: () => void;
-  /** "Fix citation": the citation only — no redraft, no new picture. */
-  onFixCitation?: () => void;
+  /** One repair: 'citation', 'image' or 'copy' — each its own button and its own cost. */
+  onFix?: (step: FixStep) => void;
   /** The Image section (New AI image / library), rendered under the picture. */
   imageControls?: ReactNode;
 }) {
@@ -163,18 +161,17 @@ export default function RunPreview({
             <div className="mb-2 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800">⚠ Opens the same way as a recent post.</div>
           )}
           {/* One button for every warning above, as on the Dashboard card. */}
-          {plan.steps.length > 0 && onFix && (() => {
-            const { general, citation } = splitFixPlan(plan);
-            return (
-              <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl bg-amber-50/70 px-3 py-2 text-[12px] text-amber-900 ring-1 ring-amber-200/60">
-                <span className="min-w-0">Fix the {fixStepsLabel(plan.steps)} automatically, then re-check.</span>
-                <span className="ml-auto flex flex-wrap gap-2">
-                  {citation.steps.length > 0 && <button type="button" disabled={busy || fixing} onClick={() => (onFixCitation || onFix)()} title={'Finds a study that backs this post and cites it; if none backs the wording, rewrites only the sentences that claim too much. The picture is not touched. Resolves: ' + citation.reasons.join('; ')} className={btn + 'bg-accent font-semibold text-white hover:opacity-90'}>{fixing ? 'Fixing…' : 'Fix citation'}</button>}
-                  {general.steps.length > 0 && <button type="button" disabled={busy || fixing} onClick={onFix} title={'Fixes the ' + fixStepsLabel(general.steps) + '. Resolves: ' + general.reasons.join('; ')} className={btn + 'bg-accent font-semibold text-white hover:opacity-90'}>{fixing ? 'Fixing…' : 'FIX ' + fixStepsLabel(general.steps)}</button>}
-                </span>
-              </div>
-            );
-          })()}
+          {plan.steps.length > 0 && onFix && (
+            <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl bg-amber-50/70 px-3 py-2 text-[12px] text-amber-900 ring-1 ring-amber-200/60">
+              <span className="min-w-0">Needs a fix: the {fixStepsLabel(plan.steps)}. Each button is its own repair and its own cost.</span>
+              <span className="ml-auto flex flex-wrap gap-2">
+                {/* One button per repair; each touches only its own part. */}
+                {fixButtons(plan).map((b) => (
+                  <button key={b.step} type="button" disabled={busy || fixing} onClick={() => onFix(b.step)} title={b.title + (b.reasons.length ? ' Resolves: ' + b.reasons.join('; ') : '')} className={btn + 'bg-accent font-semibold text-white hover:opacity-90'}>{fixing ? 'Fixing…' : b.label}</button>
+                ))}
+              </span>
+            </div>
+          )}
           <FixStatusLine angle={run.angle} steps={plan.steps} className="mb-2 block" />
 
           {channels.length > 0 ? (

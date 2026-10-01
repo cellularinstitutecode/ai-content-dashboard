@@ -105,6 +105,9 @@ function strings(v: unknown, cap = 8): string[] {
  * a picture that shows something else (the clinic reception, every time) is a
  * defect, not a matter of taste. Every other image keeps relevance advisory.
  */
+/** "the head is outside the image", "no head visible", "head out of frame" — a measurement note, never a defect. */
+export const HEAD_OUT_RE = /\b(head|face)s?\b[^.;]{0,40}\b(outside|out of|not (?:in|within|visible|shown)|cropped out|absent|missing)\b|\bno (?:visible )?(?:head|face)s?\b/i;
+
 export function classifyVerdict(raw: unknown, opts: { requireOnTopic?: boolean; minHeadTopPct?: number } = {}): ImageVerdict {
   const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const score = typeof obj.score === 'number' && Number.isFinite(obj.score)
@@ -132,6 +135,14 @@ export function classifyVerdict(raw: unknown, opts: { requireOnTopic?: boolean; 
     advisory = advisory.filter((i) => !promoted.includes(i));
   }
 
+  // A head OUT of frame is not a defect: a hands-only close-up leaves the
+  // whole top band free for the title. The reviewer, asked where "the highest
+  // person's head" is, filed "the head is outside the image" as a blocker on
+  // exactly those shots, and FIX regenerated a good picture into another one.
+  const headOnly = [...blocking, ...advisory].some((i) => HEAD_OUT_RE.test(i));
+  blocking = blocking.filter((i) => !HEAD_OUT_RE.test(i));
+  advisory = advisory.filter((i) => !HEAD_OUT_RE.test(i));
+
   // Weekly-planner covers carry a title in the top band: a head reaching up
   // into it is a defect (the reviewer reports where the highest head starts).
   const headTop = typeof obj.headTopPct === 'number' && Number.isFinite(obj.headTopPct) ? obj.headTopPct : null;
@@ -158,7 +169,8 @@ export function classifyVerdict(raw: unknown, opts: { requireOnTopic?: boolean; 
   // The reviewer saying "not approved" with no defect named at all is the one
   // ambiguous case; respect it, because the cost of a wrong pass is higher
   // than the cost of a wrong flag.
-  const vetoWithoutReason = obj.approved === false && !blocking.length && !advisory.length;
+  // ...unless the only reason it gave was a head out of frame, which is not one.
+  const vetoWithoutReason = obj.approved === false && !blocking.length && !advisory.length && !headOnly;
 
   const flagged = textDetected || blocking.length > 0 || vetoWithoutReason;
   return {

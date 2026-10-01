@@ -19,7 +19,7 @@ import { fmtScheduleTime, fmtScheduleSlot, fmtScheduleDateTime, scheduleDateKey,
 // is the one place to work from. Same route and same rules as the Dashboard.
 import { mergeByDate, reviewRuns, runText } from '@/lib/publishing-list';
 import RunPreview, { type ReviewRun } from '@/components/RunPreview';
-import { fixPlan, fixRunning, runFixInput, splitFixPlan } from '@/lib/fix-plan';
+import { fixButtons, fixPlan, fixRunning, runFixInput, type FixStep } from '@/lib/fix-plan';
 import HeroImageControls from '@/components/HeroImageControls';
 
 type Post = {
@@ -264,7 +264,7 @@ export default function CalendarPage() {
 
   // The reviewer's decision on an Autopilot draft — the same request the
   // Dashboard sends, so approve logic lives in one place (lib/autopilot.ts).
-  async function runAct(run: ReviewRun, action: 'approve' | 'skip' | 'fix', schedule = false, scope?: 'citation') {
+  async function runAct(run: ReviewRun, action: 'approve' | 'skip' | 'fix', schedule = false, scope?: FixStep) {
     const fallback = action === 'approve' ? 'We could not approve that draft.' : action === 'fix' ? 'We could not fix that draft.' : 'We could not skip that draft.';
     setRunBusy(run.id);
     setErr(null);
@@ -307,13 +307,9 @@ export default function CalendarPage() {
     if (!window.confirm('Skip this draft? It will not be published.')) return;
     void runAct(run, 'skip');
   }
-  /** FIX: the copy and the picture, then re-check. */
-  function fixRun(run: ReviewRun) {
-    void runAct(run, 'fix');
-  }
-  /** "Fix citation": the citation only — never a redraft, never a new picture. */
-  function fixRunCitation(run: ReviewRun) {
-    void runAct(run, 'fix', false, 'citation');
+  /** One repair — the citation, the image or the copy — each its own button and its own AI cost. */
+  function fixRun(run: ReviewRun, step: FixStep) {
+    void runAct(run, 'fix', false, step);
   }
 
   useEffect(() => {
@@ -1074,20 +1070,12 @@ export default function CalendarPage() {
                           <span className="rounded-full bg-black/5 px-2 py-[1px] text-[10px] text-ink/60">{r.template_name}</span>
                           <span className="flex-1" />
                           <button type="button" onClick={() => setPreviewRunId(r.id)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Preview</button>
-                          {(() => {
-                            const { general, citation } = splitFixPlan(fixPlan(runFixInput(r)));
-                            const fixing = fixRunning(r.angle);
-                            return (
-                              <>
-                                {(citation.steps.length > 0 || (fixing && r.angle?.fix?.steps?.join() === 'citation')) && (
-                                  <button type="button" disabled={runBusy === r.id || fixing} onClick={() => fixRunCitation(r)} title="Finds a study that backs this post and cites it; if none backs the wording, rewrites only the sentences that claim too much. The picture is not touched." className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{fixing ? 'Fixing…' : 'Fix citation'}</button>
-                                )}
-                                {(general.steps.length > 0 || (fixing && r.angle?.fix?.steps?.join() !== 'citation')) && (
-                                  <button type="button" disabled={runBusy === r.id || fixing} onClick={() => fixRun(r)} title="Fixes the copy and the picture automatically, then re-checks" className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{fixing ? 'Fixing…' : 'FIX'}</button>
-                                )}
-                              </>
-                            );
-                          })()}
+                          {/* One button per repair — citation, image, copy — each its own AI cost. */}
+                          {fixRunning(r.angle) ? (
+                            <button type="button" disabled className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white opacity-50">Fixing…</button>
+                          ) : fixButtons(fixPlan(runFixInput(r))).map((b) => (
+                            <button key={b.step} type="button" disabled={runBusy === r.id} onClick={() => fixRun(r, b.step)} title={b.title} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{b.label}</button>
+                          ))}
                           <button type="button" disabled={runBusy === r.id || fixRunning(r.angle)} onClick={() => approveRunScheduled(r)} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{runBusy === r.id ? 'Working…' : 'Approve & schedule'}</button>
                           {!r.writes_article && (
                             <button type="button" disabled={runBusy === r.id || fixRunning(r.angle)} onClick={() => approveRunDraft(r)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/60 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">Approve as draft</button>
@@ -1277,8 +1265,7 @@ export default function CalendarPage() {
           onApproveDraft={() => approveRunDraft(previewRun)}
           onSkip={() => skipRun(previewRun)}
           onReschedule={() => openRescheduleRun(previewRun)}
-          onFix={() => fixRun(previewRun)}
-          onFixCitation={() => fixRunCitation(previewRun)}
+          onFix={(step) => fixRun(previewRun, step)}
           imageControls={
             <HeroImageControls
               draftId={previewRun.draft_id}

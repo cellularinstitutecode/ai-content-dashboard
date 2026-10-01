@@ -287,11 +287,13 @@ export async function POST(req: NextRequest) {
     // Two buttons, two scopes: "Fix citation" repairs the citation and only
     // the citation (never a redraft, never a new picture); FIX repairs the
     // copy and the picture.
-    const scope: 'citation' | 'general' = body.scope === 'citation' ? 'citation' : 'general';
-    const started = await startFix(id, user.id, scope === 'citation' ? ['citation'] : ['copy', 'image']);
+    // One button per repair, each its own AI cost: 'citation', 'image' or 'copy'.
+    // No scope (an older page) is the copy and the picture together, never the citation.
+    const scope: 'citation' | 'image' | 'copy' | 'general' = body.scope === 'citation' || body.scope === 'image' || body.scope === 'copy' ? body.scope : 'general';
+    const started = await startFix(id, user.id, scope === 'general' ? ['copy', 'image'] : [scope]);
     if (!started.ok) return NextResponse.json({ error: 'fix_refused', message: started.note }, { status: 400 });
     after(() => fixRunInBackground(id, user.id, scope));
-    return NextResponse.json({ ok: true, started: true, note: (scope === 'citation' ? 'Fixing the citation' : 'FIX is working on it') + '. The card updates when it is done (usually one to four minutes).' }, { status: 202 });
+    return NextResponse.json({ ok: true, started: true, note: (scope === 'general' ? 'FIX is working on it' : 'Fixing the ' + scope) + '. The card updates when it is done (usually one to four minutes).' }, { status: 202 });
   }
   return NextResponse.json({ error: 'unknown action' }, { status: 400 });
 }

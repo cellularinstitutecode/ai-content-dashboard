@@ -867,5 +867,8 @@ export function onTopicCheck(p: PlannerImage): string {
       'procedure in frame, and any triumphant pose — raised arms, leaping, fists in the air. ' + lab + tail;
   }
   return `ON-TOPIC (this one is a DEFECT, not an opinion): the image must clearly show ${p.dynamic ? p.dynamic.mustShow : p.mustShow}. ` +
+    // An idea such as "monitoring changes over time" cannot be photographed
+    // literally; a reader connecting the picture to it is what counts.
+    'An everyday, symbolic depiction counts when a reader would connect it to that idea — a close-up of hands writing in a notebook or journal, a calendar, a measuring tape, a glass of water by a planner. ' +
     'A generic reception desk, front desk or waiting room does NOT count. ' + lab + tail;
 }

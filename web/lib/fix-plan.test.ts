@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { FIX_STALE_MS, FIX_STALLED_NOTE, fixImageMode, fixNote, fixPlan, fixRedraftNote, fixRunning, fixStale, fixStepsLabel, fixView, imageFlagged, needsFix, runFixInput, splitFixPlan, swapRefLine } from './fix-plan.ts';
+import { FIX_STALE_MS, FIX_STALLED_NOTE, fixImageMode, fixNote, fixPlan, fixRedraftNote, fixRunning, fixStale, fixStepsLabel, fixView, imageFlagged, needsFix, runFixInput, splitFixPlan, fixButtons, swapRefLine } from './fix-plan.ts';
 
 const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 
@@ -94,7 +94,7 @@ test('the redraft note quotes each flag and names the study to write to', () => 
 test('the note on the card says what was fixed and what still needs a look', () => {
   assert.equal(fixNote({ fixed: ['citation', 'image'], remaining: [] }), 'Fixed: citation, image. Everything was re-checked.');
   assert.equal(fixNote({ fixed: ['citation'], remaining: ['the image — the new picture was flagged too'] }), 'Fixed: citation. Still needs a look: the image — the new picture was flagged too.');
-  assert.equal(fixNote({ fixed: [], remaining: ['the copy — its time has passed'] }), 'Nothing needed fixing. Still needs a look: the copy — its time has passed.');
+  assert.equal(fixNote({ fixed: [], remaining: ['the copy — its time has passed'] }), 'Not fixed this time. Still needs a look: the copy — its time has passed.', 'never "nothing needed fixing" beside a list of what still does');
 });
 
 test('swapRefLine replaces the REF line in place and keeps the rest of the copy', () => {
@@ -120,8 +120,8 @@ test('the route starts FIX and answers at once; the work runs after the response
   assert.match(route, /if \(action === 'run_now' \|\| action === 'regenerate' \|\| action === 'fix'\) \{\s*const rl = await checkRateLimit\(user\.id, 'autopilot-action'\)/, 'the same rate-limit bucket');
   // Held open, the request kept a loader over the card at 94% for minutes.
   // Two scopes: "Fix citation" (the citation only) and FIX (the copy and the picture).
-  assert.match(route, /const scope: 'citation' \| 'general' = body\.scope === 'citation' \? 'citation' : 'general';/);
-  assert.match(route, /if \(action === 'fix'\) \{[\s\S]{0,1200}?const started = await startFix\(id, user\.id, scope === 'citation' \? \['citation'\] : \['copy', 'image'\]\);[\s\S]{0,300}?after\(\(\) => fixRunInBackground\(id, user\.id, scope\)\);/);
+  assert.match(route, /const scope: 'citation' \| 'image' \| 'copy' \| 'general' = /);
+  assert.match(route, /if \(action === 'fix'\) \{[\s\S]{0,1200}?const started = await startFix\(id, user\.id, scope === 'general' \? \['copy', 'image'\] : \[scope\]\);[\s\S]{0,300}?after\(\(\) => fixRunInBackground\(id, user\.id, scope\)\);/);
   assert.match(route, /\{ status: 202 \}/);
   assert.doesNotMatch(route, /await fixRun\(/, 'the request never waits on the repair');
   assert.match(route, /import \{ NextRequest, NextResponse, after \} from 'next\/server';/);
@@ -133,7 +133,7 @@ test('the route starts FIX and answers at once; the work runs after the response
   assert.match(start, /\.eq\('state', 'ready_for_review'\)/);
   const bg = autopilot.slice(autopilot.indexOf('export async function fixRunInBackground('));
   // The result is written whatever happens, so the card never waits forever.
-  assert.match(bg, /try \{\s*result = scope === 'citation' \? await fixCitationOnly\(runId, userId\) : await fixRun\(runId, userId, \{ only: \['copy', 'image'\] \}\);\s*\} catch/);
+  assert.match(bg, /try \{\s*result = scope === 'citation' \? await fixCitationOnly\(runId, userId\)\s*: await fixRun\(runId, userId, \{ only: scope === 'general' \? \['copy', 'image'\] : \[scope\] \}\);\s*\} catch/);
   assert.match(bg, /state: result\.ok \? 'done' : 'failed'/);
 });
 
@@ -172,20 +172,19 @@ test('fixRun reuses the existing pipelines rather than its own', () => {
 test('both review cards and the calendar row show FIX from the same plan', () => {
   const queue = src('app/AutopilotQueue.tsx');
   assert.match(queue, /fixPlan\(runFixInput\(r\)\)/);
-  assert.match(queue, /act\(r\.id, 'fix'\)/);
-  assert.match(queue, /act\(r\.id, 'fix', undefined, false, false, 'citation'\)/, 'Fix citation, its own button');
-  assert.match(queue, /const \{ general, citation \} = splitFixPlan\(plan\);/);
-  assert.match(queue, />\s*Fix citation\s*</);
+  // One button per repair, each its own cost.
+  assert.match(queue, /const buttons = fixButtons\(plan\);/);
+  assert.match(queue, /act\(r\.id, 'fix', undefined, false, false, b\.step\)/);
+  assert.match(queue, /\{b\.label\}/);
   assert.match(queue, /<FixStatusLine angle=\{r\.angle\}/, 'progress and result from the run');
   assert.match(queue, /if \(!fixingIds\) return;\s*const t = window\.setInterval/, 'polled while it runs');
   assert.match(queue, /'run_now' \| 'regenerate' \| 'fix'/);
 
   const preview = src('components/RunPreview.tsx');
   assert.match(preview, /fixPlan\(runFixInput\(run\)\)/);
-  assert.match(preview, /onClick=\{onFix\}/);
-  assert.match(preview, /\{fixing \? 'Fixing…' : 'FIX ' \+ fixStepsLabel\(general\.steps\)\}/);
-  assert.match(preview, /onClick=\{\(\) => \(onFixCitation \|\| onFix\)\(\)\}/);
-  assert.match(preview, /\{fixing \? 'Fixing…' : 'Fix citation'\}/);
+  assert.match(preview, /fixButtons\(plan\)\.map\(\(b\) =>/);
+  assert.match(preview, /onClick=\{\(\) => onFix\(b\.step\)\}/);
+  assert.match(preview, /\{fixing \? 'Fixing…' : b\.label\}/);
   assert.match(preview, /const fixing = fixRunning\(run\.angle\);/);
   assert.match(preview, /<FixStatusLine angle=\{run\.angle\}/);
   // The preview is never covered while FIX works: it can be read and closed.
@@ -193,10 +192,9 @@ test('both review cards and the calendar row show FIX from the same plan', () =>
 
   const page = src('app/calendar/page.tsx');
   assert.match(page, /'approve' \| 'skip' \| 'fix'/);
-  assert.match(page, /splitFixPlan\(fixPlan\(runFixInput\(r\)\)\)/, 'the list row too');
-  assert.match(page, /onFixCitation=\{\(\) => fixRunCitation\(previewRun\)\}/);
-  assert.match(page, /void runAct\(run, 'fix', false, 'citation'\);/);
-  assert.match(page, /onFix=\{\(\) => fixRun\(previewRun\)\}/);
+  assert.match(page, /fixButtons\(fixPlan\(runFixInput\(r\)\)\)\.map\(\(b\) =>/, 'the list row too');
+  assert.match(page, /onFix=\{\(step\) => fixRun\(previewRun, step\)\}/);
+  assert.match(page, /void runAct\(run, 'fix', false, step\);/);
   assert.match(page, /if \(!fixingIds\) return;\s*const t = window\.setInterval/, 'polled while it runs');
   assert.doesNotMatch(page, /x-chi-progress-scope': 'calendar-run:/, 'no loader over the preview');
 });
@@ -259,4 +257,20 @@ test('splitFixPlan: the citation on its own button, the copy and the picture on 
   assert.ok(general.reasons.some((r) => /text in the image/.test(r)));
   const onlyCitation = splitFixPlan(fixPlan({ claimSupport: { status: 'unsupported' } }));
   assert.deepEqual(onlyCitation.general.steps, [], 'a citation warning alone shows Fix citation and no FIX');
+});
+
+test('fixButtons: one button per repair, in order, each with only its own reasons', () => {
+  const plan = fixPlan({
+    claimSupport: { status: 'unsupported' },
+    safetyFlags: [{ code: 'x', message: 'cure claim' }],
+    image: { url: 'u', source: 'ai', verification: { status: 'flagged', textDetected: true } },
+  });
+  const b = fixButtons(plan);
+  assert.deepEqual(b.map((x) => x.label), ['Fix citation', 'Fix image', 'Fix copy']);
+  assert.ok(b[0].reasons.every((r) => /study|citation|DOI|reference/i.test(r)));
+  assert.ok(b[1].reasons.every((r) => /image/i.test(r)));
+  assert.ok(b[2].reasons.every((r) => /compliance/i.test(r)));
+  // The card in the screenshot: the citation and the image — two buttons, two costs.
+  const two = fixButtons(fixPlan({ claimSupport: { status: 'unsupported' }, image: { url: 'u', source: 'ai', verification: { status: 'flagged', issues: ['off-topic'] } } }));
+  assert.deepEqual(two.map((x) => x.label), ['Fix citation', 'Fix image']);
 });

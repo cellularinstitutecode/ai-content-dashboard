@@ -3000,7 +3000,7 @@ export async function fixRun(runId: string, userId: string, opts: { only?: reado
   const changes: string[] = [];
   const planned = fixPlan(runFixInput({ score: run.score, pack: pack as unknown as Record<string, unknown> }));
   const initial = { ...planned, steps: planned.steps.filter(want) };
-  if (!initial.steps.length) return { ok: true, fixed, remaining, note: planned.steps.includes('citation') ? 'Nothing else needed fixing. Press "Fix citation" for the citation.' : 'Nothing needed fixing — this post has no warnings.' };
+  if (!initial.steps.length) return { ok: true, fixed, remaining, note: planned.steps.length ? 'That part has no warning now. Use the other button for what is left.' : 'Nothing needed fixing — this post has no warnings.' };
   const aviso = await avisoForUser(run.user_id);
   // The step in progress goes on the run as each one starts, so the card can
   // say what FIX is doing and a kill mid-way leaves a trace of where it was.
@@ -3307,10 +3307,11 @@ export async function startFix(runId: string, userId: string, steps?: readonly F
  * Run FIX and write its result onto the run (`angle.fix`), whatever happens.
  * Called after the response, so nothing waits on it; the card polls the run.
  */
-export async function fixRunInBackground(runId: string, userId: string, scope: 'citation' | 'general' = 'general'): Promise<void> {
+export async function fixRunInBackground(runId: string, userId: string, scope: 'citation' | 'image' | 'copy' | 'general' = 'general'): Promise<void> {
   let result: FixResult;
   try {
-    result = scope === 'citation' ? await fixCitationOnly(runId, userId) : await fixRun(runId, userId, { only: ['copy', 'image'] });
+    result = scope === 'citation' ? await fixCitationOnly(runId, userId)
+      : await fixRun(runId, userId, { only: scope === 'general' ? ['copy', 'image'] : [scope] });
   } catch (err) {
     reportError('autopilot:fix', err, { runId });
     result = { ok: false, fixed: [], remaining: [], note: 'FIX stopped on an error; what it finished is saved. Press FIX again.' };

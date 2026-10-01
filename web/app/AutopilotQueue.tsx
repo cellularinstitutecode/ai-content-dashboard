@@ -18,7 +18,7 @@ import { imageUnshippable } from '@/lib/image-verdict';
 import { citationLabel, type CitationCheck } from '@/lib/citation';
 import { varietyLabels } from '@/lib/strategy-variety';
 import { claimSupportNote, type ClaimSupportStamp } from '@/lib/claim-support';
-import { fixPlan, fixRunning, fixStepsLabel, runFixInput, splitFixPlan, type FixStatus } from '@/lib/fix-plan';
+import { fixButtons, fixPlan, fixRunning, fixStepsLabel, runFixInput, type FixStatus } from '@/lib/fix-plan';
 import FixStatusLine from '@/components/FixStatusLine';
 import ImageEditPanel, { okToSpend, type ImageAction } from '@/components/ImageEditPanel';
 import LibraryPicker from '@/components/LibraryPicker';
@@ -345,7 +345,7 @@ export default function AutopilotQueue() {
     return () => window.clearInterval(t);
   }, [fixingIds, load]);
 
-  async function act(id: string, action: 'approve' | 'skip' | 'run_now' | 'regenerate' | 'fix', extraNote?: string, schedule = false, redate = false, scope?: 'citation') {
+  async function act(id: string, action: 'approve' | 'skip' | 'run_now' | 'regenerate' | 'fix', extraNote?: string, schedule = false, redate = false, scope?: 'citation' | 'image' | 'copy') {
     addTo(setBusyIds, id);
     setErr(null);
     setNote(null);
@@ -682,38 +682,28 @@ export default function AutopilotQueue() {
                       re-checks (POST /api/autopilot/runs { action: 'fix' }). */}
                   {(() => {
                     const plan = fixPlan(runFixInput(r));
-                    const { general, citation } = splitFixPlan(plan);
+                    const buttons = fixButtons(plan);
                     const fixing = fixRunning(r.angle);
                     const off = busyIds.has(r.id) || regenIds.has(r.id) || optionsIds.has(r.id);
                     return (
                       <>
                         {plan.steps.length > 0 && !fixing && (
                           <div className="flex flex-wrap items-center gap-2 border-b border-line bg-amber-50/60 px-5 py-2.5 text-[12px] text-amber-900">
-                            <span className="min-w-0">Fix the {fixStepsLabel(plan.steps)} automatically, then re-check.</span>
+                            <span className="min-w-0">Needs a fix: the {fixStepsLabel(plan.steps)}. Each button is its own repair (and its own AI cost); press only the one you want.</span>
                             <span className="ml-auto flex flex-wrap gap-2">
-                              {/* The citation has its own button: it repairs the citation only — never a redraft, never a new picture. */}
-                              {citation.steps.length > 0 && (
+                              {/* One button per repair: the citation, the image and the copy are separate costs, and each touches only its own part. */}
+                              {buttons.map((b) => (
                                 <button
+                                  key={b.step}
                                   type="button"
-                                  onClick={() => act(r.id, 'fix', undefined, false, false, 'citation')}
+                                  onClick={() => act(r.id, 'fix', undefined, false, false, b.step)}
                                   disabled={off}
-                                  title={'Finds a study that backs this post and cites it; if none backs the wording, rewrites only the sentences that claim too much. The picture is not touched. Resolves: ' + citation.reasons.join('; ')}
+                                  title={b.title + (b.reasons.length ? ' Resolves: ' + b.reasons.join('; ') : '')}
                                   className="rounded-full bg-accent px-4 py-1 text-[12px] font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50"
                                 >
-                                  Fix citation
+                                  {b.label}
                                 </button>
-                              )}
-                              {general.steps.length > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => act(r.id, 'fix')}
-                                  disabled={off}
-                                  title={'Fixes the ' + fixStepsLabel(general.steps) + '. Resolves: ' + general.reasons.join('; ')}
-                                  className="rounded-full bg-accent px-4 py-1 text-[12px] font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50"
-                                >
-                                  FIX {fixStepsLabel(general.steps)}
-                                </button>
-                              )}
+                              ))}
                             </span>
                           </div>
                         )}

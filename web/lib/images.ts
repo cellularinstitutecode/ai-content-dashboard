@@ -459,7 +459,7 @@ async function generateImageBytes(
 // verification must never take down image generation entirely.
 // ---------------------------------------------------------------------------
 
-const HEADROOM_CHECK = 'HEADROOM: measure how far down from the top edge the top of the highest person\'s head is, as a percentage of the image height (0 = top edge, 100 = bottom edge). Report it as "headTopPct".';
+const HEADROOM_CHECK = 'HEADROOM: measure how far down from the top edge the top of the highest person\'s head is, as a percentage of the image height (0 = top edge, 100 = bottom edge). Report it as "headTopPct". If no head is in frame at all (hands only, objects only, no people), report 100: a head out of frame is plenty of room for the title and is NEVER a defect, so never list it as one.';
 
 /**
  * The reviewer's brief. A planner image adds the on-topic check and the
