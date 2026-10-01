@@ -61,4 +61,13 @@ test('the idea box takes a picture: read by the vision model, written through th
   assert.match(page, /disabled=\{loading \|\| ideaImageBusy > 0 \|\| \(!prompt\.trim\(\) && !ideaImages\.length\)\}/, 'Generate works from pictures alone, once they are read');
   assert.doesNotMatch(page, /setPrompt\(brief\.idea\)/, 'what is typed is never overwritten by a picture’s idea');
   assert.match(page, /Use this idea/, 'the suggestion is offered, not imposed');
+  // ONE composer: the thumbnails sit inside the same panel as the words, above the box; + and Generate along its bottom edge.
+  const panel = page.slice(page.indexOf('onDrop={onIdeaDrop}'), page.indexOf('{/* Output */}'));
+  const thumbs = panel.indexOf('ideaImages.map((im, i) => (');
+  const box = panel.indexOf('<textarea id="gen-idea"');
+  const plus = panel.indexOf('htmlFor="gen-idea-image"');
+  const go = panel.indexOf('<button onClick={generate}');
+  assert.ok(thumbs >= 0 && thumbs < box, 'pictures above the words, in the panel');
+  assert.ok(box < plus && plus < go, 'then the box, then + and Generate along the bottom');
+  assert.match(panel, /<textarea id="gen-idea"[\s\S]{0,600}?className="block w-full resize-none bg-transparent/, 'the box has no border of its own: the panel is the border');
 });

@@ -1988,36 +1988,45 @@ className="min-w-0 flex-1 rounded-full bg-subtle px-3 py-1.5 text-[12px] text-in
 </div>
 </div>
 
-<div onDragOver={(e) => { e.preventDefault(); setIdeaDrag(true); }} onDragLeave={() => setIdeaDrag(false)} onDrop={onIdeaDrop}>
+<div>
 <label htmlFor="gen-idea" className="mb-2 block text-[12px] font-medium uppercase tracking-wide text-ink-muted">Your idea</label>
-{/* THE PROMPT AND THE PICTURES, SIDE BY SIDE. Type on the left, drop on the right — or both at once; the whole area takes a drop, and a picture pasted into the box counts too. */}
-<div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_200px]">
-<textarea id="gen-idea" value={prompt} onChange={e => setPrompt(e.target.value)} onBlur={e => publishTopic(e.target.value)} onPaste={onIdeaPaste} rows={5}
-placeholder={ideaImages.length ? 'Say what you want the post to do with the picture — the angle, the channel, the tone. Leave it empty and the picture decides.' : 'e.g. 3 Instagram captions about exosome therapy benefits for athletes'}
-className={'w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 placeholder:text-ink-faint focus:ring-accent ' + (ideaDrag ? 'ring-2 ring-accent' : 'ring-line')} />
-<label htmlFor="gen-idea-image" title={'Drop up to ' + MAX_IDEA_PICTURES + ' pictures. The post is written around what is in them — keywords, the competition and the brand\u2019s voice as for a typed idea — and the first becomes the post\u2019s picture.'}
-className={'flex min-h-[132px] cursor-pointer flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed px-3 py-3 text-center text-[12px] transition-colors ' + (ideaDrag ? 'border-accent bg-accent/5 text-accent' : 'border-line bg-subtle text-ink-muted hover:border-ink/30 hover:text-ink')}>
-<span className="text-[22px] leading-none">+</span>
-<span className="font-medium">{ideaImageBusy > 0 ? 'Reading ' + (ideaImageBusy === 1 ? 'the picture' : ideaImageBusy + ' pictures') + '\u2026' : 'Drop pictures here'}</span>
-<span className="text-[11px] text-ink-faint">or click to choose \u00b7 the post is written around them</span>
-<input id="gen-idea-image" type="file" accept="image/*" multiple className="sr-only" onChange={(e) => { void takeIdeaImages(Array.from(e.target.files || [])); e.target.value = ''; }} />
-</label>
-</div>
+{/* ONE COMPOSER. The pictures sit inside the same panel as the words, above them; the + and Generate sit along its bottom edge. Drop anywhere on the panel, click +, or paste a picture into it — and keep typing. */}
+<div onDragOver={(e) => { e.preventDefault(); setIdeaDrag(true); }} onDragLeave={() => setIdeaDrag(false)} onDrop={onIdeaDrop}
+className={'rounded-2xl bg-subtle ring-1 transition-shadow focus-within:ring-accent ' + (ideaDrag ? 'ring-2 ring-accent bg-accent/5' : 'ring-line')}>
 {ideaImages.length > 0 && (
-<div className="mt-2 rounded-2xl bg-white p-2.5 ring-1 ring-line">
-<div className="flex flex-wrap gap-2">
+<div className="flex flex-wrap gap-2 px-4 pt-4">
 {ideaImages.map((im, i) => (
 <div key={im.key} className="relative">
 <button type="button" onClick={() => leadIdeaImage(im.key)} title={i === 0 ? 'This is the post\u2019s picture' : 'Make this the post\u2019s picture'} className={'block overflow-hidden rounded-xl ring-2 ' + (i === 0 ? 'ring-accent' : 'ring-transparent hover:ring-line')}>
 {/* eslint-disable-next-line @next/next/no-img-element */}
-<img src={im.dataUrl} alt={im.brief.description || im.name} className="h-20 w-20 object-cover" />
+<img src={im.dataUrl} alt={im.brief.description || im.name} className="h-24 w-24 object-cover" />
 </button>
 {i === 0 && <span className="absolute bottom-1 left-1 rounded-md bg-accent px-1.5 py-0.5 text-[10px] font-semibold text-white">Post picture</span>}
 <button type="button" onClick={() => setIdeaImages((list) => list.filter((x) => x.key !== im.key))} aria-label="Remove this picture" className="absolute -right-1.5 -top-1.5 h-5 w-5 rounded-full bg-ink text-[12px] leading-none text-white shadow-soft hover:bg-danger">\u00d7</button>
 </div>
 ))}
+{ideaImageBusy > 0 && <div className="flex h-24 w-24 items-center justify-center rounded-xl bg-white/60 text-center text-[11px] text-accent ring-1 ring-accent/20"><span className="mr-1 h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />Reading{ideaImageBusy > 1 ? ' ' + ideaImageBusy : ''}\u2026</div>}
 </div>
-<div className="mt-2 space-y-1 text-[12px] leading-relaxed text-ink/70">
+)}
+<textarea id="gen-idea" value={prompt} onChange={e => setPrompt(e.target.value)} onBlur={e => publishTopic(e.target.value)} onPaste={onIdeaPaste} rows={ideaImages.length ? 3 : 4}
+placeholder={ideaImages.length ? 'Say what the post should do with the picture \u2014 the angle, the channel, the tone. Leave it empty and the picture decides.' : 'e.g. 3 Instagram captions about exosome therapy benefits for athletes \u2014 or drop a picture here'}
+className="block w-full resize-none bg-transparent p-4 text-[14px] text-ink placeholder:text-ink-faint focus:outline-none" />
+<div className="flex flex-wrap items-center gap-2 px-3 pb-3">
+<label htmlFor="gen-idea-image" title={'Add pictures (up to ' + MAX_IDEA_PICTURES + '). The post is written around what is in them \u2014 keywords, the competition and the brand\u2019s voice as for a typed idea \u2014 and the first becomes the post\u2019s picture.'}
+className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-full text-[22px] leading-none text-ink/60 ring-1 ring-line transition-colors hover:bg-white hover:text-ink">
++
+<input id="gen-idea-image" type="file" accept="image/*" multiple className="sr-only" onChange={(e) => { void takeIdeaImages(Array.from(e.target.files || [])); e.target.value = ''; }} />
+</label>
+<span className="text-[11px] text-ink-faint">{ideaImageBusy > 0 ? 'Reading ' + (ideaImageBusy === 1 ? 'the picture' : ideaImageBusy + ' pictures') + '\u2026' : ideaImages.length ? 'Drop or paste more, up to ' + MAX_IDEA_PICTURES : 'Drop, paste or + a picture; the post is written around it'}</span>
+<span className="flex-1" />
+<button onClick={generate} disabled={loading || ideaImageBusy > 0 || (!prompt.trim() && !ideaImages.length)}
+className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">
+{loading ? (<><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />Generating\u2026</>) : 'Generate'}
+</button>
+</div>
+</div>
+{ideaImages.length > 0 && (
+<div className="mt-2 space-y-1 px-1 text-[12px] leading-relaxed text-ink/70">
 {ideaImages.map((im, i) => (
 <div key={im.key}>
 <span className="font-medium text-ink">{ideaImages.length > 1 ? 'Picture ' + (i + 1) + ': ' : ''}</span>{im.brief.description}
@@ -2028,20 +2037,12 @@ className={'flex min-h-[132px] cursor-pointer flex-col items-center justify-cent
 <div className="flex flex-wrap items-center gap-2 pt-1">
 <span>Suggested: <span className="text-ink">{ideaImages[0].brief.idea}</span></span>
 <button type="button" onClick={() => { setPrompt(ideaImages[0].brief.idea); publishTopic(ideaImages[0].brief.idea); }} className="rounded-full bg-white px-2.5 py-0.5 text-[11px] font-medium text-ink ring-1 ring-line hover:bg-subtle">Use this idea</button>
-<span className="text-ink-faint">or type your own above — both go to the writer together.</span>
+<span className="text-ink-faint">or type your own in the box \u2014 both go to the writer together.</span>
 </div>
 )}
 </div>
-</div>
 )}
-</div>
-
-<div className="flex flex-wrap items-center gap-3">
-<button onClick={generate} disabled={loading || ideaImageBusy > 0 || (!prompt.trim() && !ideaImages.length)}
-className="inline-flex items-center gap-2 rounded-full bg-accent px-6 py-2.5 text-[14px] font-semibold text-white shadow-soft transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">
-{loading ? (<><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />Generating…</>) : 'Generate'}
-</button>
-{err && <span className="text-[13px] text-danger">{err}</span>}
+{err && <p className="mt-2 text-[13px] text-danger">{err}</p>}
 {/* The "Keyword research" button that sat here is gone: the research is the first step of Generate itself, and the keywords applied are shown under the output. */}
 </div>
 </div>
