@@ -26,6 +26,7 @@ import {
 import type { EvidenceItem } from '@/lib/evidence-parse';
 import { TITLE_SYSTEM, readTitle, titlePrompt } from '@/lib/title-writer';
 import { CLAIMS_SYSTEM, claimsPrompt, parseClaims, type CheckableClaim } from '@/lib/claim-extract';
+import { CLAIM_REWRITE_SYSTEM, acceptRewrite, claimRewritePrompt, type StudyForRewrite } from '@/lib/claim-rewrite';
 import { CAN_DO_RULE, COMMAND_ONLY_RULES, CONVERSATION_RULE, NEXT_STEP_RULE } from '@/lib/assistant-standby';
 import { KEYWORDS_SYSTEM, derivedKeywords, fallbackBriefPrompt, fallbackStamp, hasKeywords, keywordsPrompt, parseKeywords } from '@/lib/keyword-fallback';
 
@@ -997,6 +998,63 @@ export async function writeTitle(args: {
  * PubMed query. Never throws; returns [] when it cannot be had, and the caller
  * then falls back to judging the post whole, as before.
  */
+/**
+ * "Fix citation", last rung (lib/claim-rewrite.ts): the post's overclaiming
+ * sentences rewritten to what this study reports, everything else kept, and
+ * the study cited. Null when no model answered or the answer is not one to
+ * take (acceptRewrite) — the caller then leaves the post as it is.
+ */
+export async function rewriteClaimToStudy(text: string, study: StudyForRewrite, timeoutMs = 45_000): Promise<string | null> {
+  const copy = String(text || '').trim();
+  if (!copy) return null;
+  const prompt = claimRewritePrompt(copy, study);
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
+  try {
+    if (anthropicKey) {
+      const res = await fetchWithRetry(
+        (process.env.ANTHROPIC_API_BASE || 'https://api.anthropic.com').replace(/\/$/, '') + '/v1/messages',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({
+            model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5',
+            max_tokens: 4000,
+            temperature: 0,
+            system: CLAIM_REWRITE_SYSTEM,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+        },
+        { retries: 1, timeoutMs },
+      );
+      await noteProvider('anthropic', res);
+      const data = await res.json();
+      return acceptRewrite(copy, data?.content?.[0]?.text, study.ref);
+    }
+    if (!openaiKey) return null;
+    const res = await fetchWithRetry(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${openaiKey}` },
+        body: JSON.stringify({
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          max_tokens: 4000,
+          temperature: 0,
+          messages: [{ role: 'system', content: CLAIM_REWRITE_SYSTEM }, { role: 'user', content: prompt }],
+        }),
+      },
+      { retries: 1, timeoutMs },
+    );
+    await noteProvider('openai', res);
+    const data = await res.json();
+    return acceptRewrite(copy, data?.choices?.[0]?.message?.content, study.ref);
+  } catch (e) {
+    reportError('ai:rewrite-claim', e);
+    return null;
+  }
+}
+
 export async function extractCheckableClaims(text: string, timeoutMs = 15000): Promise<CheckableClaim[]> {
   const copy = String(text || '').trim();
   if (!copy) return [];

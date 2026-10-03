@@ -119,6 +119,38 @@ export function fixPlan(input: FixInput | null | undefined): FixPlan {
   return { steps: order.filter((s) => steps.includes(s)), reasons };
 }
 
+/**
+ * The two buttons a card shows: FIX for the copy and the picture, and "Fix
+ * citation" for the citation alone (lib/autopilot.ts fixCitationOnly) — so
+ * pressing for the citation never redrafts the post or changes its picture.
+ */
+export function splitFixPlan(plan: FixPlan): { general: FixPlan; citation: FixPlan } {
+  const citationWhy = /cit|DOI|study|reference/i;
+  return {
+    general: { steps: plan.steps.filter((s) => s !== 'citation'), reasons: plan.reasons.filter((r) => !citationWhy.test(r) || /image|photo/i.test(r)) },
+    citation: { steps: plan.steps.filter((s) => s === 'citation'), reasons: plan.reasons.filter((r) => citationWhy.test(r) && !/image|photo/i.test(r)) },
+  };
+}
+
+/** The separate buttons a card shows — one per repair, because each is its own AI cost. */
+export const FIX_BUTTONS: { step: FixStep; label: string; title: string }[] = [
+  { step: 'citation', label: 'Fix citation', title: 'Finds a study that backs this post and cites it; if none backs the wording, rewrites only the sentences that claim too much. Does not touch the picture or redraft the post.' },
+  { step: 'image', label: 'Fix image', title: 'Makes a new picture and checks it. Does not touch the words or the citation.' },
+  { step: 'copy', label: 'Fix copy', title: 'Redrafts the flagged passages and re-checks them. Does not touch the citation or make a new picture.' },
+];
+
+/** The buttons this plan needs, in order, with the reasons each one resolves. */
+export function fixButtons(plan: FixPlan): { step: FixStep; label: string; title: string; reasons: string[] }[] {
+  const { general, citation } = splitFixPlan(plan);
+  const imageWhy = /image|photo|picture/i;
+  return FIX_BUTTONS.filter((b) => plan.steps.includes(b.step)).map((b) => ({
+    ...b,
+    reasons: b.step === 'citation' ? citation.reasons
+      : b.step === 'image' ? general.reasons.filter((r) => imageWhy.test(r))
+      : general.reasons.filter((r) => !imageWhy.test(r)),
+  }));
+}
+
 /** True when the card shows any warning FIX can act on. */
 export function needsFix(input: FixInput | null | undefined): boolean {
   return fixPlan(input).steps.length > 0;
@@ -155,7 +187,10 @@ export function fixRedraftNote(input: FixInput | null | undefined, claim?: { tit
 
 /** One sentence for the card after FIX ran. */
 export function fixNote(result: { fixed: readonly string[]; remaining: readonly string[] }): string {
-  const fixed = result.fixed.length ? 'Fixed: ' + result.fixed.join(', ') + '.' : 'Nothing needed fixing.';
+  // "Nothing needed fixing." followed by a list of what still needs a look
+  // read as a contradiction on the card; when nothing was fixed but things
+  // remain, say that it could not be fixed.
+  const fixed = result.fixed.length ? 'Fixed: ' + result.fixed.join(', ') + '.' : result.remaining.length ? 'Not fixed this time.' : 'Nothing needed fixing.';
   if (!result.remaining.length) return fixed + (result.fixed.length ? ' Everything was re-checked.' : '');
   return fixed + ' Still needs a look: ' + result.remaining.join('; ') + '.';
 }
