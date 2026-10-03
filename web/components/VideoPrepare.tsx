@@ -94,7 +94,7 @@ export type BatchTally = {
   pending: number;
 };
 
-export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, batch, batchReasons, batchRows, batchRunning, onJump }: {
+export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, batch, batchReasons, batchRows, batchRunning, onJump, onDismissBatch }: {
   initialUrl?: string;
   blogId?: string;
   /**
@@ -131,6 +131,8 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, bat
   /** The rows behind each count, so "✗ 1 not done" can say which row. */
   batchRows?: { failed: RowRef[]; needsTranscript: RowRef[]; pending: RowRef[] } | null;
   batchRunning?: boolean;
+  /** × on the "Last run" notice: closes it (and its row notes) once the run has stopped. */
+  onDismissBatch?: () => void;
   /** Take the person to that row in the table below — a line that names a row should go there. */
   onJump?: (key: string) => void;
 }) {
@@ -306,6 +308,13 @@ export default function VideoPrepare({ initialUrl, blogId, sheetRow, result, bat
           {batch.failed > 0 && <span style={{ background: '#fff2f2', color: '#a1252b', borderRadius: 999, padding: '3px 9px' }}>✗ {batch.failed} not done{batchRows?.failed.length ? ' · ' + rowList(batchRows.failed) : ''}</span>}
           {!batchReasons?.shown.length && (
             <span style={{ opacity: .7 }}>Row-by-row detail is in the Videos table below.</span>
+          )}
+          {/* Close the notice once the run has stopped — an interrupted or finished run, read and done with. */}
+          {!batchRunning && onDismissBatch && (
+            <button type="button" onClick={onDismissBatch} aria-label="Close this notice" title="Close this notice (the videos and the sheet are not changed)"
+              style={{ marginLeft: 'auto', width: 24, height: 24, borderRadius: 999, border: '1px solid rgba(0,0,0,0.12)', background: '#fff', color: '#555', fontSize: 14, lineHeight: '20px', cursor: 'pointer', padding: 0 }}>
+              ×
+            </button>
           )}
         </div>
       )}

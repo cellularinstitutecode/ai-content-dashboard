@@ -1367,7 +1367,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
         {tab === 'videos' && (
           <div style={{ display: 'grid', gap: 20 }}>
             <VideoRegister />
-          <VideoPrepare result={shown ? results[shown] ?? null : null} batch={liveTally} batchReasons={liveReasons} batchRows={liveRows} batchRunning={running} onJump={jumpToRow} />
+          <VideoPrepare result={shown ? results[shown] ?? null : null} batch={liveTally} batchReasons={liveReasons} batchRows={liveRows} batchRunning={running} onJump={jumpToRow} onDismissBatch={() => setBatch({})} />
             <section style={{ ...card, padding: 0, overflow: 'hidden' }}>
               {ids && <SheetFrame id={ids.videos} title="Distribución RRSS CHI" height={sheetHeight - 60} />}
             </section>
