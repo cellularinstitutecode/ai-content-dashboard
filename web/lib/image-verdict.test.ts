@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyVerdict } from './image-verdict.ts';
+import { readFileSync } from 'node:fs';
+import { HEAD_OUT_RE, classifyVerdict } from './image-verdict.ts';
 
 test('the two findings from the live deployment are advisory, not a flag', () => {
   // Exactly what the reviewer said about four of five usable photos.
@@ -140,4 +141,24 @@ test('a banned prop makes an image unshippable, like text', async () => {
   assert.equal(imageUnshippable(null), false);
   assert.match('a blood-pressure cuff on the patient\'s arm', BANNED_PROP_RE);
   assert.doesNotMatch('a stethoscope resting unused on the table', BANNED_PROP_RE);
+});
+
+test('a head out of frame is never a defect: a hands-only close-up is not flagged for it', () => {
+  const clean = { approved: true, textDetected: false, bannedProp: false, onTopic: true };
+  for (const note of ["highest person's head is outside the image", 'no head visible in frame', 'the face is not visible', 'head cropped out of the frame']) {
+    const v = classifyVerdict({ ...clean, approved: false, blocking: [note], headTopPct: 100 }, { requireOnTopic: true, minHeadTopPct: 25 });
+    assert.equal(v.status, 'approved', note);
+  }
+  // A head INSIDE the title band is still a defect, and real defects still flag.
+  assert.equal(classifyVerdict({ ...clean, headTopPct: 10 }, { requireOnTopic: true, minHeadTopPct: 25 }).status, 'flagged');
+  assert.equal(classifyVerdict({ ...clean, blocking: ["highest person's head is outside the image", 'extra finger on the hand'] }).status, 'flagged');
+  assert.ok(HEAD_OUT_RE.test("highest person's head is outside the image"));
+  assert.ok(!HEAD_OUT_RE.test('a head reaches into the title area'));
+});
+
+test('the checker is told a missing head is fine, and that a symbolic picture is on topic', () => {
+  const images = readFileSync(new URL('./images.ts', import.meta.url), 'utf8');
+  assert.match(images, /If no head is in frame at all \(hands only, objects only, no people\), report 100/);
+  const planner = readFileSync(new URL('./planner-image.ts', import.meta.url), 'utf8');
+  assert.match(planner, /An everyday, symbolic depiction counts when a reader would connect it to that idea/);
 });

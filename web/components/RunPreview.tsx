@@ -9,7 +9,7 @@
 import { useState, type ReactNode } from 'react';
 import { citationLabel, type CitationCheck } from '@/lib/citation';
 import { claimSupportNote, type ClaimSupportStamp } from '@/lib/claim-support';
-import { fixPlan, fixRunning, fixStepsLabel, runFixInput, type FixStatus } from '@/lib/fix-plan';
+import { fixButtons, fixPlan, fixRunning, fixStepsLabel, runFixInput, type FixStatus, type FixStep } from '@/lib/fix-plan';
 import { imageUnshippable } from '@/lib/image-verdict';
 import { complianceLines, runChannels } from '@/lib/publishing-list';
 import { fmtScheduleSlot } from '@/lib/schedule-clock';
@@ -93,7 +93,8 @@ export default function RunPreview({
    * { action: 'fix' }). It runs in the background; its progress and result
    * are on the run (angle.fix), shown by FixStatusLine.
    */
-  onFix?: () => void;
+  /** One repair: 'citation', 'image' or 'copy' — each its own button and its own cost. */
+  onFix?: (step: FixStep) => void;
   /** The Image section (New AI image / library), rendered under the picture. */
   imageControls?: ReactNode;
 }) {
@@ -162,8 +163,13 @@ export default function RunPreview({
           {/* One button for every warning above, as on the Dashboard card. */}
           {plan.steps.length > 0 && onFix && (
             <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl bg-amber-50/70 px-3 py-2 text-[12px] text-amber-900 ring-1 ring-amber-200/60">
-              <span className="min-w-0">Fix the {fixStepsLabel(plan.steps)} automatically, then re-check.</span>
-              <button type="button" disabled={busy || fixing} onClick={onFix} title={'Resolves: ' + plan.reasons.join('; ')} className={btn + 'ml-auto bg-accent font-semibold text-white hover:opacity-90'}>{fixing ? 'Fixing…' : 'FIX'}</button>
+              <span className="min-w-0">Needs a fix: the {fixStepsLabel(plan.steps)}. Each button is its own repair and its own cost.</span>
+              <span className="ml-auto flex flex-wrap gap-2">
+                {/* One button per repair; each touches only its own part. */}
+                {fixButtons(plan).map((b) => (
+                  <button key={b.step} type="button" disabled={busy || fixing} onClick={() => onFix(b.step)} title={b.title + (b.reasons.length ? ' Resolves: ' + b.reasons.join('; ') : '')} className={btn + 'bg-accent font-semibold text-white hover:opacity-90'}>{fixing ? 'Fixing…' : b.label}</button>
+                ))}
+              </span>
             </div>
           )}
           <FixStatusLine angle={run.angle} steps={plan.steps} className="mb-2 block" />
