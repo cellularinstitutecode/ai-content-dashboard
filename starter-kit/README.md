@@ -15,3 +15,22 @@ Lint, typecheck, all unit tests and the production build pass on it as shipped.
 
 This folder is only a download. Nothing in it is built or deployed with the
 dashboard, and nothing in the dashboard depends on it.
+
+## Up to date with
+
+The zip matches the dashboard on `main` **through #394**. Recent changes it includes:
+
+- **#392**: one button per repair on review cards. **Fix** repairs the copy and
+  the picture; **Fix citation** repairs only the citation. The picture
+  checker no longer flags good pictures, and the video notice has a close ×.
+- **#393**: **Fix citation** searches for a supporting study first, then
+  corrects the copy on every channel. It keeps time for the correction so the
+  search can't use it all. If it still can't fix the citation, the card says
+  what it searched and what it rewrote.
+- **#394**: **Fix citation** only rewrites toward a study on the same subject
+  as the post. When no relevant study exists, it drops the citation, turns the
+  health claims into plain advice and asks you to read the post before
+  approving. It never adds an unrelated study.
+
+When more changes land on `main`, the zip has to be re-synced (it does not
+update itself).
