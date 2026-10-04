@@ -20,6 +20,18 @@ export const CLAIM_REWRITE_SYSTEM = [
   'Answer with the full edited post and nothing else.',
 ].join('\n');
 
+/**
+ * The second pass, when the checker still finds the rewrite claiming more than
+ * the study shows: every health statement either says only what the study
+ * reports, in its own terms, or becomes general advice that claims nothing.
+ */
+export const CLAIM_REWRITE_STRICT_SYSTEM = CLAIM_REWRITE_SYSTEM + '\n' + [
+  'STRICT PASS: a checker found that the post still claims more than the study shows.',
+  'Go through every sentence that states or implies a health benefit, effect or outcome.',
+  'Either state only what the study itself reports — its population, what was measured and what was found, with "a study found" or "research suggests" — or, when the study does not address it, turn the sentence into practical general advice that claims no benefit at all.',
+  'Remove words such as "proven", "improves", "boosts", "reduces", "heals", "treats" unless the study reports exactly that.',
+].join('\n');
+
 export function claimRewritePrompt(text: string, study: StudyForRewrite): string {
   const abstract = String(study.abstract || '').replace(/\s+/g, ' ').trim().slice(0, 1200);
   return [
