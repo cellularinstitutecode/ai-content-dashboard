@@ -51,6 +51,22 @@ function bodyOf(text: string): string {
     .replace(/\bcellular\s+(hope\s+)?institute\b/gi, ' ');
 }
 
+/**
+ * The words that made a post read as a health claim, each once, as written —
+ * so a rewrite that has to claim nothing can be told exactly what to replace.
+ */
+export function healthClaimWords(text: string): string[] {
+  const body = bodyOf(String(text || ''));
+  const all = new RegExp(HEALTH_CLAIM.source, 'gi');
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const m of body.matchAll(all)) {
+    const w = m[0];
+    if (!seen.has(w.toLowerCase())) { seen.add(w.toLowerCase()); out.push(w); }
+  }
+  return out;
+}
+
 /** True when the post says anything a study would have to back. When unsure: true. */
 export function makesHealthClaim(text: string): boolean {
   const body = bodyOf(String(text || ''));

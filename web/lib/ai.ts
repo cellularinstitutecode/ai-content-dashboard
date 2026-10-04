@@ -26,7 +26,7 @@ import {
 import type { EvidenceItem } from '@/lib/evidence-parse';
 import { TITLE_SYSTEM, readTitle, titlePrompt } from '@/lib/title-writer';
 import { CLAIMS_SYSTEM, claimsPrompt, parseClaims, type CheckableClaim } from '@/lib/claim-extract';
-import { CLAIM_REWRITE_STRICT_SYSTEM, CLAIM_REWRITE_SYSTEM, acceptRewrite, claimRewritePrompt, type StudyForRewrite } from '@/lib/claim-rewrite';
+import { CLAIM_REWRITE_STRICT_SYSTEM, CLAIM_REWRITE_SYSTEM, NO_CLAIM_SYSTEM, RELEVANCE_SYSTEM, acceptNoClaim, acceptRewrite, claimRewritePrompt, noClaimPrompt, parseRelevance, relevancePrompt, type StudyForRewrite } from '@/lib/claim-rewrite';
 import { CAN_DO_RULE, COMMAND_ONLY_RULES, CONVERSATION_RULE, NEXT_STEP_RULE } from '@/lib/assistant-standby';
 import { KEYWORDS_SYSTEM, derivedKeywords, fallbackBriefPrompt, fallbackStamp, hasKeywords, keywordsPrompt, parseKeywords } from '@/lib/keyword-fallback';
 
@@ -998,17 +998,8 @@ export async function writeTitle(args: {
  * PubMed query. Never throws; returns [] when it cannot be had, and the caller
  * then falls back to judging the post whole, as before.
  */
-/**
- * "Fix citation", last rung (lib/claim-rewrite.ts): the post's overclaiming
- * sentences rewritten to what this study reports, everything else kept, and
- * the study cited. Null when no model answered or the answer is not one to
- * take (acceptRewrite) — the caller then leaves the post as it is.
- */
-export async function rewriteClaimToStudy(text: string, study: StudyForRewrite, timeoutMs = 45_000, opts: { strict?: boolean } = {}): Promise<string | null> {
-  const system = opts.strict ? CLAIM_REWRITE_STRICT_SYSTEM : CLAIM_REWRITE_SYSTEM;
-  const copy = String(text || '').trim();
-  if (!copy) return null;
-  const prompt = claimRewritePrompt(copy, study);
+/** One short editing call to whichever model is configured. Raw text, or null when none answered. */
+async function editWithModel(system: string, prompt: string, maxTokens: number, timeoutMs: number, tag: string): Promise<string | null> {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
   try {
@@ -1018,19 +1009,13 @@ export async function rewriteClaimToStudy(text: string, study: StudyForRewrite, 
         {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
-          body: JSON.stringify({
-            model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5',
-            max_tokens: 4000,
-            temperature: 0,
-            system,
-            messages: [{ role: 'user', content: prompt }],
-          }),
+          body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5', max_tokens: maxTokens, temperature: 0, system, messages: [{ role: 'user', content: prompt }] }),
         },
         { retries: 1, timeoutMs },
       );
       await noteProvider('anthropic', res);
       const data = await res.json();
-      return acceptRewrite(copy, data?.content?.[0]?.text, study.ref);
+      return typeof data?.content?.[0]?.text === 'string' ? data.content[0].text : null;
     }
     if (!openaiKey) return null;
     const res = await fetchWithRetry(
@@ -1038,22 +1023,48 @@ export async function rewriteClaimToStudy(text: string, study: StudyForRewrite, 
       {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${openaiKey}` },
-        body: JSON.stringify({
-          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-          max_tokens: 4000,
-          temperature: 0,
-          messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
-        }),
+        body: JSON.stringify({ model: process.env.OPENAI_MODEL || 'gpt-4o-mini', max_tokens: maxTokens, temperature: 0, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] }),
       },
       { retries: 1, timeoutMs },
     );
     await noteProvider('openai', res);
     const data = await res.json();
-    return acceptRewrite(copy, data?.choices?.[0]?.message?.content, study.ref);
+    return typeof data?.choices?.[0]?.message?.content === 'string' ? data.choices[0].message.content : null;
   } catch (e) {
-    reportError('ai:rewrite-claim', e);
+    reportError(tag, e);
     return null;
   }
+}
+
+/**
+ * "Fix citation": the post's overclaiming sentences rewritten to what this
+ * study reports, everything else kept, and the study cited
+ * (lib/claim-rewrite.ts). Null when no model answered or the answer is not one
+ * to take (acceptRewrite) — the caller then leaves the post as it is.
+ */
+export async function rewriteClaimToStudy(text: string, study: StudyForRewrite, timeoutMs = 45_000, opts: { strict?: boolean } = {}): Promise<string | null> {
+  const copy = String(text || '').trim();
+  if (!copy) return null;
+  const raw = await editWithModel(opts.strict ? CLAIM_REWRITE_STRICT_SYSTEM : CLAIM_REWRITE_SYSTEM, claimRewritePrompt(copy, study), 4000, timeoutMs, 'ai:rewrite-claim');
+  return raw == null ? null : acceptRewrite(copy, raw, study.ref);
+}
+
+/** Is this study about what the post talks about? null when the model did not say. */
+export async function studyOnTopic(text: string, study: StudyForRewrite, timeoutMs = 15_000): Promise<boolean | null> {
+  const raw = await editWithModel(RELEVANCE_SYSTEM, relevancePrompt(text, study), 20, timeoutMs, 'ai:study-on-topic');
+  return raw == null ? null : parseRelevance(raw);
+}
+
+/**
+ * No study on the post's subject: the post rewritten to claim nothing and
+ * carry no citation. Returns the accepted text, or the words that still read
+ * as a claim so the caller can ask once more.
+ */
+export async function rewriteWithoutClaims(text: string, flagged: readonly string[] = [], timeoutMs = 45_000): Promise<{ text: string | null; flagged: string[] }> {
+  const copy = String(text || '').trim();
+  if (!copy) return { text: null, flagged: [] };
+  const raw = await editWithModel(NO_CLAIM_SYSTEM, noClaimPrompt(copy, flagged), 4000, timeoutMs, 'ai:rewrite-no-claim');
+  return raw == null ? { text: null, flagged: [] } : acceptNoClaim(copy, raw);
 }
 
 export async function extractCheckableClaims(text: string, timeoutMs = 15000): Promise<CheckableClaim[]> {

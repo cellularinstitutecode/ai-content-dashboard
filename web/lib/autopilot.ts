@@ -48,6 +48,8 @@ import {
   keywordLadder,
   type SemrushStamp,
   rewriteClaimToStudy,
+  rewriteWithoutClaims,
+  studyOnTopic,
 } from '@/lib/ai';
 import { fixPostCitation } from '@/lib/post-citation-fix';
 import {
@@ -2792,7 +2794,7 @@ export type FixResult = {
 /** How long FIX gives itself. The route allows 300s; the rest is headroom for the write-back. */
 const FIX_BUDGET_MS = 250_000;
 /** Fix citation keeps this much of its budget for correcting the copy (two rewrites and their re-checks); the research gets the rest. */
-const CITATION_REWRITE_RESERVE_MS = 130_000;
+const CITATION_REWRITE_RESERVE_MS = 150_000;
 /** Time a redraft (draft + score, with its own image step) needs to be started at all. */
 const FIX_REDRAFT_MS = 75_000;
 /** Time a verified image regeneration needs. */
@@ -3169,7 +3171,8 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
     const fixed = fixedIt ? ['citation'] : [];
     // Not fixed: say what it DID, so the card shows the research and the correction rather than one bare line.
     const remaining = fixedIt ? [] : ['the citation — ' + why + (changes.length ? ' (what it did: ' + changes.join('; ') + ')' : '')];
-    const note = fixNote({ fixed, remaining });
+    // Fixed: say how, because "the citation was removed" is something a reviewer must know before approving.
+    const note = fixNote({ fixed, remaining }) + (fixedIt && changes.length ? ' What it did: ' + changes.join('; ') + '.' : '');
     const { error: logError } = await db.from('template_runs')
       .update({ log: logLine(run, 'fix', 'Fix citation: ' + (changes.length ? changes.join('; ') + '. ' : 'nothing changed. ') + note) })
       .eq('id', run.id);
@@ -3219,15 +3222,27 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
     }
   }
 
-  // RUNG 3 — CORRECT THE COPY to the best real study: only what claims too
-  // much is rewritten, on every channel at once, then judged again. A second,
-  // stricter pass when the checker still disagrees: every health statement
-  // says only what the study reports, or becomes advice that claims nothing.
+  // RUNG 3 — CORRECT THE COPY to the best real study — but only a study ON
+  // THIS SUBJECT. The best paper the search returned is not that by default:
+  // a post about keeping a journal was rewritten around a paper on billing for
+  // telemedicine visits. Asked first; an unclear answer counts as no.
+  // Only what claims too much is rewritten, on every channel at once, then
+  // judged again; a stricter second pass when the checker still disagrees.
+  const canDropRef = refPolicyOf(pack) === 'if-health-claim';
+  let onTopic = false;
   if (help) {
+    const p0 = pack as unknown as Record<string, unknown>;
+    const caption0 = String(p0.instagram || p0.facebook || p0.linkedin || p0.blog || '');
+    onTopic = (await studyOnTopic(caption0, { title: help.item.title, year: help.item.year, abstract: help.item.abstract, ref: help.ref })) === true;
+    if (!onTopic) changes.push('the closest study found (' + help.ref.replace(/^REF:\s*/, '').slice(0, 120) + ') is on a different subject, so the post was not rewritten around it');
+  }
+  if (help && onTopic) {
     const study = { title: help.item.title, year: help.item.year, abstract: help.item.abstract, ref: help.ref };
     const label = help.ref.replace(/^REF:\s*/, '');
+    // Leave room for rung 4 when it can run.
+    const floor = canDropRef ? 95_000 : 45_000;
     for (const strict of [false, true]) {
-      if (left() < 45_000) { reason = 'ran out of time before the copy could be corrected — press Fix citation again'; break; }
+      if (left() < floor) { if (!canDropRef) reason = 'ran out of time before the copy could be corrected — press Fix citation again'; break; }
       const p = pack as unknown as Record<string, unknown>;
       const keys = PACK_TEXT_KEYS.filter((k) => typeof p[k] === 'string' && String(p[k]).trim());
       const timeout = Math.min(45_000, left() - 25_000);
@@ -3245,12 +3260,54 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
         pack = r.pack;
         if (r.change) changes.push(r.change);
         reason = r.reason || reason;
-        if (r.claimHelp) help = r.claimHelp;
       } catch (err) {
         reportError('autopilot:fix-citation-recheck', err, { runId });
       }
       if (!stillBad(pack)) return finish(true, '');
     }
+  }
+
+  // RUNG 4 — NO STUDY BACKS THIS POST ON ITS SUBJECT: it claims nothing, and
+  // cites nothing. Only where the template cites a study when the post makes a
+  // health claim; the compliance rule then waives the REF line for a post that
+  // makes none, decided by the same check the send doors use. Every channel
+  // must come back claim-free and without its REF line, or nothing is saved.
+  if (canDropRef) {
+    if (left() < 30_000) {
+      reason = 'ran out of time before the claims could be taken out — press Fix citation again';
+    } else {
+      const p = pack as unknown as Record<string, unknown>;
+      const keys = PACK_TEXT_KEYS.filter((k) => typeof p[k] === 'string' && String(p[k]).trim());
+      const timeout = () => Math.min(45_000, left() - 15_000);
+      let results = await Promise.all(keys.map((k) => rewriteWithoutClaims(String(p[k]), [], timeout())));
+      // One more try for each channel that still used a word that reads as a claim, told which.
+      if (results.some((r) => !r.text) && left() > 35_000) {
+        results = await Promise.all(keys.map((k, i) => results[i].text ? Promise.resolve(results[i]) : rewriteWithoutClaims(String(p[k]), results[i].flagged, timeout())));
+      }
+      if (keys.length && results.every((r) => r.text)) {
+        const texts: Record<string, string> = {};
+        keys.forEach((k, i) => { texts[k] = results[i].text as string; });
+        const next = { ...p, ...texts };
+        const refPolicy = refPolicyOf(pack);
+        const compliance = {
+          ...((p._compliance as Record<string, unknown> | undefined) || {}),
+          aviso,
+          instagram: checkCompliance(String(next.instagram || ''), aviso, { refPolicy }),
+          facebook: checkCompliance(String(next.facebook || ''), aviso, { refPolicy }),
+          citation: { status: 'not_required', doi: null, title: null, year: null },
+          refPolicy,
+        };
+        // undefined drops the key: no study is cited, so there is no verdict on one.
+        pack = await saveFixedPack(db, run, { ...texts, _compliance: compliance, _claimSupport: undefined, claimSupport: undefined });
+        changes.push('no study on this subject was found, so the health claims were turned into general advice and the citation line was removed (' + keys.join(', ') + ') — read it before approving');
+        if (!stillBad(pack)) return finish(true, '');
+      } else {
+        const words = [...new Set(results.flatMap((r) => r.flagged))].slice(0, 8);
+        reason = 'no study on this post\u2019s subject was found, and the claims could not be taken out automatically' + (words.length ? ' (still reads as a claim: ' + words.join(', ') + ')' : '') + ' — edit those sentences, or press Fix citation again';
+      }
+    }
+  } else if (!onTopic) {
+    reason = 'no study on this post\u2019s subject was found, and this template requires a citation — edit the claim or add a source';
   }
   return finish(false, reason || 'no real study could be found for what this post claims — edit the claim or the REF line');
 }
