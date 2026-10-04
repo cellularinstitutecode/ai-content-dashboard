@@ -8,6 +8,7 @@
 //
 // Pure: the prompt and the guard on what comes back decide whether a rewrite
 // is taken at all, so they are tested rather than trusted.
+import { healthClaimWords, makesHealthClaim } from './health-claim.ts';
 
 export type StudyForRewrite = { title?: string | null; year?: number | null; abstract?: string | null; ref: string };
 
@@ -66,4 +67,75 @@ export function acceptRewrite(original: string, rewritten: unknown, ref: string)
   const doi = /10\.\d{4,9}\/\S+/.exec(body)?.[0]?.replace(/[.,;)]+$/, '');
   if (doi && !out.toLowerCase().includes(doi.toLowerCase())) return null;
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// IS THE STUDY EVEN ABOUT THIS? Asked before any rewrite toward it. Without it
+// a post about keeping a journal was rewritten, on four channels, around
+// "Coding Telemedicine Visits for Proper Reimbursement" — the best real paper
+// the search happened to return, on a different subject entirely.
+// ---------------------------------------------------------------------------
+
+export const RELEVANCE_SYSTEM = [
+  'You decide whether a study is about the same subject as a social post for a regenerative-medicine clinic.',
+  'Answer "yes" only when the study is about what the post talks about — the same practice, condition, behaviour or outcome — so that citing it would make sense to a reader.',
+  'A study that only shares a word, a setting (telemedicine, billing, a hospital) or a general field is "no".',
+  'Answer with JSON only: {"onTopic": true} or {"onTopic": false}.',
+].join('\n');
+
+export function relevancePrompt(text: string, study: StudyForRewrite): string {
+  const abstract = String(study.abstract || '').replace(/\s+/g, ' ').trim().slice(0, 900);
+  return ['THE POST', String(text || '').trim().slice(0, 2500), '', 'THE STUDY', 'Title: ' + String(study.title || '').trim(), abstract ? 'Abstract: ' + abstract : ''].filter(Boolean).join('\n');
+}
+
+/** true / false from the model's answer; null when it said neither. */
+export function parseRelevance(raw: unknown): boolean | null {
+  const t = String(raw ?? '').trim();
+  const m = /"onTopic"\s*:\s*(true|false)/i.exec(t);
+  if (m) return m[1].toLowerCase() === 'true';
+  if (/^\s*yes\b/i.test(t)) return true;
+  if (/^\s*no\b/i.test(t)) return false;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// NO STUDY ON THIS SUBJECT: the post claims nothing, and carries no citation.
+// Allowed only where the template cites a study when the post makes a health
+// claim (refPolicy 'if-health-claim'); the compliance rules then waive the REF
+// line for a post that makes none (lib/health-claim.ts decides).
+// ---------------------------------------------------------------------------
+
+export const NO_CLAIM_SYSTEM = [
+  'You edit a social post for a regenerative-medicine clinic so that it makes NO health claim and carries NO citation, because no study backs what it says.',
+  'Turn every sentence that states or implies a health effect, benefit or outcome into practical, everyday advice that claims nothing — what to do, notice, write down or ask about, not what it will achieve.',
+  'Delete the REF / REFERENCIA line entirely. Keep the AVISO DE PUBLICIDAD line exactly as it is.',
+  'Keep the opening idea, the tone, the structure, the line breaks, the emojis, the hashtags and the call to action as far as possible.',
+  'Avoid words that read as a health claim: heal, improve, reduce, lower, boost, prevent, protect, relieve, restore, strengthen, enhance, faster, benefit, effective; inflammation, immune, metabolism, hormone, cortisol, blood, circulation, muscle, joint, bone, tissue, cells, brain, heart, oxygen, recovery, repair, longevity, aging, energy levels; pain, symptoms, disease, condition, disorder, injury, arthritis, diabetes, treatment, therapy, protocol, diagnosis, clinical, medical, medication, supplement, vitamin, nutrient, protein, stem cells, regenerative; study, research, evidence, science, proven.',
+  'Plain words such as "your care team", "your follow-up visit", "how you feel day to day", "your progress", "your plan" are fine.',
+  'Answer with the full edited post and nothing else.',
+].join('\n');
+
+export function noClaimPrompt(text: string, flagged: readonly string[] = []): string {
+  const again = flagged.length ? 'A first edit still used these words, which read as a health claim — replace every one: ' + flagged.join(', ') + '\n\n' : '';
+  return again + 'THE POST\n' + String(text || '').trim();
+}
+
+const REF_LINE_RE = /^[ \t]*REF(?:ERENCIA)?[ \t]*[.:：]/im;
+
+/**
+ * The no-claim rewrite, or why it is not one to take: it must keep the AVISO,
+ * drop the REF line, stay the same post (half to one and a half its length),
+ * and claim nothing by the rule the compliance check uses.
+ */
+export function acceptNoClaim(original: string, rewritten: unknown): { text: string | null; flagged: string[] } {
+  let out = String(rewritten ?? '').trim();
+  out = out.replace(/^```[a-z]*\s*/i, '').replace(/\s*```$/, '').trim();
+  const before = String(original || '').trim();
+  if (!out || !before) return { text: null, flagged: [] };
+  const ratio = out.length / before.length;
+  if (ratio < 0.4 || ratio > 1.5) return { text: null, flagged: [] };
+  if (/AVISO\s+DE\s+PUBLICIDAD/i.test(before) && !/AVISO\s+DE\s+PUBLICIDAD/i.test(out)) return { text: null, flagged: [] };
+  if (REF_LINE_RE.test(out)) return { text: null, flagged: [] };
+  if (makesHealthClaim(out)) return { text: null, flagged: healthClaimWords(out) };
+  return { text: out, flagged: [] };
 }
