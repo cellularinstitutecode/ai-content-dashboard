@@ -26,7 +26,7 @@ import {
 import type { EvidenceItem } from '@/lib/evidence-parse';
 import { TITLE_SYSTEM, readTitle, titlePrompt } from '@/lib/title-writer';
 import { CLAIMS_SYSTEM, claimsPrompt, parseClaims, type CheckableClaim } from '@/lib/claim-extract';
-import { CLAIM_REWRITE_SYSTEM, acceptRewrite, claimRewritePrompt, type StudyForRewrite } from '@/lib/claim-rewrite';
+import { CLAIM_REWRITE_STRICT_SYSTEM, CLAIM_REWRITE_SYSTEM, acceptRewrite, claimRewritePrompt, type StudyForRewrite } from '@/lib/claim-rewrite';
 import { CAN_DO_RULE, COMMAND_ONLY_RULES, CONVERSATION_RULE, NEXT_STEP_RULE } from '@/lib/assistant-standby';
 import { KEYWORDS_SYSTEM, derivedKeywords, fallbackBriefPrompt, fallbackStamp, hasKeywords, keywordsPrompt, parseKeywords } from '@/lib/keyword-fallback';
 
@@ -1004,7 +1004,8 @@ export async function writeTitle(args: {
  * the study cited. Null when no model answered or the answer is not one to
  * take (acceptRewrite) — the caller then leaves the post as it is.
  */
-export async function rewriteClaimToStudy(text: string, study: StudyForRewrite, timeoutMs = 45_000): Promise<string | null> {
+export async function rewriteClaimToStudy(text: string, study: StudyForRewrite, timeoutMs = 45_000, opts: { strict?: boolean } = {}): Promise<string | null> {
+  const system = opts.strict ? CLAIM_REWRITE_STRICT_SYSTEM : CLAIM_REWRITE_SYSTEM;
   const copy = String(text || '').trim();
   if (!copy) return null;
   const prompt = claimRewritePrompt(copy, study);
@@ -1021,7 +1022,7 @@ export async function rewriteClaimToStudy(text: string, study: StudyForRewrite, 
             model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5',
             max_tokens: 4000,
             temperature: 0,
-            system: CLAIM_REWRITE_SYSTEM,
+            system,
             messages: [{ role: 'user', content: prompt }],
           }),
         },
@@ -1041,7 +1042,7 @@ export async function rewriteClaimToStudy(text: string, study: StudyForRewrite, 
           model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
           max_tokens: 4000,
           temperature: 0,
-          messages: [{ role: 'system', content: CLAIM_REWRITE_SYSTEM }, { role: 'user', content: prompt }],
+          messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
         }),
       },
       { retries: 1, timeoutMs },

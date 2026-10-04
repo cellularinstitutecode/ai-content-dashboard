@@ -2791,6 +2791,8 @@ export type FixResult = {
 
 /** How long FIX gives itself. The route allows 300s; the rest is headroom for the write-back. */
 const FIX_BUDGET_MS = 250_000;
+/** Fix citation keeps this much of its budget for correcting the copy (two rewrites and their re-checks); the research gets the rest. */
+const CITATION_REWRITE_RESERVE_MS = 130_000;
 /** Time a redraft (draft + score, with its own image step) needs to be started at all. */
 const FIX_REDRAFT_MS = 75_000;
 /** Time a verified image regeneration needs. */
@@ -3165,7 +3167,8 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
   const changes: string[] = [];
   const finish = async (fixedIt: boolean, why: string): Promise<FixResult> => {
     const fixed = fixedIt ? ['citation'] : [];
-    const remaining = fixedIt ? [] : ['the citation — ' + why];
+    // Not fixed: say what it DID, so the card shows the research and the correction rather than one bare line.
+    const remaining = fixedIt ? [] : ['the citation — ' + why + (changes.length ? ' (what it did: ' + changes.join('; ') + ')' : '')];
     const note = fixNote({ fixed, remaining });
     const { error: logError } = await db.from('template_runs')
       .update({ log: logLine(run, 'fix', 'Fix citation: ' + (changes.length ? changes.join('; ') + '. ' : 'nothing changed. ') + note) })
@@ -3189,52 +3192,64 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
   }
   if (!stillBad(pack)) return finish(true, '');
 
-  // RUNG 2 — the post's own statements, one at a time.
-  if (left() > 60_000) {
+  // RUNG 2 — the post's own statements, one at a time: the research.
+  // It gets what is left MINUS the time the correction needs, so the search
+  // can never eat the rewrite (it did: the card came back "no study found
+  // supports the copy as written" with the rewrite never attempted).
+  const researchMs = left() - CITATION_REWRITE_RESERVE_MS;
+  if (researchMs >= 40_000) {
     try {
       const p = pack as unknown as Record<string, unknown>;
       const caption = String(p.instagram || p.facebook || p.linkedin || p.blog || '');
-      const out = await fixPostCitation({ text: caption, pack: p, aviso, budgetMs: Math.min(120_000, left() - 45_000) });
+      const out = await fixPostCitation({ text: caption, pack: p, aviso, budgetMs: Math.min(120_000, researchMs) });
       if (out.swapped && Object.keys(out.packPatch).length) {
         const texts: Record<string, unknown> = {};
         if (out.ref) for (const key of PACK_TEXT_KEYS) { const t = p[key]; if (typeof t === 'string' && t.trim()) texts[key] = swapRefLine(t, out.ref); }
         pack = await saveFixedPack(db, run, { ...texts, ...out.packPatch });
-        changes.push('cited ' + (out.ref || 'a study that backs the post'));
+        changes.push('found and cited ' + (out.ref || 'a study that backs the post'));
         // The swapped study is verified and judged again by the ladder, so the stamps agree.
         const again = await fixCitation(db, run, pack, aviso);
         pack = again.pack;
         if (!stillBad(pack)) return finish(true, '');
+      } else {
+        changes.push('searched the post statement by statement; no study backs the wording as written');
       }
     } catch (err) {
       reportError('autopilot:fix-citation-claims', err, { runId });
     }
   }
 
-  // RUNG 3 — nothing backs the wording: rewrite only what claims too much, to the best real study.
-  if (help && left() > 50_000) {
-    const p = pack as unknown as Record<string, unknown>;
+  // RUNG 3 — CORRECT THE COPY to the best real study: only what claims too
+  // much is rewritten, on every channel at once, then judged again. A second,
+  // stricter pass when the checker still disagrees: every health statement
+  // says only what the study reports, or becomes advice that claims nothing.
+  if (help) {
     const study = { title: help.item.title, year: help.item.year, abstract: help.item.abstract, ref: help.ref };
-    const texts: Record<string, string> = {};
-    for (const key of PACK_TEXT_KEYS) {
-      const t = p[key];
-      if (typeof t !== 'string' || !t.trim()) continue;
-      const next = await rewriteClaimToStudy(t, study, Math.min(45_000, left() - 30_000));
-      if (next) texts[key] = next;
-    }
-    if (Object.keys(texts).length) {
+    const label = help.ref.replace(/^REF:\s*/, '');
+    for (const strict of [false, true]) {
+      if (left() < 45_000) { reason = 'ran out of time before the copy could be corrected — press Fix citation again'; break; }
+      const p = pack as unknown as Record<string, unknown>;
+      const keys = PACK_TEXT_KEYS.filter((k) => typeof p[k] === 'string' && String(p[k]).trim());
+      const timeout = Math.min(45_000, left() - 25_000);
+      const rewritten = await Promise.all(keys.map((k) => rewriteClaimToStudy(String(p[k]), study, timeout, { strict })));
+      const texts: Record<string, string> = {};
+      keys.forEach((k, i) => { const t = rewritten[i]; if (t) texts[k] = t; });
+      if (!Object.keys(texts).length) {
+        reason = 'the copy could not be corrected to the study just now — press Fix citation again, or edit the sentence';
+        continue;
+      }
       pack = await saveFixedPack(db, run, texts);
-      changes.push('rewrote the claim to what ' + help.ref.replace(/^REF:\s*/, '') + ' reports (' + Object.keys(texts).join(', ') + ')');
+      changes.push((strict ? 'corrected every health statement to' : 'rewrote the claim to') + ' what ' + label + ' reports (' + Object.keys(texts).join(', ') + ')');
       try {
         const r = await fixCitation(db, run, pack, aviso, [help.item]);
         pack = r.pack;
         if (r.change) changes.push(r.change);
         reason = r.reason || reason;
+        if (r.claimHelp) help = r.claimHelp;
       } catch (err) {
         reportError('autopilot:fix-citation-recheck', err, { runId });
       }
       if (!stillBad(pack)) return finish(true, '');
-    } else {
-      reason = 'the claim could not be rewritten to the study just now — edit the sentence, or press Fix citation again';
     }
   }
   return finish(false, reason || 'no real study could be found for what this post claims — edit the claim or the REF line');
