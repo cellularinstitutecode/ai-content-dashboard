@@ -18,7 +18,7 @@ dashboard, and nothing in the dashboard depends on it.
 
 ## Up to date with
 
-The zip matches the dashboard on `main` **through #397**. Recent changes it includes:
+The zip matches the dashboard on `main` **through #398**. Recent changes it includes:
 
 - **#392**: one button per repair on review cards. **Fix** repairs the copy and
   the picture; **Fix citation** repairs only the citation. The picture
@@ -41,6 +41,11 @@ The zip matches the dashboard on `main` **through #397**. Recent changes it incl
   needs its citation. The composer, the send route, the nightly video queue
   and the approve step all use this one rule. The composer also has a "Find
   and add the citation" action.
+- **#398**: the composer's green check line says what is true. A post with
+  no health claim reads "No scientific reference — none needed, this post
+  makes no health claim." instead of claiming a reference is present. (In
+  this template the advertising notice is only mentioned when a permit
+  number is set.)
 
 When more changes land on `main`, the zip has to be re-synced (it does not
 update itself).
