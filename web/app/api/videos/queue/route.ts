@@ -1,8 +1,9 @@
 // POST /api/videos/queue
 //
 // Queue ONE sheet row whose copy is already written: a dashboard draft, and
-// Metricool drafts with the video attached, the copy exactly as the sheet has
-// it. This is the "Attach videos" button's path for a row that has a video
+// Metricool drafts with the video attached, the copy's words exactly as the
+// sheet has them — with the AVISO line and a researched REF line added when the
+// copy needs one (lib/existing-copy-cite.ts). This is the "Attach videos" button's path for a row that has a video
 // and copy but no draft yet — the sweep does the same thing on its own
 // schedule (lib/video-autopilot.ts queueExistingCopy); this is the same code
 // run now, for a row a person named.
@@ -47,7 +48,7 @@ export async function POST(req: NextRequest) {
       const status = out.reason === 'not_found' || out.reason === 'no_table' ? 404 : out.reason === 'already_queued' || out.reason === 'already_published' ? 409 : 422;
       return NextResponse.json({ error: out.reason, message: out.message }, { status });
     }
-    return NextResponse.json({ ok: true, title: out.title, draftId: out.draftId, metricool: out.metricool }, { headers: { 'cache-control': 'no-store' } });
+    return NextResponse.json({ ok: true, title: out.title, draftId: out.draftId, metricool: out.metricool, citation: out.citation }, { headers: { 'cache-control': 'no-store' } });
   } catch (e) {
     reportError('videos:queue', e, { tab, row: String(row) });
     return NextResponse.json(

@@ -46,6 +46,7 @@ import { columnFor, pick, tableFromRows } from '@/lib/sheet-table';
 import { VIDEO_NETWORK_COLUMNS, publishedNetworks } from '@/lib/sheet-ticks';
 import { prepareVideo, saveVideoDraft, type PrepareOk, stampDraftVideoMeta } from '@/lib/video-prepare';
 import { EXISTING_COPY_PER_RUN, existingCopyText, isExistingCopyRow, queueExistingEnabled } from '@/lib/existing-copy';
+import { CITE_EXISTING_BUDGET_MS, citeExistingCopy, type CitedCopy } from '@/lib/existing-copy-cite';
 import { attachPendingVideos, pendingVideoPosts } from '@/lib/video-attach';
 
 /** Rows whose waiting drafts get their video per run — same order of cost as queuing. */
@@ -555,7 +556,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
         result.candidates++;
         const draftTitle = title || videoLink;
         if (opts.dryRun) {
-          result.rows.push({ tab: tab.title, row, rowKey, title: draftTitle, state: 'would_queue_existing', message: 'Copy already written — would be sent to Metricool as a draft with the video, unchanged.' });
+          result.rows.push({ tab: tab.title, row, rowKey, title: draftTitle, state: 'would_queue_existing', message: 'Copy already written — would be sent to Metricool as a draft with the video, the words unchanged, with the AVISO line and a researched REF line added when the copy needs one.' });
           wouldPrepare++;
           existingThisRun++;
           continue;
@@ -572,11 +573,12 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
           userId: opts.userId, spreadsheetId, tab: tab.title, row, gid: where.gid,
           rec, rowKey, title, videoLink, copy, columns, prior,
           publicationDate: await slotForNextRow(), actor: 'sweep', skipMetricool: opts.skipMetricool,
+          budgetMs: Math.max(20_000, budgetMs - (Date.now() - started)),
         });
         existingThisRun++;
         result.queuedExisting++;
         result.metricoolDrafts += queued.metricool.filter((p) => p.ok).length;
-        result.rows.push({ tab: tab.title, row, rowKey, title: draftTitle, state: 'queued_existing', draftId: queued.draftId, metricool: queued.metricool });
+        result.rows.push({ tab: tab.title, row, rowKey, title: draftTitle, state: 'queued_existing', draftId: queued.draftId, metricool: queued.metricool, message: queued.citation.note });
         continue;
       }
 
@@ -958,22 +960,38 @@ type QueueRowArgs = {
   publicationDate?: string;
   actor: VideoActor;
   skipMetricool?: boolean;
+  /** What is left of the caller's time, so the citation research never outlives the request. */
+  budgetMs?: number;
 };
 
+/** What the queue did about the copy's citation, for the route, the panel and the register. */
+export type QueueCitation = Pick<CitedCopy, 'outcome' | 'ref' | 'note'>;
+
 /**
- * QUEUE A ROW WHOSE COPY IS ALREADY WRITTEN — do not write.
+ * QUEUE A ROW WHOSE COPY IS ALREADY WRITTEN — do not rewrite it.
  *
- * The copy is the person's and goes out verbatim. The dashboard draft exists
+ * The body of the copy is the person's and goes out word for word. What is
+ * added is what every post must carry to be sent and the sheet never has:
+ * the AVISO line, and a REF line found by research when the copy makes a
+ * health claim (lib/existing-copy-cite.ts). Without this the row reached
+ * Metricool uncited and the composer refused the same copy, while Prepare —
+ * which never rewrites copy that exists — looked as if it did nothing.
+ * The sheet's COPY cell is still never written; the REF column beside it is.
+ * The dashboard draft exists
  * so the publishing list, the PENDING chip and Approve treat this row like
  * any other; the video_runs row exists so a sweep fifteen minutes from now
  * does not queue it again; ESTADO IA says what happened; the register keeps
  * the row. One place for it, so the nightly sweep and the "Attach videos"
  * button cannot drift apart.
  */
-async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string | null; metricool: PublishOutcome[] }> {
+async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string | null; metricool: PublishOutcome[]; citation: QueueCitation }> {
   const admin = supabaseAdmin();
   const draftTitle = a.title || a.videoLink;
-  const text = existingCopyText(a.copy);
+  // The compliance lines first: the AVISO, and the researched REF when the copy
+  // needs one. The words between them are the sheet's, untouched.
+  const cited = await citeExistingCopy({ userId: a.userId, text: existingCopyText(a.copy), title: a.title, budgetMs: Math.max(15_000, Math.min(CITE_EXISTING_BUDGET_MS, (a.budgetMs ?? CITE_EXISTING_BUDGET_MS) - 20_000)) });
+  const text = cited.text;
+  const citation: QueueCitation = { outcome: cited.outcome, ref: cited.ref, note: cited.note };
   const fileId = parseDriveFileId(a.videoLink);
   const rowNetworks = VIDEO_NETWORKS.filter(([col]) => YES_TICK.test(pick(a.rec, col))).map(([, n]) => n);
 
@@ -986,6 +1004,10 @@ async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string 
       // So a replace on approve still knows Short-or-video and the privacy cell.
       format: pick(a.rec, 'formato', 'format') || null,
       sheetYoutube: pick(a.rec, 'youtube') || null,
+      // The judge's verdict on the citation, read by the send doors: 'swapped'
+      // when one was found and added, 'unsupported' when the copy needs one
+      // and none backs it — so the door holds the post rather than sending it.
+      ...(cited.claimSupport ? { claimSupport: cited.claimSupport } : {}),
     });
   } catch (e) {
     reportError('video-queue:draft', e, { tab: a.tab, row: String(a.row) });
@@ -1002,10 +1024,13 @@ async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string 
     published: publishedNetworks(VIDEO_NETWORK_COLUMNS, (col: string) => pick(a.rec, col)),
     publicationDate: a.publicationDate,
   });
-  // ESTADO IA only. COPY is not even named here, and writeRowBack never
-  // fills a cell that has something in it.
+  // ESTADO IA, and the REF column when a citation was found. COPY is not even
+  // named here, and writeRowBack never fills a cell that has something in it.
   try {
-    await writeRowBack(a.spreadsheetId, a.tab, a.row, a.columns, { aiStatus: STATUS_TEXT.queued_existing });
+    await writeRowBack(a.spreadsheetId, a.tab, a.row, a.columns, {
+      ...(cited.outcome === 'cited' && cited.ref ? { ref: cited.ref } : {}),
+      aiStatus: cited.outcome === 'cited' ? STATUS_TEXT.queued_existing_cited : cited.outcome === 'none' ? STATUS_TEXT.queued_existing_needs_ref : STATUS_TEXT.queued_existing,
+    });
   } catch (e) {
     reportError('video-queue:status', e, { tab: a.tab, row: String(a.row) });
   }
@@ -1037,13 +1062,13 @@ async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string 
     actor: a.actor,
     title: draftTitle,
     link: a.videoLink,
-    detail: { tab: a.tab, row: a.row, gid: a.gid, existingCopy: true, networks: sent, unrecorded, refused: refused.map((p) => ({ network: p.network, reason: p.reason, message: p.message })) },
+    detail: { tab: a.tab, row: a.row, gid: a.gid, existingCopy: true, citation, networks: sent, unrecorded, refused: refused.map((p) => ({ network: p.network, reason: p.reason, message: p.message })) },
   });
-  return { draftId, metricool: posted };
+  return { draftId, metricool: posted, citation };
 }
 
 export type QueueExistingResult =
-  | { ok: true; title: string; draftId: string | null; metricool: PublishOutcome[] }
+  | { ok: true; title: string; draftId: string | null; metricool: PublishOutcome[]; citation: QueueCitation }
   | { ok: false; reason: 'no_table' | 'not_found' | 'hidden' | 'no_video' | 'no_copy' | 'already_queued' | 'already_published'; message: string };
 
 /**
@@ -1061,6 +1086,7 @@ export async function queueExistingCopy(opts: {
   actor?: VideoActor;
   spreadsheetId?: string;
   skipMetricool?: boolean;
+  budgetMs?: number;
 }): Promise<QueueExistingResult> {
   const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
   const { rows, hidden } = await readTabWithMeta(spreadsheetId, opts.tab);
@@ -1129,6 +1155,7 @@ export async function queueExistingCopy(opts: {
     userId: opts.userId, spreadsheetId, tab: opts.tab, row: opts.row, gid,
     rec: found.rec, rowKey, title, videoLink, copy, columns, prior,
     publicationDate: opts.publicationDate, actor: opts.actor ?? 'button', skipMetricool: opts.skipMetricool,
+    budgetMs: opts.budgetMs,
   });
   return { ok: true, title: title || videoLink, ...out };
 }
