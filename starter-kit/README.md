@@ -10,7 +10,22 @@ dashboard with everything specific to this deployment removed:
 - the built-in weekly strategy is a generic example to replace
 - fresh history: the zip carries no `.git`
 
-Unzip it, push it to a new GitHub repository, and follow its `SETUP.md`.
+Unzip it and push it to a new GitHub repository (git or GitHub Desktop — the
+browser upload page takes only 100 files at a time). From there it runs on
+its own:
+
+- **First push:** CI checks it, and a workflow points the README's
+  **Deploy with Vercel** button at the new repository.
+- **Deploy button:** Vercel asks for the keys and builds it. Vercel's free
+  plan works as shipped (only daily crons in `vercel.json`).
+- **Database:** add the `SUPABASE_DB_URL` secret and the **Set up database**
+  workflow creates every table (or paste `web/supabase/setup.sql` once).
+- **Background jobs:** add `APP_URL` and `CRON_SECRET`, and GitHub runs the
+  hourly jobs; Vercel runs the daily ones.
+
+What cannot be automated, because only the owner can do it: creating the
+Supabase / AI / Metricool accounts and pasting their keys, and filling in
+Brand Brain. `SETUP.md` walks through each.
 Lint, typecheck, all unit tests and the production build pass on it as shipped.
 
 This folder is only a download. Nothing in it is built or deployed with the
