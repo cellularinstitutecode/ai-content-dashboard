@@ -1054,9 +1054,15 @@ export default function SourcesView({ kind }: { kind: Tab }) {
           const alreadyThere = outs.filter((m) => m?.reason === 'already_queued').length;
           const refused = outs.filter((m) => !m?.ok && m?.reason !== 'already_queued');
           if (!sent && alreadyThere && !refused.length) return finish('done', 'Already in the queue, waiting for your approval (' + alreadyThere + ' draft' + (alreadyThere === 1 ? '' : 's') + ').');
+          // What became of the citation: the one thing the sheet never has and the send doors insist on.
+          const cite = (j?.citation || null) as { outcome?: string; ref?: string | null; note?: string } | null;
+          const citeSaid = cite?.outcome === 'cited' ? ' · REF found and added: ' + (cite.ref || '')
+            : cite?.outcome === 'none' ? ' · no study found to cite — the doors hold it until a REF line is added'
+            : cite?.outcome === 'kept' ? ' · keeps its own REF line'
+            : '';
           return finish(
-            refused.length && !sent ? 'failed' : 'done',
-            'Queued with the video, copy unchanged · ' + sent + ' draft' + (sent === 1 ? '' : 's') +
+            (refused.length && !sent) ? 'failed' : 'done',
+            'Queued with the video, the words unchanged · ' + sent + ' draft' + (sent === 1 ? '' : 's') + citeSaid +
               (refused.length ? ' · ' + refused.length + ' refused: ' + refused.map((m) => m.network + ' (' + m.message + ')').join('; ') : ''),
           );
         }
@@ -1544,7 +1550,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                   {(summary || (!running && liveSummary)) && <span style={{ fontSize: 12, fontWeight: 600 }}>{summary || liveSummary}</span>}
                   {pickedWithCopy > 0 && (
                     <span style={{ fontSize: 11, color: '#8a6d00' }}>
-                      {pickedWithCopy} of these already {pickedWithCopy === 1 ? 'has' : 'have'} copy. Copy already written is never overwritten, so {pickedWithCopy === 1 ? 'it' : 'they'} will cost a run and change nothing.
+                      {pickedWithCopy} of these already {pickedWithCopy === 1 ? 'has' : 'have'} copy. Copy already written is never rewritten: {pickedWithCopy === 1 ? 'it is' : 'they are'} queued as written, with the AVISO line and a researched REF line added when the copy needs one.
                     </span>
                   )}
                 </div>

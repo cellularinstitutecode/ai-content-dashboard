@@ -442,6 +442,22 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
   // The sheet row the video was handed over from, sent with the post so the
   // queue can name it. Cleared with the media.
   const [mSource, setMSource] = useState<{ tab: string; row: number; link: string; format: string } | null>(null);
+  /** "Find and add the citation": the composer's copy, with the AVISO and a researched REF line (POST /api/posts/cite). */
+  const [mCiteBusy, setMCiteBusy] = useState(false);
+  const [mCiteNote, setMCiteNote] = useState<string | null>(null);
+  async function citeComposerCopy() {
+    if (mCiteBusy || !mText.trim()) return;
+    setMCiteBusy(true); setMCiteNote(null);
+    try {
+      const r = await fetch('/api/posts/cite', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: mText, title: mTitle }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.message || j?.error || 'The citation could not be found just now.');
+      if (typeof j?.text === 'string' && j.text.trim()) setMText(j.text);
+      setMCiteNote(String(j?.note || (j?.outcome === 'cited' ? 'Citation added.' : 'No citation was added.')));
+    } catch (e) {
+      setMCiteNote(friendlyError(e, 'The citation could not be found just now.'));
+    } finally { setMCiteBusy(false); }
+  }
   // The next free planner slots (13:00 / 17:00 Cancún), from the server: the
   // time chips and the box's default. Not "tomorrow 9 AM" on the browser's clock.
   const [mSlots, setMSlots] = useState<string[]>([]);
@@ -2451,7 +2467,14 @@ Too long for {networkLabel(mLimit.network)} by {mOverBy.toLocaleString()} charac
 {mProblem && !mBusy && !mAlreadySent && (
 <p role="status" className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[13px] font-medium text-amber-900 ring-1 ring-amber-200">
 {mProblem}{!mDate ? ' The three time chips above set one in a click.' : ''}
+{/* The REF line is the one thing the app can go and find: the same research the video pipeline runs, on this copy, with the words kept. */}
+{mCompliance && !mCompliance.ok && (mCompliance.missing.includes('ref') || mCompliance.missing.includes('doi')) && (
+<button type="button" onClick={() => void citeComposerCopy()} disabled={mCiteBusy} className="ml-2 rounded-full bg-amber-900 px-3 py-1 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{mCiteBusy ? 'Searching for a study…' : 'Find and add the citation'}</button>
+)}
 </p>
+)}
+{mCiteNote && !mBusy && (
+<p role="status" className="mt-2 rounded-xl bg-sky-50 px-3 py-2 text-[12px] text-sky-900 ring-1 ring-sky-100">{mCiteNote}</p>
 )}
 {mAlreadySent && mSent && (
 <div role="status" className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-[13px] font-medium text-emerald-900 ring-1 ring-emerald-200">

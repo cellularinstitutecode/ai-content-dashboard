@@ -36,8 +36,12 @@ export const STATUS_TEXT = {
   needs_transcript: 'Falta transcripción',
   // Not an error: the slow half succeeded and the next pass writes the copy.
   transcript_ready: 'Transcripción lista — copy pendiente',
-  /** The copy a person wrote was sent to Metricool as a draft with the video, unchanged. */
+  /** The copy a person wrote was sent to Metricool as a draft with the video; it already carried a REF line, or needs none. */
   queued_existing: 'En cola — copy existente',
+  /** The copy a person wrote, sent with a REF line found by research (lib/existing-copy-cite.ts); the REF column holds it. */
+  queued_existing_cited: 'En cola — copy existente + REF encontrada',
+  /** The copy makes a health claim and no study was found to back it: queued, but the doors hold it until a REF is added. */
+  queued_existing_needs_ref: 'En cola — copy existente, SIN REF (revisar)',
   failed: 'Error — revisar',
 } as const;
 
