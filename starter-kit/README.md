@@ -18,7 +18,7 @@ dashboard, and nothing in the dashboard depends on it.
 
 ## Up to date with
 
-The zip matches the dashboard on `main` **through #394**. Recent changes it includes:
+The zip matches the dashboard on `main` **through #397**. Recent changes it includes:
 
 - **#392**: one button per repair on review cards. **Fix** repairs the copy and
   the picture; **Fix citation** repairs only the citation. The picture
@@ -31,6 +31,16 @@ The zip matches the dashboard on `main` **through #394**. Recent changes it incl
   as the post. When no relevant study exists, it drops the citation, turns the
   health claims into plain advice and asks you to read the post before
   approving. It never adds an unrelated study.
+- **#395**: video rows that already have copy get the advertising notice (when
+  a permit is set) and a researched REF line, so they can be sent.
+- **#396**: video copy with no health claim needs no REF line and can be sent
+  as it is.
+- **#397**: a health claim is an assertion, not a topic. Copy that only names
+  a therapy or asks questions sends without a REF; copy that asserts an
+  effect, a safety statement, a percentage or an appeal to studies still
+  needs its citation. The composer, the send route, the nightly video queue
+  and the approve step all use this one rule. The composer also has a "Find
+  and add the citation" action.
 
 When more changes land on `main`, the zip has to be re-synced (it does not
 update itself).
