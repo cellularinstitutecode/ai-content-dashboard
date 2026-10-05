@@ -78,12 +78,16 @@ test('no study on the subject: the rewrite must drop the REF line, keep the AVIS
   assert.deepEqual(acceptNoClaim(before, good), { text: good, flagged: [] });
   assert.equal(acceptNoClaim(before, good + '\nREF: Gross 2020').text, null, 'the citation must go');
   assert.equal(acceptNoClaim(before, 'Write down how you feel each day and bring it along.').text, null, 'the AVISO must stay');
-  const still = acceptNoClaim(before, 'Write down your recovery and any pain each day and bring it along.\n\nAVISO DE PUBLICIDAD 123');
+  // Naming pain or recovery is not a claim (lib/health-claim.ts); asserting an effect is.
+  const topicOnly = acceptNoClaim(before, 'Write down your recovery and any pain each day and bring it along.\n\nAVISO DE PUBLICIDAD 123');
+  assert.ok(topicOnly.text, 'topic words alone are no claim');
+  const still = acceptNoClaim(before, 'Write down how the pain reduces each day; it improves faster than you think.\n\nAVISO DE PUBLICIDAD 123');
   assert.equal(still.text, null);
-  assert.deepEqual(still.flagged.map((w) => w.toLowerCase()).sort(), ['pain', 'recovery'], 'and it says which words still read as a claim');
-  assert.match(noClaimPrompt('x', ['pain', 'recovery']), /replace every one: pain, recovery/);
+  assert.deepEqual(still.flagged.map((w) => w.toLowerCase()).sort(), ['faster', 'improves', 'reduces'], 'and it says which words still read as a claim');
+  assert.match(noClaimPrompt('x', ['reduces', 'improves']), /replace every one: reduces, improves/);
   assert.match(NO_CLAIM_SYSTEM, /Delete the REF \/ REFERENCIA line entirely\. Keep the AVISO DE PUBLICIDAD line exactly as it is\./);
-  assert.deepEqual(healthClaimWords('Pain and pain relief, then recovery.').map((w) => w.toLowerCase()), ['pain', 'relief', 'recovery']);
+  // Topic words are not claims; the effect words are what come back.
+  assert.deepEqual(healthClaimWords('Pain relief that improves sleep and improves mood.').map((w) => w.toLowerCase()), ['relief', 'improves'], 'each once, as written');
 });
 
 test('Fix citation never rewrites a post around a study on another subject, and drops the citation when none exists', () => {

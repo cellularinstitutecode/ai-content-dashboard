@@ -23,7 +23,32 @@ test('anything that sounds like a health claim counts, when unsure yes', () => {
     'Warm weather and rest can help the body recover after treatment.',
     'Studies show sea air reduces stress.',
     'Gentle walks on the beach support circulation.',
+    'Stem cell therapy reduces knee pain in most patients.',
+    'Our protocols are safe and 90% of patients see results.',
+    'According to a 2022 study, red light speeds up healing.',
+    'Exosomes may help the body recover faster.',
+  ]) assert.equal(makesHealthClaim(t), true, t);
+});
+
+test('naming a therapy, a condition or a part of the body is not a claim — asserting what it does is', () => {
+  // A reel asking what to ask a clinic: every sentence names a therapy, cells, a
+  // protocol or a condition, and none asserts an effect. It was held for a
+  // citation it had nothing to cite.
+  const askTheClinic = 'One clinic may quote you $1,000. Another may quote $5,000 or more. But before assuming one is overpriced, look at what you are actually receiving. '
+    + 'Is it simply an injection? What type of cells are being used? Has a physician reviewed your case? Are diagnostics included? Is there a personalized protocol built around your condition? '
+    + 'Two clinics can both call what they offer "stem cell therapy" while providing completely different products and levels of care.';
+  assert.equal(makesHealthClaim(askTheClinic), false);
+  for (const t of [
     'HBOT sessions fit easily into an open day.',
+    'Bring your diagnostics and your medication list to the first consultation.',
+    'Our support team will meet you at the airport and take you to the clinic.',
+    'The treatment room has a sea view.',
+  ]) assert.equal(makesHealthClaim(t), false, t);
+  // The same words, asserting something: a claim.
+  for (const t of [
+    'HBOT sessions reduce swelling.',
+    'The treatment is safe.',
+    'Stem cells repair cartilage.',
   ]) assert.equal(makesHealthClaim(t), true, t);
 });
 
