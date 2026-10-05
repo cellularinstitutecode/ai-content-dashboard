@@ -364,7 +364,9 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
     }).catch(() => undefined);
     return () => { alive = false; };
   }, []);
-  const mCompliance = complianceApplies(mNetworks) && mText.trim() ? checkCompliance(mText, avisoNumber) : null;
+  // The clinic's rule: a post cites a study when it makes a health claim. Copy
+  // that makes none needs no REF line; the send route applies the same test.
+  const mCompliance = complianceApplies(mNetworks) && mText.trim() ? checkCompliance(mText, avisoNumber, { refPolicy: 'if-health-claim' }) : null;
   // A post handed over from the Sources section (a video's copy, a Drive
   // photo as the hero image). Consumed once, then cleared.
   const handoffSeen = useRef(0);

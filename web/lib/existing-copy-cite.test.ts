@@ -9,7 +9,15 @@ test('copy a person wrote is queued with the AVISO line and a researched REF lin
   const cite = src('lib/existing-copy-cite.ts');
   assert.match(cite, /const withAviso = ensureAviso\(String\(opts\.text \|\| ''\)\.trim\(\), aviso\);/, 'the AVISO first');
   assert.match(cite, /if \(check\.ref && check\.doi\) \{[\s\S]{0,200}outcome: 'kept'/, 'a REF the person wrote is kept');
-  assert.match(cite, /if \(!makesHealthClaim\(withAviso\)\)[\s\S]{0,200}outcome: 'not_needed'/, 'no claim, no citation needed');
+  assert.match(cite, /if \(!makesHealthClaim\(withAviso\)\)[\s\S]{0,300}outcome: 'not_needed'/, 'no claim, no citation needed');
+  // The clinic's rule, stamped on the draft so every door reads it: a REF only when the copy makes a health claim.
+  assert.match(cite, /const POLICY = 'if-health-claim' as const;/);
+  assert.match(cite, /stamp\(withAviso, \{ status: 'not_required', doi: null, title: null, year: null \}\)/, 'no claim: the citation is not required, and the doors agree');
+  assert.match(src('lib/video-autopilot.ts'), /_compliance: cited\.compliance,/, 'the stamp rides on the queued draft');
+  assert.equal(STATUS_TEXT.queued_existing_no_claim, 'En cola — copy existente, sin claim (no requiere REF)');
+  // The composer and the send route apply the same rule to copy with no draft behind it.
+  assert.match(src('app/page.tsx'), /checkCompliance\(mText, avisoNumber, \{ refPolicy: 'if-health-claim' \}\)/);
+  assert.match(src('app/api/metricool/schedule/route.ts'), /let draftRefPolicy: RefPolicy = 'if-health-claim';/);
   assert.match(cite, /fixPostCitation\(\{\s*text: withAviso,\s*pack: \{ title: String\(opts\.title \|\| ''\)\.trim\(\), kind: 'video' \}/, 'the same ladder Verify / fix climbs, searching the video’s title too');
   assert.match(cite, /status: fix\.status === 'unchecked' \? 'unchecked' : 'unsupported'/, 'nothing found: stamped so the doors hold it');
 

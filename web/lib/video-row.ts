@@ -42,6 +42,8 @@ export const STATUS_TEXT = {
   queued_existing_cited: 'En cola — copy existente + REF encontrada',
   /** The copy makes a health claim and no study was found to back it: queued, but the doors hold it until a REF is added. */
   queued_existing_needs_ref: 'En cola — copy existente, SIN REF (revisar)',
+  /** The copy makes no health claim, so it needs no citation: queued with its AVISO, sendable as it is. */
+  queued_existing_no_claim: 'En cola — copy existente, sin claim (no requiere REF)',
   failed: 'Error — revisar',
 } as const;
 

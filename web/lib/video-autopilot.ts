@@ -1008,7 +1008,10 @@ async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string 
       // when one was found and added, 'unsupported' when the copy needs one
       // and none backs it — so the door holds the post rather than sending it.
       ...(cited.claimSupport ? { claimSupport: cited.claimSupport } : {}),
-    });
+      // The policy the copy was checked under: a post that makes no health
+      // claim needs no REF line, and the send doors read this to agree.
+      _compliance: cited.compliance,
+    } as Parameters<typeof saveVideoDraft>[2]);
   } catch (e) {
     reportError('video-queue:draft', e, { tab: a.tab, row: String(a.row) });
   }
@@ -1029,7 +1032,7 @@ async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string 
   try {
     await writeRowBack(a.spreadsheetId, a.tab, a.row, a.columns, {
       ...(cited.outcome === 'cited' && cited.ref ? { ref: cited.ref } : {}),
-      aiStatus: cited.outcome === 'cited' ? STATUS_TEXT.queued_existing_cited : cited.outcome === 'none' ? STATUS_TEXT.queued_existing_needs_ref : STATUS_TEXT.queued_existing,
+      aiStatus: cited.outcome === 'cited' ? STATUS_TEXT.queued_existing_cited : cited.outcome === 'none' ? STATUS_TEXT.queued_existing_needs_ref : cited.outcome === 'not_needed' ? STATUS_TEXT.queued_existing_no_claim : STATUS_TEXT.queued_existing,
     });
   } catch (e) {
     reportError('video-queue:status', e, { tab: a.tab, row: String(a.row) });
