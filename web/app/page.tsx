@@ -2418,7 +2418,10 @@ className={"mt-2 w-full rounded-xl bg-subtle px-3 py-2 text-[14px] text-ink ring
 <textarea id="composer-text" value={mText} onChange={(e) => setMText(e.target.value)} rows={4} placeholder="Write your post… you can paste anything you generated above." aria-invalid={mTooLong || undefined} className={"mt-1 w-full resize-none rounded-2xl bg-subtle p-4 text-[14px] text-ink ring-1 placeholder:text-ink-faint focus:ring-accent " + (mTooLong ? "ring-danger" : "ring-line")} />
 {complianceApplies(mNetworks) && mText.trim() ? (
   mCompliance && mCompliance.ok ? (
-    <p className="mt-2 text-[12px] text-emerald-700" role="status">✓ Advertising notice and scientific reference present.</p>
+    <p className="mt-2 text-[12px] text-emerald-700" role="status">
+      {/* Says what is true: a post that makes no health claim carries no REF line, and the line must not claim one. */}
+      {mCompliance.refWaived ? '✓ Advertising notice present. No scientific reference — none needed, this post makes no health claim.' : '✓ Advertising notice and scientific reference present.'}
+    </p>
   ) : (
     <div className="mt-2 rounded-2xl bg-amber-50 p-3 text-[12px] text-amber-900 ring-1 ring-amber-200" role="status">
       <div className="font-semibold">These posts must carry two lines</div>

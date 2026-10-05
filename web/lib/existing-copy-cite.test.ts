@@ -17,6 +17,8 @@ test('copy a person wrote is queued with the AVISO line and a researched REF lin
   assert.equal(STATUS_TEXT.queued_existing_no_claim, 'En cola — copy existente, sin claim (no requiere REF)');
   // The composer and the send route apply the same rule to copy with no draft behind it.
   assert.match(src('app/page.tsx'), /checkCompliance\(mText, avisoNumber, \{ refPolicy: 'if-health-claim' \}\)/);
+  // The green line says what is true: no REF, none needed, no claim made.
+  assert.match(src('app/page.tsx'), /mCompliance\.refWaived \? '✓ Advertising notice present\. No scientific reference — none needed, this post makes no health claim\.' : '✓ Advertising notice and scientific reference present\.'/);
   assert.match(src('app/api/metricool/schedule/route.ts'), /let draftRefPolicy: RefPolicy = 'if-health-claim';/);
   assert.match(cite, /fixPostCitation\(\{\s*text: withAviso,\s*pack: \{ title: String\(opts\.title \|\| ''\)\.trim\(\), kind: 'video' \}/, 'the same ladder Verify / fix climbs, searching the video’s title too');
   assert.match(cite, /status: fix\.status === 'unchecked' \? 'unchecked' : 'unsupported'/, 'nothing found: stamped so the doors hold it');
