@@ -123,7 +123,11 @@ export async function POST(req: NextRequest) {
   let ownedDraftIdEarly: string | null = null;
   // The REF policy the draft was written under (lib/compliance.ts refPolicyOf),
   // and the judge's verdict on its citation (lib/citation-gate.ts).
-  let draftRefPolicy: RefPolicy = 'required';
+  // A post with no draft behind it (the composer's own words, or copy handed
+  // over from the video sheet) is checked under the clinic's rule: a REF line
+  // when it makes a health claim, decided on the text (lib/health-claim.ts).
+  // A draft keeps the policy it was written under.
+  let draftRefPolicy: RefPolicy = 'if-health-claim';
   let draftClaimSupport: string | null = null;
   if (draftId) {
     const { data: ownDraftEarly } = await sb.from('drafts').select('id, pack').eq('id', draftId).eq('user_id', user.id).maybeSingle()

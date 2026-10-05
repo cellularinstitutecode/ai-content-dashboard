@@ -1059,6 +1059,7 @@ export default function SourcesView({ kind }: { kind: Tab }) {
           const citeSaid = cite?.outcome === 'cited' ? ' · REF found and added: ' + (cite.ref || '')
             : cite?.outcome === 'none' ? ' · no study found to cite — the doors hold it until a REF line is added'
             : cite?.outcome === 'kept' ? ' · keeps its own REF line'
+            : cite?.outcome === 'not_needed' ? ' · no health claim, so no REF needed — sendable as it is'
             : '';
           return finish(
             (refused.length && !sent) ? 'failed' : 'done',
