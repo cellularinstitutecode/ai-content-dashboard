@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { CLAIM_REWRITE_STRICT_SYSTEM, CLAIM_REWRITE_SYSTEM, NO_CLAIM_SYSTEM, acceptNoClaim, acceptRewrite, claimRewritePrompt, noClaimPrompt, parseRelevance, relevancePrompt } from './claim-rewrite.ts';
+import { CLAIM_REWRITE_STRICT_SYSTEM, CLAIM_REWRITE_SYSTEM, NO_CLAIM_SYSTEM, acceptNoClaim, acceptRewrite, claimRewritePrompt, noClaimPrompt, parseRelevance, relevancePrompt, stripRefLine } from './claim-rewrite.ts';
 import { healthClaimWords } from './health-claim.ts';
 
 const POST = 'Stem cells repair knee cartilage completely.\n\nAsk us how.\n\nREF: Old et al. 2019. doi:10.1000/old\n\nAVISO DE PUBLICIDAD COFEPRIS 123';
@@ -97,16 +97,27 @@ test('Fix citation never rewrites a post around a study on another subject, and 
   // Asked before any rewrite toward it; an unclear answer counts as no.
   assert.match(body, /onTopic = \(await studyOnTopic\(caption0, \{[^}]*\}\)\) === true;/);
   assert.match(body, /if \(help && onTopic\) \{/);
-  // Rung 4: only where the template allows a post with no claim to carry no citation.
-  assert.match(body, /const canDropRef = refPolicyOf\(pack\) === 'if-health-claim';/);
+  // The rule first: no health claim, no citation — the REF line goes and nothing is searched for.
+  assert.match(body, /const claims = keys\.some\(\(k\) => makesHealthClaim\(String\(p\[k\]\)\)\);\s*if \(keys\.length && !claims\) \{/);
+  assert.match(body, /texts\[k\] = stripRefLine\(String\(p\[k\]\)\);/);
+  assert.match(body, /the post makes no health claim, so no citation is needed; the REF line was removed/);
+  // Rung 4 for every template: the rule is the clinic's, not the template's.
+  assert.match(body, /const canDropRef = true;/);
+  assert.doesNotMatch(body, /this template requires a citation/);
   assert.match(body, /rewriteWithoutClaims\(String\(p\[k\]\), \[\], timeout\(\)\)/);
   assert.match(body, /rewriteWithoutClaims\(String\(p\[k\]\), results\[i\]\.flagged, timeout\(\)\)/, 'a second try, told which words');
   assert.match(body, /if \(keys\.length && results\.every\(\(r\) => r\.text\)\)/, 'every channel or nothing');
   assert.match(body, /citation: \{ status: 'not_required', doi: null, title: null, year: null \}/);
   assert.match(body, /_claimSupport: undefined, claimSupport: undefined/);
   assert.match(body, /read it before approving/);
-  // A template that requires a citation is told so, not given an unrelated one.
-  assert.match(body, /this template requires a citation — edit the claim or add a source/);
   // The note says what it did when it fixed it, too.
   assert.match(body, /fixedIt && changes\.length \? ' What it did: ' \+ changes\.join\('; '\) \+ '\.' : ''/);
+});
+
+test('stripRefLine: the REF line goes, everything else stays', () => {
+  const post = 'Ask what the package includes.\n\nREF: Palmer J et al. 2014. doi:10.1038/eye.2014.1\n\nAVISO DE PUBLICIDAD 123\n\n#care';
+  assert.equal(stripRefLine(post), 'Ask what the package includes.\n\nAVISO DE PUBLICIDAD 123\n\n#care');
+  assert.equal(stripRefLine('REFERENCIA: x doi:10.1/y\nBody.'), 'Body.');
+  assert.equal(stripRefLine('No ref here.'), 'No ref here.');
+  assert.equal(stripRefLine('A refreshing walk.\nREF: a\nREF: b'), 'A refreshing walk.', 'only REF lines, never a word that starts with ref');
 });

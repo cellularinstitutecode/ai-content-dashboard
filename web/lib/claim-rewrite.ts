@@ -122,6 +122,16 @@ export function noClaimPrompt(text: string, flagged: readonly string[] = []): st
 
 const REF_LINE_RE = /^[ \t]*REF(?:ERENCIA)?[ \t]*[.:：]/im;
 
+/** The copy without its REF line(s), the rest untouched: a post that makes no health claim carries none. */
+export function stripRefLine(text: string): string {
+  return String(text || '').replace(/\r\n?/g, '\n')
+    .split('\n')
+    .filter((line) => !/^[ \t]*REF(?:ERENCIA)?[ \t]*[.:：][ \t]*\S/i.test(line))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 /**
  * The no-claim rewrite, or why it is not one to take: it must keep the AVISO,
  * drop the REF line, stay the same post (half to one and a half its length),
