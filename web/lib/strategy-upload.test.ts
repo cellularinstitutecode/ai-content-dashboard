@@ -82,7 +82,7 @@ test('uploaded slots cite a study only when a post makes a health claim, and are
   const s = uploadRows(normalizeUpload(READ))[0].strategy;
   assert.equal(citationPolicyFor(s), 'if-health-claim');
   assert.equal(isStrategySlot(s), false);
-  assert.equal(citationPolicyFor({ seeded: undefined }), 'required', 'everything else unchanged');
+  assert.equal(citationPolicyFor({ seeded: undefined }), 'if-health-claim', 'the same rule for every template');
 });
 
 test('every dropped strategy is written like the weekly strategy', () => {

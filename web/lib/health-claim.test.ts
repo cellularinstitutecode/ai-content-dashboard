@@ -72,11 +72,14 @@ test('the policy is read from the draft, and anything unknown is "required"', ()
   assert.equal(refPolicyOf(null), 'required');
 });
 
-test('only the weekly strategy\'s destination slots are relaxed', () => {
+test('every template cites a study when the post makes a health claim, and not otherwise', () => {
+  // The rule is the clinic's, not the slot's: it used to be 'required' for all
+  // but the destination slots, so informational posts cited studies that did
+  // not back them and Fix citation could not remove them.
   assert.equal(citationPolicyFor({ seeded: 'weekly-strategy', slot: 'thu-2' }), 'if-health-claim');
-  assert.equal(citationPolicyFor({ seeded: 'weekly-strategy', slot: 'sun-2' }), 'if-health-claim');
-  assert.equal(citationPolicyFor({ seeded: 'weekly-strategy', slot: 'tue-1' }), 'required');
-  assert.equal(citationPolicyFor({ slot: 'thu-2' }), 'required', 'a hand-written template is never relaxed');
+  assert.equal(citationPolicyFor({ seeded: 'weekly-strategy', slot: 'tue-1' }), 'if-health-claim');
+  assert.equal(citationPolicyFor({ slot: 'thu-2' }), 'if-health-claim', 'a hand-written template follows the same rule');
+  assert.equal(citationPolicyFor(null), 'if-health-claim');
   assert.match(String(strategyBrand({ guidelines: '' } as Record<string, unknown>, { citation: 'if-health-claim' }).guidelines), /only if the post makes a health claim/);
   assert.match(String(strategyBrand({ guidelines: '' } as Record<string, unknown>).guidelines), /cite one real, relevant study\.$/);
   // The destination angles the policy exists for.

@@ -23,17 +23,20 @@ import { UPLOAD_MARK } from './strategy-upload.ts';
 import { negatedAt } from './safety-rules.ts';
 
 /**
- * Whether this template's posts must cite a study: the document slot's policy
- * for a seeded slot (lib/content-strategy.ts), 'if-health-claim' for an
- * uploaded strategy's slot, 'required' for everything else.
+ * Whether this template's posts must cite a study.
+ *
+ * THE CLINIC'S RULE, FOR EVERY TEMPLATE: a post cites a study when it makes a
+ * health claim (lib/health-claim.ts decides, on the text), and needs none
+ * when it makes none. It used to be 'required' for every template but the
+ * weekly strategy's destination slots and a dropped document's slots — so an
+ * informational post ("a standard package versus a personalized plan") was
+ * written with a citation it had nothing to cite, the judge found the study
+ * did not back it, and Fix citation could do nothing because "this template
+ * requires a citation". The parameter is kept so a caller can still ask per
+ * template; the answer is the same for all of them.
  */
-export function citationPolicyFor(strategy: { seeded?: unknown; slot?: unknown } | null | undefined): CitationPolicy {
-  // A slot from a dropped strategy document (lib/strategy-upload.ts) follows
-  // the same rule the team chose for the weekly strategy: a REF line only when
-  // the post makes a health claim.
-  if (String(strategy?.seeded || '') === UPLOAD_MARK) return 'if-health-claim';
-  if (!isStrategySlot(strategy)) return 'required';
-  return citationPolicyForSlot(String(strategy?.slot || ''));
+export function citationPolicyFor(_strategy: { seeded?: unknown; slot?: unknown } | null | undefined): CitationPolicy {
+  return 'if-health-claim';
 }
 
 /** Is this template one of the weekly strategy's own slots? */

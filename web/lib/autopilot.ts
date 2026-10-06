@@ -51,6 +51,8 @@ import {
   rewriteWithoutClaims,
   studyOnTopic,
 } from '@/lib/ai';
+import { stripRefLine } from '@/lib/claim-rewrite';
+import { makesHealthClaim } from '@/lib/health-claim';
 import { fixPostCitation } from '@/lib/post-citation-fix';
 import {
   buildKeywordBrief,
@@ -3180,6 +3182,31 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
     return { ok: true, fixed, remaining, note };
   };
 
+  // THE RULE FIRST: a post cites a study when it makes a health claim. One that
+  // makes none — "a standard package versus a personalized plan", said as
+  // information — needs no citation, so its REF line goes and nothing is
+  // searched for. The policy is stamped on the draft so the doors agree.
+  {
+    const p = pack as unknown as Record<string, unknown>;
+    const keys = PACK_TEXT_KEYS.filter((k) => typeof p[k] === 'string' && String(p[k]).trim());
+    const claims = keys.some((k) => makesHealthClaim(String(p[k])));
+    if (keys.length && !claims) {
+      const texts: Record<string, string> = {};
+      for (const k of keys) texts[k] = stripRefLine(String(p[k]));
+      const compliance = {
+        ...((p._compliance as Record<string, unknown> | undefined) || {}),
+        aviso,
+        instagram: checkCompliance(String(texts.instagram ?? p.instagram ?? ''), aviso, { refPolicy: 'if-health-claim' }),
+        facebook: checkCompliance(String(texts.facebook ?? p.facebook ?? ''), aviso, { refPolicy: 'if-health-claim' }),
+        citation: { status: 'not_required', doi: null, title: null, year: null },
+        refPolicy: 'if-health-claim',
+      };
+      pack = await saveFixedPack(db, run, { ...texts, _compliance: compliance, _claimSupport: undefined, claimSupport: undefined });
+      changes.push('the post makes no health claim, so no citation is needed; the REF line was removed (' + keys.join(', ') + ')');
+      if (!stillBad(pack)) return finish(true, '');
+    }
+  }
+
   // RUNG 1 — the ladder FIX climbs: the papers in hand, then a search at the claim.
   let help: ClaimHelp | null = null;
   let reason = '';
@@ -3228,7 +3255,8 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
   // telemedicine visits. Asked first; an unclear answer counts as no.
   // Only what claims too much is rewritten, on every channel at once, then
   // judged again; a stricter second pass when the checker still disagrees.
-  const canDropRef = refPolicyOf(pack) === 'if-health-claim';
+  // Every template: the rule is the clinic's, not the template's.
+  const canDropRef = true;
   let onTopic = false;
   if (help) {
     const p0 = pack as unknown as Record<string, unknown>;
@@ -3288,7 +3316,7 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
         const texts: Record<string, string> = {};
         keys.forEach((k, i) => { texts[k] = results[i].text as string; });
         const next = { ...p, ...texts };
-        const refPolicy = refPolicyOf(pack);
+        const refPolicy = 'if-health-claim' as const;
         const compliance = {
           ...((p._compliance as Record<string, unknown> | undefined) || {}),
           aviso,
@@ -3306,8 +3334,6 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
         reason = 'no study on this post\u2019s subject was found, and the claims could not be taken out automatically' + (words.length ? ' (still reads as a claim: ' + words.join(', ') + ')' : '') + ' — edit those sentences, or press Fix citation again';
       }
     }
-  } else if (!onTopic) {
-    reason = 'no study on this post\u2019s subject was found, and this template requires a citation — edit the claim or add a source';
   }
   return finish(false, reason || 'no real study could be found for what this post claims — edit the claim or the REF line');
 }
