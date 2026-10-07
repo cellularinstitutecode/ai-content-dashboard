@@ -15,15 +15,16 @@
 // It never publishes and never ticks a network column. Approve is still a person.
 import 'server-only';
 
-import { autoKeywordBrief, generateContentPack, judgeClaimSupport, keywordLadder, writeTitle, type BrandContext, type ContentPack, type SemrushStamp } from '@/lib/ai';
+import { autoKeywordBrief, generateContentPack, judgeClaimSupport, keywordLadder, rewriteWithoutClaims, writeTitle, type BrandContext, type ComplianceStamp, type ContentPack, type SemrushStamp } from '@/lib/ai';
 import { hasKeywords } from '@/lib/keyword-fallback';
 import { avisoNumberFor, checkCompliance } from '@/lib/compliance';
+import { makesHealthClaim } from '@/lib/health-claim';
 import { resolveTranscript, type TranscriptOrigin } from '@/lib/video-transcript';
 import { keywordLineFrom } from '@/lib/video-row';
 import { composeCaption, forbiddenNames, houseStyleHint, keywordGrounding, namesLeaked, topicFromTranscript, transcriptExcerpt, videoSubject, withCitation } from '@/lib/video-copy';
 import { draftDefect, type DraftDefect } from '@/lib/draft-defect';
 import { writerRefusedContent } from '@/lib/citation-gate';
-import { canCheckClaim, canResearchClaim, canWriteCopy, canWriteTitle, remainingMs } from '@/lib/prepare-budget';
+import { canCheckClaim, canDropClaims, canResearchClaim, canWriteCopy, canWriteTitle, remainingMs } from '@/lib/prepare-budget';
 import { shouldReseed } from '@/lib/reseed';
 import { writerFailure } from '@/lib/writer-failure';
 import { findEvidence } from '@/lib/evidence';
@@ -219,6 +220,52 @@ const MAX_DRAFTS = 2;
  * Where the transcript could not be stored, coming back means downloading and
  * transcribing the whole video again — so the sentence names the actual blocker instead.
  */
+/**
+ * RUNG 4 of the claim ladder: no study backs the copy as written, so the
+ * copy is rewritten to claim nothing and carry no citation.
+ *
+ * The rule is the clinic's, set in October for every other writer in the app
+ * (lib/strategy-voice.ts citationPolicyFor, lib/existing-copy-cite.ts, the
+ * Autopilot's Fix citation): a post cites a study when it makes a health
+ * claim, and needs none when it makes none. The video writer never got the
+ * rung. When the judge said twice that nothing backed the draft it refused
+ * the video outright — which on 7 October held back a patient's testimonial
+ * about the clinic's service, a tip about single-ingredient foods and a
+ * conversation about fasting insulin: three recordings with no study behind
+ * them, for which the writer kept asserting effects it could not back.
+ *
+ * Both captions must come back claim-free by the same check the send doors
+ * use (lib/health-claim.ts, inside acceptNoClaim), or nothing is taken: the
+ * refusal then names the words that still read as a claim. One retry per
+ * caption, told which words. The AVISO line stays; the REF line goes.
+ */
+async function dropClaims(opts: {
+  tiktok: string;
+  linkedin: string;
+  aviso: string;
+  startedAt: number;
+  budgetMs: number;
+}): Promise<{ ok: true; tiktok: string; linkedin: string } | { ok: false; why: 'time' | 'claims'; flagged: string[] }> {
+  const left = () => (opts.budgetMs > 0 ? remainingMs(opts.startedAt, opts.budgetMs, Date.now()) : Number.POSITIVE_INFINITY);
+  if (!canDropClaims(left())) return { ok: false, why: 'time', flagged: [] };
+  // Each call inside what is left, with room kept to save and send afterwards.
+  const timeout = () => Math.min(45_000, Math.max(10_000, left() - 15_000));
+  const texts = [opts.tiktok, opts.linkedin];
+  let results = await Promise.all(texts.map((t) => rewriteWithoutClaims(t, [], timeout())));
+  if (results.some((r) => !r.text) && canDropClaims(left())) {
+    results = await Promise.all(texts.map((t, i) => (results[i].text ? Promise.resolve(results[i]) : rewriteWithoutClaims(t, results[i].flagged, timeout()))));
+  }
+  if (results.every((r) => r.text)) {
+    // composeCaption writes exactly one AVISO line and puts the hashtags last,
+    // as it did for the draft the rewrite started from. It adds no claim.
+    const tiktok = composeCaption(String(results[0].text), opts.aviso);
+    const linkedin = composeCaption(String(results[1].text), opts.aviso);
+    if (!makesHealthClaim(tiktok) && !makesHealthClaim(linkedin)) return { ok: true, tiktok, linkedin };
+  }
+  const flagged = Array.from(new Set(results.flatMap((r) => r.flagged))).slice(0, 8);
+  return { ok: false, why: 'claims', flagged };
+}
+
 function retryAdvice(banked: boolean): string {
   return banked
     ? 'Press Prepare again; the transcript is kept, so it costs seconds.'
@@ -942,34 +989,76 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
       };
     }
     if (defect.kind === 'unsupported_citation') {
-      // A real paper that backs nothing the post says. Twice. Refused rather
-      // than sent flagged, since the September audit found the flag was never
-      // read and the posts reached Metricool with unrelated studies under them.
+      // A real paper that backs nothing the post says. Twice. Never sent
+      // flagged, since the September audit found the flag was never read and
+      // the posts reached Metricool with unrelated studies under them.
+      //
+      // RUNG 4 — so the claims come out instead. The copy is rewritten to
+      // claim nothing and carry no citation, and the draft is stamped under
+      // the policy that waives the REF line for a post that makes no health
+      // claim — the same stamp the Autopilot's Fix citation writes, which the
+      // send doors already read (lib/compliance-gate.ts, refPolicyOf). The
+      // doors decide on the text itself every time, so the stamp can never
+      // carry a claim past them.
+      const dropped = await dropClaims({ tiktok, linkedin, aviso, startedAt, budgetMs });
+      if (dropped.ok) {
+        tiktok = dropped.tiktok;
+        linkedin = dropped.linkedin;
+        ref = '';
+        claimSupport = { status: 'not_required', doi: null };
+        const refPolicy = 'if-health-claim' as const;
+        const prior = ((pack as ContentPack & { _compliance?: Partial<ComplianceStamp> })._compliance || {}) as Partial<ComplianceStamp>;
+        pack = {
+          ...pack,
+          instagram: tiktok,
+          linkedin,
+          _compliance: {
+            regenerated: false,
+            ...prior,
+            aviso,
+            instagram: checkCompliance(tiktok, aviso, { refPolicy }),
+            facebook: checkCompliance(String(pack.facebook || '').trim() ? String(pack.facebook) : tiktok, aviso, { refPolicy }),
+            citation: { status: 'not_required', doi: null, title: null, year: null },
+            refPolicy,
+          },
+        } as ContentPack;
+        // Visible, like every other rung: a person approving the draft should
+        // know its claims were taken out rather than backed.
+        reportError('videos:claims-dropped', new Error('no study backs the copy; rewritten to claim nothing, REF removed'), { title });
+      } else {
+        return {
+          ok: false,
+          status: 422,
+          error: 'unsupported_citation',
+          message: 'None of the studies found supports what the copy says, twice over — the writer kept making a point the papers in front of it do not show. ' +
+            'A reference that backs nothing the post says cannot go under a medical advertisement. ' +
+            (dropped.why === 'time'
+              ? 'There was no time left to take the claims out of the copy. '
+              : 'The claims could not be taken out of the copy automatically' + (dropped.flagged.length ? ' (still reads as a claim: ' + dropped.flagged.join(', ') + ')' : '') + '. ') +
+            retryAdvice(t.banked),
+          needsPaste: false,
+          title,
+        };
+      }
+    } else {
+      // No citation anywhere, on a post advertising a clinic's therapies.
+      //
+      // This used to pass in silence: the back-fill above is guarded on `ref`, so an empty
+      // one simply skipped it and LinkedIn and TikTok went out carrying an AVISO and no
+      // study at all — the one combination that looks compliant and is not.
+      //
+      // Every blocking kind the rung above did not resolve lands here, so a
+      // kind added later without its own branch is refused rather than sent.
       return {
         ok: false,
         status: 422,
-        error: 'unsupported_citation',
-        message: 'None of the studies found supports what the copy says, twice over — the writer kept making a point the papers in front of it do not show. ' +
-          'A reference that backs nothing the post says cannot go under a medical advertisement. ' +
+        error: 'no_citation',
+        message: 'The writer produced no verifiable citation for this one — a REF line with a real DOI is required before it can be advertised. ' +
           retryAdvice(t.banked),
         needsPaste: false,
         title,
       };
     }
-    // No citation anywhere, on a post advertising a clinic's therapies.
-    //
-    // This used to pass in silence: the back-fill above is guarded on `ref`, so an empty
-    // one simply skipped it and LinkedIn and TikTok went out carrying an AVISO and no
-    // study at all — the one combination that looks compliant and is not.
-    return {
-      ok: false,
-      status: 422,
-      error: 'no_citation',
-      message: 'The writer produced no verifiable citation for this one — a REF line with a real DOI is required before it can be advertised. ' +
-        retryAdvice(t.banked),
-      needsPaste: false,
-      title,
-    };
   }
   // The title was written above, before the claim check — see there.
   const chosen = titleChoice();

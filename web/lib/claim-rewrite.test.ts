@@ -4,6 +4,34 @@ import { readFileSync } from 'node:fs';
 import { CLAIM_REWRITE_STRICT_SYSTEM, CLAIM_REWRITE_SYSTEM, NO_CLAIM_SYSTEM, acceptNoClaim, acceptRewrite, claimRewritePrompt, noClaimPrompt, parseRelevance, relevancePrompt, stripRefLine } from './claim-rewrite.ts';
 import { healthClaimWords } from './health-claim.ts';
 
+const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+
+test('the video writer takes the claims out before it refuses a draft nothing backs', () => {
+  // The clinic's rule — a post cites a study when it makes a health claim and
+  // needs none when it makes none — reached every other writer in October.
+  // The video writer refused outright, which held back a testimonial about
+  // the clinic's service and a tip about single-ingredient foods.
+  const prepare = src('lib/video-prepare.ts');
+  const refusal = prepare.indexOf("defect.kind === 'unsupported_citation'");
+  assert.ok(refusal > -1);
+  const branch = prepare.slice(refusal, prepare.indexOf("error: 'no_citation'", refusal));
+  assert.match(branch, /await dropClaims\(/, 'the rung runs before the refusal');
+  assert.match(branch, /claimSupport = \{ status: 'not_required', doi: null \}/, 'the draft says no citation is needed, not that none was checked');
+  assert.match(branch, /refPolicy = 'if-health-claim'/, 'stamped under the policy the send doors read');
+  assert.match(branch, /citation: \{ status: 'not_required'/);
+  assert.match(branch, /still reads as a claim:/, 'and when the claims cannot come out, the refusal names the words');
+  // The rung itself: both captions through the no-claim rewrite, one retry
+  // told which words, and the result checked by the doors' own rule.
+  const rung = prepare.slice(prepare.indexOf('async function dropClaims('), prepare.indexOf('function retryAdvice('));
+  assert.match(rung, /rewriteWithoutClaims\(t, \[\], timeout\(\)\)/);
+  assert.match(rung, /rewriteWithoutClaims\(t, results\[i\]\.flagged, timeout\(\)\)/);
+  assert.match(rung, /!makesHealthClaim\(tiktok\) && !makesHealthClaim\(linkedin\)/);
+  assert.match(rung, /canDropClaims\(left\(\)\)/, 'never started without the time to finish');
+  // The doors let a 'not_required' stamp through: only 'unsupported' refuses.
+  const gate = src('lib/citation-gate.ts');
+  assert.match(gate, /!== 'unsupported'\) return null/);
+});
+
 const POST = 'Stem cells repair knee cartilage completely.\n\nAsk us how.\n\nREF: Old et al. 2019. doi:10.1000/old\n\nAVISO DE PUBLICIDAD COFEPRIS 123';
 const REF = 'REF: Smith J et al. Knee MSC trial. 2022. doi:10.5555/knee.2022';
 

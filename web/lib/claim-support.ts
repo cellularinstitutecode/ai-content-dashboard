@@ -44,8 +44,11 @@ export type SupportVerdict =
 export type ClaimSupportStamp = {
   /** 'supported' — checked and backed. 'swapped' — backed after changing paper.
    *  'unsupported' — checked, nothing backed it, published anyway (flagged).
-   *  'unchecked' — the judge could not be asked. */
-  status: 'supported' | 'swapped' | 'unsupported' | 'unchecked';
+   *  'unchecked' — the judge could not be asked.
+   *  'not_required' — nothing backed the copy as written, so it was rewritten
+   *  to claim nothing and carries no citation; under the clinic's rule a post
+   *  that makes no health claim needs none (lib/video-prepare.ts rung 4). */
+  status: 'supported' | 'swapped' | 'unsupported' | 'unchecked' | 'not_required';
   /** The DOI the post went out with, when there is one. */
   doi: string | null;
 };

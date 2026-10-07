@@ -151,3 +151,18 @@ export const CLAIM_RESEARCH_MS = 30_000;
 export function canResearchClaim(remaining: number): boolean {
   return remaining >= CLAIM_RESEARCH_MS;
 }
+
+/**
+ * Room to take the health claims OUT of a draft nothing backs.
+ *
+ * The last rung of the video writer's ladder (lib/video-prepare.ts): both
+ * captions are rewritten at once to claim nothing (lib/ai.ts
+ * rewriteWithoutClaims, 45 seconds each, in parallel), and the request still
+ * has to save the draft and hand it to Metricool afterwards. Below this the
+ * draft is refused exactly as it was before the rung existed, with the words
+ * that read as a claim named, so a person can take them out by hand.
+ */
+export const DROP_CLAIMS_MS = 60_000;
+export function canDropClaims(remaining: number): boolean {
+  return remaining >= DROP_CLAIMS_MS;
+}
