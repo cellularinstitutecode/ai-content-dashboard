@@ -140,7 +140,8 @@ export default function KeywordIntelligence({
     setLoading(true);
     setSerp(null);
     try {
-      const r = await fetch('/api/semrush?action=hub&topic=' + encodeURIComponent(seed));
+      // A person pressed Analyze: this may spend units (lib/semrush-policy.ts).
+      const r = await fetch('/api/semrush?action=hub&live=1&topic=' + encodeURIComponent(seed));
       const j = (await r.json().catch(() => null)) as HubData | null;
       setData(j);
       if (j && typeof j.balance === 'number') { setBalance(j.balance); setConnected('yes'); }
@@ -159,7 +160,7 @@ export default function KeywordIntelligence({
     if (!seed || serpLoading) return;
     setSerpLoading(true);
     try {
-      const r = await fetch('/api/semrush?action=serp&topic=' + encodeURIComponent(seed));
+      const r = await fetch('/api/semrush?action=serp&live=1&topic=' + encodeURIComponent(seed));
       const j = await r.json().catch(() => null);
       setSerp(j && Array.isArray(j.rows) ? j.rows : []);
     } catch {
@@ -253,6 +254,8 @@ export default function KeywordIntelligence({
           <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">
             {data.reason === 'budget'
               ? 'Unit balance is at the protection floor — serving cached data only.'
+              : data.reason === 'policy'
+              ? 'Live Semrush lookups are switched off — serving cached data only.'
               : data.note || 'No Semrush data available for this topic.'}
           </p>
         )}

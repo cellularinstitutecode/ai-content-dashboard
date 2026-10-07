@@ -440,6 +440,8 @@ function SectionNotice({ meta, what }: { meta: SectionMeta; what: string }) {
       ? 'Live ' + what.toLowerCase() + ' needs Semrush connected — ask whoever set this up to add the key. Showing stored data.'
       : meta.reason === 'budget'
       ? 'Unit balance is at the protection floor — ' + what.toLowerCase() + ' will refresh when the budget recovers.'
+      : meta.reason === 'policy'
+      ? 'Showing stored ' + what.toLowerCase() + ' — press Analyze to fetch fresh Semrush numbers (this spends credits).'
       : meta.reason === 'balance_unknown'
       ? 'The app cannot confirm the Semrush unit balance, so live ' + what.toLowerCase() + ' is paused — ask whoever set this up to check the Semrush connection. Showing stored data.'
       : meta.reason === 'v3_key'
@@ -519,10 +521,14 @@ export default function SemrushPanel({
   const [adviceErr, setAdviceErr] = useState('');
   const moversFor = useRef<string | null>(null);
 
-  async function loadDomain(domain?: string) {
+  // `live` marks a request the person made on purpose (Analyze, Inspect,
+  // "back to your domain"). Only those may spend Semrush units; the load on
+  // mount and the refresh-bus re-reads show what is cached. See
+  // lib/semrush-policy.ts.
+  async function loadDomain(domain?: string, live = false) {
     setLoading(true);
     try {
-      const q = domain ? '&domain=' + encodeURIComponent(domain) : '';
+      const q = (domain ? '&domain=' + encodeURIComponent(domain) : '') + (live ? '&live=1' : '');
       const r = await fetch('/api/semrush?action=domain' + q);
       const j = await okJson<DomainBundle>(r);
       setBundle(j);
@@ -546,7 +552,8 @@ export default function SemrushPanel({
     moversFor.current = d;
     setMoversLoading(true);
     try {
-      const r = await fetch('/api/semrush?action=movers&domain=' + encodeURIComponent(d));
+      // Opening the Rankings tab is a deliberate ask for this data.
+      const r = await fetch('/api/semrush?action=movers&live=1&domain=' + encodeURIComponent(d));
       setMovers(await okJson<KeywordMovers>(r));
     } catch {
       setMovers(null);
@@ -560,7 +567,7 @@ export default function SemrushPanel({
     setAdviceLoading(true);
     setAdviceErr('');
     try {
-      const r = await fetch('/api/semrush?action=advise&domain=' + encodeURIComponent(d));
+      const r = await fetch('/api/semrush?action=advise&live=1&domain=' + encodeURIComponent(d));
       const j = await r.json().catch(() => null);
       if (!r.ok || !j?.ok) throw new Error(j?.error === 'rate_limited' ? 'Rate limit reached — try again in a few minutes.' : j?.error || 'Advisor failed');
       setAdvice(j.plan as AdvicePlan);
@@ -572,16 +579,20 @@ export default function SemrushPanel({
     }
   }
 
-  // Everything loads on mount: the overview IS the dashboard.
+  async function loadProject(live = false) {
+    try {
+      const r = await fetch('/api/semrush?action=project' + (live ? '&live=1' : ''));
+      setProject(await okJson<ProjectData>(r));
+    } catch { setProject(null); }
+    finally { setProjectLoading(false); }
+  }
+
+  // Everything loads on mount from the CACHE: the overview is the dashboard,
+  // but opening the dashboard is not a request for fresh Semrush numbers —
+  // the Analyze button is.
   useEffect(() => {
     void loadDomain();
-    (async () => {
-      try {
-        const r = await fetch('/api/semrush?action=project');
-        setProject(await okJson<ProjectData>(r));
-      } catch { setProject(null); }
-      finally { setProjectLoading(false); }
-    })();
+    void loadProject();
     (async () => {
       try {
         const r = await fetch('/api/semrush?action=activity');
@@ -741,13 +752,13 @@ export default function SemrushPanel({
               type="text"
               value={domainInput}
               onChange={(e) => setDomainInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') void loadDomain(domainInput); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { void loadDomain(domainInput, true); void loadProject(true); } }}
               placeholder="cellularhopeinstitute.com — or any competitor domain"
               className="w-full max-w-md rounded-xl bg-white px-3.5 py-2 text-[13px] text-ink ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-accent/40"
             />
             <button
               type="button"
-              onClick={() => void loadDomain(domainInput)}
+              onClick={() => { void loadDomain(domainInput, true); void loadProject(true); }}
               disabled={loading}
               className="shrink-0 rounded-xl bg-accent px-4 py-2 text-[13px] font-medium text-white transition hover:bg-accent-hover disabled:opacity-50"
             >
@@ -773,7 +784,7 @@ export default function SemrushPanel({
         {bundle && !bundle.isPrimaryDomain && (
           <p className="mt-2 text-[12px] text-ink-muted">
             Viewing <span className="font-medium text-ink">{bundle.domain}</span> ·{' '}
-            <button type="button" className="font-medium text-accent hover:underline" onClick={() => { setDomainInput(''); void loadDomain(); }}>
+            <button type="button" className="font-medium text-accent hover:underline" onClick={() => { setDomainInput(''); void loadDomain(undefined, true); }}>
               back to your domain
             </button>
           </p>
@@ -1298,7 +1309,7 @@ export default function SemrushPanel({
                             <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{fmtNum(c.organicKeywords)}</td>
                             <td className="px-3 py-2 text-right tabular-nums text-ink-muted">{fmtNum(c.organicTraffic)}</td>
                             <td className="px-3 py-2 text-right">
-                              <button type="button" onClick={() => { setDomainInput(c.domain); void loadDomain(c.domain); setTab('overview'); }} className="rounded-full px-2.5 py-1 text-[11px] font-medium text-accent ring-1 ring-accent/30 transition hover:bg-accent-soft">Inspect</button>
+                              <button type="button" onClick={() => { setDomainInput(c.domain); void loadDomain(c.domain, true); setTab('overview'); }} className="rounded-full px-2.5 py-1 text-[11px] font-medium text-accent ring-1 ring-accent/30 transition hover:bg-accent-soft">Inspect</button>
                             </td>
                           </tr>
                         ))}

@@ -17,8 +17,12 @@
 
 export type SpendDecision = {
   allow: boolean;
-  /** Why, for logging and for the tests to assert against. */
-  reason: 'no-key' | 'balance-unknown' | 'below-floor' | 'ok';
+  /**
+   * Why, for logging and for the tests to assert against. 'policy' is set by
+   * lib/semrush.ts before the balance is even read: the request is automatic
+   * and SEMRUSH_MODE reserves live spend for people (lib/semrush-policy.ts).
+   */
+  reason: 'no-key' | 'balance-unknown' | 'below-floor' | 'policy' | 'ok';
 };
 
 /**

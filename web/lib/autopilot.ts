@@ -637,7 +637,7 @@ async function stepResearch(run: RunRow, template: TemplateRow, strategy: Templa
   }
 
   // Live data (all cache-first + unit-floor guarded).
-  const bundle = await researchBundle(seedTopic, { relatedLimit: 12, questionLimit: 6 });
+  const bundle = await researchBundle(seedTopic);
   let movers: KeywordMovers | null = null;
   // Not for a strategy slot: the domain's lost and declining keywords are the
   // clinic's procedure searches, and one week in four the rotation offered

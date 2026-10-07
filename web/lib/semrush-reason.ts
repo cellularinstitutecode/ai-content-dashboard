@@ -9,6 +9,8 @@
 //   v3_key   the credential cannot call the v3 API     → nothing to fix by retry
 //   plan     the report/units are not on this plan     → nothing to fix by retry
 //   budget   our own unit floor stopped the call       → clears by itself
+//   policy   an automatic job, and SEMRUSH_MODE says only people may spend
+//            (lib/semrush-policy.ts)                   → nothing is wrong
 //   balance_unknown  the balance endpoint is unreadable  → a human should fix it
 //   empty    Semrush genuinely has no data yet         → nothing is wrong
 //
@@ -36,6 +38,7 @@ export type SemrushReason =
   | 'network'
   | 'empty'
   | 'budget'
+  | 'policy'
   | 'balance_unknown';
 
 // The v3 API reports failures in the BODY as `ERROR <code> :: <text>`, with a
@@ -68,7 +71,7 @@ export function reasonForHttpStatus(status: number): SemrushReason {
 // states a human can actually act on deserve the amber.
 export function isInformationalReason(reason: SemrushReason | undefined): boolean {
   // balance_unknown is deliberately NOT here: it is a human's job to fix.
-  return reason === 'no_token' || reason === 'v3_key' || reason === 'budget' || reason === 'empty';
+  return reason === 'no_token' || reason === 'v3_key' || reason === 'budget' || reason === 'policy' || reason === 'empty';
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +94,7 @@ const MESSAGES: Record<SemrushReason, string> = {
   v3_key: 'This Semrush plan does not include the keyword reports, so stored data is being shown.',
   plan: 'Semrush has no report credit left on this plan right now.',
   budget: 'Keyword research is paused to protect the Semrush credit balance — it resumes when the balance recovers.',
+  policy: 'Automatic jobs use stored keyword data to save Semrush credits — use the SEO panel to fetch fresh numbers.',
   balance_unknown: 'Keyword research is paused because the app cannot confirm the Semrush unit balance — ask whoever set this up to check the Semrush connection.',
   http: 'Semrush did not answer just now — showing stored data instead.',
   network: 'Semrush could not be reached just now — showing stored data instead.',

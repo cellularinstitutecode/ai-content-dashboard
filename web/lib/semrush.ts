@@ -26,6 +26,7 @@
 import { pickPrimary, withoutShopping } from '@/lib/keyword-brief';
 import { reportError } from '@/lib/report';
 import { decideSpend, applyCharge, type SpendDecision } from '@/lib/semrush-budget';
+import { liveSemrushAllowed, semrushMode } from '@/lib/semrush-policy';
 import { reasonForCode, reasonForHttpStatus, type SemrushReason } from '@/lib/semrush-reason';
 import { mcpExecuteReport, toMcpCall, toMcpProjectCall, transportFor, type McpCall, type SemrushTransport } from '@/lib/semrush-transport';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -114,9 +115,19 @@ function unitFloor(): number {
   const n = parseInt(process.env.SEMRUSH_UNIT_FLOOR || '5000', 10);
   return Number.isFinite(n) ? n : 5000;
 }
+/**
+ * The monthly pool the MCP-transport guard works from. The Pro plan's pool is
+ * 50,000, but the app is not meant to use all of it: in manual mode (the
+ * default, see lib/semrush-policy.ts) the unset default is 10,000, so with the
+ * 5,000 floor the app's own live spend stops at 5,000 units a month unless
+ * SEMRUSH_UNIT_ALLOWANCE says otherwise.
+ */
+const DEFAULT_ALLOWANCE_AUTO = 50000;
+const DEFAULT_ALLOWANCE_MANUAL = 10000;
 function unitAllowance(): number {
-  const n = parseInt(process.env.SEMRUSH_UNIT_ALLOWANCE || '50000', 10);
-  return Number.isFinite(n) && n > 0 ? n : 50000;
+  const fallback = semrushMode() === 'auto' ? DEFAULT_ALLOWANCE_AUTO : DEFAULT_ALLOWANCE_MANUAL;
+  const n = parseInt(process.env.SEMRUSH_UNIT_ALLOWANCE || String(fallback), 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 /** Which way requests leave the app for the configured key. */
@@ -137,7 +148,7 @@ function cacheTtlMs(): number {
  * entry a year old is still real search data for this phrase, and a post
  * written to it is better than one written to nothing.
  */
-const STALE_TTL_MS = 400 * 24 * 60 * 60 * 1000;
+export const STALE_TTL_MS = 400 * 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Parsing helpers
@@ -307,6 +318,10 @@ export function chargeUnits(units: number): void {
  */
 export async function budgetDecision(estUnits: number): Promise<SpendDecision> {
   const hasKey = Boolean(process.env.SEMRUSH_API_KEY);
+  // Policy comes before balance: an automatic job in manual mode (or anything
+  // in 'off' mode) never spends, however healthy the pot. Decided first so it
+  // does not even cost the balance read.
+  if (hasKey && !liveSemrushAllowed()) return { allow: false, reason: 'policy' };
   const bal = hasKey ? await getUnitsBalance() : null;
   const decision = decideSpend(bal, estUnits, unitFloor(), hasKey);
   if (!decision.allow && decision.reason === 'balance-unknown') {
@@ -328,6 +343,11 @@ export async function budgetAllows(estUnits: number): Promise<boolean> {
  * weeks both were reported as the first — see lib/semrush-reason.ts.
  */
 export function refusalReason(d: SpendDecision): { reason: SemrushReason; note: string } {
+  if (d.reason === 'policy') {
+    return semrushMode() === 'off'
+      ? { reason: 'policy', note: 'Live Semrush lookups are switched off (SEMRUSH_MODE=off) — serving cache only' }
+      : { reason: 'policy', note: 'Automatic job: live Semrush lookups are reserved for the SEO panel (SEMRUSH_MODE=manual) — serving cache only' };
+  }
   if (d.reason === 'balance-unknown') {
     return semrushTransport() === 'mcp'
       ? { reason: 'balance_unknown', note: 'Unit usage log could not be read, so the spend guard is closed — serving cache/link-out only' }
@@ -578,10 +598,15 @@ async function keywordReport(
   if (!r.ok) return { ok: false, rows: [], source: r.source, reason: r.reason, note: r.note, unitsSpent: 0 };
   const rows = parseKeywordCsv(r.body || '');
   const units = rows.length * (UNIT_COST[report] ?? 40); // actual lines returned
-  if (rows.length) {
-    void cachePut(report, opts.database ?? db(), topic, rows, units);
-    void logUsage(report, topic, units, 'live');
-  }
+  // Awaited, not fire-and-forget: a serverless function may be frozen the
+  // moment it has answered, and a paid result that never reached the cache is
+  // paid for again next time. An EMPTY answer is cached too — a phrase Semrush
+  // has no data for was asked again on every draft, at the same price as a
+  // phrase it does.
+  await Promise.all([
+    cachePut(report, opts.database ?? db(), topic, rows, units),
+    logUsage(report, topic, units, 'live'),
+  ]);
   return { ok: true, rows, source: 'live', reason: 'ok', unitsSpent: units };
 }
 
@@ -606,10 +631,10 @@ export async function serpCompetitors(
   if (!r.ok) return { ok: false, rows: [], source: r.source, reason: r.reason, note: r.note, unitsSpent: 0 };
   const rows = parseSerpCsv(r.body || '');
   const units = rows.length * UNIT_COST.phrase_organic;
-  if (rows.length) {
-    void cachePut('phrase_organic', opts.database ?? db(), topic, rows, units);
-    void logUsage('phrase_organic', topic, units, 'live');
-  }
+  await Promise.all([
+    cachePut('phrase_organic', opts.database ?? db(), topic, rows, units),
+    logUsage('phrase_organic', topic, units, 'live'),
+  ]);
   return { ok: true, rows, source: 'live', reason: 'ok', unitsSpent: units };
 }
 
@@ -656,10 +681,18 @@ export function selectBrief(topic: string, related: SemKeyword[], questions: Sem
 }
 
 // Fetch related + questions (cache-first) and assemble the brief + UI tables.
+//
+// Defaults are sized to what selectBrief() keeps: one primary plus six
+// supporting from `related`, three from `questions`. They were 12 and 6, which
+// bought five related rows and three questions (320 units a lookup) that were
+// discarded on arrival. At 40 units a row, 8 + 3 is the cheapest shape that
+// still fills the brief.
+export const RELATED_LIMIT_DEFAULT = 8;
+export const QUESTION_LIMIT_DEFAULT = 3;
 export async function researchBundle(topic: string, opts: { database?: string; relatedLimit?: number; questionLimit?: number } = {}): Promise<ResearchBundle> {
-  const rel = await relatedKeywords(topic, { limit: opts.relatedLimit ?? 12, database: opts.database });
+  const rel = await relatedKeywords(topic, { limit: opts.relatedLimit ?? RELATED_LIMIT_DEFAULT, database: opts.database });
   // Questions are optional garnish: skip silently when unavailable.
-  const qs = rel.ok && rel.rows.length ? await questionKeywords(topic, { limit: opts.questionLimit ?? 6, database: opts.database }) : { ok: false, rows: [], source: 'none' as SemSource, reason: rel.reason, unitsSpent: 0 };
+  const qs = rel.ok && rel.rows.length ? await questionKeywords(topic, { limit: opts.questionLimit ?? QUESTION_LIMIT_DEFAULT, database: opts.database }) : { ok: false, rows: [], source: 'none' as SemSource, reason: rel.reason, unitsSpent: 0 };
   const haveData = rel.ok && rel.rows.length > 0;
   const sel = selectBrief(topic, rel.rows, qs.rows);
   const brief: KeywordBrief = {

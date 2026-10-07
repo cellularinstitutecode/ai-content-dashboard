@@ -120,6 +120,15 @@ useful for the auth behaviour it cannot check for itself.
 - A v4 key (`semrtkn-…`, the only kind the API Keys page issues on a Pro plan)
   is routed through Semrush's MCP server automatically (`lib/semrush-transport.ts`);
   any other key shape goes to the Standard API (v3). `SEMRUSH_TRANSPORT=v3|mcp`
-  forces one. Over MCP the balance is `SEMRUSH_UNIT_ALLOWANCE` (default 50,000,
-  the monthly Standard API pool) minus the spend this app has logged this month;
-  `SEMRUSH_MCP_URL` overrides the server (the e2e harness points it at a mock).
+  forces one. Over MCP the balance is `SEMRUSH_UNIT_ALLOWANCE` minus the spend
+  this app has logged this month (default 10,000 in manual/off mode, 50,000 —
+  the monthly Standard API pool — in auto mode); `SEMRUSH_MCP_URL` overrides
+  the server (the e2e harness points it at a mock).
+- `SEMRUSH_MODE` decides WHO may spend units (`lib/semrush-policy.ts`). The
+  default, `manual`, reserves live calls for a person's explicit action in the
+  SEO panel or the Keyword Intelligence hub (`/api/semrush?…&live=1`); every
+  automatic path — Autopilot, the video watcher, strategy drops, drafts, the
+  assistant, the voice session, the panel opening — reads the cache and falls
+  back to the model's own keywords. `off` is cache-only everywhere; `auto` is
+  the old behaviour. The Site Audit health score (10,000 units a fetch) is no
+  longer bought in any mode.
