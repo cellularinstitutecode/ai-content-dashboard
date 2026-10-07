@@ -110,13 +110,19 @@ export const NO_CLAIM_SYSTEM = [
   'Turn every sentence that states or implies a health effect, benefit or outcome into practical, everyday advice that claims nothing — what to do, notice, write down or ask about, not what it will achieve.',
   'Delete the REF / REFERENCIA line entirely. Keep the AVISO DE PUBLICIDAD line exactly as it is.',
   'Keep the opening idea, the tone, the structure, the line breaks, the emojis, the hashtags and the call to action as far as possible.',
-  'Avoid words that read as a health claim: heal, improve, reduce, lower, boost, prevent, protect, relieve, restore, strengthen, enhance, faster, benefit, effective; inflammation, immune, metabolism, hormone, cortisol, blood, circulation, muscle, joint, bone, tissue, cells, brain, heart, oxygen, recovery, repair, longevity, aging, energy levels; pain, symptoms, disease, condition, disorder, injury, arthritis, diabetes, treatment, therapy, protocol, diagnosis, clinical, medical, medication, supplement, vitamin, nutrient, protein, stem cells, regenerative; study, research, evidence, science, proven.',
+  'Avoid words that read as a health claim: heal, cure, improve, reduce, lower, boost, prevent, protect, relieve, restore, strengthen, enhance, faster, benefit, effective, safe; inflammation, immune, metabolism, hormone, cortisol, blood, circulation, muscle, joint, bone, tissue, cells, brain, heart, oxygen, recovery, repair, longevity, aging, energy levels; pain, symptoms, disease, condition, disorder, injury, arthritis, diabetes, treatment, therapy, protocol, diagnosis, clinical, medical, medication, supplement, vitamin, nutrient, protein, stem cells, regenerative; study, research, evidence, science, proven.',
+  // "Whole foods are not a cure-all" kept the word, twice, and the checker
+  // reads the word, not the sentence: a denial is still a claim-word in the
+  // copy. The sentence goes, or is said another way.
+  'Do not use any of those words even to say that something is NOT one — no "not a cure", no "not a cure-all", no "no quick fix for a condition". Say it another way, or leave the sentence out.',
   'Plain words such as "your care team", "your follow-up visit", "how you feel day to day", "your progress", "your plan" are fine.',
   'Answer with the full edited post and nothing else.',
 ].join('\n');
 
 export function noClaimPrompt(text: string, flagged: readonly string[] = []): string {
-  const again = flagged.length ? 'A first edit still used these words, which read as a health claim — replace every one: ' + flagged.join(', ') + '\n\n' : '';
+  const again = flagged.length
+    ? 'A first edit still used these words, which read as a health claim — replace every one, even where the sentence says something is NOT one (drop the sentence if need be): ' + flagged.join(', ') + '\n\n'
+    : '';
   return again + 'THE POST\n' + String(text || '').trim();
 }
 

@@ -112,8 +112,13 @@ test('no study on the subject: the rewrite must drop the REF line, keep the AVIS
   const still = acceptNoClaim(before, 'Write down how the pain reduces each day; it improves faster than you think.\n\nAVISO DE PUBLICIDAD 123');
   assert.equal(still.text, null);
   assert.deepEqual(still.flagged.map((w) => w.toLowerCase()).sort(), ['faster', 'improves', 'reduces'], 'and it says which words still read as a claim');
-  assert.match(noClaimPrompt('x', ['reduces', 'improves']), /replace every one: reduces, improves/);
+  assert.match(noClaimPrompt('x', ['reduces', 'improves']), /replace every one, even where the sentence says something is NOT one \(drop the sentence if need be\): reduces, improves/);
   assert.match(NO_CLAIM_SYSTEM, /Delete the REF \/ REFERENCIA line entirely\. Keep the AVISO DE PUBLICIDAD line exactly as it is\./);
+  // "Whole foods are not a cure-all" came back twice with the word in it; the
+  // checker reads the word, so the prompt names it and forbids the denial too.
+  assert.match(NO_CLAIM_SYSTEM, /heal, cure, improve/);
+  assert.match(NO_CLAIM_SYSTEM, /no "not a cure", no "not a cure-all"/);
+  assert.deepEqual(healthClaimWords('Whole foods are not a cure-all.'), ['cure'], 'the checker flags the denial, so the prompt must prevent it');
   // Topic words are not claims; the effect words are what come back.
   assert.deepEqual(healthClaimWords('Pain relief that improves sleep and improves mood.').map((w) => w.toLowerCase()), ['relief', 'improves'], 'each once, as written');
 });
