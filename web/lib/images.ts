@@ -19,8 +19,8 @@
 import { cleanTopic, familyAt, onTopicCheck, plannerImageFor, plannerPromptLines, scienceOffered, SHOT_COUNT, type PlannerImage } from '@/lib/planner-image';
 import { renderTitleCover } from '@/lib/title-cover';
 import { briefSource, briefSystemPrompt, briefUserPrompt, parseSceneBrief, type SceneBrief } from '@/lib/image-brief';
-import { COVER_MIN_HEAD_TOP_PCT, photographVerdict, type LibraryProvenance } from './library-cover.ts';
-import { cleanCoverTitle, notesOf, takesOf } from './cover-edit.ts';
+import { COVER_MIN_HEAD_TOP_PCT, ownBucketUrl, photographVerdict, type LibraryProvenance } from './library-cover.ts';
+import { cleanCoverTitle, notesOf, retitleDecision, takesOf } from './cover-edit.ts';
 import { setStoredFontReader } from '@/lib/brand-card';
 import { readStoredFonts } from '@/lib/brand-fonts';
 
@@ -108,6 +108,13 @@ export type PackImage = {
   takes?: number;
   /** Older takes only: the library photo an AI image was styled after. That path is gone. */
   styledAfter?: string;
+  /**
+   * An edited take: the clean photograph this one was made FROM, with the
+   * team's notes applied to it (editPackImage). The notes used to produce a
+   * new, unrelated picture; this records that they changed the one that was
+   * there, so the card can say so.
+   */
+  editedFrom?: string;
   /** Library photos: was the brand's colour filter applied (lib/library-cover.ts)? */
   brandGraded?: boolean;
   /** The ffmpeg filters that were applied; empty when the photo was already in the palette. */
@@ -276,16 +283,52 @@ export function buildImagePrompt(opts: {
   ].filter(Boolean).join(' ');
 }
 
+/**
+ * The prompt for EDITING the picture a draft already has.
+ *
+ * "Notes for the picture" used to be a text-to-image prompt: the stored
+ * photograph was never shown to the model, so "warmer light, no glasses"
+ * produced a different photograph of different people in a different room.
+ * This asks for the picture that is there, changed only where the notes say.
+ * The no-text mandate and the medical limits hold exactly as they do for a
+ * fresh take, and the verifier reads the result either way.
+ */
+export function buildEditPrompt(opts: {
+  direction?: string | null;
+  topic: string;
+  brand?: BrandContext | null;
+  /** A planner cover gets its title set on the top third afterwards, so that band must stay clear. */
+  planner?: PlannerImage | null;
+}): string {
+  const brandName = opts.brand?.name || 'a premium regenerative medicine and longevity clinic';
+  const direction = String(opts.direction || '').trim();
+  return [
+    'Edit this photograph as directed. Keep everything the direction does not mention exactly as it is:',
+    'the same people and their faces, the same setting, framing, camera angle and lighting.',
+    direction
+      ? `Direction from the team (follow this closely): ${direction}`
+      : 'No specific direction was given: make a subtly refined take of the same scene — natural, photorealistic, nothing added.',
+    `The picture illustrates a post for ${brandName} about: ${String(opts.topic || '').trim()}.`,
+    opts.planner ? 'Keep the top third of the frame clear and uncluttered: a title is set there afterwards.' : '',
+    'The result is a purely visual, text-free photograph: no words, letters, numbers, typography, signage, labels, logos or watermarks anywhere;',
+    'no needles piercing skin, no blood, no graphic medical procedures, nothing that implies a medical claim.',
+    'Photorealistic, natural colour, soft light; no stock-photo poses or forced smiles at the camera.',
+  ].filter(Boolean).join(' ');
+}
+
 // ---------------------------------------------------------------------------
 // OpenAI Images call (gpt-image-1 primary, DALL·E 3 fallback on API errors).
 // ---------------------------------------------------------------------------
 
-// One Images-API call. Returns whichever the API gives us — inline base64 or
-// a short-lived asset URL — so callers survive response-shape differences
-// between models and API revisions.
-async function callImagesApi(
-  body: Record<string, unknown>,
-  timeoutMs: number
+/**
+ * One call to the Images API, generations or edits. Returns whichever the API
+ * gives us — inline base64 or a short-lived asset URL — so callers survive
+ * response-shape differences between models and API revisions.
+ */
+async function postImages(
+  endpoint: 'generations' | 'edits',
+  body: string | FormData,
+  timeoutMs: number,
 ): Promise<{ b64?: string; url?: string }> {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('OPENAI_API_KEY missing');
@@ -294,10 +337,11 @@ async function callImagesApi(
   try {
     let res: Response;
     try {
-      res = await fetch('https://api.openai.com/v1/images/generations', {
+      // A FormData body sets its own multipart content-type (with the boundary).
+      res = await fetch('https://api.openai.com/v1/images/' + endpoint, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-        body: JSON.stringify(body),
+        headers: { ...(typeof body === 'string' ? { 'content-type': 'application/json' } : {}), authorization: `Bearer ${key}` },
+        body,
         signal: controller.signal,
       });
     } catch (e) {
@@ -323,6 +367,16 @@ async function callImagesApi(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Text to image. */
+async function callImagesApi(body: Record<string, unknown>, timeoutMs: number): Promise<{ b64?: string; url?: string }> {
+  return postImages('generations', JSON.stringify(body), timeoutMs);
+}
+
+/** Image to image: the photograph goes up with the prompt, as multipart form data. */
+async function callImageEditsApi(form: FormData, timeoutMs: number): Promise<{ b64?: string; url?: string }> {
+  return postImages('edits', form, timeoutMs);
 }
 
 // Download an API-returned image asset (OpenAI serves short-lived URLs for
@@ -448,6 +502,86 @@ async function generateImageBytes(
     }
   }
   throw new Error('image generation failed: ' + errors.join(' | '));
+}
+
+/**
+ * EDIT a photograph: the bytes go up with the prompt (POST /v1/images/edits)
+ * and the model returns the same picture, changed as directed.
+ *
+ * The same ladder shape as generateImageBytes, for the same reasons. Two
+ * things differ. `input_fidelity: high` on the first rungs keeps the faces
+ * and the fine detail of the photograph that is being edited — the whole
+ * point of editing rather than regenerating — and is dropped on the bare
+ * rung in case a model does not take it. `size: auto` keeps the photograph's
+ * own shape: a portrait planner cover stays portrait, a landscape hero stays
+ * landscape, without this code having to measure anything.
+ */
+async function editImageBytes(
+  prompt: string,
+  source: { bytes: Buffer; contentType: string },
+  callMs = IMAGE_CALL_MS,
+  deadline: number | null = null,
+  quality: ImageQuality = 'high',
+): Promise<GeneratedImage> {
+  const rungs: { model: string; fields: Record<string, string> }[] = [
+    { model: PRIMARY_MODEL, fields: { quality: 'high', input_fidelity: 'high', output_format: 'jpeg', output_compression: '80' } },
+    { model: PRIMARY_MODEL, fields: { quality: 'medium', input_fidelity: 'high', output_format: 'jpeg', output_compression: '80' } },
+    { model: PRIMARY_MODEL, fields: { output_format: 'jpeg', output_compression: '80' } },
+    { model: FALLBACK_MODEL, fields: {} },
+  ];
+  const attempts = quality === 'medium' ? rungs.filter((r) => r.fields.quality !== 'high') : rungs;
+  const ext = source.contentType === 'image/png' ? 'png' : source.contentType === 'image/webp' ? 'webp' : 'jpg';
+  const errors: string[] = [];
+  const rungMs = (): number => (deadline == null ? callMs : Math.max(20_000, Math.min(callMs, deadline - Date.now() - 30_000)));
+  for (let i = 0; i < attempts.length; i++) {
+    const form = new FormData();
+    form.append('model', attempts[i].model);
+    form.append('prompt', prompt.slice(0, 3900));
+    form.append('n', '1');
+    form.append('size', 'auto');
+    for (const [k, v] of Object.entries(attempts[i].fields)) form.append(k, v);
+    form.append('image', new Blob([new Uint8Array(source.bytes)], { type: source.contentType }), 'photo.' + ext);
+    try {
+      const out = await callImageEditsApi(form, rungMs());
+      const bytes = out.b64 ? Buffer.from(out.b64, 'base64') : await fetchImageBytes(out.url as string, 30_000);
+      if (!bytes.length) throw new Error('empty image payload');
+      return { bytes, ...sniffImage(bytes), model: attempts[i].model };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'unknown error';
+      errors.push(`[${attempts[i].model}#${i + 1}] ${msg}`);
+      const status = (e as Error & { apiStatus?: number }).apiStatus;
+      const timedOut = Boolean((e as Error & { timedOut?: boolean }).timedOut);
+      const isLast = i === attempts.length - 1;
+      const timeForAnother = deadline == null || deadline - Date.now() >= FALLBACK_AFTER_TIMEOUT_MIN_MS;
+      const rejected = Boolean(status && status >= 400 && status < 500);
+      if (isLast || !(rejected || (timedOut && timeForAnother))) {
+        throw new Error('image edit failed: ' + errors.join(' | '));
+      }
+    }
+  }
+  throw new Error('image edit failed: ' + errors.join(' | '));
+}
+
+/**
+ * The photograph a draft keeps, fetched back for editing.
+ *
+ * Server-side, so only from the app's own bucket: a request must not be able
+ * to point this at any address it likes (lib/library-cover.ts ownBucketUrl).
+ */
+async function fetchOwnPhoto(url: string): Promise<{ bytes: Buffer; contentType: string }> {
+  if (!ownBucketUrl(url, process.env.NEXT_PUBLIC_SUPABASE_URL, IMAGE_BUCKET)) throw new Error('that picture is not one the dashboard stored');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const res = await fetch(url, { signal: controller.signal, redirect: 'error' });
+    if (!res.ok) throw new Error('photo fetch ' + res.status);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (!bytes.length) throw new Error('photo fetch: empty');
+    if (bytes.length > 30 * 1024 * 1024) throw new Error('photo fetch: too large');
+    return { bytes, contentType: sniffImage(bytes).contentType };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -892,6 +1026,113 @@ async function generateBestPackImage(opts: {
     verification: best.verification,
     ...(direction ? { direction } : {}),
   };
+}
+
+/**
+ * EDIT the picture a draft already has, as the team's notes ask.
+ *
+ * "Notes for the picture" and the picture sat side by side and had nothing
+ * to do with each other: the notes went into a text-to-image prompt and the
+ * stored photograph was never shown to the model, so "warmer light, no
+ * glasses on the table" came back as a different photograph of different
+ * people. This fetches the clean photograph the draft keeps (the one a free
+ * retitle re-renders from — a titled cover's `titled.photoUrl`, or a library
+ * photo or upload itself), sends it up WITH the notes, and treats what comes
+ * back exactly like a fresh take: verified by the same checker, stored, and
+ * given the same title again when the picture had one.
+ *
+ * Throws when the picture cannot be edited (no clean photograph behind it —
+ * lib/cover-edit.ts retitleDecision says why) or when every rung of the edit
+ * failed; the route says so rather than quietly making a new picture, which
+ * is the one thing the person did not ask for.
+ */
+export async function editPackImage(opts: {
+  existing: PackImage;
+  topic: string;
+  pack?: Record<string, unknown> | null;
+  brand?: BrandContext | null;
+  direction?: string | null;
+  budgetMs?: number | null;
+  quality?: ImageQuality;
+  /** How many takes a flagged edit may have (default 2): the second asks the same of the same photograph. */
+  maxAttempts?: number;
+}): Promise<PackImage> {
+  if (!imagesEnabled()) throw new Error('image generation disabled (IMAGE_GEN=off or no OPENAI_API_KEY)');
+  const decision = retitleDecision(opts.existing);
+  if (!decision.ok) throw new Error(decision.reason);
+  const sourceUrl = decision.photoUrl;
+  const direction = String(opts.direction || '').trim();
+  const plannerBase = plannerImageFor(opts.pack);
+  const planner = plannerBase
+    ? { ...plannerBase, ...(direction ? { direction } : {}), science: scienceOffered(plannerBase.pillarId, briefSource(opts.pack, 6000) || opts.topic) }
+    : null;
+  const subject = planner ? planner.subject : opts.topic;
+  try {
+    const photo = await fetchOwnPhoto(sourceUrl);
+    const prompt = buildEditPrompt({ direction, topic: subject, brand: opts.brand, planner });
+    const started = Date.now();
+    const deadline = opts.budgetMs && opts.budgetMs > 0 ? started + opts.budgetMs : null;
+    const fits = (): boolean => deadline == null || deadline - Date.now() >= ATTEMPT_MS;
+    const callMs = (): number => (deadline == null ? IMAGE_CALL_MS : Math.max(20_000, Math.min(IMAGE_CALL_MS, deadline - Date.now() - 30_000)));
+    const maxAttempts = Math.max(1, Math.min(MAX_GEN_ATTEMPTS, Math.round(opts.maxAttempts ?? 2)));
+    let best: { img: GeneratedImage; verification: ImageVerification } | null = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (attempt > 0 && !fits()) break;
+      let img: GeneratedImage;
+      try {
+        img = await editImageBytes(prompt, photo, callMs(), deadline, opts.quality ?? 'high');
+      } catch (e) {
+        if (best) break;
+        throw e;
+      }
+      const verification = await verifyGeneratedImage(img, subject, normalizeVisual(opts.brand?.visual), planner);
+      const rank = (v: ImageVerification) =>
+        (imageUnshippable(v) ? 0 : v.status === 'approved' ? 600 : v.status === 'unchecked' ? 400 : 200) + (v.score ?? 0) + (v.brandFit ?? 0) / 200;
+      if (!best || rank(verification) > rank(best.verification)) best = { img, verification };
+      if (verification.status !== 'flagged') break;
+      if (Date.now() - started > RETRY_TIME_BUDGET_MS) break;
+    }
+    if (!best) throw new Error('image edit produced no candidate');
+
+    const nameHint = cleanTopic(opts.topic) || opts.topic;
+    // The edited photograph is stored clean first, like a fresh take, so the
+    // next free retitle — and the next edit — start from it.
+    const photoUrl = await storeImage(best.img, nameHint + '-edit');
+    let url = photoUrl;
+    let titled: PackImage['titled'];
+    const had = opts.existing.titled;
+    if (had && had.title) {
+      try {
+        const cover = await renderTitleCover({ title: had.title, photo: { bytes: best.img.bytes, contentType: best.img.contentType }, headTopPct: best.verification.headTopPct });
+        url = await storeBytes(cover.png, 'image/png', 'png', nameHint + '-cover');
+        titled = { title: had.title, photoUrl, family: cover.family, ...(had.custom ? { custom: true } : {}) };
+      } catch (err) {
+        reportError('images:edit-title-cover', err, { title: had.title });
+      }
+    } else if (had) {
+      titled = { title: '', photoUrl, family: 'none', custom: true };
+    }
+    const made: PackImage = {
+      ...opts.existing,
+      url,
+      ...(titled ? { titled } : {}),
+      prompt,
+      model: best.img.model,
+      createdAt: new Date().toISOString(),
+      verification: best.verification,
+      source: 'generated',
+      editedFrom: sourceUrl,
+      ...(direction ? { direction } : {}),
+    };
+    // What a library photo recorded about itself (its filter, its Drive file)
+    // no longer describes this picture.
+    delete made.brandGraded; delete made.filters; delete made.palette; delete made.padded; delete made.libraryFileId; delete made.libraryName; delete made.styledAfter;
+    recordImageOutcome({ ok: true });
+    return made;
+  } catch (e) {
+    recordImageOutcome({ ok: false, message: e instanceof Error ? e.message : String(e) });
+    throw e;
+  }
 }
 
 // Idempotent: give a draft an image if it doesn't have one yet. Uses the

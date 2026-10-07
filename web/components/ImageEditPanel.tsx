@@ -13,8 +13,15 @@
 //                          ({ suggestTitles }); clicking one fills the field.
 //   Notes for the picture  what the next take should show, kept on the draft
 //                          and reused by every later "New image" until cleared.
-//   Regenerate with notes  the one button here that spends a credit, and it
-//                          says so ({ regenerate, direction }).
+//   Edit this picture      the one button here that spends a credit, and it
+//                          says so ({ regenerate, direction }). It EDITS the
+//                          photograph that is already on the draft — the notes
+//                          are applied to it, and everything they do not
+//                          mention stays — unless "Start from a new picture"
+//                          is ticked ({ fresh: true }), which makes one from
+//                          the post's text as before. The field used to sit
+//                          beside the picture and have nothing to do with it:
+//                          every note produced a different, unrelated photo.
 //
 // The panel draws and decides; the host does the request and whatever follows
 // it (reload, sync the Metricool post) through `onAction`, so the Calendar's
@@ -68,10 +75,17 @@ export default function ImageEditPanel({
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [suggesting, setSuggesting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // "Start from a new picture instead": off by default, so the notes edit the
+  // picture that is there. A draft with no picture, or one whose picture has
+  // no clean photograph behind it (the same rule as retitling), can only be
+  // given a new one — the box is ticked for it and cannot be unticked.
+  const [wantFresh, setWantFresh] = useState(false);
   const title = typedTitle ?? shown;
   const notes = typedNotes ?? notesOf(image);
   const titleChanged = cleanCoverTitle(title) !== cleanCoverTitle(shown) || off;
   const notesChanged = notes.trim() !== notesOf(image);
+  const editable = Boolean(image?.url) && can.ok;
+  const fresh = wantFresh || !editable;
   const idBase = 'img-edit-' + (draftId || 'none');
 
   async function suggest() {
@@ -114,7 +128,7 @@ export default function ImageEditPanel({
 
   function regenerate() {
     if (!okToSpend(image, 1)) return;
-    void onAction({ regenerate: true, direction: notes.trim() }, { label: 'notes', credits: 1, fallback: 'The new image could not be made.' });
+    void onAction({ regenerate: true, direction: notes.trim(), fresh }, { label: 'notes', credits: 1, fallback: fresh ? 'The new image could not be made.' : 'The picture could not be edited.' });
   }
 
   const chip = 'rounded-full px-2.5 py-1 text-[11px] font-medium ring-1 transition disabled:opacity-50 ';
@@ -177,9 +191,13 @@ export default function ImageEditPanel({
         maxLength={600}
         disabled={disabled}
         onChange={(e) => setTypedNotes(e.target.value)}
-        placeholder="e.g. two women at a table, no lab coat, warmer light, show fresh vegetables"
+        placeholder={fresh ? 'e.g. two women at a table, no lab coat, warmer light, show fresh vegetables' : 'e.g. warmer light, take the glasses off the table, add fresh vegetables — the rest of the picture stays'}
         className="mt-1 w-full resize-none rounded-lg bg-surface px-2.5 py-1.5 text-[12px] text-ink ring-1 ring-black/10 focus:ring-accent disabled:opacity-50"
       />
+      <label className={'mt-1.5 flex items-center gap-1 text-[11px] text-ink/70 ' + (editable ? 'cursor-pointer' : 'opacity-50')} title={editable ? 'Unticked, the notes change the picture that is here. Ticked, a new picture is made from the post instead.' : (image?.url && !can.ok ? can.reason : 'There is no picture to edit yet, so a new one is made.')}>
+        <input type="checkbox" checked={fresh} disabled={disabled || !editable} onChange={(e) => setWantFresh(e.target.checked)} className="h-3.5 w-3.5 accent-accent" />
+        Start from a new picture instead
+      </label>
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
         {image?.url && notesChanged && (
           <button type="button" disabled={disabled} onClick={() => void onAction({ saveNotes: notes.trim() }, { label: 'save-notes', credits: 0, fallback: 'The notes could not be saved.' })} className={plain} title="Keeps the notes for the next picture without making one. No credits.">
@@ -189,13 +207,15 @@ export default function ImageEditPanel({
         <span className="flex-1" />
         <button
           type="button"
-          disabled={disabled}
+          disabled={disabled || (!fresh && !notes.trim())}
           onClick={regenerate}
-          title="Makes a new picture from these notes, verified like any other. Spends one image credit."
+          title={fresh
+            ? 'Makes a new picture from the post and these notes, verified like any other. Spends one image credit.'
+            : 'Applies these notes to the picture that is here — what they do not mention stays. Verified like any other take. Spends one image credit.'}
           className={chip + 'bg-accent text-white ring-accent hover:opacity-90'}
-        >{busy ? 'Making…' : 'Regenerate with these notes ' + creditLabel(1)}</button>
+        >{busy ? 'Making…' : (fresh ? 'Make a new picture with these notes ' : 'Edit this picture with these notes ') + creditLabel(1)}</button>
       </div>
-      <p className="mt-1 text-[10px] text-ink/40">The notes stay on the draft: every later new picture follows them until you clear them.</p>
+      <p className="mt-1 text-[10px] text-ink/40">{fresh ? 'The notes stay on the draft: every later new picture follows them until you clear them.' : 'The notes are applied to this picture; the title on it is set again afterwards. They stay on the draft until you clear them.'}</p>
       {note && <p role="status" className="mt-1 text-[11px] font-medium text-red-600">{note}</p>}
     </div>
   );

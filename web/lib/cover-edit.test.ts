@@ -158,6 +158,44 @@ test('the planner cover path stores the clean photograph beside the cover, so ev
   assert.match(hero, /titled = \{ title, photoUrl, family: cover\.family, \.\.\.\(custom \? \{ custom: true \} : \{\}\) \}/, 'library covers keep theirs too');
 });
 
+test('the notes edit the picture that is there, unless a new one is asked for', () => {
+  // The notes field sat beside the picture and had nothing to do with it: it
+  // fed a text-to-image prompt, and the stored photograph never reached the
+  // model, so every note produced a different, unrelated photo.
+  const images = src('lib/images.ts');
+  const edit = images.slice(images.indexOf('export async function editPackImage('), images.indexOf('export async function ensureDraftImage('));
+  assert.match(edit, /const decision = retitleDecision\(opts\.existing\)/, 'edits the clean photograph the free retitle uses');
+  assert.match(edit, /fetchOwnPhoto\(sourceUrl\)/, 'fetched back from the app\'s own bucket');
+  assert.match(edit, /editImageBytes\(prompt, photo, callMs\(\), deadline, opts\.quality \?\? 'high'\)/, 'the photograph goes up with the prompt');
+  assert.match(edit, /verifyGeneratedImage\(img, subject, normalizeVisual\(opts\.brand\?\.visual\), planner\)/, 'checked like any take');
+  assert.match(edit, /renderTitleCover\(\{ title: had\.title/, 'the title it had is set again');
+  assert.match(edit, /editedFrom: sourceUrl/, 'and the record says what it was made from');
+  const ladder = images.slice(images.indexOf('async function editImageBytes('), images.indexOf('async function fetchOwnPhoto('));
+  assert.match(ladder, /input_fidelity: 'high'/, 'faces and detail of the photograph are kept');
+  assert.match(ladder, /form\.append\('size', 'auto'\)/, 'the photograph keeps its own shape');
+  assert.match(ladder, /form\.append\('image', new Blob/, 'as multipart, with the bytes');
+  assert.match(images, /'https:\/\/api\.openai\.com\/v1\/images\/' \+ endpoint/, 'edits and generations share one call');
+  assert.match(images, /return postImages\('edits', form, timeoutMs\)/);
+  const fetchOwn = images.slice(images.indexOf('async function fetchOwnPhoto('), images.indexOf('// Verification: a vision model'));
+  assert.match(fetchOwn, /ownBucketUrl\(url, process\.env\.NEXT_PUBLIC_SUPABASE_URL, IMAGE_BUCKET\)/, 'only the app\'s own storage');
+
+  // The route: a regenerate with a picture in place edits it; `fresh`, a set,
+  // a proposition, or a picture with nothing to edit from makes a new one.
+  const route = src('app/api/drafts/image/route.ts');
+  assert.match(route, /const startFresh = body\?\.fresh === true/);
+  assert.match(route, /const editing = regenerate && !startFresh && wantSet === 0 && !asOption && Boolean\(existing\?\.url\) && !existingHasText && retitleDecision\(existing\)\.ok/);
+  assert.match(route, /image = await editPackImage\(\{ existing, topic, pack, brand, direction: effectiveDirection \}\)/);
+  assert.match(route, /error: 'edit_failed'/, 'a failed edit is the answer, never a quietly made new picture');
+  assert.match(route, /Start from a new picture instead/, 'and it says how to ask for one');
+
+  // The panel edits by default; the hosts' own "New image" buttons say fresh.
+  const panel = src('components/ImageEditPanel.tsx');
+  assert.match(panel, /const fresh = wantFresh \|\| !editable/, 'a draft with nothing to edit from can only get a new picture');
+  assert.match(panel, /regenerate: true, direction: notes\.trim\(\), fresh/);
+  assert.match(src('components/HeroImageControls.tsx'), /send\(\{ regenerate: true, fresh: true \}/);
+  assert.match(src('app/AutopilotQueue.tsx'), /editImage\(r, \{ regenerate: true, fresh: true \}/);
+});
+
 test('the Edit image panel is open by default on the Dashboard card and in the Calendar preview', () => {
   const panel = src('components/ImageEditPanel.tsx');
   assert.doesNotMatch(panel, /useState<boolean>\(false\)|open \? |setOpen\(/, 'nothing to click open');
@@ -167,8 +205,9 @@ test('the Edit image panel is open by default on the Dashboard card and in the C
   assert.match(panel, /No title on the image/);
   assert.match(panel, /suggestTitles: true/, 'Title suggestions');
   assert.match(panel, /Notes for the picture/);
-  assert.match(panel, /regenerate: true, direction: notes\.trim\(\)/, 'Regenerate with these notes');
-  assert.match(panel, /'Regenerate with these notes ' \+ creditLabel\(1\)/, 'and it says it spends a credit');
+  assert.match(panel, /regenerate: true, direction: notes\.trim\(\), fresh/, 'Edit this picture with these notes — and whether to start afresh');
+  assert.match(panel, /\(fresh \? 'Make a new picture with these notes ' : 'Edit this picture with these notes '\) \+ creditLabel\(1\)/, 'and it says it spends a credit, whichever it does');
+  assert.match(panel, /Start from a new picture instead/, 'the opt-out');
   assert.match(panel, /okToSpend\(image, 1\)/, 'asked about only after a few takes');
   assert.match(panel, /can\.reason/, 'the disabled button explains itself');
 
@@ -176,8 +215,8 @@ test('the Edit image panel is open by default on the Dashboard card and in the C
   assert.match(controls, /<ImageEditPanel/, 'the Calendar preview and RunPreview');
   assert.match(controls, /fetch\('\/api\/drafts\/image\?id='/, 'pre-filled from the draft');
   assert.match(controls, /credits: 1/, 'New AI image is labelled as a credit');
-  assert.ok(controls.indexOf('Choose from Image Library') < controls.indexOf("send({ regenerate: true }"), 'free actions first');
-  assert.ok(controls.indexOf('<ImageEditPanel') < controls.indexOf("send({ regenerate: true }"), 'the panel before the credit button');
+  assert.ok(controls.indexOf('Choose from Image Library') < controls.indexOf("send({ regenerate: true, fresh: true }"), 'free actions first');
+  assert.ok(controls.indexOf('<ImageEditPanel') < controls.indexOf("send({ regenerate: true, fresh: true }"), 'the panel before the credit button');
 
   const queue = src('app/AutopilotQueue.tsx');
   assert.match(queue, /<ImageEditPanel/, 'the Dashboard card');

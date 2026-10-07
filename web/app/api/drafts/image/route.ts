@@ -11,7 +11,7 @@ import { decodeDataUrl } from '@/lib/data-url';
 import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
-import { generatePackImage, imagesEnabled, removeSuperseded, storeBytes, type PackImage } from '@/lib/images';
+import { editPackImage, generatePackImage, imagesEnabled, removeSuperseded, storeBytes, type PackImage } from '@/lib/images';
 import { libraryHero } from '@/lib/library-hero';
 import { pictureForDraft } from '@/lib/draft-picture';
 import { touchLibraryUse } from '@/lib/library-index';
@@ -121,6 +121,12 @@ export async function POST(req: NextRequest) {
     // clears them); a request without any reuses what the last take was made
     // with, so "New image" and "Show me 3 options" keep the team's notes.
     const directionGiven = typeof body?.prompt === 'string' || typeof body?.direction === 'string';
+    // fresh: true — "Start from a new picture instead". Without it a regenerate
+    // with a picture already on the draft EDITS that picture (editPackImage):
+    // the notes are applied to the photograph that is there, and what they do
+    // not mention stays. The hosts' own "New AI image" buttons send it, since
+    // a new picture is what they promise.
+    const startFresh = body?.fresh === true;
     const useUrl = typeof body?.useUrl === 'string' ? body.useUrl.trim() : '';
     if (brandPhotoUrl && !/^https:\/\/\S+$/i.test(brandPhotoUrl)) {
       return NextResponse.json({ error: 'bad_image', message: 'That library photo address is not one a network can fetch.' }, { status: 400 });
@@ -386,9 +392,30 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: setErrors[0] || 'image generation failed' }, { status: 500 });
     }
 
-    const image = wantSet > 0
-      ? madeSet[0]
-      : await makeOne(askedSlot ?? (asOption ? 1 + (options.length % 3) : (advanceVariant ? null : 0)), 0);
+    // EDIT, NOT REPLACE. A regenerate with the draft's picture still in place
+    // changes that picture — the clean photograph behind it goes up with the
+    // notes and comes back changed as they ask, verified and retitled like any
+    // take. Only an explicit `fresh`, a set, a proposition, or a picture with
+    // no clean photograph behind it (or one that may never ship) makes a new
+    // one from the post's text as before. When the edit itself fails, the
+    // answer is the failure, never a quietly made new picture.
+    const editing = regenerate && !startFresh && wantSet === 0 && !asOption && Boolean(existing?.url) && !existingHasText && retitleDecision(existing).ok;
+    let image: PackImage;
+    if (wantSet > 0) {
+      image = madeSet[0];
+    } else if (editing && existing) {
+      try {
+        image = await editPackImage({ existing, topic, pack, brand, direction: effectiveDirection });
+      } catch (e) {
+        reportError('drafts-image:edit', e, { id });
+        return NextResponse.json(
+          { error: 'edit_failed', message: 'The picture could not be edited: ' + (e instanceof Error ? e.message : 'unknown error') + '. Tick "Start from a new picture instead" to make one from the post.' },
+          { status: 502 },
+        );
+      }
+    } else {
+      image = await makeOne(askedSlot ?? (asOption ? 1 + (options.length % 3) : (advanceVariant ? null : 0)), 0);
+    }
 
     // Re-read the pack immediately before writing, and merge `_image` into the
     // FRESH copy. Generation + vision verification takes 30-60s, and the pack
@@ -437,7 +464,7 @@ export async function POST(req: NextRequest) {
     // — after the write, so a failed write never orphans the image on screen.
     await removeSuperseded(currentPack, nextPack);
 
-    return NextResponse.json({ image: nextHero, options: nextOptions, made: proposing ? madeNow.length : 1, failed: setErrors });
+    return NextResponse.json({ image: nextHero, options: nextOptions, made: proposing ? madeNow.length : 1, failed: setErrors, ...(editing ? { edited: true } : {}) });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : 'image generation failed' },
