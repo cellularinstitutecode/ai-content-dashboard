@@ -91,6 +91,10 @@ test('every template cites a study when the post makes a health claim, and not o
 test('wiring: every gate that re-checks stored copy reads the draft\'s policy', () => {
   assert.match(src('app/api/posts/route.ts'), /complianceGate\(user\.id, String\(existing\.text \|\| ''\), metricoolNetworks\(existing\.providers\), \{ refPolicy: refPolicyOf\(draftPack\), claimSupport: claimSupportOf\(draftPack\) \}\)/);
   assert.match(src('app/api/metricool/schedule/route.ts'), /complianceGate\(user\.id, text, network, \{ refPolicy: draftRefPolicy, claimSupport: draftClaimSupport \}\)/);
+  // The sweep's own hand-off to Metricool reads the same policy: a video post
+  // rewritten to claim nothing (lib/video-prepare.ts rung 4) carries no REF
+  // line on purpose, and this door used to refuse it for exactly that.
+  assert.match(src('lib/video-publish.ts'), /complianceGate\(input\.userId, text, network, \{ refPolicy: refPolicyOf\(pack\), claimSupport: claimSupportOf\(pack\) \}\)/);
   const ap = src('lib/autopilot.ts');
   assert.match(ap, /refPolicy,\n/, 'approveRun plans each network under the template\'s policy');
   assert.match(ap, /claimSupport: \(pack\?\._claimSupport as \{ status\?: string \} \| undefined\)\?\.status \?\? null/, 'the judge\'s verdict reaches autoschedule');

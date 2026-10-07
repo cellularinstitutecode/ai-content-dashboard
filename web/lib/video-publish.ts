@@ -19,6 +19,7 @@ import 'server-only';
 
 import { complianceGate } from '@/lib/compliance-gate';
 import { claimSupportOf } from '@/lib/citation-gate';
+import { refPolicyOf } from '@/lib/compliance';
 import { autoFixCitation } from '@/lib/citation-autofix';
 import { ensureKeywords } from '@/lib/keyword-guard';
 import { MediaNotNormalisedError, metricoolConfigured, metricoolSchedulePost, readPostId, type Provider } from '@/lib/metricool';
@@ -90,7 +91,13 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
   const kw = await ensureKeywords({ userId: input.userId, draftId: input.draftId, text, pack: fixed.pack ?? (input.pack as Record<string, unknown> | undefined) ?? null });
   const pack = (kw.pack ?? fixed.pack ?? input.pack ?? null) as PackLike | null;
 
-  const gate = await complianceGate(input.userId, text, network, { claimSupport: claimSupportOf(pack) });
+  // The REF policy the draft was written under (lib/compliance.ts refPolicyOf),
+  // as the Approve and Send doors already read it. Without it this door
+  // demanded a REF line of every video post — including one the writer
+  // rewrote to claim nothing because no study backed it (lib/video-prepare.ts
+  // rung 4), which the gate then refused for the citation it rightly lacks.
+  // The gate still decides on the text itself: a stamp never waives a claim.
+  const gate = await complianceGate(input.userId, text, network, { refPolicy: refPolicyOf(pack), claimSupport: claimSupportOf(pack) });
   if (!gate.ok) {
     // Deliberately not sent. Copy missing the AVISO line or the REF citation
     // must not go out at all, and now goes out by itself if it does.

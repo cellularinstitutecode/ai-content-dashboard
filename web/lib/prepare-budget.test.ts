@@ -1,6 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RESERVE_MS, remainingMs, downloadBudgetMs, transcribeBudgetMs, canWriteCopy, streamExtractBudgetMs, COMFORTABLE_COPY_MS } from './prepare-budget.ts';
+import { RESERVE_MS, remainingMs, downloadBudgetMs, transcribeBudgetMs, canWriteCopy, streamExtractBudgetMs, COMFORTABLE_COPY_MS, DROP_CLAIMS_MS, canDropClaims, canResearchClaim } from './prepare-budget.ts';
+
+test('taking the claims out of a draft needs real time in hand, more than one more search', () => {
+  // Two rewrites in parallel at up to 45 seconds each, then the save and the
+  // hand-off to Metricool still have to fit.
+  assert.equal(canDropClaims(DROP_CLAIMS_MS), true);
+  assert.equal(canDropClaims(DROP_CLAIMS_MS - 1), false);
+  assert.ok(DROP_CLAIMS_MS > 45_000, 'at least one full rewrite timeout');
+  // The rung before it (research at the claim) is cheaper, so a request that
+  // can still afford the rewrite could always afford the research first.
+  assert.equal(canResearchClaim(DROP_CLAIMS_MS), true);
+});
 
 test('remaining counts down from the start of the request', () => {
   assert.equal(remainingMs(1_000, 300_000, 1_000), 300_000);
