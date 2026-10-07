@@ -198,7 +198,8 @@ export default function HeroImageControls({
 
       {/* SPENDS A CREDIT: last, and labelled. */}
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        <button type="button" disabled={Boolean(busy)} onClick={() => void send({ regenerate: true }, 'ai', 'The new image could not be made.', { credits: 1 })} className={chip + 'bg-surface text-ink/70 ring-black/10 hover:bg-black/5'} title="A fresh AI picture, verified before it replaces this one. It follows the notes above, if any. Spends one image credit.">
+        {/* fresh: true — this button means a NEW picture; the panel's own button edits the one that is here. */}
+        <button type="button" disabled={Boolean(busy)} onClick={() => void send({ regenerate: true, fresh: true }, 'ai', 'The new image could not be made.', { credits: 1 })} className={chip + 'bg-surface text-ink/70 ring-black/10 hover:bg-black/5'} title="A fresh AI picture, verified before it replaces this one. It follows the notes above, if any. Spends one image credit.">
           {busy === 'ai' ? 'Making…' : (hasImage ? '↻ New AI image ' : 'Make an AI image ') + creditLabel(1)}
         </button>
       </div>

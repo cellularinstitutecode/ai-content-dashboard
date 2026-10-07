@@ -89,6 +89,8 @@ type PackImage = {
   /** A library photo that went through the brand's colour filter (lib/library-cover.ts). */
   brandGraded?: boolean;
   libraryName?: string;
+  /** An edited take: the photograph it was made from, changed as the notes asked (lib/images.ts editPackImage). */
+  editedFrom?: string;
 };
 
 /** A weekly-planner draft whose picture predates the title cover — it is refreshed once. */
@@ -440,7 +442,8 @@ export default function AutopilotQueue() {
     // The panel is open by default, so a reroll asks first only on a draft
     // that has already had a few takes (lib/cover-edit.ts).
     if (r.pack?._image?.url && !okToSpend(r.pack._image, 1)) return;
-    await editImage(r, { regenerate: true }, { label: 'regenerate', credits: 1, fallback: 'Image regeneration failed' });
+    // fresh: true — this button means a NEW picture; the panel's own button edits the one that is here.
+    await editImage(r, { regenerate: true, fresh: true }, { label: 'regenerate', credits: 1, fallback: 'Image regeneration failed' });
   }
 
   /**
@@ -760,7 +763,9 @@ export default function AutopilotQueue() {
                             ? '📁 Library photo' + (r.pack._image.libraryName ? ' “' + r.pack._image.libraryName + '”' : '') + (r.pack._image.brandGraded ? ' with the brand filter' : '') + (r.pack._image.titled ? ' and the post title' : '') + ' — no AI; attaches to the Metricool draft on approve.'
                             : r.pack._image.source === 'upload'
                               ? '🖼 Photo the team dropped in — attaches to the Metricool draft on approve.'
-                              : '🖼 AI hero image (' + (r.pack._image.model || 'OpenAI') + ') — generated fresh from THIS article’s text; attaches to the Metricool draft on approve.'}
+                              : r.pack._image.editedFrom
+                                ? '🖼 The previous picture, edited as the notes asked (' + (r.pack._image.model || 'OpenAI') + ') — verified; attaches to the Metricool draft on approve.'
+                                : '🖼 AI hero image (' + (r.pack._image.model || 'OpenAI') + ') — generated fresh from THIS article’s text; attaches to the Metricool draft on approve.'}
                         </p>
                       </div>
                       {/* EDIT IMAGE, open by default: the free changes (title, no title, notes) come before anything that spends a credit. */}
