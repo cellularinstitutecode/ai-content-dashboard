@@ -16,10 +16,12 @@
 //   /reports/v1/projects/{id}/siteaudit/info      — site health, errors, warnings
 //   /reports/v1/projects/{id}/tracking/ (reports) — position-tracking visibility
 //
-// Domain metrics move slowly, so domain reports default to a 24h cache TTL
-// (SEMRUSH_DOMAIN_CACHE_TTL_HOURS) instead of the 30-day keyword TTL.
+// Domain metrics move slowly, so domain reports default to a 7-day cache TTL
+// (SEMRUSH_DOMAIN_CACHE_TTL_HOURS, 168) instead of the 30-day keyword TTL. It
+// was 24h, which re-bought the whole panel (~550 units) every day it was open.
 
 import {
+  STALE_TTL_MS,
   UNIT_COST,
   budgetDecision,
   refusalReason,
@@ -173,9 +175,10 @@ export function projectId(): string {
   return (process.env.SEMRUSH_PROJECT_ID || '').trim();
 }
 
+const DOMAIN_TTL_HOURS_DEFAULT = 168;
 function domainCacheTtlMs(): number {
-  const h = parseInt(process.env.SEMRUSH_DOMAIN_CACHE_TTL_HOURS || '24', 10);
-  return (Number.isFinite(h) && h > 0 ? h : 24) * 60 * 60 * 1000;
+  const h = parseInt(process.env.SEMRUSH_DOMAIN_CACHE_TTL_HOURS || String(DOMAIN_TTL_HOURS_DEFAULT), 10);
+  return (Number.isFinite(h) && h > 0 ? h : DOMAIN_TTL_HOURS_DEFAULT) * 60 * 60 * 1000;
 }
 
 export function normalizeDomain(raw: string): string {
@@ -229,6 +232,15 @@ async function rawCsvReport(
   const estUnits = (UNIT_COST[report] ?? 40) * Math.max(1, opts.estLines);
   const decision = await budgetDecision(estUnits);
   if (!decision.allow) {
+    // Refused — by policy (an automatic job in manual mode), by the floor, or
+    // because the balance is unreadable. An expired entry is still the real
+    // picture of this domain, and the panel reading it is better than a blank.
+    const old = await cacheGet(report, database, cachePhrase, STALE_TTL_MS);
+    if (old) {
+      void logUsage(report, cachePhrase, 0, 'cache');
+      const why = refusalReason(decision);
+      return { ok: true, rowsCached: old, source: 'cache', reason: 'ok', note: 'expired cache entry served: ' + why.note, unitsSpent: 0 };
+    }
     return { ok: false, source: 'none', ...refusalReason(decision), unitsSpent: 0 };
   }
 
@@ -300,8 +312,7 @@ export async function domainOverview(domain: string): Promise<{ data: DomainOver
   const rows = parseCsvRows(r.body || '');
   const units = rows.length * UNIT_COST.domain_ranks;
   if (rows.length) {
-    void cachePut('domain_ranks', db(), domain, rows, units);
-    void logUsage('domain_ranks', domain, units, 'live');
+    await Promise.all([cachePut('domain_ranks', db(), domain, rows, units), logUsage('domain_ranks', domain, units, 'live')]);
   }
   return finish(rows, units, r);
 }
@@ -344,8 +355,7 @@ export async function backlinksOverview(domain: string): Promise<{ data: Backlin
   const rows = parseCsvRows(r.body || '');
   const units = UNIT_COST.backlinks_overview; // billed per request
   if (rows.length) {
-    void cachePut('backlinks_overview', db(), domain, rows, units);
-    void logUsage('backlinks_overview', domain, units, 'live');
+    await Promise.all([cachePut('backlinks_overview', db(), domain, rows, units), logUsage('backlinks_overview', domain, units, 'live')]);
   }
   return finish(rows, rows.length ? units : 0, r);
 }
@@ -395,8 +405,7 @@ export async function topOrganicKeywords(
   const parsed = parseCsvRows(r.body || '');
   const units = parsed.length * UNIT_COST.domain_organic;
   if (parsed.length) {
-    void cachePut('domain_organic', db(), domain + ':top:' + lim, parsed, units);
-    void logUsage('domain_organic', domain, units, 'live');
+    await Promise.all([cachePut('domain_organic', db(), domain + ':top:' + lim, parsed, units), logUsage('domain_organic', domain, units, 'live')]);
   }
   return { rows: toRows(parsed), meta: meta(r, units) };
 }
@@ -456,8 +465,7 @@ async function moverReport(domain: string, kind: 'new' | 'lost' | 'rise' | 'fall
   const parsed = parseCsvRows(r.body || '');
   const units = parsed.length * UNIT_COST.domain_organic;
   if (parsed.length) {
-    void cachePut('domain_organic', db(), domain + ':mv:' + kind + ':' + lim, parsed, units);
-    void logUsage('domain_organic', domain + ' (' + kind + ')', units, 'live');
+    await Promise.all([cachePut('domain_organic', db(), domain + ':mv:' + kind + ':' + lim, parsed, units), logUsage('domain_organic', domain + ' (' + kind + ')', units, 'live')]);
   }
   return { rows: toRows(parsed), meta: meta(r, units) };
 }
@@ -521,18 +529,18 @@ export async function organicCompetitors(
   const parsed = parseCsvRows(r.body || '');
   const units = parsed.length * UNIT_COST.domain_organic_organic;
   if (parsed.length) {
-    void cachePut('domain_organic_organic', db(), domain + ':comp:' + lim, parsed, units);
-    void logUsage('domain_organic_organic', domain, units, 'live');
+    await Promise.all([cachePut('domain_organic_organic', db(), domain + ':comp:' + lim, parsed, units), logUsage('domain_organic_organic', domain, units, 'live')]);
   }
   return { rows: toRows(parsed), meta: meta(r, units) };
 }
 
 // ---------------------------------------------------------------------------
 // Projects API (JSON): Site Audit + Position Tracking. Requires
-// SEMRUSH_PROJECT_ID. Billed 100 units/request → cached 12h by default.
+// SEMRUSH_PROJECT_ID. Billed 100 units/request → cached 7 days by default
+// (was 12h: two refreshes a day of a number that moves weekly).
 // ---------------------------------------------------------------------------
 
-const PROJECT_TTL_MS = 12 * 60 * 60 * 1000;
+const PROJECT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 async function projectJson(
   cacheReport: 'siteaudit_info' | 'siteaudit_history' | 'tracking_report',
@@ -541,17 +549,27 @@ async function projectJson(
   path: string,
   params: Record<string, string>,
   ttlMs: number = PROJECT_TTL_MS,
+  opts: { cacheOnly?: boolean } = {},
 ): Promise<{ json: any | null; meta: SectionMeta }> {
   const cached = await cacheGet(cacheReport, 'proj', cachePhrase, ttlMs);
   if (cached && cached[0]) {
     void logUsage(cacheReport, cachePhrase, 0, 'cache');
     return { json: cached[0], meta: { ok: true, source: 'cache', reason: 'ok', unitsSpent: 0 } };
   }
+  // A report the app will read but never buy (the 10,000-unit audit history).
+  if (opts.cacheOnly) {
+    return { json: null, meta: { ok: false, source: 'none', reason: 'policy', note: 'not fetched live: cache-only report', unitsSpent: 0 } };
+  }
   const key = process.env.SEMRUSH_API_KEY;
   if (!key) return { json: null, meta: { ok: false, source: 'none', reason: 'no_token', unitsSpent: 0 } };
   const est = UNIT_COST[cacheReport] ?? UNIT_COST.siteaudit_info;
   const decision = await budgetDecision(est);
   if (!decision.allow) {
+    const old = await cacheGet(cacheReport, 'proj', cachePhrase, STALE_TTL_MS);
+    if (old && old[0]) {
+      void logUsage(cacheReport, cachePhrase, 0, 'cache');
+      return { json: old[0], meta: { ok: true, source: 'cache', reason: 'ok', note: 'expired cache entry served: ' + refusalReason(decision).note, unitsSpent: 0 } };
+    }
     return { json: null, meta: { ok: false, source: 'none', ...refusalReason(decision), unitsSpent: 0 } };
   }
   try {
@@ -573,8 +591,7 @@ async function projectJson(
     // below expect the v3 body. Unwrapped once, here, for every project report.
     json = unwrapEnvelope(json);
     if (json == null) return { json: null, meta: { ok: false, source: 'none', reason: 'http', note: 'unexpected response', unitsSpent: 0 } };
-    void cachePut(cacheReport, 'proj', cachePhrase, [json], est);
-    void logUsage(cacheReport, cachePhrase, est, 'live');
+    await Promise.all([cachePut(cacheReport, 'proj', cachePhrase, [json], est), logUsage(cacheReport, cachePhrase, est, 'live')]);
     return { json, meta: { ok: true, source: 'live', reason: 'ok', unitsSpent: est } };
   } catch (e: any) {
     return { json: null, meta: { ok: false, source: 'none', reason: 'network', note: e?.name || 'fetch failed', unitsSpent: 0 } };
@@ -594,9 +611,10 @@ export async function siteAudit(): Promise<{ data: SiteAuditSnapshot; meta: Sect
   const info = parseAuditInfo(json);
 
   // THE HEALTH SCORE. Not in `info`: it is the audit history's quality value,
-  // billed at 10,000 units. It only changes when an audit finishes (about
-  // monthly), so it is kept under that audit's finish time and fetched once
-  // per audit — a refresh costs nothing, a new audit costs one fetch.
+  // billed at 10,000 units — a fifth of the monthly pool for one number that
+  // fills a single line of the Advisor prompt. It is no longer bought: the
+  // history is read from the cache if an earlier build paid for it, and the
+  // Advisor does without the health score otherwise.
   let health = info.health;
   let healthDelta = info.healthDelta;
   let units = m.unitsSpent;
@@ -606,6 +624,7 @@ export async function siteAudit(): Promise<{ data: SiteAuditSnapshot; meta: Sect
       'siteaudit_history', phrase, id,
       `/reports/v1/projects/${encodeURIComponent(id)}/siteaudit/history`, { limit: '1' },
       400 * 24 * 60 * 60 * 1000,
+      { cacheOnly: true },
     );
     if (h.json) {
       const parsed = parseAuditHealth(h.json);
@@ -784,8 +803,11 @@ export async function domainBundle(rawDomain?: string): Promise<DomainBundle> {
   const [ov, bl, kw, comp, balance, cap] = await Promise.all([
     domainOverview(domain),
     backlinksOverview(domain),
-    topOrganicKeywords(domain, 30),
-    organicCompetitors(domain, 5),
+    // 10 rows (100 u) and 3 competitors (120 u), down from 30 and 5 (500 u):
+    // the panel's tables are glanced at, not scrolled, and the Advisor prompt
+    // reads well from ten. Cold cost of the bundle: 550 → 270 units.
+    topOrganicKeywords(domain, 10),
+    organicCompetitors(domain, 3),
     getUnitsBalance(),
     keywordCapability(),
   ]);

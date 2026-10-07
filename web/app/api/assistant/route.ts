@@ -1049,7 +1049,7 @@ async function runAgent(session: Session, input: string, userId: string | null, 
           // Ground the research in the REAL Semrush Keyword Brief (cache-first,
           // budget-guarded) so the chatbot recommends keywords with genuine
           // volume/difficulty/intent rather than inventing them.
-          const bundle = await researchBundle(topic, { relatedLimit: 12, questionLimit: 6 });
+          const bundle = await researchBundle(topic);
           const kwHint = briefPromptFrom(bundle.brief);
           const research: any = await researchTopic({ topic, provider: session.provider === "openai" ? "openai" : "anthropic", network, keywordHint: kwHint || undefined });
           const r = (research && research.result) ? research.result : research;
@@ -1139,13 +1139,15 @@ async function runAgent(session: Session, input: string, userId: string | null, 
         if (!topic) {
           toolResult = "No topic provided. Ask the user what keyword or topic to look up.";
         } else {
-          const bundle = await researchBundle(topic, { relatedLimit: 12, questionLimit: 6 });
+          const bundle = await researchBundle(topic);
           if (bundle.brief.source !== "semrush") {
             toolResult =
               bundle.reason === "no_token"
                 ? "Semrush is not connected (SEMRUSH_API_KEY not set) and this topic is not in the cache. Tell the user to add the key in Vercel, and offer your best editorial judgement clearly labeled as an estimate."
                 : bundle.reason === "budget"
                 ? "Semrush unit balance is at the protection floor, and this topic is not cached. Recommend re-using recently analyzed topics, and label any further advice as an estimate."
+                : bundle.reason === "policy"
+                ? "Live Semrush lookups are reserved for the SEO panel to save credits, and this topic is not cached. Suggest the user run it through Keyword Intelligence if real numbers matter, and label any further advice as an estimate."
                 : "No Semrush data available for this topic (" + (bundle.note || bundle.reason) + "). Offer editorial judgement clearly labeled as an estimate.";
           } else {
             const b = bundle.brief;

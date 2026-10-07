@@ -14,8 +14,16 @@
 // GET /api/semrush?action=movers[&domain=...]  → new/lost/improved/declined
 // GET /api/semrush?action=advise[&domain=...]  → AI ranking action plan built
 //                                                from the (cached) domain data
+//
+// `&live=1` marks a request a person started on purpose (the panel's Analyze,
+// Inspect, Rankings and Advisor buttons, the hub's Analyze). Only those may
+// make a live Semrush call in the default SEMRUSH_MODE=manual; without it the
+// same actions read the cache — fresh or expired — and spend nothing, which is
+// what the panel's load-on-mount and refresh-bus re-reads now do. See
+// lib/semrush-policy.ts.
 import { NextRequest, NextResponse } from 'next/server';
 import { researchBundle, serpCompetitors, getUnitsBalance, opportunityScore } from '@/lib/semrush';
+import { withUserSemrush } from '@/lib/semrush-policy';
 import { domainBundle, primaryDomain, siteAudit, trackingSummary, normalizeDomain, keywordResearchActivity, keywordMovers } from '@/lib/semrush-domain';
 import { chatAssistant } from '@/lib/ai';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -86,6 +94,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ balance }, { headers: { 'Cache-Control': 'no-store' } });
   }
 
+  const live = req.nextUrl.searchParams.get('live') === '1';
+  const run = () => handle(req, userId, action, topic);
+  return live ? withUserSemrush(run) : run();
+}
+
+async function handle(req: NextRequest, userId: string, action: string, topic: string): Promise<NextResponse> {
   if (action === 'domain') {
     const domain = normalizeDomain(req.nextUrl.searchParams.get('domain') || '') || primaryDomain();
     const bundle = await domainBundle(domain);
@@ -120,7 +134,9 @@ export async function GET(req: NextRequest) {
     }
 
     const domain = normalizeDomain(req.nextUrl.searchParams.get('domain') || '') || primaryDomain();
-    // All of this is cache-first, so composing the context is ~free in units.
+    // Cache-first; with `live=1` a cold cache costs the domain bundle (~270),
+    // the movers (240) and the audit info (100). The audit's health score is
+    // never bought here any more (10,000 units) — it is read only if cached.
     const [bundle, movers, audit] = await Promise.all([domainBundle(domain), keywordMovers(domain), siteAudit()]);
 
     const lines: string[] = [];
@@ -203,7 +219,7 @@ export async function GET(req: NextRequest) {
   }
 
   // Default: the full hub bundle (brief + tables), plus fresh balance for the chip.
-  const bundle = await researchBundle(topic, { relatedLimit: 12, questionLimit: 6 });
+  const bundle = await researchBundle(topic);
   const balance = await getUnitsBalance();
   return NextResponse.json(
     {

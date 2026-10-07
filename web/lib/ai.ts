@@ -526,7 +526,7 @@ export async function autoKeywordBrief(
     checkedAt: new Date().toISOString(),
   };
   try {
-    const bundle = await researchBundle(topic, { relatedLimit: 12, questionLimit: 6 });
+    const bundle = await researchBundle(topic);
     if (bundle.brief.source !== 'semrush') {
       return { brief: null, stamp: { ...base, reason: bundle.reason } };
     }
