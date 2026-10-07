@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ABSOLUTE_MAX_BYTES, DISK_SAFE_BYTES, megabytes, routeFor } from './media-route.ts';
+import { ABSOLUTE_MAX_BYTES, DISK_SAFE_BYTES, diskRanOut, megabytes, routeFor } from './media-route.ts';
 
 const MB = 1024 * 1024;
 
@@ -23,6 +23,20 @@ test('an unknown size keeps the guarded path, not the unguarded one', () => {
   // bytes overrun; the URL path has no ceiling to refuse against.
   assert.equal(routeFor(null), 'disk');
   assert.equal(routeFor(Number.NaN), 'disk');
+});
+
+test('a full scratch disk is recognised however Node reports it', () => {
+  // The 1 October failure, as the write stream raised it.
+  const enospc = Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+  assert.equal(diskRanOut(enospc), true);
+  // The same, once it has been wrapped and only the sentence survives.
+  assert.equal(diskRanOut(new Error('The video could not be pulled down in full (ENOSPC: no space left on device, write).')), true);
+  assert.equal(diskRanOut('no space left on device'), true);
+  // Everything else is still a failure of the file or the network.
+  assert.equal(diskRanOut(Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })), false);
+  assert.equal(diskRanOut(new Error('Drive sent no data for that file.')), false);
+  assert.equal(diskRanOut(null), false);
+  assert.equal(diskRanOut(undefined), false);
 });
 
 test('past the absolute ceiling it is refused, with the size to say so', () => {

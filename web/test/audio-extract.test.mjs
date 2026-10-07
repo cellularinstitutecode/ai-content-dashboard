@@ -193,6 +193,24 @@ test('a video with no sound is reported as such, not as an error', async () => {
   assert.equal(got.reason, 'no_audio');
 });
 
+test('a scratch disk that fills while staging is named as such, not as a bad video', async () => {
+  // The 1 October failure: a 294 MB reel, well under the staging ceiling, and
+  // the write stream raised ENOSPC because a warm function's /tmp was not
+  // empty. The caller needs the reason by name so it can take the route that
+  // stages nothing; filed as 'failed' it was a row a person had to look at.
+  const before = (await run('sh', ['-c', 'ls -d /tmp/chi-audio-* 2>/dev/null | wc -l'])).stdout.trim();
+  const body = new ReadableStream({
+    start(c) { c.enqueue(new TextEncoder().encode('first slice arrives fine')); },
+    pull(c) { c.error(Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })); },
+  });
+  const got = await extractAudio(body, 'reel.mp4');
+  assert.equal(got.ok, false);
+  assert.equal(got.reason, 'no_space');
+  assert.match(got.message, /scratch disk/);
+  const after = (await run('sh', ['-c', 'ls -d /tmp/chi-audio-* 2>/dev/null | wc -l'])).stdout.trim();
+  assert.equal(after, before, 'a full disk must still clean up its scratch directory');
+});
+
 test('bytes that are not a video fail without leaving anything behind', async () => {
   const before = (await run('sh', ['-c', 'ls -d /tmp/chi-audio-* 2>/dev/null | wc -l'])).stdout.trim();
   const body = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('this is not a video')); c.close(); } });

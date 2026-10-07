@@ -78,6 +78,27 @@ export function routeFor(
   return sizeBytes > diskSafe ? 'stream' : 'disk';
 }
 
+/**
+ * Did the disk route fail because the scratch disk was FULL?
+ *
+ * The 360 MB ceiling above assumes the disk is otherwise empty, and on a warm
+ * function it is not: the Metricool upload stages its own copy in the same
+ * /tmp (lib/metricool-upload.ts), and a request that died mid-way leaves its
+ * files behind. So a 294 MB reel, well under the ceiling, was refused with
+ * "ENOSPC: no space left on device" on 1 October — and filed as a failure a
+ * person had to look at, for a video that was never the problem.
+ *
+ * Running out of disk is not a verdict on the file; it is the disk route
+ * saying it cannot run right now. The stream route needs no disk for the
+ * video at all, so that is where the file goes next (lib/media-transcript.ts).
+ */
+export function diskRanOut(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (code === 'ENOSPC') return true;
+  const message = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  return /\bENOSPC\b|no space left on device/i.test(message);
+}
+
 /** How big, in the units a person reads. */
 export function megabytes(bytes: number | null): string {
   if (bytes === null || !Number.isFinite(bytes)) return 'that video';

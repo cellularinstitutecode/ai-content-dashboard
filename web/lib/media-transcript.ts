@@ -20,7 +20,7 @@ import { extractAudio, extractAudioFromUrl, ffmpegAvailable, type ExtractedAudio
 import { driveMediaAddress, driveMediaStream, probeDriveMedia } from '@/lib/google-sources';
 import { megabytes, routeFor } from '@/lib/media-route';
 import { downloadBudgetMs, streamExtractBudgetMs, transcribeBudgetMs } from '@/lib/prepare-budget';
-import { redact } from '@/lib/report';
+import { redact, reportError } from '@/lib/report';
 
 /** Why a recording could not be turned into words. Named so callers that wrap
  *  this (the transcript ladder, the cache) can pass a failure through unchanged. */
@@ -102,9 +102,10 @@ export async function transcribeDriveMedia(
     };
   }
 
-  // Big enough that staging it would need more scratch disk than the function
-  // has: ffmpeg opens the Drive URL itself and writes only the mp3.
-  if (route === 'stream') {
+  // ffmpeg opens the Drive URL itself and writes only the mp3: nothing of the
+  // video touches the scratch disk. The route for a file too big to stage —
+  // and, below, the route the disk path hands over to when the disk is full.
+  const streamRoute = async (): Promise<MediaTranscript> => {
     const address = await driveMediaAddress(fileId);
     // Not forDownload: that holds back time for a separate extraction step this
     // path does not have, and these are the files with none to spare.
@@ -121,7 +122,11 @@ export async function transcribeDriveMedia(
       return { ok: false, reason, message: streamed.message };
     }
     return transcribeExtracted(streamed.audio, probe.name, key, deadlineAt);
-  }
+  };
+
+  // Big enough that staging it would need more scratch disk than the function
+  // has.
+  if (route === 'stream') return streamRoute();
 
   let res: Response;
   try {
@@ -146,6 +151,17 @@ export async function transcribeDriveMedia(
 
   const extracted = await extractAudio(res.body, probe.name);
   if (!extracted.ok) {
+    // The scratch disk filled while the video was being staged. The 360 MB
+    // ceiling assumes an empty disk, and on a warm function it is shared with
+    // the Metricool upload's staged copy and whatever an earlier request left
+    // behind — which is how a 294 MB reel, well under the ceiling, was refused
+    // with ENOSPC on 1 October and filed as "Error — revisar" for a person to
+    // look at. The stream route stages nothing, so the same request takes it
+    // now, with the clock it still has, rather than failing for the disk.
+    if (extracted.reason === 'no_space') {
+      reportError('media-transcript:disk-full', new Error(extracted.message), { fileId, sizeBytes: probe.sizeBytes ?? undefined });
+      return streamRoute();
+    }
     // 'no_audio' is a b-roll clip with nothing said in it — the caller treats
     // that as "a person should write this one", not as a fault.
     const reason = extracted.reason === 'no_audio' ? 'empty'
