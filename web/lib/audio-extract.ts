@@ -30,6 +30,7 @@ import ffmpegStatic from 'ffmpeg-static';
 
 import { redact, reportError } from '@/lib/report';
 import { cachedBinaryName, downloadVerdict, ffmpegSource } from './ffmpeg-source.ts';
+import { diskRanOut } from './media-route.ts';
 
 const run = promisify(execFile);
 
@@ -304,7 +305,16 @@ export type ExtractedAudio = {
 
 export type ExtractResult =
   | { ok: true; audio: ExtractedAudio }
-  | { ok: false; reason: 'not_available' | 'too_long' | 'no_audio' | 'failed'; message: string };
+  | {
+      ok: false;
+      /**
+       * 'no_space' is the disk route's own refusal: the scratch disk filled
+       * while the video was being staged. Nothing is wrong with the file, and
+       * the caller has a route that stages nothing (extractAudioFromUrl).
+       */
+      reason: 'not_available' | 'too_long' | 'no_audio' | 'no_space' | 'failed';
+      message: string;
+    };
 
 export function ffmpegAvailable(): boolean {
   return Boolean(ffmpegStatic);
@@ -454,6 +464,18 @@ export async function extractAudio(
     return { ok: true, audio: { path: output, sizeBytes: info.size, release } };
   } catch (e) {
     await release();
+    // A full scratch disk is the function's state, not the video's: a warm
+    // instance can be holding a Metricool upload's staged copy, or what an
+    // earlier request left behind. Named so the caller can take the route
+    // that needs no disk for the video, instead of filing it as a failure.
+    if (diskRanOut(e)) {
+      reportError('audio-extract:disk-full', e, { sourceName });
+      return {
+        ok: false,
+        reason: 'no_space',
+        message: 'The function ran out of scratch disk while staging the video (' + redact(e instanceof Error ? e.message : 'ENOSPC') + ').',
+      };
+    }
     return { ok: false, reason: 'failed', message: 'The video could not be pulled down in full (' + redact(e instanceof Error ? e.message : 'error') + ').' };
   }
 }
