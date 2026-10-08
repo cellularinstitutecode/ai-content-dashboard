@@ -149,6 +149,13 @@ export default function RunPreview({
           {run.score && run.score.safetyFlags.length > 0 && (
             <div className="mb-2 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800">⚠ {run.score.safetyFlags.length} compliance flag(s): {run.score.safetyFlags.map((f) => f.message).join(' ')}</div>
           )}
+          {citation?.status === 'not_required' && (
+            <div className="mb-2 rounded-xl bg-emerald-50 px-3 py-2 text-[12px] text-emerald-700">
+              ✓ {run.pack?._citationSearch
+                ? 'No study found online for this subject — the post was verified to make no health claims and needs no citation. Good to go.'
+                : 'No citation needed — this post makes no health claims.'}
+            </div>
+          )}
           {citation && citation.status !== 'verified' && citation.status !== 'not_required' && (
             <div className={'mb-2 rounded-xl px-3 py-2 text-[12px] ' + (citationBad ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}>
               {citationBad ? '✗ ' : '⚠ '}{citationLabel(citation)}{citationBad ? ' — you can still approve; it goes out with this remark on record. Press Fix citation first if you want it replaced.' : ''}

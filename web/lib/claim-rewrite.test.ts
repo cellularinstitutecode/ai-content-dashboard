@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { CLAIM_REWRITE_STRICT_SYSTEM, CLAIM_REWRITE_SYSTEM, NO_CLAIM_SYSTEM, acceptNoClaim, acceptRewrite, claimRewritePrompt, noClaimPrompt, parseRelevance, relevancePrompt, stripRefLine } from './claim-rewrite.ts';
+import { CLAIM_REWRITE_STRICT_SYSTEM, CLAIM_REWRITE_SYSTEM, NO_CLAIM_SYSTEM, acceptNoClaim, acceptRewrite, claimRewritePrompt, dropClaimSentences, noClaimPrompt, parseRelevance, relevancePrompt, sentencesWith, stripRefLine } from './claim-rewrite.ts';
 import { healthClaimWords } from './health-claim.ts';
 
 const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
@@ -143,7 +143,11 @@ test('Fix citation never rewrites a post around a study on another subject, and 
   assert.match(body, /const canDropRef = true;/);
   assert.doesNotMatch(body, /this template requires a citation/);
   assert.match(body, /rewriteWithoutClaims\(String\(p\[k\]\), \[\], timeout\(\)\)/);
-  assert.match(body, /rewriteWithoutClaims\(String\(p\[k\]\), results\[i\]\.flagged, timeout\(\)\)/, 'a second try, told which words');
+  assert.match(body, /for \(let round = 0; round < 3 && results\.some\(\(r\) => !r\.text\) && left\(\) > 35_000; round\+\+\)/, 'up to three more tries');
+  assert.match(body, /rewriteWithoutClaims\(String\(p\[k\]\), results\[i\]\.flagged, timeout\(\), sentencesWith\(String\(p\[k\]\), results\[i\]\.flagged\)\)/, 'told which words and which sentences');
+  // The last resort: the sentences that still read as a claim are taken out, deterministically.
+  assert.match(body, /acceptNoClaim\(String\(p\[keys\[i\]\]\), dropClaimSentences\(String\(p\[keys\[i\]\]\)\)\)/);
+  assert.match(body, /verified: no health claims, good to go/);
   assert.match(body, /if \(keys\.length && results\.every\(\(r\) => r\.text\)\)/, 'every channel or nothing');
   assert.match(body, /citation: \{ status: 'not_required', doi: null, title: null, year: null \}/);
   assert.match(body, /_claimSupport: undefined, claimSupport: undefined/);
@@ -158,4 +162,23 @@ test('stripRefLine: the REF line goes, everything else stays', () => {
   assert.equal(stripRefLine('REFERENCIA: x doi:10.1/y\nBody.'), 'Body.');
   assert.equal(stripRefLine('No ref here.'), 'No ref here.');
   assert.equal(stripRefLine('A refreshing walk.\nREF: a\nREF: b'), 'A refreshing walk.', 'only REF lines, never a word that starts with ref');
+});
+
+test('the retry is told the sentences, not only the words', () => {
+  const post = 'Give your body time.\nRest supports healing after a long week. Drink water. Sleep reduces stress too!\n\n#rest #care\n\nAVISO DE PUBLICIDAD: 2623022002A00090\nREF: Someone (2020). A paper. DOI: 10.1/x';
+  const where = sentencesWith(post, ['Healing', 'reduces']);
+  assert.deepEqual(where, ['Rest supports healing after a long week.', 'Sleep reduces stress too!']);
+  assert.deepEqual(sentencesWith(post, []), []);
+  assert.match(noClaimPrompt(post, ['healing'], where), /These sentences must be rewritten so they claim nothing, or left out entirely:\n- "Rest supports healing after a long week\."/);
+});
+
+test('the last resort takes out only the sentences that read as a claim, and keeps the notice', () => {
+  const post = 'Give your body time.\nRest supports healing after a long week. Drink water. Sleep reduces stress too!\n\n#rest #care\n\nAVISO DE PUBLICIDAD: 2623022002A00090\nREF: Someone (2020). A paper. DOI: 10.1/x';
+  const cut = dropClaimSentences(post);
+  assert.equal(cut, 'Give your body time.\nDrink water.\n\n#rest #care\n\nAVISO DE PUBLICIDAD: 2623022002A00090');
+  // And acceptNoClaim takes it: same post, notice kept, REF gone, no claim.
+  assert.ok(acceptNoClaim(post, cut).text);
+  // A post that is nothing but claims loses too much and is not taken.
+  const allClaims = 'It heals you. It cures everything. It reduces pain.\n\nAVISO DE PUBLICIDAD: 2623022002A00090';
+  assert.equal(acceptNoClaim(allClaims, dropClaimSentences(allClaims)).text, null);
 });

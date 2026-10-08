@@ -1060,10 +1060,10 @@ export async function studyOnTopic(text: string, study: StudyForRewrite, timeout
  * carry no citation. Returns the accepted text, or the words that still read
  * as a claim so the caller can ask once more.
  */
-export async function rewriteWithoutClaims(text: string, flagged: readonly string[] = [], timeoutMs = 45_000): Promise<{ text: string | null; flagged: string[] }> {
+export async function rewriteWithoutClaims(text: string, flagged: readonly string[] = [], timeoutMs = 45_000, sentences: readonly string[] = []): Promise<{ text: string | null; flagged: string[] }> {
   const copy = String(text || '').trim();
   if (!copy) return { text: null, flagged: [] };
-  const raw = await editWithModel(NO_CLAIM_SYSTEM, noClaimPrompt(copy, flagged), 4000, timeoutMs, 'ai:rewrite-no-claim');
+  const raw = await editWithModel(NO_CLAIM_SYSTEM, noClaimPrompt(copy, flagged, sentences), 4000, timeoutMs, 'ai:rewrite-no-claim');
   return raw == null ? { text: null, flagged: [] } : acceptNoClaim(copy, raw);
 }
 
