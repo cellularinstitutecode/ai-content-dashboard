@@ -80,3 +80,11 @@ test('missing pieces degrade rather than produce a malformed line', () => {
   // It must still satisfy the gate, which is the only thing that matters.
   assert.deepEqual(checkCompliance('x\n\nAVISO DE PUBLICIDAD: ' + DEFAULT_AVISO_NUMBER + '\n' + line).missing, []);
 });
+
+test('a paper stored before the parser decoded entities still prints as a name', () => {
+  // pack._evidence on older drafts carries the raw reference; the card showed
+  // "L&#xf3;pez-Medina, E., et al." inside the Fix citation note.
+  const line = refLineFrom(paper({ firstAuthor: 'L&#xf3;pez-Medina, E., et al.', title: 'Effect of Ivermectin &amp; placebo', journal: 'JAMA &#8211; the journal', year: 2021 }));
+  assert.match(line, /^REF: López-Medina, E\., et al\. \(2021\)\. Effect of Ivermectin & placebo\. JAMA – the journal\. DOI: /);
+  assert.doesNotMatch(line, /&#|&amp;/);
+});
