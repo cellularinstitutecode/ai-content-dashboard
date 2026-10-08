@@ -1016,6 +1016,36 @@ if (!r.ok) setActionMsg(await friendlyErrorFromResponse(r, 'The new picture is s
 finally { refreshPosts(); announce('posts', 'images', 'drafts'); }
 }
 
+/** The post's time has already passed: it cannot be approved as it is (Metricool refuses a past date). */
+function slotPassed(p: any): boolean {
+const t = new Date(String(p?.publication_date || '')).getTime();
+return Number.isFinite(t) && t <= Date.now();
+}
+
+// The Reschedule button a past-dated post shows where Approve would be: the
+// server picks the next free slot (lib/queue-next-slot.ts) and moves the post
+// there, here and in Metricool. It stays waiting for approval at the new time.
+async function rescheduleNext(p: any) {
+const id = String(p?.id || '');
+if (!id) return;
+if (typeof window !== 'undefined' && !window.confirm('This post\'s time has passed, so it cannot be approved as it is.\n\nMove it to the next free slot? It stays waiting for your approval at the new time.')) return;
+setApprovingId(id);
+try {
+const r = await fetch('/api/posts', {
+method: 'PATCH',
+headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({ id, action: 'reschedule', publication_date: 'next' }),
+});
+if (!r.ok) { setActionMsg(await friendlyErrorFromResponse(r, 'We could not move that post.')); return; }
+const j = await r.json().catch(() => null);
+const when = j?.post?.publication_date ? fmtDateTime(j.post.publication_date) + ' (' + scheduleTzLabel() + ' time)' : 'the next free slot';
+setActionMsg('Moved to ' + when + '. Press Approve when it is ready to go.');
+setRescheduleId(null); setRescheduleAt('');
+refreshPosts(); announce('posts', 'stats', 'insights');
+} catch (e) { setActionMsg(friendlyError(e, 'We could not move that post.')); }
+finally { setApprovingId(null); }
+}
+
 // The reviewer's yes. This is the only control in the app that makes a post
 // go out, so it reads back exactly what will happen before it does anything.
 async function approvePost(p: any, now = false) {
@@ -2674,6 +2704,8 @@ className="w-full rounded-full bg-white px-4 py-2 text-[12px] text-ink ring-1 ri
   timeOf={(p: any) => fmtScheduleTime(p?.publication_date)}
   onPreview={(id) => setPreviewPostId(id)}
   onApprove={(p: any) => approvePost(p)}
+  onReschedule={(p: any) => rescheduleNext(p)}
+  slotPassed={slotPassed}
   approvingId={approvingId}
   matchIds={queueMatchIds}
   plannerUrl={metricoolPlannerUrl(activeBlogId)}
@@ -2748,12 +2780,16 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 <button type="button" onClick={() => setPreviewPostId(id)} title="See the whole post — picture, caption and channels — before approving" className="rounded-full px-2.5 py-0.5 text-[11px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle hover:text-ink">Preview</button>
 {meta.label === 'Waiting for your approval' && !pending && (
 <>
+{slotPassed(p) ? (
+<button type="button" disabled={approvingId === id} onClick={() => rescheduleNext(p)} title="Its time has passed, so it cannot be approved as it is. Move it to the next free slot." className="rounded-full bg-amber-600 px-2.5 py-0.5 text-[11px] font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50">{approvingId === id ? 'Moving…' : 'Reschedule'}</button>
+) : (
 <button type="button" disabled={approvingId === id} onClick={() => approvePost(p)} className="rounded-full bg-accent px-2.5 py-0.5 text-[11px] font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50">{approvingId === id ? 'Approving…' : 'Approve'}</button>
+)}
 <button type="button" disabled={approvingId === id} onClick={() => approvePost(p, true)} className="text-[11px] font-medium text-accent hover:underline disabled:opacity-50">Publish now</button>
 <button type="button" onClick={() => continueDraft(p)} title="Opens this draft in the panel above. Sending updates this same draft — it does not make a second one." className="text-[11px] font-medium text-accent hover:underline">Continue</button>
 </>
 )}
-<button type="button" onClick={() => { setRescheduleId(id); setRescheduleAt(''); }} className="text-[11px] font-medium text-accent hover:underline">Reschedule</button>
+<button type="button" onClick={() => { setRescheduleId(id); setRescheduleAt(''); }} className="text-[11px] font-medium text-accent hover:underline">{slotPassed(p) && meta.label === 'Waiting for your approval' && !pending ? 'Pick a time' : 'Reschedule'}</button>
 <button type="button" onClick={() => deletePost(id)} className="text-[11px] font-medium text-danger hover:underline">Delete</button>
 </span>
 )}
@@ -3232,7 +3268,11 @@ className="rounded-full bg-subtle px-5 py-2 text-[13px] font-medium text-ink rin
             <>
               <button type="button" onClick={() => { close(); continueDraft(pp); }} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line hover:bg-white">Continue</button>
               <button type="button" disabled={approvingId === ppId} onClick={() => void approvePost(pp, true)} className="rounded-full px-3 py-1 text-[12px] font-medium text-accent ring-1 ring-line hover:bg-white disabled:opacity-50">Publish now</button>
-              <button type="button" disabled={approvingId === ppId} onClick={() => void approvePost(pp)} className="rounded-full bg-accent px-3 py-1 text-[12px] font-semibold text-white shadow-soft hover:opacity-90 disabled:opacity-50">{approvingId === ppId ? 'Approving…' : 'Approve'}</button>
+              {slotPassed(pp) ? (
+                <button type="button" disabled={approvingId === ppId} onClick={() => void rescheduleNext(pp)} title="Its time has passed, so it cannot be approved as it is. Move it to the next free slot." className="rounded-full bg-amber-600 px-3 py-1 text-[12px] font-semibold text-white shadow-soft hover:opacity-90 disabled:opacity-50">{approvingId === ppId ? 'Moving…' : 'Reschedule'}</button>
+              ) : (
+                <button type="button" disabled={approvingId === ppId} onClick={() => void approvePost(pp)} className="rounded-full bg-accent px-3 py-1 text-[12px] font-semibold text-white shadow-soft hover:opacity-90 disabled:opacity-50">{approvingId === ppId ? 'Approving…' : 'Approve'}</button>
+              )}
             </>
           )}
           {!ppWaiting && <button type="button" onClick={close} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line hover:bg-white">Close</button>}
