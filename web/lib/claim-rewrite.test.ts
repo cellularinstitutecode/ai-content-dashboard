@@ -20,6 +20,7 @@ test('the video writer takes the claims out before it refuses a draft nothing ba
   assert.match(branch, /refPolicy = 'if-health-claim'/, 'stamped under the policy the send doors read');
   assert.match(branch, /citation: \{ status: 'not_required'/);
   assert.match(branch, /still reads as a claim:/, 'and when the claims cannot come out, the refusal names the words');
+  assert.match(branch, /dropped\.why === 'time'\) \{[\s\S]{0,400}error: 'out_of_time'/, 'out of time is the clock, retried by the sweep — never a terminal refusal');
   // The rung itself: both captions through the no-claim rewrite, one retry
   // told which words, and the result checked by the doors' own rule.
   const rung = prepare.slice(prepare.indexOf('async function dropClaims('), prepare.indexOf('function retryAdvice('));

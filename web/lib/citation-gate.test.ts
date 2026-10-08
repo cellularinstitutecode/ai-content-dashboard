@@ -75,11 +75,17 @@ test('every door a person sends through reads the judge\'s verdict', () => {
 
 test('the video path never cites a search hit the judge has already rejected', () => {
   const prepare = src('lib/video-prepare.ts');
-  assert.match(prepare, /if \(\(!ref \|\| !haveDoi\(ref\)\) && verdict\.status !== 'none'\) \{\s*const found = refLineFromEvidence\(evidence\);/);
+  // The top-hit fallback is gone altogether: a citation ships from the video
+  // writer only when the judge confirmed it backs the copy. On 7 October a
+  // reel about single-ingredient foods went out under a tea-quality review
+  // because the judge had not been asked and the writer's pick shipped as is.
+  assert.doesNotMatch(prepare, /refLineFromEvidence\(evidence\)/, 'no search hit is ever cited unjudged');
+  assert.match(prepare, /const unsupported = !backing;/, 'not backed by the judge is not backed');
+  assert.match(prepare, /if \(unsupported\) \{\s*claimSupport = \{ status: 'unsupported'/);
   // ...and when two drafts both claimed what no paper shows, takes the claims
   // out (rung 4, the clinic's rule: no health claim, no citation needed) and
   // refuses, in words, only when they cannot come out.
-  assert.match(prepare, /defect\.kind === 'unsupported_citation'[\s\S]{0,1200}await dropClaims\([\s\S]{0,1800}error: 'unsupported_citation'/);
+  assert.match(prepare, /defect\.kind === 'unsupported_citation'[\s\S]{0,1200}await dropClaims\([\s\S]{0,2600}error: 'unsupported_citation'/);
   // ...and a writer that wrote about the empty transcript is a refusal that asks for the words.
   assert.match(prepare, /writerRefusedContent\(tiktok\) \|\| writerRefusedContent\(linkedin\)[\s\S]{0,600}error: 'empty_transcript'[\s\S]{0,400}needsPaste: true/);
   // ...and neither refusal is retried by the sweep.
