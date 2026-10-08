@@ -76,7 +76,11 @@ test('Fix citation keeps time for the correction, runs a strict second pass, and
   // The research can never eat the rewrite.
   assert.match(autopilot, /const CITATION_REWRITE_RESERVE_MS = 150_000;/);
   assert.match(body, /const researchMs = left\(\) - CITATION_REWRITE_RESERVE_MS;/);
-  assert.match(body, /fixPostCitation\(\{ text: caption, pack: p, aviso, budgetMs: Math\.min\(120_000, researchMs\) \}\)/);
+  // Rung 1 just judged the papers in hand; the research starts at the statements.
+  assert.match(body, /fixPostCitation\(\{ text: caption, pack: p, aviso, budgetMs: Math\.min\(120_000, researchMs\), skipInHand: true \}\)/);
+  // The same words again skip the research: the memo answers (fixTextHash).
+  assert.match(body, /const memo = memoOf\(pack\);\s*if \(memo\) \{/);
+  assert.match(body, /if \(!memo && researchMs >= 40_000\) \{/);
   // Every channel at once, then a stricter pass if the checker still disagrees.
   assert.match(body, /for \(const strict of \[false, true\]\)/);
   assert.match(body, /await Promise\.all\(keys\.map\(\(k\) => rewriteClaimToStudy\(String\(p\[k\]\), study, timeout, \{ strict \}\)\)\)/);
@@ -129,7 +133,7 @@ test('Fix citation never rewrites a post around a study on another subject, and 
   const autopilot = src('lib/autopilot.ts');
   const body = autopilot.slice(autopilot.indexOf('export async function fixCitationOnly('), autopilot.indexOf('/** Write the step FIX is on'));
   // Asked before any rewrite toward it; an unclear answer counts as no.
-  assert.match(body, /onTopic = \(await studyOnTopic\(caption0, \{[^}]*\}\)\) === true;/);
+  assert.match(body, /onTopic = typeof known === 'boolean' \? known : \(await studyOnTopic\(caption0, \{[^}]*\}\)\) === true;/);
   assert.match(body, /if \(help && onTopic\) \{/);
   // The rule first: no health claim, no citation — the REF line goes and nothing is searched for.
   assert.match(body, /const claims = keys\.some\(\(k\) => makesHealthClaim\(String\(p\[k\]\)\)\);\s*if \(keys\.length && !claims\) \{/);
