@@ -24,10 +24,21 @@ export type EvidenceItem = {
   abstract: string;
 };
 
+/** The character for a numeric reference, or nothing for one outside Unicode. */
+function codePoint(n: number): string {
+  return Number.isFinite(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : '';
+}
+
 /** Strip inline markup and entities; collapse whitespace. */
 export function plain(xml: string): string {
   return String(xml || '')
     .replace(/<[^>]+>/g, ' ')
+    // Numeric references first: PubMed writes non-ASCII names as "&#xe7;" and
+    // "&#214;", and the author label "Gen&#xe7;, &#x.c.7.;, et al." reached a
+    // card. Decoded before "&amp;" so that "&amp;#xe7;" stays the literal text
+    // "&#xe7;" rather than becoming "ç" on a second pass.
+    .replace(/&#x([0-9a-f]{1,6});/gi, (_, hex) => codePoint(parseInt(hex, 16)))
+    .replace(/&#(\d{1,7});/g, (_, dec) => codePoint(parseInt(dec, 10)))
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
     // Ampersand last, or "&amp;lt;" would decode twice into a tag.
     .replace(/&amp;/g, '&')
@@ -43,7 +54,10 @@ function inside(xml: string, name: string): string {
 /** "Calcat-i-Cervera, S., et al." from the first author, when there is one. */
 function authorLabel(surname: string, initials: string): string {
   if (!surname) return '';
-  const inits = initials ? ', ' + initials.split('').filter(Boolean).map((c) => c + '.').join('') : '';
+  // By code point, letters only: "Ç" must come out as "Ç.", and anything that
+  // is not a letter (a stray digit or punctuation) is not an initial.
+  const letters = Array.from(initials || '').filter((c) => /\p{L}/u.test(c));
+  const inits = letters.length ? ', ' + letters.map((c) => c + '.').join('') : '';
   return surname + inits + ', et al.';
 }
 
@@ -92,7 +106,7 @@ export function parseCrossrefWork(it: Record<string, any>): EvidenceItem | null 
     journal: plain(String((it['container-title'] || [])[0] || '')) || 'Crossref',
     year: Number(it?.issued?.['date-parts']?.[0]?.[0]) || null,
     doi,
-    firstAuthor: authorLabel(surname, a.given ? String(a.given)[0] : ''),
+    firstAuthor: authorLabel(surname, a.given ? Array.from(String(a.given).trim())[0] || '' : ''),
     abstract,
   };
 }

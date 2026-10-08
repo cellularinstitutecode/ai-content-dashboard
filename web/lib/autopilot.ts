@@ -3262,7 +3262,13 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
     const p0 = pack as unknown as Record<string, unknown>;
     const caption0 = String(p0.instagram || p0.facebook || p0.linkedin || p0.blog || '');
     onTopic = (await studyOnTopic(caption0, { title: help.item.title, year: help.item.year, abstract: help.item.abstract, ref: help.ref })) === true;
-    if (!onTopic) changes.push('the closest study found (' + help.ref.replace(/^REF:\s*/, '').slice(0, 120) + ') is on a different subject, so the post was not rewritten around it');
+    if (!onTopic) {
+      // Cut at a word and say so: "Monitoring the operational changes in
+      // surface reflectances af)" read as a title with a hole in it.
+      const label = help.ref.replace(/^REF:\s*/, '');
+      const short = label.length > 120 ? label.slice(0, 120).replace(/\s+\S*$/, '') + '…' : label;
+      changes.push('the closest study found (' + short + ') is on a different subject, so the post was not rewritten around it');
+    }
   }
   if (help && onTopic) {
     const study = { title: help.item.title, year: help.item.year, abstract: help.item.abstract, ref: help.ref };
