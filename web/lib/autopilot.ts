@@ -77,6 +77,7 @@ import { ARTICLE_LINK_PLACEHOLDER, PROMO_DELAY_MINUTES, articleLogNote, articleU
 import { refTitle, verifyDoi } from '@/lib/citation';
 import { findByDoi, findEvidence } from '@/lib/evidence';
 import { claimSupportRefusal } from '@/lib/citation-gate';
+import { approvalRemarkNote, recordApprovalRemarks } from '@/lib/approval-remarks';
 import { autoFixCitation } from '@/lib/citation-autofix';
 import { strategyClaimSupport } from '@/lib/strategy-claim-support';
 import { ensureKeywords } from '@/lib/keyword-guard';
@@ -1983,6 +1984,16 @@ export async function advanceRuns(opts: {
 
 export type ApproveOptions = {
   /**
+   * A PERSON pressed Approve. The citation checks below — a missing REF line,
+   * a DOI with no record, a DOI that points at a different paper, a study
+   * that does not back the claim — then write what they found down as
+   * remarks on the draft and let the send go ahead, instead of refusing and
+   * sending the reviewer back to the card (lib/approval-remarks.ts). The
+   * engine's own auto-schedule never sets this: nobody has looked, so the
+   * same findings still refuse there.
+   */
+  remarkCitation?: boolean;
+  /**
    * true  → the post goes straight into Metricool's live queue and publishes
    *         at the run's slot (the reviewer pressed "Approve & schedule");
    * false → it lands in the review queue as before (the default).
@@ -2262,15 +2273,20 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     const kw = await ensureKeywords({ userId: run.user_id, draftId: run.draft_id, text: caption, pack: pack as unknown as Record<string, unknown> });
     if (kw.backfilled && kw.pack) pack = kw.pack as unknown as ContentPack;
   }
+  // What the citation checks found and a person approved past. Written onto
+  // the draft and into the note at the end (lib/approval-remarks.ts).
+  const remarks: string[] = [];
   const plan = perNetworkPlan(pack as unknown as Record<string, unknown>, mcProviders, {
     aviso,
     refPolicy,
     transform: wantsArticle ? (_network, text) => withArticleLink(text, ARTICLE_LINK_PLACEHOLDER) : undefined,
+    citationAsRemark: opts.remarkCitation === true,
   });
   if (!plan.ok) {
     await releaseClaim(db, run, 'approve-refused', 'Not sent: ' + plan.reason + ' Edit the draft, then approve again.');
     return { ok: false, note: plan.reason + ' The run is back in your queue.' };
   }
+  remarks.push(...plan.remarks);
   let sends = plan.sends;
 
   // A CITATION CROSSREF SAID DOES NOT EXIST. The generator re-rolls a DOI
@@ -2281,9 +2297,12 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
   const stamp = (pack as ContentPack & { _compliance?: { citation?: { status?: string | null; doi?: string | null; title?: string | null } | null } })._compliance;
   const badDoi = knownBadCitation(stamp, sends);
   if (badDoi) {
-    const why = 'Not sent: Crossref has no record of the study cited in the REF line (DOI ' + badDoi + '). Replace the citation with a real study, then approve again. Nothing was sent.';
-    await releaseClaim(db, run, 'approve-refused', why);
-    return { ok: false, note: why };
+    if (opts.remarkCitation) remarks.push('Crossref has no record of the study cited in the REF line (DOI ' + badDoi + ').');
+    else {
+      const why = 'Not sent: Crossref has no record of the study cited in the REF line (DOI ' + badDoi + '). Replace the citation with a real study, then approve again. Nothing was sent.';
+      await releaseClaim(db, run, 'approve-refused', why);
+      return { ok: false, note: why };
+    }
   }
   // Every DOI is checked now, the stamped one included: the title in the REF
   // line must match the paper the DOI resolves to, and older stamps never
@@ -2295,13 +2314,15 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
       checked = { ...checked, status: 'mismatch', title: stamp.citation.title ?? null };
     }
     if (checked.status === 'not_found') {
+      if (opts.remarkCitation) { remarks.push('Crossref has no record of the study cited in the REF line (DOI ' + doi + ').'); continue; }
       const why = 'Not sent: Crossref has no record of the study cited in the REF line (DOI ' + doi + '). Replace the citation with a real study, then approve again. Nothing was sent.';
       await releaseClaim(db, run, 'approve-refused', why);
       return { ok: false, note: why };
     }
     if (checked.status === 'mismatch') {
-      const why = 'Not sent: the DOI in the REF line points to a different paper: ' + (checked.title ? '"' + checked.title + '"' : 'not the study it names') +
-        ' (DOI ' + doi + '). Replace the citation with the study the post means, then approve again. Nothing was sent.';
+      const points = 'the DOI in the REF line points to a different paper: ' + (checked.title ? '"' + checked.title + '"' : 'not the study it names') + ' (DOI ' + doi + ').';
+      if (opts.remarkCitation) { remarks.push(points.charAt(0).toUpperCase() + points.slice(1)); continue; }
+      const why = 'Not sent: ' + points.replace(/\.$/, '') + ' Replace the citation with the study the post means, then approve again. Nothing was sent.';
       await releaseClaim(db, run, 'approve-refused', why);
       return { ok: false, note: why };
     }
@@ -2341,8 +2362,11 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     }
     const unsupported = claimSupportRefusal(status);
     if (unsupported) {
-      await releaseClaim(db, run, 'approve-refused', unsupported);
-      return { ok: false, note: unsupported + ' The run is back in your queue.' };
+      if (opts.remarkCitation) remarks.push('The study cited in the REF line does not support what the post says.');
+      else {
+        await releaseClaim(db, run, 'approve-refused', unsupported);
+        return { ok: false, note: unsupported + ' The run is back in your queue.' };
+      }
     }
   }
 
@@ -2692,6 +2716,16 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
         postId: insertedIds[i] || '',
       });
     }
+  }
+  // THE REMARKS. What the citation checks found and the reviewer approved
+  // past: on the draft, where the card and the queue can read it, and at the
+  // front of the note, so the decision is on record rather than lost with
+  // the card.
+  if (remarks.length) {
+    // Once each: the stamp and the live check can name the same DOI.
+    const unique = [...new Set(remarks)];
+    note = approvalRemarkNote(unique) + ' ' + note;
+    await recordApprovalRemarks(db, { draftId: run.draft_id, userId, remarks: unique });
   }
   const { error: logError } = await db
     .from('template_runs')

@@ -75,6 +75,7 @@ export default function RunPreview({
   onApprove,
   onApproveDraft,
   onSkip,
+  onRegenerate,
   onReschedule,
   onFix,
   imageControls,
@@ -86,6 +87,8 @@ export default function RunPreview({
   onApprove: () => void;
   onApproveDraft: () => void;
   onSkip: () => void;
+  /** "Ask for changes": the caller collects the note and posts { action: 'regenerate' }. */
+  onRegenerate?: () => void;
   /** "Reschedule": any date and time for this draft (the caller opens the box). */
   onReschedule?: () => void;
   /**
@@ -148,7 +151,7 @@ export default function RunPreview({
           )}
           {citation && citation.status !== 'verified' && citation.status !== 'not_required' && (
             <div className={'mb-2 rounded-xl px-3 py-2 text-[12px] ' + (citationBad ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}>
-              {citationBad ? '✗ ' : '⚠ '}{citationLabel(citation)}{citation.status === 'not_found' || citation.status === 'mismatch' ? ' — this post will not be sent until the REF line cites a real study.' : ''}
+              {citationBad ? '✗ ' : '⚠ '}{citationLabel(citation)}{citationBad ? ' — you can still approve; it goes out with this remark on record. Press Fix citation first if you want it replaced.' : ''}
             </div>
           )}
           {claim && (
@@ -202,6 +205,9 @@ export default function RunPreview({
                 <span className="text-[11px] text-ink/50" title="Articles are approved and scheduled together, so the post and its link go out at the slot.">No draft option for articles</span>
               ) : (
                 <button type="button" disabled={busy || fixing} onClick={onApproveDraft} className={btn + 'text-ink/70 ring-1 ring-black/10 hover:bg-black/5'}>Approve as draft</button>
+              )}
+              {onRegenerate && (
+                <button type="button" disabled={busy || fixing} onClick={onRegenerate} className={btn + 'text-ink ring-1 ring-black/10 hover:bg-black/5'}>{busy ? 'Working…' : 'Ask for changes'}</button>
               )}
             </>
           )}

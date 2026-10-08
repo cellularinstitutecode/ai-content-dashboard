@@ -83,3 +83,26 @@ test('wiring: Approve checks every DOI against its REF title and refuses a misma
   assert.match(approve, /the DOI in the REF line points to a different paper: /);
   assert.doesNotMatch(approve, /if \(doi === stampedDoi\) continue;/, 'the stamped DOI is checked too');
 });
+
+test('a person approving goes past a missing REF line with a remark; the AVISO never', () => {
+  const noRef = { instagram: 'A post with no reference.', facebook: 'A post with no reference.' };
+  // Strict (the engine's own auto-schedule): refused as before.
+  const strict = perNetworkPlan(noRef, ['instagram', 'facebook'], { aviso: AVISO });
+  assert.equal(strict.ok, false);
+  // A person: the send goes, the finding is a remark naming the network.
+  const lenient = perNetworkPlan(noRef, ['instagram', 'facebook'], { aviso: AVISO, citationAsRemark: true });
+  assert.ok(lenient.ok);
+  if (lenient.ok) {
+    assert.equal(lenient.sends.length, 2);
+    assert.equal(lenient.remarks.length, 2);
+    assert.match(lenient.remarks[0], /^Instagram: the REF line citing a scientific study is missing\.$/);
+    assert.match(lenient.sends[0].text, /AVISO DE PUBLICIDAD/, 'the notice is still stamped');
+  }
+  // A REF line without a DOI is the other citation remark.
+  const noDoi = { instagram: 'Post.\n\nREF: Smith, J. (2020). A study. A Journal.' };
+  const lenientDoi = perNetworkPlan(noDoi, ['instagram'], { aviso: AVISO, citationAsRemark: true });
+  assert.ok(lenientDoi.ok && /has no DOI/.test(lenientDoi.remarks[0]));
+  // A clean plan carries no remarks.
+  const clean = perNetworkPlan(pack, ['instagram', 'facebook'], { aviso: AVISO, citationAsRemark: true });
+  assert.ok(clean.ok && clean.remarks.length === 0);
+});

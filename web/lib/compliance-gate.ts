@@ -17,6 +17,12 @@ export type GateResult = {
   aviso: string;
   check: ComplianceCheck | null;
   message: string;
+  /**
+   * What the citation checks found when `citationAsRemark` let the post
+   * through anyway (lib/approval-remarks.ts). Empty when nothing was found,
+   * or when the gate refused.
+   */
+  remarks: string[];
 };
 
 /** The permit number this user's posts must carry. Tolerates a database that predates the column. */
@@ -49,17 +55,30 @@ export async function complianceGate(
   userId: string,
   text: string,
   providers: readonly string[] | string | null | undefined,
-  opts: { refPolicy?: RefPolicy; claimSupport?: string | null } = {},
+  opts: { refPolicy?: RefPolicy; claimSupport?: string | null; citationAsRemark?: boolean } = {},
 ): Promise<GateResult> {
   const aviso = await avisoForUser(userId);
-  if (!appliesTo(providers)) return { ok: true, applies: false, aviso, check: null, message: '' };
+  if (!appliesTo(providers)) return { ok: true, applies: false, aviso, check: null, message: '', remarks: [] };
   const check = checkCompliance(text, aviso, { refPolicy: opts.refPolicy });
+  const remarks: string[] = [];
   if (!check.ok) {
-    return { ok: false, applies: true, aviso, check, message: complianceMessage(check, Array.isArray(providers) ? providers : providers ? [providers] : null) };
+    const message = complianceMessage(check, Array.isArray(providers) ? providers : providers ? [providers] : null);
+    // A person approving may send past a missing or DOI-less REF line, with
+    // the finding written down (lib/approval-remarks.ts). The AVISO is never
+    // waved through: a missing or wrong permit number refuses as before.
+    if (!(opts.citationAsRemark && !check.missing.includes('aviso'))) {
+      return { ok: false, applies: true, aviso, check, message, remarks: [] };
+    }
+    remarks.push(check.missing.includes('ref')
+      ? 'The REF line citing a scientific study is missing.'
+      : 'The REF line has no DOI, so the citation could not be checked.');
   }
   const unsupported = claimSupportRefusal(opts.claimSupport);
-  if (unsupported) return { ok: false, applies: true, aviso, check, message: unsupported };
-  return { ok: true, applies: true, aviso, check, message: '' };
+  if (unsupported) {
+    if (!opts.citationAsRemark) return { ok: false, applies: true, aviso, check, message: unsupported, remarks: [] };
+    remarks.push('The study cited in the REF line does not support what the post says.');
+  }
+  return { ok: true, applies: true, aviso, check, message: '', remarks };
 }
 
 /** The JSON body a refused request returns — the same shape everywhere. */

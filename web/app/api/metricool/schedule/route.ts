@@ -16,6 +16,7 @@ import { metricoolRefusal } from '@/lib/metricool-refusal';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { tiktokDataFor } from '@/lib/tiktok-meta';
 import { NextRequest, NextResponse } from 'next/server';
+import { recordApprovalRemarks } from '@/lib/approval-remarks';
 import { supabaseServer } from '@/lib/supabase';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { isAllowedEmail, ALLOWED_BLOG_IDS, DEFAULT_BLOG_ID } from '@/lib/access';
@@ -166,7 +167,9 @@ export async function POST(req: NextRequest) {
 
   // Instagram / Facebook copy must carry the advertising notice and a
   // scientific reference before it goes anywhere near the account.
-  const gate = await complianceGate(user.id, text, network, { refPolicy: draftRefPolicy, claimSupport: draftClaimSupport });
+  // A person is sending: a missing or unverifiable citation is written down
+  // as a remark and the post goes (lib/approval-remarks.ts); the AVISO still refuses.
+  const gate = await complianceGate(user.id, text, network, { refPolicy: draftRefPolicy, claimSupport: draftClaimSupport, citationAsRemark: true });
   if (!gate.ok) return NextResponse.json(gateRefusal(gate), { status: 422 });
 
   // AND THE MEDIA REQUIREMENT, on the server.
@@ -587,8 +590,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    if (gate.remarks.length && ownedDraftIdEarly) await recordApprovalRemarks(sb, { draftId: ownedDraftIdEarly, userId: user.id, remarks: gate.remarks });
     return NextResponse.json({
       ok: true,
+      // What the citation checks found and the sender went past, for the panel to say.
+      remarks: gate.remarks,
       // The copy that went out, when it is not the one the composer held, so
       // the panel can show the video Metricool has rather than the Drive link
       // it refused — and the next send starts from the right one.

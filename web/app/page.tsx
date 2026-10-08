@@ -26,6 +26,7 @@ import { appliesTo as complianceApplies, checkCompliance, complianceNetworksLabe
 import { PanelLoader } from "@/components/LoadingScreen";
 import Link from 'next/link';
 import { friendlyError, friendlyErrorFromResponse, friendlyImageError } from '@/lib/friendly-error';
+import { planFromPack } from '@/lib/pack-schedule';
 import { METRICOOL_BLOG_ID, METRICOOL_USER_ID, metricoolPlannerUrl } from '@/lib/metricool-links';
 import { postStatusMeta, isAwaitingApproval } from '@/lib/post-mode';
 import { mapLimit } from '@/lib/map-limit';
@@ -232,6 +233,9 @@ const [approvingId, setApprovingId] = useState<string | null>(null);
 const [attachingId, setAttachingId] = useState<string | null>(null);
 /** Recent Drafts: the ones ticked for "Delete selected". */
 const [pickedDrafts, setPickedDrafts] = useState<Set<string>>(() => new Set());
+/** Recent Drafts: the draft an Approve button is working on, and what the last one did. */
+const [draftActBusy, setDraftActBusy] = useState<string | null>(null);
+const [draftActMsg, setDraftActMsg] = useState<string | null>(null);
 /** What the last bulk delete did — shown IN the Recent Drafts panel, beside the buttons, not at the top of the page. */
 const [draftsMsg, setDraftsMsg] = useState<{ text: string; bad: boolean } | null>(null);
 const [bulkDeleting, setBulkDeleting] = useState(false);
@@ -1199,6 +1203,65 @@ setActionMsg(null);
 refreshPosts(); announce('posts');
 } catch (e) { setActionMsg(friendlyError(e, 'We could not attach the video to that post.')); }
 finally { setAttachingId(null); }
+}
+
+// Approve a saved draft RIGHT HERE — no composer, no Metricool tab. Every
+// channel the pack has copy for is sent at the next free posting slot;
+// `schedule` also approves the rows that made, so Metricool publishes then.
+// A citation the checks could not stand behind is a remark on the draft and
+// in the message, never a refusal (lib/approval-remarks.ts). Same four verbs
+// as an Autopilot card: this, "Approve as draft", Edit, Delete.
+async function approveDraft(d: any, schedule: boolean) {
+const id = String((d && (d.id || d._id)) || '');
+const pack = d && d.pack && typeof d.pack === 'object' ? d.pack : null;
+if (!id || !pack) { setDraftActMsg('This draft has nothing to send yet.'); return; }
+if (pack.kind === 'clip') { setDraftActMsg('Clips are sent from their own preview — open the draft to send it.'); return; }
+const mediaUrl = String((pack._image && pack._image.url) || '');
+const plans = planFromPack(pack, { mediaUrl, avisoNumber }).filter((p) => p.text && p.fits && !(p.needsMedia && !p.hasMedia));
+if (!plans.length) { setDraftActMsg('This draft has no social copy that can be sent — open it and add an image, or shorten it.'); return; }
+const nets = plans.map((p) => networkLabel(p.network)).join(', ');
+if (!window.confirm((schedule ? 'Approve and schedule this draft?' : 'Send this draft to your queue?') + '\n\nIt goes to ' + nets + ' at the next free posting slot' + (schedule ? ', and Metricool publishes it then.' : ', waiting for your final Approve in the queue.'))) return;
+setDraftActBusy(id); setDraftActMsg(null);
+try {
+const sr = await fetch('/api/schedule/next-slots?n=1');
+const sj = await sr.json().catch(() => null);
+const slot = sj && Array.isArray(sj.slots) ? String(sj.slots[0] || '') : '';
+if (!slot) throw new Error((sj && sj.message) || 'The posting calendar could not be read just now.');
+const results = await Promise.all(plans.map(async (p) => {
+const r = await fetch('/api/metricool/schedule', {
+method: 'POST', headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({ network: p.network, text: ensureAviso(p.text, avisoNumber), publishAt: slot, blogId: activeBlogId || METRICOOL_BLOG_ID, mediaUrl: mediaUrl || undefined, draftId: id }),
+});
+const data = await r.json().catch(() => ({}));
+return { network: p.network, ok: r.ok, data };
+}));
+const failed = results.filter((x) => !x.ok).map((x) => networkLabel(x.network) + ': ' + friendlyError(x.data));
+const remarks = Array.from(new Set(results.flatMap((x) => (x.ok && Array.isArray(x.data?.remarks) ? x.data.remarks : [])))) as string[];
+let approved = 0;
+if (schedule && results.some((x) => x.ok)) {
+// The rows those sends just made, approved through the same door the queue uses.
+const pr = await fetchPosts();
+const pj = await pr.json().catch(() => null);
+const rows = ((pj && Array.isArray(pj.posts)) ? pj.posts : toArray(pj)) as any[];
+const mine = rows.filter((p) => String(p?.draft_id || '') === id && isAwaitingApproval(p?.status) && p?.videoPending !== true);
+for (const p of mine) {
+const r = await fetch('/api/posts', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: String(p.id), action: 'approve' }) });
+if (r.ok) approved++;
+else failed.push(networkLabel(String((p.providers || [])[0] || '')) + ': ' + (await friendlyErrorFromResponse(r, 'could not be approved')));
+}
+}
+const sent = results.filter((x) => x.ok).map((x) => networkLabel(x.network));
+setDraftActMsg([
+sent.length
+? (schedule ? 'Approved and scheduled for ' : 'Sent to your queue for ') + sent.join(', ') + ' at ' + fmtDateTime(slot) +
+(schedule ? (approved ? ' — Metricool publishes it then.' : ' — still waiting for your Approve in the queue.') : '. Press Approve there when you are happy.')
+: '',
+remarks.length ? 'Remark on the citation: ' + remarks.join(' ') : '',
+failed.length ? 'Not sent — ' + failed.join('; ') : '',
+].filter(Boolean).join(' '));
+refreshPosts(); announce('posts', 'stats', 'drafts', 'insights');
+} catch (e) { setDraftActMsg(friendlyError(e, 'We could not send that draft.')); }
+finally { setDraftActBusy(null); }
 }
 
 async function deleteDraft(id: string) {
@@ -2919,6 +2982,7 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 {/* Recent Drafts */}
 <section id="section-library" className={"rounded-3xl bg-surface p-6 shadow-card ring-1 ring-line/60 sm:p-7" + (isDraft ? " 2xl:col-span-2" : "")}>
 <h2 className="mb-4 text-headline font-semibold">Recent Drafts</h2>
+{draftActMsg ? (<p className="mb-3 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-900 ring-1 ring-amber-200">{draftActMsg}</p>) : null}
 {/* Several at once: tick the drafts, then one Delete. The per-row Delete stays. */}
 {safeDrafts.length > 0 && (() => {
 const listed = safeDrafts.map((d: any) => String((d && (d.id || d._id)) || '')).filter(Boolean);
@@ -3071,7 +3135,13 @@ className="mt-3 h-4 w-4 shrink-0 cursor-pointer accent-rose-600" />
 </div>
 {body && <div className="mt-0.5 line-clamp-2 text-[13px] text-ink-muted">{String(body)}</div>}
 </div>
-<div className="ml-auto flex shrink-0 items-center gap-1 self-center">
+<div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-1 self-center">
+{d?.pack?.kind !== 'clip' ? (<>
+<button type="button" aria-label="Approve and schedule" disabled={draftActBusy === String((d && (d.id || d._id)) || '')} onClick={(e) => { e.stopPropagation(); void approveDraft(d, true); }}
+className="rounded-lg bg-accent px-2.5 py-1 text-[12px] font-semibold text-white transition hover:opacity-90 disabled:opacity-50">{draftActBusy === String((d && (d.id || d._id)) || '') ? 'Working…' : 'Approve & schedule'}</button>
+<button type="button" aria-label="Approve as draft" disabled={draftActBusy === String((d && (d.id || d._id)) || '')} onClick={(e) => { e.stopPropagation(); void approveDraft(d, false); }}
+className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle disabled:opacity-50">Approve as draft</button>
+</>) : null}
 <button type="button" aria-label="Edit draft" onClick={(e) => { e.stopPropagation(); prefillComposerFromDraft(d); }}
 className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Edit</button>
 <button type="button" aria-label="Delete draft" onClick={(e) => { e.stopPropagation(); deleteDraft((d && (d.id || d._id)) || ''); }}
@@ -3187,7 +3257,11 @@ className="min-w-0 flex-1 rounded-xl bg-subtle px-3 py-2 text-[16px] font-semibo
 {!editingDraft ? (
 <button onClick={() => startEditDraft(selectedDraft)} className="rounded-xl px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Edit</button>
 ) : null}
-{!editingDraft && !(selectedDraft && selectedDraft.pack && selectedDraft.pack.kind === "clip") ? (<button onClick={() => prefillComposerFromDraft(selectedDraft)} className="rounded-xl bg-accent px-3 py-1.5 text-[13px] font-semibold text-white transition hover:bg-accent-hover">Schedule / Publish</button>) : null}
+{!editingDraft && !(selectedDraft && selectedDraft.pack && selectedDraft.pack.kind === "clip") ? (<>
+<button type="button" disabled={draftActBusy === String((selectedDraft && (selectedDraft.id || selectedDraft._id)) || '')} onClick={() => void approveDraft(selectedDraft, true)} className="rounded-xl bg-accent px-3 py-1.5 text-[13px] font-semibold text-white transition hover:bg-accent-hover disabled:opacity-50">{draftActBusy === String((selectedDraft && (selectedDraft.id || selectedDraft._id)) || '') ? 'Working…' : 'Approve & schedule'}</button>
+<button type="button" disabled={draftActBusy === String((selectedDraft && (selectedDraft.id || selectedDraft._id)) || '')} onClick={() => void approveDraft(selectedDraft, false)} className="rounded-xl px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle disabled:opacity-50">Approve as draft</button>
+<button onClick={() => prefillComposerFromDraft(selectedDraft)} title="Pick the channels and a time yourself" className="rounded-xl px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Pick a time</button>
+</>) : null}
 <button onClick={() => { setSelectedDraft(null); setEditingDraft(false); }} className="rounded-xl px-3 py-1.5 text-[13px] font-medium text-ink-muted ring-1 ring-line transition hover:bg-subtle">Close</button>
 </div>
 </div>

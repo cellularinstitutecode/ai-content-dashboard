@@ -214,7 +214,8 @@ export async function POST(req: NextRequest) {
     // `redate: true` is "Approve for next free slot" on a card whose time has
     // already passed. Without it approveRun refuses a past slot rather than
     // sending Metricool a date it will not accept.
-    const result = await approveRun(id, user.id, { schedule: body?.schedule === true, redate: body?.redate === true });
+    // A person pressed the button: a citation problem is remarked, not refused.
+    const result = await approveRun(id, user.id, { schedule: body?.schedule === true, redate: body?.redate === true, remarkCitation: true });
     if (!result.ok) return NextResponse.json({ error: result.note }, { status: 400 });
     return NextResponse.json({ ok: true, note: result.note });
   }
