@@ -3402,7 +3402,7 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
         changes.push('no study on this subject was found, so the health claims were turned into general advice and the citation line was removed (' + keys.join(', ') + ') — read it before approving');
         if (!stillBad(pack)) return finish(true, '');
       } else {
-        const words = [...new Set(results.flatMap((r) => r.flagged))].slice(0, 8);
+        const words = [...new Set(results.flatMap((r) => r.flagged.map((w) => String(w).trim())).filter(Boolean))].slice(0, 8);
         reason = 'no study on this post\u2019s subject was found, and the claims could not be taken out automatically' + (words.length ? ' (still reads as a claim: ' + words.join(', ') + ')' : '') + ' — edit those sentences, or press Fix citation again';
       }
     }

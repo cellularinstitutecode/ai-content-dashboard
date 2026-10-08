@@ -20,7 +20,7 @@
 // convenience is worth it.
 //
 // Pure: `./x.ts` imports only, so the test runner reads this file directly.
-import type { EvidenceItem } from './evidence-parse.ts';
+import { plain, type EvidenceItem } from './evidence-parse.ts';
 
 /** A DOI as it really looks. The same shape lib/compliance.ts accepts. */
 const DOI_RE = /^10\.\d{4,9}\/\S+$/;
@@ -56,10 +56,13 @@ export function pickCitation(items: readonly EvidenceItem[] | null | undefined):
  * its own gate then refuses would be worse than useless.
  */
 export function refLineFrom(item: EvidenceItem): string {
-  const author = String(item.firstAuthor || '').trim();
+  // Decoded again here, not only when the paper was parsed: drafts keep
+  // their papers (pack._evidence), and the ones stored before the parser
+  // decoded numeric references still carry "L&#xf3;pez" — a card showed it.
+  const author = plain(String(item.firstAuthor || ''));
   const year = Number(item.year) || null;
-  const title = String(item.title || '').trim().replace(/\s+/g, ' ').replace(/\.*$/, '');
-  const journal = String(item.journal || '').trim();
+  const title = plain(String(item.title || '')).replace(/\.*$/, '');
+  const journal = plain(String(item.journal || ''));
   const doi = String(item.doi || '').trim();
 
   // The parsers already hand over "Surname, I., et al." — appending another
