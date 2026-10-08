@@ -914,7 +914,7 @@ export default function AutopilotQueue() {
                         disabled={busyIds.has(r.id) || fixRunning(r.angle)}
                         className="rounded-full bg-accent px-4 py-1.5 text-[13px] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
                       >
-                        {busyIds.has(r.id) ? 'Working…' : 'Approve for next free slot'}
+                        {busyIds.has(r.id) ? 'Working…' : 'Approve'}
                       </button>
                     ) : (
                       <>
