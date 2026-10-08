@@ -26,7 +26,7 @@
 import { pickPrimary, withoutShopping } from '@/lib/keyword-brief';
 import { reportError } from '@/lib/report';
 import { decideSpend, applyCharge, type SpendDecision } from '@/lib/semrush-budget';
-import { liveSemrushAllowed, semrushMode } from '@/lib/semrush-policy';
+import { liveAllowedByPolicy, liveSemrushAllowed, semrushMode } from '@/lib/semrush-policy';
 import { reasonForCode, reasonForHttpStatus, type SemrushReason } from '@/lib/semrush-reason';
 import { mcpExecuteReport, toMcpCall, toMcpProjectCall, transportFor, type McpCall, type SemrushTransport } from '@/lib/semrush-transport';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -359,7 +359,12 @@ export function refusalReason(d: SpendDecision): { reason: SemrushReason; note: 
 export type KeywordCapability = {
   /** Would a keyword lookup for a draft run live right now? */
   ok: boolean;
-  reason: 'ok' | 'no_token' | 'budget' | 'balance_unknown';
+  /**
+   * 'policy' is the deliberate "no": SEMRUSH_MODE reserves live spend for a
+   * person's click (lib/semrush-policy.ts), so a draft — automatic work — reads
+   * the cache. Nothing is broken; the panel's buttons still fetch live.
+   */
+  reason: 'ok' | 'no_token' | 'budget' | 'balance_unknown' | 'policy';
   balance: number | null;
   floor: number;
   /** How requests leave the app: direct v3, or Semrush's MCP server. */
@@ -387,6 +392,11 @@ export async function keywordCapability(): Promise<KeywordCapability> {
   const transport = semrushTransport();
   if (!hasKey) return { ok: false, reason: 'no_token', balance: null, floor, transport };
   const balance = await getUnitsBalance();
+  // A draft is automatic work whatever request happens to be asking — the
+  // panel's own Analyze click included — so the policy is read for the
+  // automatic origin, not the current one. Decided before the floor: in
+  // manual mode the pot's health does not change the answer for drafts.
+  if (!liveAllowedByPolicy(semrushMode(), 'auto')) return { ok: false, reason: 'policy', balance, floor, transport };
   const decision = decideSpend(balance, UNIT_COST.phrase_related, floor, hasKey);
   if (decision.allow) return { ok: true, reason: 'ok', balance, floor, transport };
   return {

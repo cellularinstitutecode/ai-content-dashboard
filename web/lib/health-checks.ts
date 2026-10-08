@@ -14,6 +14,7 @@ import 'server-only';
 
 import { ALLOWED_EMAILS, ALLOWED_BLOG_IDS } from '@/lib/access';
 import { keywordCapability } from '@/lib/semrush';
+import { semrushMode } from '@/lib/semrush-policy';
 import { lastImageOutcome, lastProviderOutcome, type ProviderName } from '@/lib/provider-status';
 import { resolveFfmpeg } from '@/lib/audio-extract';
 import { missingSchema } from '@/lib/schema-check';
@@ -362,13 +363,20 @@ export async function runHealthChecks(): Promise<HealthReport> {
     },
     {
       name: 'semrush',
-      ok: keywords.ok,
+      // 'policy' is the configured default (SEMRUSH_MODE=manual): drafts read
+      // stored keyword data on purpose and the SEO panel still fetches live.
+      // That is the app working as set, so it is not reported as a fault.
+      ok: keywords.ok || keywords.reason === 'policy',
       code: keywords.reason,
       severity: 'optional',
       detail: keywords.ok
         ? 'Live keyword research is running over ' +
           (keywords.transport === 'mcp' ? 'the Semrush MCP server (v4 key)' : 'the Standard API (v3 key)') +
           '. Balance ' + keywords.balance + ' units, floor ' + keywords.floor + '.'
+        : keywords.reason === 'policy'
+          ? 'Live keyword lookups are reserved for the SEO panel and Keyword Intelligence (SEMRUSH_MODE=' +
+            semrushMode() + '); drafts, Autopilot and the assistant use stored keyword data. Balance ' +
+            keywords.balance + ' units, floor ' + keywords.floor + '.'
         : keywords.reason === 'no_token'
           ? 'SEMRUSH_API_KEY is unset: the keyword layer degrades to cache-or-link-out — the Semrush ' +
             'panel, the assistant’s live grounding and Autopilot’s angle selection all lose their data.'
