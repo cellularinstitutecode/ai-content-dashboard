@@ -263,7 +263,7 @@ export async function POST(req: NextRequest) {
     if (!ok) {
       return NextResponse.json({
         error: 'run cannot be regenerated',
-        message: 'This post cannot be redrafted. If its time has already passed, use "Approve for next free slot" or skip it.',
+        message: 'This post cannot be redrafted. If its time has already passed, press Approve to send it at the next open time, or skip it.',
       }, { status: 400 });
     }
     // Redraft immediately so the reviewer gets the new version in one click.

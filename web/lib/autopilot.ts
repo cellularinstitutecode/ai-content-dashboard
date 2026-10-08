@@ -1591,7 +1591,7 @@ async function autoSchedule(
     // engine's: approveRun would refuse it anyway, and moving a post to a new
     // time is something only a reviewer asks for.
     if (isMissed(run)) {
-      await hold(db, run, 'Held for you because this post\'s time has already passed. Nothing was sent. Use "Approve for next free slot" to send it at the next open time, or skip it.');
+      await hold(db, run, 'Held for you because this post\'s time has already passed. Nothing was sent. Press Approve to send it at the next open time, or skip it.');
       return;
     }
     // A redraft a reviewer asked for waits for that reviewer. The !opts.runId
@@ -2158,7 +2158,7 @@ export async function approveRun(runId: string, userId: string, opts: ApproveOpt
     const missedAt = slotLabel(run.scheduled_for);
     if (!opts.redate) {
       const why = 'Not sent: this post was due ' + missedAt + ' and that time has passed. ' +
-        'Press "Approve for next free slot" to send it at the next open time, or skip it. Nothing was sent.';
+        'Press Approve to send it at the next open time, or skip it. Nothing was sent.';
       await releaseClaim(db, run, 'approve-refused', why);
       return { ok: false, note: why };
     }
