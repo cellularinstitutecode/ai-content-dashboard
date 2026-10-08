@@ -339,8 +339,12 @@ test('the prepare path refuses over claim support only after the repair has fail
   assert.ok(errors.includes('unsupported_citation'), 'a citation the judge rejected twice is refused, in words');
   const block = prepare.slice(prepare.indexOf('if (defect && defect.blocking) {'));
   assert.match(block, /defect\.kind === 'unsupported_citation'/, 'and only inside the blocking block, after the re-roll');
-  // The judge's 'none' is final for the fallback: no top search hit is cited over it.
-  assert.match(prepare, /&& verdict\.status !== 'none'\) \{\s*const found = refLineFromEvidence\(evidence\)/);
+  // No top search hit is ever cited over the judge — not after a 'none', and
+  // not in its absence either. The 'unchecked' gap put a tea-quality review
+  // under a reel about single-ingredient foods on 7 October; now a citation
+  // ships from the video writer only when the judge confirmed it backs the copy.
+  assert.doesNotMatch(prepare, /refLineFromEvidence\(evidence\)/);
+  assert.match(prepare, /const unsupported = !backing;/);
 });
 
 test('the judge fails open, in the file that talks to the provider', () => {

@@ -31,7 +31,7 @@ import { findEvidence } from '@/lib/evidence';
 import { evidenceBriefFrom } from '@/lib/evidence-brief';
 import type { EvidenceItem } from '@/lib/evidence-parse';
 import { claimFrom, claimQuery, supportedItem, type ClaimSupportStamp, type SupportVerdict } from '@/lib/claim-support';
-import { refLineFrom, refLineFromEvidence } from '@/lib/citation-from-evidence';
+import { refLineFrom } from '@/lib/citation-from-evidence';
 import { findBackingByClaims } from '@/lib/post-citation-fix';
 import { professionalTitle } from '@/lib/post-title';
 import { verifyDoi } from '@/lib/citation';
@@ -835,51 +835,27 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
       }
     }
 
-    // THE WRITER DID NOT PRODUCE ONE, OR PRODUCED ONE WITH NO DOI.
+    // NOT BACKED BY THE JUDGE IS NOT BACKED.
     //
-    // Fixed here rather than left for a person: the citation is built from a
-    // paper findEvidence already retrieved from PubMed above, and its DOI is
-    // then verified against Crossref like any other. Nothing is invented — if
-    // no paper was found, ref stays empty and the post is refused exactly as it
-    // is today, because a fabricated reference on a medical advertisement is a
-    // far worse thing than a missing one.
+    // There used to be a fallback here for a draft with no DOI: cite the top
+    // search hit, as long as the judge had not said 'none'. The September
+    // audit closed the 'none' case (a tadalafil trial under a peptides post).
+    // The 'unchecked' case stayed open — the judge not asked, or not
+    // answering — and on 7 October a reel about single-ingredient foods went
+    // out with a review of tea-quality testing under it: the writer's own
+    // pick from the papers it was handed, never judged, shipped as if it
+    // were. The send doors judged it again and refused LinkedIn.
     //
-    // And NOT when the judge has already read these papers and said none of
-    // them backs the copy. That was the September audit's finding: the judge
-    // answered 'none', this fallback then cited the top search hit anyway —
-    // a tadalafil trial under a peptides post, a vaccinia paper under a spine
-    // post — and the post went out looking referenced. A verdict of 'none'
-    // leaves ref empty here, and the draft is refused below as unsupported.
-    if ((!ref || !haveDoi(ref)) && verdict.status !== 'none') {
-      const found = refLineFromEvidence(evidence);
-      if (found) {
-        const candidate = found.replace(/^REF:\s*/i, '');
-        const verified = await verifyDoi(checkCompliance(found).doi);
-        if (verified.status === 'verified' || verified.status === 'unavailable') {
-          // 'unavailable' is Crossref being unreachable, not the paper being
-          // wrong — the DOI still came from PubMed. 'not_found' is a real
-          // rejection and falls through to no citation.
-          ref = candidate;
-          // TikTok's caption was composed above, BEFORE this recovery ran, so
-          // it has to be patched here or the network that most often carries
-          // the reel would be the one still missing its citation.
-          if (!checkCompliance(tiktok).doi) tiktok = composeCaption(tiktok + '\n\nREF: ' + ref, aviso);
-        }
-      }
-    }
-
-    // Judged, and nothing backed it. The copy still goes out — with the real,
-    // verified citation it has and a flag on the draft — and the writer gets
-    // one more attempt below to make a point its own research supports.
-    const unsupported = verdict.status === 'none' && !backing;
-    if (claimSupport.status === 'unchecked') {
-      // Not 'supported' and not 'swapped', so either nothing backed the claim
-      // or the question could not be asked. Both carry whatever citation the
-      // draft ended up with, which is real and verified either way.
-      claimSupport = {
-        status: unsupported ? 'unsupported' : 'unchecked',
-        doi: ref ? checkCompliance('REF: ' + ref).doi : null,
-      };
+    // So a citation ships from here only when the judge confirmed it backs the
+    // copy (rung 3 above). Anything else — the judge said no, the judge could
+    // not be asked, nothing was found to ask about — is unsupported: the
+    // writer gets one more draft, then rung 4 takes the claims out and the
+    // post goes without a citation, which under the clinic's rule is what a
+    // post that asserts nothing needs. Nothing is invented, and nothing
+    // unverified goes out looking referenced.
+    const unsupported = !backing;
+    if (unsupported) {
+      claimSupport = { status: 'unsupported', doi: ref ? checkCompliance('REF: ' + ref).doi : null };
     }
 
     // LinkedIn carries the notice and the citation too.
@@ -1025,6 +1001,20 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
         // Visible, like every other rung: a person approving the draft should
         // know its claims were taken out rather than backed.
         reportError('videos:claims-dropped', new Error('no study backs the copy; rewritten to claim nothing, REF removed'), { title });
+      } else if (dropped.why === 'time') {
+        // The clock, not the copy: a second pass with a full clock can finish
+        // the rung. Filed as out_of_time — the one failure lib/failure-kind.ts
+        // retries on its own — rather than as a terminal refusal of a video
+        // nothing is wrong with.
+        return {
+          ok: false,
+          status: 503,
+          error: 'out_of_time',
+          message: 'No study backs what the copy says, and there was no time left on this request to take the claims out of it. ' +
+            retryAdvice(t.banked),
+          needsPaste: false,
+          title,
+        };
       } else {
         return {
           ok: false,
@@ -1032,9 +1022,7 @@ export async function prepareVideo(input: PrepareInput): Promise<PrepareOk | Pre
           error: 'unsupported_citation',
           message: 'None of the studies found supports what the copy says, twice over — the writer kept making a point the papers in front of it do not show. ' +
             'A reference that backs nothing the post says cannot go under a medical advertisement. ' +
-            (dropped.why === 'time'
-              ? 'There was no time left to take the claims out of the copy. '
-              : 'The claims could not be taken out of the copy automatically' + (dropped.flagged.length ? ' (still reads as a claim: ' + dropped.flagged.join(', ') + ')' : '') + '. ') +
+            'The claims could not be taken out of the copy automatically' + (dropped.flagged.length ? ' (still reads as a claim: ' + dropped.flagged.join(', ') + ')' : '') + '. ' +
             retryAdvice(t.banked),
           needsPaste: false,
           title,
