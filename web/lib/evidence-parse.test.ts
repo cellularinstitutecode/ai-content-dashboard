@@ -72,6 +72,25 @@ test('markup and entities are stripped without decoding twice', () => {
   assert.equal(plain('<p>one</p>\n\n<p>two</p>'), 'one two');
 });
 
+test('numeric character references decode, and only once', () => {
+  // PubMed writes "Genç" as "Gen&#xe7;" and "Ö" as "&#214;". Both must come out
+  // as the letter — and an escaped reference ("&amp;#xe7;") must stay text.
+  assert.equal(plain('Gen&#xe7; &#214;zt&#xFC;rk'), 'Genç Öztürk');
+  assert.equal(plain('a &amp;#xe7; b'), 'a &#xe7; b');
+  assert.equal(plain('x &#1114112; y'), 'x y', 'a reference just past the last code point is dropped, not thrown');
+});
+
+test('an author with accented initials is labelled, not spelled out as entities', () => {
+  // The card showed "Gen&#xe7;, &#x.c.7.;&#x.d.6.;, et al." — the entity text
+  // split into "initials" with a dot after each character.
+  const xml = PUBMED_XML
+    .replace('<LastName>Calcat-i-Cervera</LastName>', '<LastName>Gen&#xe7;</LastName>')
+    .replace('<Initials>S</Initials>', '<Initials>&#xc7;&#xd6;</Initials>');
+  const got = parsePubmedArticle(xml);
+  assert.ok(got);
+  assert.equal(got.firstAuthor, 'Genç, Ç.Ö., et al.');
+});
+
 test('a Crossref work parses to the same shape', () => {
   const got = parseCrossrefWork({
     DOI: '10.1016/j.stem.2011.06.008',

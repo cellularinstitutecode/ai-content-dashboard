@@ -33,6 +33,16 @@ test('the line carries the author, year, title, journal and DOI', () => {
   assert.match(line, /DOI: 10\.1016\/j\.jrm\.2024\.01\.001$/);
 });
 
+test('an author label that already says "et al." is not doubled', () => {
+  // The parsers hand over "Surname, I., et al."; the line once read
+  // "Genç, Ç., et al. et al. (2025)." on a card.
+  const line = refLineFrom(paper({ firstAuthor: 'Genç, Ç.Ö., et al.', year: 2025 }));
+  assert.match(line, /^REF: Genç, Ç\.Ö\., et al\. \(2025\)\. Hyperbaric/);
+  assert.doesNotMatch(line, /et al\.\s*et al\./);
+  // Without a year the label still ends in exactly one full stop.
+  assert.match(refLineFrom(paper({ firstAuthor: 'Genç, Ç., et al', year: null })), /^REF: Genç, Ç\., et al\. Hyperbaric/);
+});
+
 test('a paper with no DOI is never cited', () => {
   // Nothing is invented. No DOI means no citation, and the post is refused
   // exactly as it is today — a fabricated reference on a medical advertisement

@@ -103,6 +103,10 @@ RATE_LIMIT_FAIL_OPEN=true
 # A v4-shaped Semrush key is routed through the MCP transport; point it at the mock.
 SEMRUSH_API_KEY=semrtkn-e2e-0000
 SEMRUSH_MCP_URL=http://127.0.0.1:54323
+# The suite proves the LIVE plumbing (research, spend log, 50,000 allowance)
+# from automatic paths too, so it runs the old policy; the app's default is
+# manual (lib/semrush-policy.ts), under which those checks would read cache.
+SEMRUSH_MODE=auto
 # Google Sheets/Drive + Crossref stand-in (e2e/mock-google.cjs)
 GOOGLE_API_BASE=http://127.0.0.1:54325
 GOOGLE_STATIC_TOKEN=e2e-google-token

@@ -62,8 +62,12 @@ export function refLineFrom(item: EvidenceItem): string {
   const journal = String(item.journal || '').trim();
   const doi = String(item.doi || '').trim();
 
+  // The parsers already hand over "Surname, I., et al." — appending another
+  // "et al." wrote "Genç, Ç., et al. et al. (2025)." onto a card. A bare
+  // "Smith AB" still gets the suffix.
+  const etAl = /\bet al\.?$/i.test(author) ? author.replace(/\.?$/, '.') : author + ' et al.';
   const parts: string[] = [];
-  if (author) parts.push(year ? author + ' et al. (' + year + ').' : author + '.');
+  if (author) parts.push(year ? etAl + ' (' + year + ').' : etAl);
   else if (year) parts.push('(' + year + ').');
   if (title) parts.push(title + '.');
   if (journal) parts.push(journal + '.');

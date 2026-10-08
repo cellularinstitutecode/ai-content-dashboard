@@ -99,7 +99,7 @@ type DomainBundle = {
   history: SnapshotRow[];
   balance: number | null;
   unitsSpent: number;
-  keywordResearch?: { ok: boolean; reason: 'ok' | 'no_token' | 'budget' | 'balance_unknown'; transport: 'v3' | 'mcp' };
+  keywordResearch?: { ok: boolean; reason: 'ok' | 'no_token' | 'budget' | 'balance_unknown' | 'policy'; transport: 'v3' | 'mcp' };
 };
 
 type TrackingSummary = {
@@ -966,7 +966,11 @@ export default function SemrushPanel({
               tag="AI × Semrush"
               title="Automatic keyword research"
               right={
-                bundle?.keywordResearch && !bundle.keywordResearch.ok ? (
+                bundle?.keywordResearch?.reason === 'policy' ? (
+                  // The configured default (SEMRUSH_MODE=manual): drafts read
+                  // stored keyword data on purpose; Analyze here still spends.
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700">Manual — drafts use stored keyword data</span>
+                ) : bundle?.keywordResearch && !bundle.keywordResearch.ok ? (
                   // The same fact the status banner states, so the two never
                   // disagree: research is paused, drafts still write.
                   <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800">Paused — drafts write without live data</span>
