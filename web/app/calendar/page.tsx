@@ -264,15 +264,15 @@ export default function CalendarPage() {
 
   // The reviewer's decision on an Autopilot draft — the same request the
   // Dashboard sends, so approve logic lives in one place (lib/autopilot.ts).
-  async function runAct(run: ReviewRun, action: 'approve' | 'skip' | 'fix', schedule = false, scope?: FixStep) {
-    const fallback = action === 'approve' ? 'We could not approve that draft.' : action === 'fix' ? 'We could not fix that draft.' : 'We could not skip that draft.';
+  async function runAct(run: ReviewRun, action: 'approve' | 'skip' | 'fix' | 'regenerate', schedule = false, scope?: FixStep, note?: string) {
+    const fallback = action === 'approve' ? 'We could not approve that draft.' : action === 'fix' ? 'We could not fix that draft.' : action === 'regenerate' ? 'We could not redraft that post.' : 'We could not skip that draft.';
     setRunBusy(run.id);
     setErr(null);
     try {
       const r = await fetch('/api/autopilot/runs', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id: run.id, action, schedule, ...(scope ? { scope } : {}) }),
+        body: JSON.stringify({ id: run.id, action, schedule, ...(scope ? { scope } : {}), ...(note ? { note } : {}) }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(friendlyError(j, fallback));
@@ -306,6 +306,11 @@ export default function CalendarPage() {
   function skipRun(run: ReviewRun) {
     if (!window.confirm('Skip this draft? It will not be published.')) return;
     void runAct(run, 'skip');
+  }
+  /** "Ask for changes": the same redraft the Dashboard card offers, from here. */
+  function askForChanges(run: ReviewRun) {
+    const feedback = window.prompt('What should change? The engine redrafts and must address your note.', '');
+    if (feedback !== null) void runAct(run, 'regenerate', false, undefined, feedback);
   }
   /** One repair — the citation, the image or the copy — each its own button and its own AI cost. */
   function fixRun(run: ReviewRun, step: FixStep) {
@@ -1080,6 +1085,9 @@ export default function CalendarPage() {
                           {!r.writes_article && (
                             <button type="button" disabled={runBusy === r.id || fixRunning(r.angle)} onClick={() => approveRunDraft(r)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/60 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">Approve as draft</button>
                           )}
+                          {!r.missed && (
+                            <button type="button" disabled={runBusy === r.id || fixRunning(r.angle)} onClick={() => askForChanges(r)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">Ask for changes</button>
+                          )}
                           <button type="button" disabled={runBusy === r.id} onClick={() => skipRun(r)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-50">Skip</button>
                         </div>
                       </div>
@@ -1264,6 +1272,7 @@ export default function CalendarPage() {
           onApprove={() => approveRunScheduled(previewRun)}
           onApproveDraft={() => approveRunDraft(previewRun)}
           onSkip={() => skipRun(previewRun)}
+          onRegenerate={() => askForChanges(previewRun)}
           onReschedule={() => openRescheduleRun(previewRun)}
           onFix={(step) => fixRun(previewRun, step)}
           imageControls={

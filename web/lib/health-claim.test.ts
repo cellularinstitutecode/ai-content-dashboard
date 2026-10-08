@@ -89,8 +89,8 @@ test('every template cites a study when the post makes a health claim, and not o
 });
 
 test('wiring: every gate that re-checks stored copy reads the draft\'s policy', () => {
-  assert.match(src('app/api/posts/route.ts'), /complianceGate\(user\.id, String\(existing\.text \|\| ''\), metricoolNetworks\(existing\.providers\), \{ refPolicy: refPolicyOf\(draftPack\), claimSupport: claimSupportOf\(draftPack\) \}\)/);
-  assert.match(src('app/api/metricool/schedule/route.ts'), /complianceGate\(user\.id, text, network, \{ refPolicy: draftRefPolicy, claimSupport: draftClaimSupport \}\)/);
+  assert.match(src('app/api/posts/route.ts'), /complianceGate\(user\.id, String\(existing\.text \|\| ''\), metricoolNetworks\(existing\.providers\), \{ refPolicy: refPolicyOf\(draftPack\), claimSupport: claimSupportOf\(draftPack\), citationAsRemark: true \}\)/);
+  assert.match(src('app/api/metricool/schedule/route.ts'), /complianceGate\(user\.id, text, network, \{ refPolicy: draftRefPolicy, claimSupport: draftClaimSupport, citationAsRemark: true \}\)/);
   // The sweep's own hand-off to Metricool reads the same policy: a video post
   // rewritten to claim nothing (lib/video-prepare.ts rung 4) carries no REF
   // line on purpose, and this door used to refuse it for exactly that.

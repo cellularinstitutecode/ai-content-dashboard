@@ -1,5 +1,6 @@
 // web/app/api/posts/route.ts
 import { complianceGate, gateRefusal } from '@/lib/compliance-gate';
+import { recordApprovalRemarks } from '@/lib/approval-remarks';
 import { refPolicyOf } from '@/lib/compliance';
 import { claimSupportOf } from '@/lib/citation-gate';
 import { fixPostCitation } from '@/lib/post-citation-fix';
@@ -691,8 +692,12 @@ export async function PATCH(req: Request) {
     // destination post needs a REF only when its text makes a health claim.
     // And under the judge's verdict on its citation: a REF line the judge
     // said backs nothing in the post is refused here, not flagged.
-    const gate = await complianceGate(user.id, String(existing.text || ''), metricoolNetworks(existing.providers), { refPolicy: refPolicyOf(draftPack), claimSupport: claimSupportOf(draftPack) });
+    // A person pressed Approve: a missing, unverifiable or unsupporting
+    // citation is written down as a remark on the draft and the post goes
+    // (lib/approval-remarks.ts). The AVISO still refuses.
+    const gate = await complianceGate(user.id, String(existing.text || ''), metricoolNetworks(existing.providers), { refPolicy: refPolicyOf(draftPack), claimSupport: claimSupportOf(draftPack), citationAsRemark: true });
     if (!gate.ok) return NextResponse.json(gateRefusal(gate), { status: 422 });
+    if (gate.remarks.length && existing.draft_id) await recordApprovalRemarks(supabaseAdmin(), { draftId: String(existing.draft_id), userId: user.id, remarks: gate.remarks });
 
     // And the video rule, at the same door rather than in a mechanism of its
     // own. Copy transcribed from a video may not go out without that video.

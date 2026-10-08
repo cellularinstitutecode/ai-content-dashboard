@@ -21,7 +21,7 @@ import { fitsNetwork } from './video-row.ts';
 export type NetworkSend = { network: string; text: string };
 
 export type NetworkPlan =
-  | { ok: true; sends: NetworkSend[] }
+  | { ok: true; sends: NetworkSend[]; remarks: string[] }
   | { ok: false; network: string; reason: string };
 
 function label(network: string): string {
@@ -49,9 +49,20 @@ export function channelCopy(pack: Record<string, unknown> | null | undefined, ne
 export function perNetworkPlan(
   pack: Record<string, unknown> | null | undefined,
   networks: readonly string[],
-  opts: { aviso?: string | null; transform?: (network: string, text: string) => string; refPolicy?: RefPolicy } = {},
+  opts: {
+    aviso?: string | null;
+    transform?: (network: string, text: string) => string;
+    refPolicy?: RefPolicy;
+    /**
+     * A person is approving: a REF line that is missing or has no DOI is
+     * written down as a remark and the send goes ahead (lib/approval-remarks.ts).
+     * The AVISO is never a remark — a wrong permit number still refuses.
+     */
+    citationAsRemark?: boolean;
+  } = {},
 ): NetworkPlan {
   const sends: NetworkSend[] = [];
+  const remarks: string[] = [];
   for (const network of networks) {
     let text = channelCopy(pack, network).trim();
     if (!text) return { ok: false, network, reason: 'The draft has no copy for ' + label(network) + '.' };
@@ -61,7 +72,13 @@ export function perNetworkPlan(
     if (appliesTo([network])) {
       text = ensureAviso(text, opts.aviso);
       const check = checkCompliance(text, opts.aviso, { refPolicy: opts.refPolicy });
-      if (!check.ok) return { ok: false, network, reason: complianceMessage(check, [network]) };
+      if (!check.ok) {
+        const onlyCitation = !check.missing.includes('aviso');
+        if (!(opts.citationAsRemark && onlyCitation)) return { ok: false, network, reason: complianceMessage(check, [network]) };
+        remarks.push(label(network) + ': ' + (check.missing.includes('ref')
+          ? 'the REF line citing a scientific study is missing.'
+          : 'the REF line has no DOI, so the citation could not be checked.'));
+      }
     }
     const fit = fitsNetwork(network, text);
     if (!fit.ok) {
@@ -69,7 +86,7 @@ export function perNetworkPlan(
     }
     sends.push({ network, text });
   }
-  return { ok: true, sends };
+  return { ok: true, sends, remarks };
 }
 
 /** The DOIs the sends actually carry, lower-cased and de-duplicated. */

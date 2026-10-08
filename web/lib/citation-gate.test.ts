@@ -70,7 +70,10 @@ test('every door a person sends through reads the judge\'s verdict', () => {
   const door = autopilot.slice(autopilot.indexOf('DOES THE STUDY BACK WHAT THE POST SAYS?'), autopilot.indexOf('// And the video rule, at the same door'));
   assert.match(door, /findByDoi\(cited\)/);
   assert.match(door, /judgeClaimSupport\(/);
-  assert.match(door, /const unsupported = claimSupportRefusal\(status\);\s*if \(unsupported\) \{\s*await releaseClaim\(db, run, 'approve-refused', unsupported\)/);
+  // A person's Approve writes the verdict down as a remark and goes ahead;
+  // the engine's own auto-schedule (no remarkCitation) still refuses.
+  assert.match(door, /const unsupported = claimSupportRefusal\(status\);\s*if \(unsupported\) \{\s*if \(opts\.remarkCitation\) remarks\.push\(/);
+  assert.match(door, /else \{\s*await releaseClaim\(db, run, 'approve-refused', unsupported\)/);
 });
 
 test('the video path never cites a search hit the judge has already rejected', () => {
