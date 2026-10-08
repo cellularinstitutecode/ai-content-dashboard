@@ -119,11 +119,58 @@ export const NO_CLAIM_SYSTEM = [
   'Answer with the full edited post and nothing else.',
 ].join('\n');
 
-export function noClaimPrompt(text: string, flagged: readonly string[] = []): string {
+export function noClaimPrompt(text: string, flagged: readonly string[] = [], sentences: readonly string[] = []): string {
   const again = flagged.length
     ? 'A first edit still used these words, which read as a health claim — replace every one, even where the sentence says something is NOT one (drop the sentence if need be): ' + flagged.join(', ') + '\n\n'
     : '';
-  return again + 'THE POST\n' + String(text || '').trim();
+  // The sentences themselves, quoted: an edit told only the words kept the
+  // sentence and swapped a synonym in; told the sentence, it rewrites or
+  // drops it.
+  const where = sentences.length
+    ? 'These sentences must be rewritten so they claim nothing, or left out entirely:\n' + sentences.map((s) => '- "' + s + '"').join('\n') + '\n\n'
+    : '';
+  return again + where + 'THE POST\n' + String(text || '').trim();
+}
+
+/** Split the body of a post into sentences, line breaks respected, hashtags and the compliance lines left out. */
+function sentencesOf(text: string): string[] {
+  return stripRefLine(String(text || ''))
+    .split('\n')
+    .filter((l) => !/AVISO\s+DE\s+PUBLICIDAD/i.test(l) && !/^\s*(#\S+\s*)+$/.test(l))
+    .flatMap((l) => l.split(/(?<=[.!?])\s+/))
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** The sentences of a post that use any of these words (each once, up to five), for the prompt. */
+export function sentencesWith(text: string, words: readonly string[]): string[] {
+  const list = words.map((w) => String(w || '').trim().toLowerCase()).filter(Boolean);
+  if (!list.length) return [];
+  const out: string[] = [];
+  for (const s of sentencesOf(text)) {
+    const low = s.toLowerCase();
+    if (list.some((w) => low.includes(w)) && !out.includes(s)) out.push(s);
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
+/**
+ * THE LAST RESORT when no model edit claims nothing: the sentences that read
+ * as a health claim are taken out, deterministically, and the REF line with
+ * them. The AVISO, the hashtags, the line breaks and every other sentence
+ * stay. The caller judges the result with acceptNoClaim — a post that lost
+ * most of itself is not taken.
+ */
+export function dropClaimSentences(text: string): string {
+  const lines = stripRefLine(String(text || '')).split('\n');
+  const kept = lines.map((line) => {
+    if (/AVISO\s+DE\s+PUBLICIDAD/i.test(line) || /^\s*(#\S+\s*)+$/.test(line) || !line.trim()) return line;
+    const parts = line.split(/(?<=[.!?])\s+/);
+    const clean = parts.filter((s) => !healthClaimWords(s).length);
+    return clean.join(' ').trim();
+  });
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 const REF_LINE_RE = /^[ \t]*REF(?:ERENCIA)?[ \t]*[.:：]/im;
@@ -152,6 +199,10 @@ export function acceptNoClaim(original: string, rewritten: unknown): { text: str
   if (ratio < 0.4 || ratio > 1.5) return { text: null, flagged: [] };
   if (/AVISO\s+DE\s+PUBLICIDAD/i.test(before) && !/AVISO\s+DE\s+PUBLICIDAD/i.test(out)) return { text: null, flagged: [] };
   if (REF_LINE_RE.test(out)) return { text: null, flagged: [] };
+  // A notice with no post left above it is not a post: nothing but the AVISO
+  // and hashtags survived.
+  const bodyLeft = out.split('\n').filter((l) => !/AVISO\s+DE\s+PUBLICIDAD/i.test(l) && !/^\s*(#\S+\s*)+$/.test(l)).join('').trim();
+  if (!bodyLeft) return { text: null, flagged: [] };
   if (makesHealthClaim(out)) return { text: null, flagged: healthClaimWords(out) };
   return { text: out, flagged: [] };
 }

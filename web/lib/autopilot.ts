@@ -51,7 +51,7 @@ import {
   rewriteWithoutClaims,
   studyOnTopic,
 } from '@/lib/ai';
-import { stripRefLine } from '@/lib/claim-rewrite';
+import { acceptNoClaim, dropClaimSentences, sentencesWith, stripRefLine } from '@/lib/claim-rewrite';
 import { makesHealthClaim } from '@/lib/health-claim';
 import { fixPostCitation } from '@/lib/post-citation-fix';
 import {
@@ -85,6 +85,7 @@ import { competitiveBrief } from '@/lib/competitive-brief';
 import { evidenceBriefFrom, type EvidenceItem } from '@/lib/evidence-brief';
 import { MAX_CANDIDATES, claimFrom, claimQuery, supportedItem, type ClaimSupportStamp, type SupportVerdict } from '@/lib/claim-support';
 import { pickCitation, refLineFrom } from '@/lib/citation-from-evidence';
+import { plain } from '@/lib/evidence-parse';
 import { FIX_STALLED_NOTE, fixImageMode, fixNote, fixPlan, fixRedraftNote, fixRunning, fixStale, fixTextHash, imageFlagged, runFixInput, swapRefLine, type FixScope, type FixStatus, type FixStep } from '@/lib/fix-plan';
 import { NETWORKS_NEEDING_MEDIA, mediaProblem } from '@/lib/composer';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
@@ -3264,7 +3265,9 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
   const memo = memoOf(pack);
   if (memo) {
     // Researched already, for these exact words: straight to the correction.
-    help = memo.closest;
+    // The REF line is built again from the paper rather than reused: one
+    // stored before the parser decoded names still read "L&#xf3;pez".
+    help = memo.closest ? { item: memo.closest.item, ref: refLineFrom(memo.closest.item) } : null;
     reason = 'no study found supports the copy as written';
     changes.push('the copy has not changed since the last press, so the research was not run again');
   } else {
@@ -3331,7 +3334,7 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
     if (!onTopic) {
       // Cut at a word and say so: "Monitoring the operational changes in
       // surface reflectances af)" read as a title with a hole in it.
-      const label = help.ref.replace(/^REF:\s*/, '');
+      const label = plain(help.ref.replace(/^REF:\s*/, ''));
       const short = label.length > 120 ? label.slice(0, 120).replace(/\s+\S*$/, '') + '…' : label;
       changes.push('the closest study found (' + short + ') is on a different subject, so the post was not rewritten around it');
     }
@@ -3380,10 +3383,23 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
       const keys = PACK_TEXT_KEYS.filter((k) => typeof p[k] === 'string' && String(p[k]).trim());
       const timeout = () => Math.min(45_000, left() - 15_000);
       let results = await Promise.all(keys.map((k) => rewriteWithoutClaims(String(p[k]), [], timeout())));
-      // One more try for each channel that still used a word that reads as a claim, told which.
-      if (results.some((r) => !r.text) && left() > 35_000) {
-        results = await Promise.all(keys.map((k, i) => results[i].text ? Promise.resolve(results[i]) : rewriteWithoutClaims(String(p[k]), results[i].flagged, timeout())));
+      // Up to three more tries for each channel that still used a word that
+      // reads as a claim — told which words, and quoted the sentences they sit
+      // in, so the edit lands on them rather than around them.
+      for (let round = 0; round < 3 && results.some((r) => !r.text) && left() > 35_000; round++) {
+        results = await Promise.all(keys.map((k, i) => results[i].text ? Promise.resolve(results[i]) : rewriteWithoutClaims(String(p[k]), results[i].flagged, timeout(), sentencesWith(String(p[k]), results[i].flagged))));
       }
+      // THE LAST RESORT, deterministic: the sentences that still read as a
+      // claim are taken out. "No study backs it" has to end in a post that
+      // claims nothing — a green card — not in a card asking a person to
+      // do it by hand.
+      let cut = false;
+      results = results.map((r, i) => {
+        if (r.text) return r;
+        const dropped = acceptNoClaim(String(p[keys[i]]), dropClaimSentences(String(p[keys[i]])));
+        if (dropped.text) cut = true;
+        return dropped.text ? dropped : r;
+      });
       if (keys.length && results.every((r) => r.text)) {
         const texts: Record<string, string> = {};
         keys.forEach((k, i) => { texts[k] = results[i].text as string; });
@@ -3399,7 +3415,8 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
         };
         // undefined drops the key: no study is cited, so there is no verdict on one.
         pack = await saveFixedPack(db, run, { ...texts, _compliance: compliance, _claimSupport: undefined, claimSupport: undefined });
-        changes.push('no study on this subject was found, so the health claims were turned into general advice and the citation line was removed (' + keys.join(', ') + ') — read it before approving');
+        changes.push('no study was found online for this subject, so the post now makes no health claims and carries no citation line (' + keys.join(', ') + ')' +
+          (cut ? '; the sentences that still read as a claim were taken out' : '') + ' — verified: no health claims, good to go; read it before approving');
         if (!stillBad(pack)) return finish(true, '');
       } else {
         const words = [...new Set(results.flatMap((r) => r.flagged.map((w) => String(w).trim())).filter(Boolean))].slice(0, 8);

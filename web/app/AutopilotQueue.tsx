@@ -656,6 +656,17 @@ export default function AutopilotQueue() {
                     </div>
                   )}
 
+                  {/* GREEN, not silence: a post that needs no citation says so.
+                      After Fix citation found no study online, that is the
+                      outcome the reviewer is waiting to see. */}
+                  {r.pack?._compliance?.citation?.status === 'not_required' && (
+                    <div className="border-b border-line bg-emerald-50 px-5 py-2.5 text-[12px] text-emerald-700">
+                      ✓ {(r.pack as { _citationSearch?: unknown } | null)?._citationSearch
+                        ? 'No study found online for this subject — the post was verified to make no health claims and needs no citation. Good to go.'
+                        : 'No citation needed — this post makes no health claims.'}
+                    </div>
+                  )}
+
                   {/* Whether the cited study backs what the post says — the
                       judge's verdict on a strategy post (lib/claim-support.ts).
                       An 'unsupported' also holds an auto-scheduled post. */}
