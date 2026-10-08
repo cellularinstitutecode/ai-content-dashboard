@@ -19,7 +19,7 @@ import { fmtScheduleTime, fmtScheduleSlot, fmtScheduleDateTime, scheduleDateKey,
 // is the one place to work from. Same route and same rules as the Dashboard.
 import { mergeByDate, reviewRuns, runText } from '@/lib/publishing-list';
 import RunPreview, { type ReviewRun } from '@/components/RunPreview';
-import { fixButtons, fixPlan, fixRunning, runFixInput, type FixStep } from '@/lib/fix-plan';
+import { fixBothButton, fixButtons, fixPlan, fixRunning, runFixInput, type FixScope } from '@/lib/fix-plan';
 import HeroImageControls from '@/components/HeroImageControls';
 
 type Post = {
@@ -264,7 +264,7 @@ export default function CalendarPage() {
 
   // The reviewer's decision on an Autopilot draft — the same request the
   // Dashboard sends, so approve logic lives in one place (lib/autopilot.ts).
-  async function runAct(run: ReviewRun, action: 'approve' | 'skip' | 'fix' | 'regenerate', schedule = false, scope?: FixStep, note?: string) {
+  async function runAct(run: ReviewRun, action: 'approve' | 'skip' | 'fix' | 'regenerate', schedule = false, scope?: FixScope, note?: string) {
     const fallback = action === 'approve' ? 'We could not approve that draft.' : action === 'fix' ? 'We could not fix that draft.' : action === 'regenerate' ? 'We could not redraft that post.' : 'We could not skip that draft.';
     setRunBusy(run.id);
     setErr(null);
@@ -313,7 +313,7 @@ export default function CalendarPage() {
     if (feedback !== null) void runAct(run, 'regenerate', false, undefined, feedback);
   }
   /** One repair — the citation, the image or the copy — each its own button and its own AI cost. */
-  function fixRun(run: ReviewRun, step: FixStep) {
+  function fixRun(run: ReviewRun, step: FixScope) {
     void runAct(run, 'fix', false, step);
   }
 
@@ -1063,6 +1063,8 @@ export default function CalendarPage() {
                   // An Autopilot draft: not in Metricool yet, so no tick, no
                   // move, no delete — preview, approve or skip.
                   const r = entry.run;
+                  // One press for the citation and the picture together, when both need a repair.
+                  const rBoth = fixBothButton(fixPlan(runFixInput(r)));
                   return (
                     <li key={'run-' + r.id} className="flex gap-2 rounded-xl border border-amber-300/70 bg-amber-50 p-3 text-[12px]">
                       <div className="min-w-0 flex-1">
@@ -1078,9 +1080,14 @@ export default function CalendarPage() {
                           {/* One button per repair — citation, image, copy — each its own AI cost. */}
                           {fixRunning(r.angle) ? (
                             <button type="button" disabled className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white opacity-50">Fixing…</button>
-                          ) : fixButtons(fixPlan(runFixInput(r))).map((b) => (
-                            <button key={b.step} type="button" disabled={runBusy === r.id} onClick={() => fixRun(r, b.step)} title={b.title} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{b.label}</button>
-                          ))}
+                          ) : (<>
+                            {rBoth && (
+                              <button type="button" disabled={runBusy === r.id} onClick={() => fixRun(r, 'all')} title={rBoth.title} className="rounded-full bg-ink px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{rBoth.label}</button>
+                            )}
+                            {fixButtons(fixPlan(runFixInput(r))).map((b) => (
+                              <button key={b.step} type="button" disabled={runBusy === r.id} onClick={() => fixRun(r, b.step)} title={b.title} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{b.label}</button>
+                            ))}
+                          </>)}
                           <button type="button" disabled={runBusy === r.id || fixRunning(r.angle)} onClick={() => approveRunScheduled(r)} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{runBusy === r.id ? 'Working…' : 'Approve & schedule'}</button>
                           {!r.writes_article && (
                             <button type="button" disabled={runBusy === r.id || fixRunning(r.angle)} onClick={() => approveRunDraft(r)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/60 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">Approve as draft</button>

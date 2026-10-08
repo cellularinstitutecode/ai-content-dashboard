@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { FIX_STALE_MS, FIX_STALLED_NOTE, fixImageMode, fixNote, fixPlan, fixRedraftNote, fixRunning, fixStale, fixStepsLabel, fixView, imageFlagged, needsFix, runFixInput, splitFixPlan, fixButtons, swapRefLine } from './fix-plan.ts';
+import { FIX_STALE_MS, FIX_STALLED_NOTE, fixImageMode, fixNote, fixPlan, fixRedraftNote, fixRunning, fixStale, fixStepsLabel, fixView, imageFlagged, needsFix, runFixInput, splitFixPlan, fixButtons, fixBothButton, fixTextHash, swapRefLine } from './fix-plan.ts';
 
 const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 
@@ -120,8 +120,9 @@ test('the route starts FIX and answers at once; the work runs after the response
   assert.match(route, /if \(action === 'run_now' \|\| action === 'regenerate' \|\| action === 'fix'\) \{\s*const rl = await checkRateLimit\(user\.id, 'autopilot-action'\)/, 'the same rate-limit bucket');
   // Held open, the request kept a loader over the card at 94% for minutes.
   // Two scopes: "Fix citation" (the citation only) and FIX (the copy and the picture).
-  assert.match(route, /const scope: 'citation' \| 'image' \| 'copy' \| 'general' = /);
-  assert.match(route, /if \(action === 'fix'\) \{[\s\S]{0,1200}?const started = await startFix\(id, user\.id, scope === 'general' \? \['copy', 'image'\] : \[scope\]\);[\s\S]{0,300}?after\(\(\) => fixRunInBackground\(id, user\.id, scope\)\);/);
+  // Plus 'all': the citation and the image together, at the same time.
+  assert.match(route, /const scope: 'citation' \| 'image' \| 'copy' \| 'all' \| 'general' = /);
+  assert.match(route, /if \(action === 'fix'\) \{[\s\S]{0,1400}?const started = await startFix\(id, user\.id, scope === 'general' \? \['copy', 'image'\] : scope === 'all' \? \['citation', 'image'\] : \[scope\]\);[\s\S]{0,300}?after\(\(\) => fixRunInBackground\(id, user\.id, scope\)\);/);
   assert.match(route, /\{ status: 202 \}/);
   assert.doesNotMatch(route, /await fixRun\(/, 'the request never waits on the repair');
   assert.match(route, /import \{ NextRequest, NextResponse, after \} from 'next\/server';/);
@@ -133,7 +134,9 @@ test('the route starts FIX and answers at once; the work runs after the response
   assert.match(start, /\.eq\('state', 'ready_for_review'\)/);
   const bg = autopilot.slice(autopilot.indexOf('export async function fixRunInBackground('));
   // The result is written whatever happens, so the card never waits forever.
-  assert.match(bg, /try \{\s*result = scope === 'citation' \? await fixCitationOnly\(runId, userId\)\s*: await fixRun\(runId, userId, \{ only: scope === 'general' \? \['copy', 'image'\] : \[scope\] \}\);\s*\} catch/);
+  assert.match(bg, /result = scope === 'citation' \? await fixCitationOnly\(runId, userId\)\s*: await fixRun\(runId, userId, \{ only: scope === 'general' \? \['copy', 'image'\] : \[scope\] \}\);/);
+  // 'all': both repairs at once, each failing on its own, one result for the card.
+  assert.match(bg, /if \(scope === 'all'\) \{[\s\S]*?await Promise\.all\(\[\s*fixCitationOnly\(runId, userId\)[\s\S]*?fixRun\(runId, userId, \{ only: \['image'\] \}\)/);
   assert.match(bg, /state: result\.ok \? 'done' : 'failed'/);
 });
 
@@ -273,4 +276,20 @@ test('fixButtons: one button per repair, in order, each with only its own reason
   // The card in the screenshot: the citation and the image — two buttons, two costs.
   const two = fixButtons(fixPlan({ claimSupport: { status: 'unsupported' }, image: { url: 'u', source: 'ai', verification: { status: 'flagged', issues: ['off-topic'] } } }));
   assert.deepEqual(two.map((x) => x.label), ['Fix citation', 'Fix image']);
+});
+
+test('one press for both when the citation and the picture both need a repair', () => {
+  const both = fixPlan({ citation: { status: 'not_found' }, image: { url: 'x', source: 'ai', verification: { status: 'flagged' } } });
+  assert.ok(both.steps.includes('citation') && both.steps.includes('image'));
+  assert.equal(fixBothButton(both)?.step, 'all');
+  assert.equal(fixBothButton(fixPlan({ citation: { status: 'not_found' } })), null, 'only the citation: no combined button');
+  assert.equal(fixBothButton(fixPlan({ image: { url: 'x', source: 'ai', verification: { status: 'flagged' } } })), null, 'only the picture: no combined button');
+});
+
+test('the research memo key follows the words, REF line included, and nothing else', () => {
+  const a = fixTextHash({ instagram: 'Post.\n\nREF: A. DOI: 10.1/x', facebook: 'Post.' });
+  assert.equal(fixTextHash({ instagram: 'Post.\n\nREF: A. DOI: 10.1/x', facebook: 'Post.', _image: { url: 'y' } }), a, 'a new picture does not change it');
+  assert.notEqual(fixTextHash({ instagram: 'Post.\n\nREF: B. DOI: 10.1/y', facebook: 'Post.' }), a, 'an edited REF line does');
+  assert.notEqual(fixTextHash({ instagram: 'Post!\n\nREF: A. DOI: 10.1/x', facebook: 'Post.' }), a, 'an edited sentence does');
+  assert.equal(fixTextHash(null), fixTextHash({}));
 });

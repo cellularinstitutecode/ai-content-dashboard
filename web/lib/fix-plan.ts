@@ -13,6 +13,8 @@
 import { imageUnshippable } from './image-verdict.ts';
 
 export type FixStep = 'citation' | 'copy' | 'image';
+/** A button's scope: one repair, or the citation and the image together ('all'). */
+export type FixScope = FixStep | 'all';
 
 export type FixInput = {
   /** `pack._compliance.citation.status` — Crossref's verdict on the REF line's DOI. */
@@ -149,6 +151,37 @@ export function fixButtons(plan: FixPlan): { step: FixStep; label: string; title
       : b.step === 'image' ? general.reasons.filter((r) => imageWhy.test(r))
       : general.reasons.filter((r) => !imageWhy.test(r)),
   }));
+}
+
+/**
+ * The one-press button when BOTH the citation and the picture need a repair:
+ * the two touch different parts of the draft (the words and the REF line;
+ * `_image`), so they run at the same time instead of one wait after another.
+ * Null when the plan needs only one of them.
+ */
+export function fixBothButton(plan: FixPlan): { step: 'all'; label: string; title: string } | null {
+  if (!plan.steps.includes('citation') || !plan.steps.includes('image')) return null;
+  return {
+    step: 'all',
+    label: 'Fix citation + image',
+    title: 'Repairs the citation and makes a new picture at the same time — one press, one wait, instead of two. The same two repairs as the buttons beside it.',
+  };
+}
+
+const HASH_KEYS = ['instagram', 'facebook', 'linkedin', 'tiktok', 'youtube', 'blog'] as const;
+
+/**
+ * A fingerprint of the words on every channel, REF lines included. Fix
+ * citation keeps the outcome of its research under this key, so pressing it
+ * again on unchanged copy goes straight to the correction instead of
+ * running the same searches and the same judge a second time.
+ */
+export function fixTextHash(pack: Record<string, unknown> | null | undefined): string {
+  const p = pack || {};
+  const s = HASH_KEYS.map((k) => (typeof p[k] === 'string' ? String(p[k]).trim() : '')).join('\u0001');
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 33) ^ s.charCodeAt(i)) >>> 0;
+  return h.toString(16) + ':' + s.length;
 }
 
 /** True when the card shows any warning FIX can act on. */

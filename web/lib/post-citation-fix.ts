@@ -110,27 +110,60 @@ export async function findBackingByClaims(input: {
   const seen = input.seen || new Set(input.candidates.map(doiOf));
   let candidates = input.candidates;
   let verdict: SupportVerdict = { status: 'unchecked' };
-  const claims = await extractCheckableClaims(input.text);
-  for (const c of claims) {
-    if (outOfTime()) break;
-    if (candidates.length) {
-      const inHand = await judgeClaimSupport({ claim: c.claim, items: candidates });
-      const hit = supportedItem(candidates, inHand);
-      if (hit) return { backing: hit, candidates: dedupe([hit, ...candidates]), backedClaim: c.claim, verdict: inHand };
+  // AT ONCE, not one after another. This used to judge, search and judge
+  // again for each statement in turn — a four-statement post was four
+  // rounds of the judge's latency plus four searches, end to end, and the
+  // card routinely ran out of time before the correction. Every statement
+  // now gets its judge call and its search in the same breath; the first
+  // statement in the post's own order with a backing paper still wins, so
+  // the answer is the same, only sooner.
+  const claims = (await extractCheckableClaims(input.text)).slice(0, MAX_CLAIMS);
+  if (!claims.length || outOfTime()) return { backing: null, candidates, backedClaim: '', verdict };
+  if (candidates.length) {
+    const inHand = await Promise.all(claims.map((c) => judgeClaimSupport({ claim: c.claim, items: candidates })));
+    for (let i = 0; i < claims.length; i++) {
+      const hit = supportedItem(candidates, inHand[i]);
+      if (hit) return { backing: hit, candidates: dedupe([hit, ...candidates]), backedClaim: claims[i].claim, verdict: inHand[i] };
     }
-    let found: EvidenceItem[] = [];
-    try { found = (await findEvidence(c.query)).filter((i) => doiOf(i) && !seen.has(doiOf(i))); } catch (err) { reportError('post-citation-fix:claim-search', err); }
-    if (!found.length) continue;
-    found.forEach((i) => seen.add(doiOf(i)));
-    const retried = await judgeClaimSupport({ claim: c.claim, items: found });
-    const hit = supportedItem(found, retried);
-    if (hit) { candidates = dedupe([hit, ...candidates]); return { backing: hit, candidates, backedClaim: c.claim, verdict: retried }; }
+  }
+  if (outOfTime()) return { backing: null, candidates, backedClaim: '', verdict };
+  const searched = await Promise.all(claims.map(async (c) => {
+    try { return (await findEvidence(c.query)).filter((i) => doiOf(i)); } catch (err) { reportError('post-citation-fix:claim-search', err); return [] as EvidenceItem[]; }
+  }));
+  // A paper two searches both returned is judged once, for the first statement that found it.
+  const fresh = searched.map((found) => {
+    const mine = found.filter((i) => !seen.has(doiOf(i)));
+    mine.forEach((i) => seen.add(doiOf(i)));
+    return mine;
+  });
+  if (outOfTime()) return { backing: null, candidates, backedClaim: '', verdict };
+  const judged = await Promise.all(claims.map((c, i) => (fresh[i].length ? judgeClaimSupport({ claim: c.claim, items: fresh[i] }) : Promise.resolve(null))));
+  for (let i = 0; i < claims.length; i++) {
+    const retried = judged[i];
+    if (!retried) continue;
+    const hit = supportedItem(fresh[i], retried);
+    if (hit) { candidates = dedupe([hit, ...candidates]); return { backing: hit, candidates, backedClaim: claims[i].claim, verdict: retried }; }
     if (retried.status !== 'unchecked') verdict = retried;
   }
   return { backing: null, candidates, backedClaim: '', verdict };
 }
 
-export async function fixPostCitation(input: { text: string; pack: Record<string, unknown> | null; aviso?: string | null; budgetMs?: number }): Promise<CitationFixOutcome> {
+/** Statements researched per press. Past four, a post is a list, and the fourth search rarely finds what the first three did not. */
+const MAX_CLAIMS = 4;
+
+export async function fixPostCitation(input: {
+  text: string;
+  pack: Record<string, unknown> | null;
+  aviso?: string | null;
+  budgetMs?: number;
+  /**
+   * The caller has JUST judged the papers in hand against the copy and found
+   * none backs it (the Autopilot's rung 1, lib/autopilot.ts fixCitation).
+   * Rung 1 here would ask the judge the same question about the same papers
+   * a second time; it is skipped and the research starts at the statements.
+   */
+  skipInHand?: boolean;
+}): Promise<CitationFixOutcome> {
   const startedAt = Date.now();
   const outOfTime = () => Date.now() - startedAt > (input.budgetMs ?? FIX_BUDGET_MS);
   const text = String(input.text || '');
@@ -163,8 +196,9 @@ export async function fixPostCitation(input: { text: string; pack: Record<string
   }
 
   // RUNG 1 — does the paper cited, or one already in hand, back the copy?
+  // (Not asked again when the caller just did: see `skipInHand`.)
   let verdict: SupportVerdict = { status: 'unchecked' };
-  if (candidates.length) verdict = await judgeClaimSupport({ claim, items: candidates });
+  if (candidates.length) verdict = input.skipInHand ? { status: 'none' } : await judgeClaimSupport({ claim, items: candidates });
   let backing = supportedItem(candidates, verdict);
 
   // RUNG 2 — the post's own statements, one at a time (findBackingByClaims).
@@ -183,18 +217,28 @@ export async function fixPostCitation(input: { text: string; pack: Record<string
     }
   }
 
-  // RUNG 2b — search for what the post is about, one subject at a time.
+  // RUNG 2b — search for what the post is about: every subject at once, the
+  // judge asked about each set in the same breath, the first subject with a
+  // backing paper wins (same answer as one at a time, without the wait).
   if (!backing && !outOfTime()) {
-    for (const s of searchSubjectsFor(pack, text)) {
-      if (outOfTime()) break;
-      let found: EvidenceItem[] = [];
-      try { found = (await findEvidence(s.subject, s.keywords)).filter((i) => doiOf(i) && !seen.has(doiOf(i))); } catch (err) { reportError('post-citation-fix:search', err); }
-      if (!found.length) continue;
-      found.forEach((i) => seen.add(doiOf(i)));
-      const retried = await judgeClaimSupport({ claim, items: found });
-      const hit = supportedItem(found, retried);
-      if (hit) { backing = hit; candidates = dedupe([hit, ...candidates]); verdict = retried; break; }
-      if (retried.status === 'unchecked') { verdict = retried; break; }
+    const subjects = searchSubjectsFor(pack, text);
+    const searched = await Promise.all(subjects.map(async (s) => {
+      try { return (await findEvidence(s.subject, s.keywords)).filter((i) => doiOf(i)); } catch (err) { reportError('post-citation-fix:search', err); return [] as EvidenceItem[]; }
+    }));
+    const fresh = searched.map((found) => {
+      const mine = found.filter((i) => !seen.has(doiOf(i)));
+      mine.forEach((i) => seen.add(doiOf(i)));
+      return mine;
+    });
+    if (!outOfTime()) {
+      const judged = await Promise.all(fresh.map((found) => (found.length ? judgeClaimSupport({ claim, items: found }) : Promise.resolve(null))));
+      for (let i = 0; i < fresh.length; i++) {
+        const retried = judged[i];
+        if (!retried) continue;
+        const hit = supportedItem(fresh[i], retried);
+        if (hit) { backing = hit; candidates = dedupe([hit, ...candidates]); verdict = retried; break; }
+        if (retried.status === 'unchecked') { verdict = retried; break; }
+      }
     }
   }
 

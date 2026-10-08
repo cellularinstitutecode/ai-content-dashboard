@@ -85,7 +85,7 @@ import { competitiveBrief } from '@/lib/competitive-brief';
 import { evidenceBriefFrom, type EvidenceItem } from '@/lib/evidence-brief';
 import { MAX_CANDIDATES, claimFrom, claimQuery, supportedItem, type ClaimSupportStamp, type SupportVerdict } from '@/lib/claim-support';
 import { pickCitation, refLineFrom } from '@/lib/citation-from-evidence';
-import { FIX_STALLED_NOTE, fixImageMode, fixNote, fixPlan, fixRedraftNote, fixRunning, fixStale, imageFlagged, runFixInput, swapRefLine, type FixStatus, type FixStep } from '@/lib/fix-plan';
+import { FIX_STALLED_NOTE, fixImageMode, fixNote, fixPlan, fixRedraftNote, fixRunning, fixStale, fixTextHash, imageFlagged, runFixInput, swapRefLine, type FixScope, type FixStatus, type FixStep } from '@/lib/fix-plan';
 import { NETWORKS_NEEDING_MEDIA, mediaProblem } from '@/lib/composer';
 import { SCHEDULE_TZ, upcomingSlots } from '@/lib/timezone';
 import { ANTI_REPEAT_DAYS, HORIZON_DAYS, MAX_ATTEMPTS, SCORE_THRESHOLD } from '@/lib/planner-constants';
@@ -3203,6 +3203,23 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
   const aviso = await avisoForUser(run.user_id);
   await markFixStep(db, runId, userId, 'citation', ['citation']);
   const changes: string[] = [];
+  // THE MEMO. What the last press found out about THESE words — the research
+  // came up empty, the closest paper, whether it is on the subject — kept on
+  // the draft under a fingerprint of the copy. The same words again skip the
+  // searches and the judge and go straight to the correction; edited words
+  // (the REF line included) are researched afresh. Seven days, then it is
+  // research again: the literature moves.
+  const memoOf = (pk: ContentPack): CitationSearchMemo | null => {
+    const m = (pk as ContentPack & { _citationSearch?: CitationSearchMemo | null })._citationSearch;
+    if (!m || typeof m !== 'object' || m.hash !== fixTextHash(pk as unknown as Record<string, unknown>)) return null;
+    const age = Date.now() - new Date(String(m.at || '')).getTime();
+    return Number.isFinite(age) && age >= 0 && age < CITATION_MEMO_MS ? m : null;
+  };
+  const remember = async (pk: ContentPack, fields: Partial<CitationSearchMemo>): Promise<ContentPack> => {
+    const prior = memoOf(pk);
+    const memo: CitationSearchMemo = { hash: fixTextHash(pk as unknown as Record<string, unknown>), at: new Date().toISOString(), closest: prior?.closest ?? null, onTopic: prior?.onTopic ?? null, ...fields };
+    try { return await saveFixedPack(db, run, { _citationSearch: memo }); } catch (err) { reportError('autopilot:fix-citation-memo', err, { runId }); return pk; }
+  };
   const finish = async (fixedIt: boolean, why: string): Promise<FixResult> => {
     const fixed = fixedIt ? ['citation'] : [];
     // Not fixed: say what it DID, so the card shows the research and the correction rather than one bare line.
@@ -3244,28 +3261,38 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
   // RUNG 1 — the ladder FIX climbs: the papers in hand, then a search at the claim.
   let help: ClaimHelp | null = null;
   let reason = '';
-  try {
-    const r = await fixCitation(db, run, pack, aviso);
-    pack = r.pack;
-    if (r.change) changes.push(r.change);
-    help = r.claimHelp;
-    reason = r.reason;
-  } catch (err) {
-    reportError('autopilot:fix-citation', err, { runId });
-    reason = 'the citation could not be repaired just now';
+  const memo = memoOf(pack);
+  if (memo) {
+    // Researched already, for these exact words: straight to the correction.
+    help = memo.closest;
+    reason = 'no study found supports the copy as written';
+    changes.push('the copy has not changed since the last press, so the research was not run again');
+  } else {
+    try {
+      const r = await fixCitation(db, run, pack, aviso);
+      pack = r.pack;
+      if (r.change) changes.push(r.change);
+      help = r.claimHelp;
+      reason = r.reason;
+    } catch (err) {
+      reportError('autopilot:fix-citation', err, { runId });
+      reason = 'the citation could not be repaired just now';
+    }
+    if (!stillBad(pack)) return finish(true, '');
   }
-  if (!stillBad(pack)) return finish(true, '');
 
-  // RUNG 2 — the post's own statements, one at a time: the research.
-  // It gets what is left MINUS the time the correction needs, so the search
-  // can never eat the rewrite (it did: the card came back "no study found
-  // supports the copy as written" with the rewrite never attempted).
+  // RUNG 2 — the post's own statements: the research (every statement at
+  // once, lib/post-citation-fix.ts). It gets what is left MINUS the time the
+  // correction needs, so the search can never eat the rewrite (it did: the
+  // card came back "no study found supports the copy as written" with the
+  // rewrite never attempted). Skipped on a memo hit: it already ran.
   const researchMs = left() - CITATION_REWRITE_RESERVE_MS;
-  if (researchMs >= 40_000) {
+  if (!memo && researchMs >= 40_000) {
     try {
       const p = pack as unknown as Record<string, unknown>;
       const caption = String(p.instagram || p.facebook || p.linkedin || p.blog || '');
-      const out = await fixPostCitation({ text: caption, pack: p, aviso, budgetMs: Math.min(120_000, researchMs) });
+      // Rung 1 just judged the papers in hand; the research starts at the statements.
+      const out = await fixPostCitation({ text: caption, pack: p, aviso, budgetMs: Math.min(120_000, researchMs), skipInHand: true });
       if (out.swapped && Object.keys(out.packPatch).length) {
         const texts: Record<string, unknown> = {};
         if (out.ref) for (const key of PACK_TEXT_KEYS) { const t = p[key]; if (typeof t === 'string' && t.trim()) texts[key] = swapRefLine(t, out.ref); }
@@ -3277,6 +3304,8 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
         if (!stillBad(pack)) return finish(true, '');
       } else {
         changes.push('searched the post statement by statement; no study backs the wording as written');
+        // Kept: the next press on these words goes straight to the correction.
+        pack = await remember(pack, { closest: help });
       }
     } catch (err) {
       reportError('autopilot:fix-citation-claims', err, { runId });
@@ -3295,7 +3324,10 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
   if (help) {
     const p0 = pack as unknown as Record<string, unknown>;
     const caption0 = String(p0.instagram || p0.facebook || p0.linkedin || p0.blog || '');
-    onTopic = (await studyOnTopic(caption0, { title: help.item.title, year: help.item.year, abstract: help.item.abstract, ref: help.ref })) === true;
+    // The memo answers this too when it has been asked before for these words.
+    const known = memoOf(pack)?.onTopic;
+    onTopic = typeof known === 'boolean' ? known : (await studyOnTopic(caption0, { title: help.item.title, year: help.item.year, abstract: help.item.abstract, ref: help.ref })) === true;
+    if (typeof known !== 'boolean') pack = await remember(pack, { closest: help, onTopic });
     if (!onTopic) {
       // Cut at a word and say so: "Monitoring the operational changes in
       // surface reflectances af)" read as a title with a hole in it.
@@ -3378,6 +3410,10 @@ export async function fixCitationOnly(runId: string, userId: string): Promise<Fi
   return finish(false, reason || 'no real study could be found for what this post claims — edit the claim or the REF line');
 }
 
+/** What Fix citation learned about one exact wording of the copy (see fixCitationOnly). */
+type CitationSearchMemo = { hash: string; at: string; closest: ClaimHelp | null; onTopic: boolean | null };
+const CITATION_MEMO_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** Write the step FIX is on to `angle.fix`. Best-effort: a failed stamp never stops the repair. */
 async function markFixStep(db: ReturnType<typeof supabaseAdmin>, runId: string, userId: string, step: FixStep, steps: readonly FixStep[]): Promise<void> {
   const { data, error } = await db.from('template_runs').select('angle').eq('id', runId).eq('user_id', userId).maybeSingle();
@@ -3445,11 +3481,26 @@ export async function startFix(runId: string, userId: string, steps?: readonly F
  * Run FIX and write its result onto the run (`angle.fix`), whatever happens.
  * Called after the response, so nothing waits on it; the card polls the run.
  */
-export async function fixRunInBackground(runId: string, userId: string, scope: 'citation' | 'image' | 'copy' | 'general' = 'general'): Promise<void> {
+export async function fixRunInBackground(runId: string, userId: string, scope: FixScope | 'general' = 'general'): Promise<void> {
   let result: FixResult;
   try {
-    result = scope === 'citation' ? await fixCitationOnly(runId, userId)
-      : await fixRun(runId, userId, { only: scope === 'general' ? ['copy', 'image'] : [scope] });
+    if (scope === 'all') {
+      // The citation and the picture AT THE SAME TIME: they touch different
+      // parts of the draft (the words and the REF line; `_image`), and both
+      // writers re-read the pack before writing, so neither undoes the other.
+      // One press and one wait instead of two.
+      const failed = (what: string): FixResult => ({ ok: false, fixed: [], remaining: [what + ' — FIX stopped on an error; what it finished is saved. Press it again.'], note: '' });
+      const [c, i] = await Promise.all([
+        fixCitationOnly(runId, userId).catch((err) => { reportError('autopilot:fix-both-citation', err, { runId }); return failed('the citation'); }),
+        fixRun(runId, userId, { only: ['image'] }).catch((err) => { reportError('autopilot:fix-both-image', err, { runId }); return failed('the image'); }),
+      ]);
+      const fixed = [...c.fixed, ...i.fixed];
+      const remaining = [...c.remaining, ...i.remaining];
+      result = { ok: c.ok && i.ok, fixed, remaining, note: fixNote({ fixed, remaining }) };
+    } else {
+      result = scope === 'citation' ? await fixCitationOnly(runId, userId)
+        : await fixRun(runId, userId, { only: scope === 'general' ? ['copy', 'image'] : [scope] });
+    }
   } catch (err) {
     reportError('autopilot:fix', err, { runId });
     result = { ok: false, fixed: [], remaining: [], note: 'FIX stopped on an error; what it finished is saved. Press FIX again.' };

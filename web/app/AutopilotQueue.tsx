@@ -18,7 +18,7 @@ import { imageUnshippable } from '@/lib/image-verdict';
 import { citationLabel, type CitationCheck } from '@/lib/citation';
 import { varietyLabels } from '@/lib/strategy-variety';
 import { claimSupportNote, type ClaimSupportStamp } from '@/lib/claim-support';
-import { fixButtons, fixPlan, fixRunning, fixStepsLabel, runFixInput, type FixStatus } from '@/lib/fix-plan';
+import { fixBothButton, fixButtons, fixPlan, fixRunning, fixStepsLabel, runFixInput, type FixScope, type FixStatus } from '@/lib/fix-plan';
 import FixStatusLine from '@/components/FixStatusLine';
 import ImageEditPanel, { okToSpend, type ImageAction } from '@/components/ImageEditPanel';
 import LibraryPicker from '@/components/LibraryPicker';
@@ -347,7 +347,7 @@ export default function AutopilotQueue() {
     return () => window.clearInterval(t);
   }, [fixingIds, load]);
 
-  async function act(id: string, action: 'approve' | 'skip' | 'run_now' | 'regenerate' | 'fix', extraNote?: string, schedule = false, redate = false, scope?: 'citation' | 'image' | 'copy') {
+  async function act(id: string, action: 'approve' | 'skip' | 'run_now' | 'regenerate' | 'fix', extraNote?: string, schedule = false, redate = false, scope?: FixScope) {
     addTo(setBusyIds, id);
     setErr(null);
     setNote(null);
@@ -686,14 +686,26 @@ export default function AutopilotQueue() {
                   {(() => {
                     const plan = fixPlan(runFixInput(r));
                     const buttons = fixButtons(plan);
+                    const both = fixBothButton(plan);
                     const fixing = fixRunning(r.angle);
                     const off = busyIds.has(r.id) || regenIds.has(r.id) || optionsIds.has(r.id);
                     return (
                       <>
                         {plan.steps.length > 0 && !fixing && (
                           <div className="flex flex-wrap items-center gap-2 border-b border-line bg-amber-50/60 px-5 py-2.5 text-[12px] text-amber-900">
-                            <span className="min-w-0">Needs a fix: the {fixStepsLabel(plan.steps)}. Each button is its own repair (and its own AI cost); press only the one you want.</span>
+                            <span className="min-w-0">Needs a fix: the {fixStepsLabel(plan.steps)}. {both ? 'One press does both at once, or press just the one you want.' : 'Each button is its own repair (and its own AI cost); press only the one you want.'}</span>
                             <span className="ml-auto flex flex-wrap gap-2">
+                              {both && (
+                                <button
+                                  type="button"
+                                  onClick={() => act(r.id, 'fix', undefined, false, false, 'all')}
+                                  disabled={off}
+                                  title={both.title}
+                                  className="rounded-full bg-ink px-4 py-1 text-[12px] font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50"
+                                >
+                                  {both.label}
+                                </button>
+                              )}
                               {/* One button per repair: the citation, the image and the copy are separate costs, and each touches only its own part. */}
                               {buttons.map((b) => (
                                 <button
