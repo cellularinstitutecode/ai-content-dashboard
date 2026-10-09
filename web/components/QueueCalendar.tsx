@@ -11,7 +11,7 @@
 // the post's preview.
 
 import { gridKey, monthGrid, shiftMonth, type MonthCursor } from '@/lib/queue-calendar';
-import { isAwaitingApproval } from '@/lib/post-mode';
+import { isAwaitingApproval, postStatusMeta } from '@/lib/post-mode';
 import { metricoolPlannerUrl } from '@/lib/metricool-links';
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -115,7 +115,10 @@ export default function QueueCalendar<T extends Post>({
                   const id = String(p.id || '');
                   const approvable = isAwaitingApproval(p.status) && p.videoPending !== true;
                   const dim = matchIds && !matchIds.has(id);
-                  const tone = p.videoPending ? 'bg-rose-50 ring-rose-200' : approvable ? 'bg-blue-50 ring-blue-100' : 'bg-emerald-50 ring-emerald-100';
+                  // Not waiting on anyone: say what it is instead of offering a button —
+                  // Posted (it went out), Scheduled (approved, waiting for its time).
+                  const meta = approvable || p.videoPending ? null : postStatusMeta(p.status);
+                  const tone = p.videoPending ? 'bg-rose-50 ring-rose-200' : approvable ? 'bg-blue-50 ring-blue-100' : meta?.tone === 'green' ? 'bg-emerald-50 ring-emerald-100' : meta?.tone === 'red' ? 'bg-rose-50 ring-rose-200' : 'bg-sky-50 ring-sky-100';
                   return (
                     <div key={id || i} className={'min-w-0 rounded-lg px-1.5 py-1 text-[10.5px] ring-1 ' + tone + (dim ? ' opacity-30' : '')}>
                       <div className="flex items-center justify-between gap-1">
@@ -141,6 +144,7 @@ export default function QueueCalendar<T extends Post>({
                           </button>
                         ))}
                         {p.videoPending && <span className="text-[9.5px] font-medium text-rose-700">Video</span>}
+                        {meta && <span className={'text-[9.5px] font-semibold ' + (meta.tone === 'green' ? 'text-emerald-700' : meta.tone === 'red' ? 'text-rose-700' : 'text-sky-700')}>{meta.label}</span>}
                       </div>
                       <button
                         type="button"

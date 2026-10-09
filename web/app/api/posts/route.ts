@@ -30,6 +30,9 @@ import { isMetricoolCopyId } from '@/lib/metricool-upload-parse';
 import { publicBase } from '@/lib/public-base';
 import { modeOfStatus, videoPending, APPROVED_STATUS } from '@/lib/post-mode';
 import { NEXT_SLOT, nextFreeSlotFor } from '@/lib/queue-next-slot';
+import { metricoolQueue } from '@/lib/metricool-queue';
+import { reconcileStatus, remoteStateOf } from '@/lib/metricool-state';
+import { ALLOWED_BLOG_IDS } from '@/lib/access';
 import { tabGid } from '@/lib/google-sources';
 import type { PostSource } from '@/lib/sheet-link';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -149,6 +152,30 @@ export async function GET() {
   // errors are not symmetric and this is the safe side of them — the chip can
   // be missing from a post that cannot go out, never present on one that can.
   const posts = (data ?? []) as Record<string, unknown>[];
+
+  // WHAT METRICOOL SAYS. A post approved in Metricool's own planner, or one
+  // Metricool has already published, used to keep its Approve button here
+  // for ever: nothing read the answer back. Each post Metricool holds is
+  // looked up by id (lib/metricool-queue.ts), its state read
+  // (lib/metricool-state.ts), and our row brought into line — approved,
+  // published or failed — so the queue says "Scheduled" or "Posted" instead
+  // of offering to approve a post that is already out. Best-effort: a
+  // Metricool hiccup leaves every row as it was.
+  if (posts.some((p) => p.metricool_post_id)) {
+    const remote = await metricoolQueue(ALLOWED_BLOG_IDS, new Date(since), new Date(Date.now() + 60 * 24 * 60 * 60 * 1000));
+    const changes: { id: string; status: string }[] = [];
+    for (const p of posts) {
+      const mc = p.metricool_post_id ? remote.get(String(p.metricool_post_id)) : undefined;
+      if (!mc) continue;
+      const next = reconcileStatus(p.status, remoteStateOf(mc));
+      if (next) { p.status = next; changes.push({ id: String(p.id), status: next }); }
+    }
+    if (changes.length) {
+      const results = await Promise.all(changes.map(({ id, status }) => sb.from('posts').update({ status }).eq('id', id).eq('user_id', user.id)));
+      const failed = results.find((r) => r.error);
+      if (failed?.error) reportError('posts:metricool-reconcile', failed.error, { userId: user.id, changed: changes.length });
+    }
+  }
   const draftIds = Array.from(
     new Set(posts.map((p) => String(p.draft_id || '')).filter(Boolean)),
   );
