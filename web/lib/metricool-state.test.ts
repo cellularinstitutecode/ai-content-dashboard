@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { indexByPostId, reconcileStatus, remoteStateOf } from './metricool-state.ts';
+import { describeAnswer, indexByPostId, reconcileStatus, remoteStateOf } from './metricool-state.ts';
 import { postStatusMeta } from './post-mode.ts';
 
 test('the state is read off whichever field Metricool put it in', () => {
@@ -11,7 +11,12 @@ test('the state is read off whichever field Metricool put it in', () => {
   assert.equal(remoteStateOf({ id: 1, draft: true, autoPublish: false }), 'review');
   assert.equal(remoteStateOf({ id: 1, draft: false, autoPublish: true }), 'scheduled');
   // The network's own status, as app/api/assistant/route.ts already read it.
-  assert.equal(remoteStateOf({ id: 1, providers: [{ network: 'instagram', status: 'PENDING' }] }), 'scheduled');
+  // PENDING is what Metricool says about a draft this app created, so on
+  // its own it decides nothing — only the draft flag tells the queues apart.
+  assert.equal(remoteStateOf({ id: 1, providers: [{ network: 'instagram', status: 'PENDING' }] }), 'unknown');
+  assert.equal(remoteStateOf({ id: 1, draft: true, providers: [{ network: 'instagram', status: 'PENDING' }] }), 'review');
+  assert.equal(remoteStateOf({ id: 1, draft: false, providers: [{ network: 'instagram', status: 'PENDING' }] }), 'scheduled');
+  assert.equal(remoteStateOf({ id: 1, status: 'SCHEDULED' }), 'unknown');
   assert.equal(remoteStateOf({ id: 1, providers: [{ network: 'instagram', status: 'PUBLISHED' }] }), 'published');
   assert.equal(remoteStateOf({ id: 1, providers: [{ network: 'instagram', status: 'ERROR' }] }), 'failed');
   assert.equal(remoteStateOf({ id: 1, providers: [{ network: 'instagram', status: 'DRAFT' }] }), 'review');
@@ -50,7 +55,15 @@ test('the list is keyed by id whatever it is wrapped in', () => {
   assert.deepEqual([...indexByPostId([{ id: 1 }, { postId: '2' }, { text: 'no id' }]).keys()], ['1', '2']);
   assert.deepEqual([...indexByPostId({ data: [{ id: 'a' }] }).keys()], ['a']);
   assert.deepEqual([...indexByPostId({ posts: [{ id: 'b' }] }).keys()], ['b']);
+  assert.deepEqual([...indexByPostId({ data: { posts: [{ id: 'c' }] } }).keys()], ['c'], 'two envelopes deep');
   assert.equal(indexByPostId(null).size, 0);
+});
+
+test('the record describes the answer without its text', () => {
+  const line = describeAnswer({ data: [{ id: 1, text: 'SECRET COPY', draft: true, providers: [{ network: 'tiktok', status: 'PENDING' }] }] });
+  assert.match(line, /^queue: 1 posts; keys=id,text,draft,providers; draft=true autoPublish=undefined status=; provider keys=network,status status=PENDING; state=review$/);
+  assert.doesNotMatch(line, /SECRET/);
+  assert.equal(describeAnswer({ error: 'nope' }), 'queue: 0 posts (top-level: error)');
 });
 
 test('a post that went out reads Posted', () => {

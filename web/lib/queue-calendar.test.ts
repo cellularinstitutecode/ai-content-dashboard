@@ -72,6 +72,7 @@ test('a post whose time has passed offers Reschedule where Approve would be, and
   assert.match(cal, /'Reschedule'/);
   const calendar = readFileSync(new URL('../app/calendar/page.tsx', import.meta.url), 'utf8');
   assert.match(calendar, /waiting && overdueIds\.includes\(String\(p\.id\)\) \? \(\n\s*<button[^\n]*rescheduleNext\(p\)/, 'the day list');
+  assert.match(calendar, /isAwaitingApproval\(p\.status\) && overdueIds\.includes\(String\(p\.id\)\) \? \([^]*?void rescheduleNext\(p\)[^]*?'Reschedule'/, 'the month-grid square');
   assert.match(calendar, /overdueIds\.includes\(String\(previewPost\.id\)\) \? \(\n\s*<button[^\n]*rescheduleNext\(previewPost\)/, 'the preview');
   assert.doesNotMatch(calendar, /Move to tomorrow/, 'the overdue list moves to the next free slot too');
   const route = readFileSync(new URL('../app/api/posts/route.ts', import.meta.url), 'utf8');

@@ -940,6 +940,18 @@ export default function CalendarPage() {
                           >
                             {saving === p.id ? 'Attaching…' : 'Pending video'}
                           </button>
+                        ) : isAwaitingApproval(p.status) && overdueIds.includes(String(p.id)) ? (
+                          // Its time has passed: Metricool refuses a past date,
+                          // so the square offers the move to the next free slot.
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); void rescheduleNext(p); }}
+                            disabled={saving === p.id}
+                            title="Its time has passed, so it cannot be approved as it is. Move it to the next free slot."
+                            className="rounded-full bg-amber-600 px-1.5 py-[1px] text-[9px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                          >
+                            {saving === p.id ? 'Moving…' : 'Reschedule'}
+                          </button>
                         ) : isAwaitingApproval(p.status) ? (
                           <button
                             type="button"
