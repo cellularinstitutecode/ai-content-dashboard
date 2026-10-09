@@ -9,22 +9,55 @@ import 'server-only';
 import { reportError } from '@/lib/report';
 import { fallbackTitles, parseTitleList, SUGGEST_TITLES_SYSTEM, suggestTitlesPrompt } from './cover-edit.ts';
 
-export async function suggestCoverTitles(input: {
+type TitleInput = {
   angle: string;
   pillarName?: string | null;
   copy?: string | null;
   current?: string | null;
   avoid?: readonly string[];
   timeoutMs?: number;
-}): Promise<string[]> {
+};
+
+/**
+ * THE title a cover gets, written from the post in the feed's voice
+ * (lib/cover-edit.ts TITLE_STYLE_EXAMPLES). Null when no model answered —
+ * the caller falls back to the static title it always had.
+ */
+export async function writeCoverTitle(input: TitleInput): Promise<string | null> {
+  const avoid = [...(input.avoid || [])].filter(Boolean);
+  try {
+    const titles = await askTitles(suggestTitlesPrompt({ ...input, count: 1 }), 1, avoid, input.timeoutMs);
+    return titles[0] || null;
+  } catch (e) {
+    reportError('title-write', e, { angle: input.angle });
+    return null;
+  }
+}
+
+export async function suggestCoverTitles(input: TitleInput): Promise<string[]> {
   const avoid = [String(input.current || ''), ...(input.avoid || [])].filter(Boolean);
   const fallback = () => fallbackTitles(String(input.current || input.angle || ''));
-  const prompt = suggestTitlesPrompt(input);
+  try {
+    const titles = await askTitles(suggestTitlesPrompt(input), 3, avoid, input.timeoutMs);
+    // Fill up from the framings when the model offered fewer than three.
+    for (const t of fallback()) {
+      if (titles.length >= 3) break;
+      if (!titles.some((x) => x.toLowerCase() === t.toLowerCase())) titles.push(t);
+    }
+    return titles;
+  } catch (e) {
+    reportError('title-suggest', e, { angle: input.angle });
+    return fallback();
+  }
+}
+
+/** One text call, either provider; throws when neither is configured or the call fails. */
+async function askTitles(prompt: string, max: number, avoid: string[], timeoutMs?: number): Promise<string[]> {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
-  if (!anthropicKey && !openaiKey) return fallback();
+  if (!anthropicKey && !openaiKey) throw new Error('no text model configured');
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 12_000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs ?? 12_000);
   try {
     let raw = '';
     if (anthropicKey) {
@@ -59,16 +92,7 @@ export async function suggestCoverTitles(input: {
       const data = await res.json();
       raw = String(data?.choices?.[0]?.message?.content ?? '');
     }
-    const titles = parseTitleList(raw, { max: 3, avoid });
-    // Fill up from the framings when the model offered fewer than three.
-    for (const t of fallback()) {
-      if (titles.length >= 3) break;
-      if (!titles.some((x) => x.toLowerCase() === t.toLowerCase())) titles.push(t);
-    }
-    return titles;
-  } catch (e) {
-    reportError('title-suggest', e, { angle: input.angle });
-    return fallback();
+    return parseTitleList(raw, { max, avoid });
   } finally {
     clearTimeout(timer);
   }

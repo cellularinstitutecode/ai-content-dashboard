@@ -75,11 +75,27 @@ export type PlannerImage = {
  * Replaces the Brand Brain's materials line for planner images (that line
  * describes the clinic's dark interior); the palette still grades the frame.
  */
+/**
+ * THE BASELINE: the clinic's own Instagram feed. Every prompt — planner
+ * cover, hero image, edit — carries this block, so a picture looks like the
+ * next post in that grid rather than a generic clinic: warm cream and sand
+ * rooms, the team in plain black scrubs, soft daylight, calm people
+ * mid-moment, and room at the top for a large serif title.
+ */
+export const FEED_BASELINE = [
+  'BASELINE — the clinic\'s own Instagram feed: warm cream, sand and oat walls with pale travertine, warm oak and walnut, soft natural daylight,',
+  'a calm premium interior (consultation desks, treatment rooms, a recovery lounge) with screens off and every surface uncluttered.',
+  'The team wears plain black scrubs with no visible logos; patients wear neutral athleisure, soft knits or linen.',
+  'Expressions are quiet and attentive, mid-moment, eyes usually off-camera; one or two people, never a crowd.',
+  'Palette: cream, sand, warm taupe and oak, with terracotta and rust only as small accents — never cool blue, white-and-steel, or neon.',
+  'Composition leaves the top of the frame open and quiet for a large serif title; vertical 4:5 framing.',
+].join(' ');
+
 export const PLANNER_PHOTOGRAPHY = [
   'Photographic style: a bright, airy editorial lifestyle photograph in soft natural daylight from a large window.',
   'Warm beige, cream, sand and soft terracotta tones; a light oak table, pale stone and linen; one or two green plants or an olive branch in a ceramic vase;',
   'through the window, a soft-focus view of greenery or hills.',
-  'The physician wears a tailored white or cream blazer over a neutral top — never scrubs, never a lab coat with logos — with a warm, attentive, approachable expression.',
+  'The clinician wears plain black scrubs with no logos, as the team does on the clinic\'s own feed, with a warm, attentive, approachable expression.',
   'The patient is seen three-quarter from behind or in soft profile, relaxed and engaged.',
   '35-50mm lens from slightly above eye level, shallow depth of field, realistic skin and hands, natural unposed moment.',
   'The mood of a trusted private practice — calm, premium, welcoming — never a hospital, never a waiting room or reception desk.',
@@ -468,13 +484,13 @@ type ShotContext = { objects: string; foreground: string; action: string; window
 
 type Cast = { clinician: string; patient: string };
 
-/** Casting varies with the post, so the feed is not one actress over and over. */
+/** Casting varies with the post, so the feed is not one actress over and over. Dressed as the team is on the clinic's own feed: plain black scrubs. */
 const CLINICIANS = [
-  'a woman in her early 40s, Latina, dark wavy shoulder-length hair, tailored ivory blazer over a soft beige blouse, fine gold necklace',
-  'a man in his late 40s, salt-and-pepper close-cropped hair, light grey knit polo under an unstructured cream jacket, no tie',
-  'a woman in her mid 50s, Black, short natural hair, camel silk shirt and slim tortoiseshell glasses',
-  'a man in his mid 30s, Asian, neat dark hair, pale blue oxford shirt with the sleeves rolled, no jacket',
-  'a woman in her late 30s, fair-skinned with light-brown hair in a low twist, stone-coloured linen blazer',
+  'a woman in her early 40s, Latina, dark wavy shoulder-length hair, plain black scrubs with no logo, fine gold necklace',
+  'a man in his late 40s, salt-and-pepper close-cropped hair, plain black scrubs, a slim watch',
+  'a woman in her mid 50s, Black, short natural hair, plain black scrubs and slim tortoiseshell glasses',
+  'a man in his mid 30s, Asian, neat dark hair, plain black scrubs with the sleeves pushed up',
+  'a woman in her late 30s, fair-skinned with light-brown hair in a low twist, plain black scrubs',
 ];
 const PATIENTS = [
   'a woman in her 60s with short silver hair and a cream linen shirt',
@@ -501,14 +517,14 @@ export const CRAFT = [
   'REAL THINGS ONLY: this is clinic photography, not a classroom. Everything in frame is an ordinary real object — real food, real cups,',
   'real paper, real linen. Absolutely no anatomical models, plastic organs, model brains, hearts or spines, skeletons, skulls, mannequins,',
   'torso models or other medical teaching props; no anatomical charts, posters, diagrams, illustrations or infographics of any kind.',
-  'COLOUR: neutral white balance, daylight-accurate skin tones, a calm cream-and-oat palette with pale sage and soft grey-green;',
-  'terracotta appears only as the smallest accent, if at all. No orange cast, no amber filter, no heavy golden-hour wash, no sepia.',
+  'COLOUR: neutral white balance, daylight-accurate skin tones, the feed\'s calm cream, sand and warm-taupe palette with oak and walnut;',
+  'terracotta appears only as a small accent. No heavy orange cast, no amber filter, no golden-hour wash, no sepia, no cool blue.',
 ].join(' ');
 
-/** The world every shot lives in. */
-const WORLD = 'THE PLACE: a calm, light-filled private practice in Cancún — soft off-white and oat plaster walls, pale oak furniture, linen and ' +
-  'light stone, a few living green plants, tall windows with sheer curtains and clear daylight. Palette: white, cream, oat, pale sage and light ' +
-  'grey-green, with wood as the only warm tone.';
+/** The world every shot lives in — the clinic as its own feed shows it. */
+const WORLD = 'THE PLACE: a calm, light-filled private practice in Cancún, as it appears on the clinic\'s own Instagram — warm cream and sand walls, ' +
+  'pale travertine, warm oak and walnut furniture, linen and light stone, a few living green plants, large windows with soft daylight. ' +
+  'Palette: cream, sand, oat and warm taupe, with oak and walnut as the warm tones and terracotta only as a small accent. ' + FEED_BASELINE;
 
 /** The band the title needs, worded for the shot at hand. */
 const titleBand = (people: boolean) =>

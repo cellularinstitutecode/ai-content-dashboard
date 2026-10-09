@@ -73,6 +73,21 @@ export function titleOff(image: EditableImage | null | undefined): boolean {
   return Boolean(image?.titled) && String(image!.titled!.title ?? '') === '';
 }
 
+/**
+ * Would "Apply title" change the picture? True when the words differ from
+ * the ones painted on it, when the title is off, and — the case the button
+ * used to miss — when NOTHING is painted yet: a library photo or an upload
+ * has no cover, and the field opens pre-filled with the draft's title, so
+ * "unchanged words" was read as nothing to do while the photo still had no
+ * title at all.
+ */
+export function titleApplyable(image: EditableImage | null | undefined, title: string, shown: string): boolean {
+  const words = cleanCoverTitle(title);
+  if (!words) return false;
+  if (!image?.titled || titleOff(image)) return true;
+  return words !== cleanCoverTitle(shown);
+}
+
 /** The notes the last take was made with, for the panel to show again. */
 export function notesOf(image: EditableImage | null | undefined): string {
   return String(image?.direction || '').trim();
@@ -108,15 +123,25 @@ export function creditLabel(credits: number): string {
 
 // --- TITLE SUGGESTIONS --------------------------------------------------------
 
+/**
+ * The feed is the baseline: its covers read "Evening Routines Matter",
+ * "Everyday Habits Shape How You Feel", "The Connection Between Food and
+ * Energy", "Fiber First", "Start With What You Drink" — a plain, calm
+ * statement of what the post is about, never a claim. Titles are written in
+ * that voice, from the post itself, so no two posts wear the same words.
+ */
+export const TITLE_STYLE_EXAMPLES = ['Evening Routines Matter', 'Everyday Habits Shape How You Feel', 'The Connection Between Food and Energy', 'Fiber First', 'Start With What You Drink', 'Organized. Professional. Human.'] as const;
+
 export const SUGGEST_TITLES_SYSTEM =
-  'You write short cover titles for a clinic\'s educational social posts. The title is set in large serif type over a photograph, ' +
-  'so it must be a few words in plain title case — like "The Importance of Nutrition" or "Sleep and Recovery". Rules: no claim, ' +
+  'You write cover titles for a clinic\'s educational social posts. The title is set in large serif type over a photograph, ' +
+  'in the voice of the clinic\'s own feed — plain, calm statements of what the post is about, like ' + TITLE_STYLE_EXAMPLES.map((t) => '"' + t + '"').join(', ') + '. ' +
+  'Two to seven words in title case, written from THIS post\'s own subject (its first lines carry it). Rules: no claim, ' +
   'no number, no promise, no outcome; never name a person or a therapy; no question marks, no emoji, no quotation marks, no ' +
-  'trailing full stop; at most ' + MAX_COVER_TITLE + ' characters and ideally under 30. Answer with a JSON array of exactly three ' +
-  'different titles and nothing else.';
+  'trailing full stop; at most ' + MAX_COVER_TITLE + ' characters and ideally under 34. Answer with a JSON array of the titles asked for and nothing else.';
 
 /** The material the suggester reads: the angle, the pillar, and what the post says. */
-export function suggestTitlesPrompt(input: { angle: string; pillarName?: string | null; copy?: string | null; current?: string | null; avoid?: readonly string[] }): string {
+export function suggestTitlesPrompt(input: { angle: string; pillarName?: string | null; copy?: string | null; current?: string | null; avoid?: readonly string[]; count?: number }): string {
+  const count = Math.max(1, Math.min(5, Math.round(input.count ?? 3)));
   const parts: string[] = [];
   parts.push('ANGLE: ' + String(input.angle || '').trim());
   if (input.pillarName) parts.push('THEME: ' + String(input.pillarName).trim());
@@ -125,7 +150,7 @@ export function suggestTitlesPrompt(input: { angle: string; pillarName?: string 
   // Hashtags keep their words: "#recovery" says what the post is about.
   const copy = String(input.copy || '').replace(/#(?=[\w-])/g, '').replace(/\s+/g, ' ').trim();
   if (copy) parts.push('THE POST: ' + copy.slice(0, 1200));
-  parts.push('Three titles, as a JSON array:');
+  parts.push((count === 1 ? 'One title' : count + ' different titles') + ', as a JSON array:');
   return parts.join('\n');
 }
 

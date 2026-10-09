@@ -29,7 +29,7 @@
 import { useState } from 'react';
 import {
   cleanCoverTitle, creditConfirmText, creditLabel, currentCoverTitle, needsCreditConfirm, notesOf,
-  retitleDecision, takesOf, titleOff, type EditableImage,
+  retitleDecision, takesOf, titleApplyable, titleOff, type EditableImage,
 } from '@/lib/cover-edit';
 import { MAX_COVER_TITLE } from '@/lib/planner-image';
 import { friendlyError } from '@/lib/friendly-error';
@@ -82,7 +82,9 @@ export default function ImageEditPanel({
   const [wantFresh, setWantFresh] = useState(false);
   const title = typedTitle ?? shown;
   const notes = typedNotes ?? notesOf(image);
-  const titleChanged = cleanCoverTitle(title) !== cleanCoverTitle(shown) || off;
+  // "Apply title" has something to do when the words differ from the ones
+  // painted — or when nothing is painted yet (a library photo, an upload).
+  const titleChanged = titleApplyable(image, title, shown);
   const notesChanged = notes.trim() !== notesOf(image);
   const editable = Boolean(image?.url) && can.ok;
   const fresh = wantFresh || !editable;
