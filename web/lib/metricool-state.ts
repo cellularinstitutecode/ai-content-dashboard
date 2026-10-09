@@ -154,3 +154,15 @@ export function describeAnswer(raw: unknown): string {
     + '; provider keys=' + Object.keys(p0).slice(0, 8).join(',') + ' status=' + String(p0.status ?? '')
     + '; state=' + remoteStateOf(first);
 }
+
+/**
+ * The `start` / `end` of a scheduler list, as Metricool wants them. A bare
+ * date is refused: "Invalid value '2026-09-25'. Valid format is: date-time
+ * in format yyyy-MM-dd'T'HH:mm:ss" (its 400, recorded by the queue read).
+ * Local wall-clock digits with no zone, which is what the error describes.
+ */
+export function metricoolDateTime(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+    + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}

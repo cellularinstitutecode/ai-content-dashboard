@@ -8,17 +8,12 @@
 // call per screen. A failure is reported and answers an empty map: the
 // queue still renders, from our own rows, as it always did.
 import { metricoolConfigured, metricoolFetch } from '@/lib/metricool';
-import { describeAnswer, indexByPostId } from '@/lib/metricool-state';
+import { describeAnswer, indexByPostId, metricoolDateTime } from '@/lib/metricool-state';
 import { recordProviderOutcomeNow } from '@/lib/provider-status';
 import { redact, reportError } from '@/lib/report';
 
 const CACHE_MS = 60_000;
 const cache = new Map<string, { at: number; posts: Map<string, Record<string, unknown>> }>();
-
-function day(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0');
-  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
-}
 
 export async function metricoolQueue(blogIds: Iterable<string>, start: Date, end: Date): Promise<Map<string, Record<string, unknown>>> {
   const out = new Map<string, Record<string, unknown>>();
@@ -29,7 +24,7 @@ export async function metricoolQueue(blogIds: Iterable<string>, start: Date, end
     await recordProviderOutcomeNow('metricool', { ok: false, message: 'queue read skipped: Metricool is not configured' });
     return out;
   }
-  const range = '?start=' + day(start) + '&end=' + day(end);
+  const range = '?start=' + encodeURIComponent(metricoolDateTime(start)) + '&end=' + encodeURIComponent(metricoolDateTime(end));
   await Promise.all(Array.from(blogIds).map(async (blogId) => {
     const key = blogId + range;
     const hit = cache.get(key);
@@ -42,8 +37,10 @@ export async function metricoolQueue(blogIds: Iterable<string>, start: Date, end
       if (!res.ok) {
         // Said in the provider record too, so /api/health and the status
         // table show a queue read Metricool refused, with its own words.
-        const said = (await res.text().catch(() => '')).slice(0, 160);
-        await recordProviderOutcomeNow('metricool', { ok: false, message: 'queue read: Metricool ' + res.status + ' ' + said });
+        // Metricool's own words, as much as the record holds (300 chars):
+        // the first one of these named the date format the call had wrong.
+        const said = (await res.text().catch(() => '')).slice(0, 270);
+        await recordProviderOutcomeNow('metricool', { ok: false, message: 'Metricool ' + res.status + ' ' + said });
         reportError('posts:metricool-queue', new Error('Metricool ' + res.status), { blogId });
         return;
       }
