@@ -21,8 +21,11 @@ export type RemoteState = 'review' | 'scheduled' | 'published' | 'failed' | 'unk
 
 const PUBLISHED = new Set(['PUBLISHED', 'SENT', 'LIVE']);
 const FAILED = new Set(['ERROR', 'ERRORS', 'FAILED', 'FAILURE', 'REJECTED', 'WITH_ERRORS']);
-const SCHEDULED = new Set(['PENDING', 'SCHEDULED', 'QUEUED', 'PUBLISHING']);
 const DRAFT = new Set(['DRAFT', 'REVIEW', 'PENDING_REVIEW']);
+// NOT a queue: Metricool answers PENDING on a post this app created with
+// draft:true (app/api/assistant/route.ts stored exactly that), so the word
+// says "not yet out", not "approved". Only the draft flag tells the queues
+// apart; a status word alone never marks a post approved.
 
 function word(x: unknown): string {
   return typeof x === 'string' ? x.trim().toUpperCase().replace(/[\s-]+/g, '_') : '';
@@ -64,7 +67,8 @@ export function unwrapPost(raw: unknown): Record<string, unknown> | null {
  *              that is out is out, whatever its draft flag still says.
  *   failed     a network reported an error and none published.
  *   review     Metricool holds it as a draft — nobody has approved it there.
- *   scheduled  it is in the live queue, waiting for its time.
+ *   scheduled  it is in the live queue (draft:false / autoPublish:true),
+ *              waiting for its time. A bare PENDING is not this.
  *   unknown    none of the above could be read.
  */
 export function remoteStateOf(raw: unknown): RemoteState {
@@ -77,7 +81,7 @@ export function remoteStateOf(raw: unknown): RemoteState {
   if (post.draft === true) return 'review';
   if (post.draft === false) return 'scheduled';
   if (words.some((w) => DRAFT.has(w))) return 'review';
-  if (words.some((w) => SCHEDULED.has(w)) || post.autoPublish === true) return 'scheduled';
+  if (post.autoPublish === true) return 'scheduled';
   return 'unknown';
 }
 
@@ -102,14 +106,23 @@ export function reconcileStatus(local: unknown, remote: RemoteState): string | n
   }
 }
 
+/** The first array of objects in the answer, up to two envelopes deep ({data:[...]}, {data:{posts:[...]}}). */
+export function postList(raw: unknown, depth = 0): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  if (!raw || typeof raw !== 'object' || depth > 2) return [];
+  const r = raw as Record<string, unknown>;
+  for (const k of ['data', 'posts', 'items', 'content', 'list', 'results']) {
+    if (k in r) {
+      const found = postList(r[k], depth + 1);
+      if (found.length) return found;
+    }
+  }
+  return [];
+}
+
 /** Metricool's list answer, whatever it is wrapped in, keyed by post id. */
 export function indexByPostId(raw: unknown): Map<string, Record<string, unknown>> {
-  const r = raw as Record<string, unknown> | unknown[] | null;
-  const list: unknown[] = Array.isArray(r) ? r
-    : r && typeof r === 'object' && Array.isArray((r as Record<string, unknown>).data) ? ((r as Record<string, unknown>).data as unknown[])
-    : r && typeof r === 'object' && Array.isArray((r as Record<string, unknown>).posts) ? ((r as Record<string, unknown>).posts as unknown[])
-    : r && typeof r === 'object' && Array.isArray((r as Record<string, unknown>).items) ? ((r as Record<string, unknown>).items as unknown[])
-    : [];
+  const list = postList(raw);
   const out = new Map<string, Record<string, unknown>>();
   for (const item of list) {
     const post = unwrapPost(item);
@@ -119,4 +132,25 @@ export function indexByPostId(raw: unknown): Map<string, Record<string, unknown>
     out.set(String(id), post);
   }
   return out;
+}
+
+/**
+ * One line about what Metricool answered, for the provider-status record
+ * (lib/provider-status.ts): how many posts, the keys of one, and the fields
+ * the reader looks at — never the text. This is how the contract gets
+ * learned from a real answer instead of guessed.
+ */
+export function describeAnswer(raw: unknown): string {
+  const list = postList(raw);
+  const first = unwrapPost(list[0]);
+  if (!first) {
+    const r = raw && typeof raw === 'object' ? Object.keys(raw as object).slice(0, 8).join(',') : typeof raw;
+    return 'queue: 0 posts (top-level: ' + r + ')';
+  }
+  const providers = Array.isArray(first.providers) ? first.providers : [];
+  const p0 = providers[0] && typeof providers[0] === 'object' ? (providers[0] as Record<string, unknown>) : {};
+  return 'queue: ' + list.length + ' posts; keys=' + Object.keys(first).slice(0, 14).join(',')
+    + '; draft=' + String(first.draft) + ' autoPublish=' + String(first.autoPublish) + ' status=' + String(first.status ?? '')
+    + '; provider keys=' + Object.keys(p0).slice(0, 8).join(',') + ' status=' + String(p0.status ?? '')
+    + '; state=' + remoteStateOf(first);
 }

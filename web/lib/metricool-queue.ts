@@ -8,7 +8,8 @@
 // call per screen. A failure is reported and answers an empty map: the
 // queue still renders, from our own rows, as it always did.
 import { metricoolConfigured, metricoolFetch } from '@/lib/metricool';
-import { indexByPostId } from '@/lib/metricool-state';
+import { describeAnswer, indexByPostId } from '@/lib/metricool-state';
+import { recordProviderOutcome } from '@/lib/provider-status';
 import { reportError } from '@/lib/report';
 
 const CACHE_MS = 60_000;
@@ -32,8 +33,19 @@ export async function metricoolQueue(blogIds: Iterable<string>, start: Date, end
     }
     try {
       const res = await metricoolFetch('/v2/scheduler/posts' + range, { method: 'GET', blogId, timeoutMs: 8_000 });
-      if (!res.ok) { reportError('posts:metricool-queue', new Error('Metricool ' + res.status), { blogId }); return; }
-      const posts = indexByPostId(await res.json().catch(() => null));
+      if (!res.ok) {
+        // Said in the provider record too, so /api/health and the status
+        // table show a queue read Metricool refused, with its own words.
+        const said = (await res.text().catch(() => '')).slice(0, 160);
+        recordProviderOutcome('metricool', { ok: false, message: 'queue read: Metricool ' + res.status + ' ' + said });
+        reportError('posts:metricool-queue', new Error('Metricool ' + res.status), { blogId });
+        return;
+      }
+      const raw = await res.json().catch(() => null);
+      const posts = indexByPostId(raw);
+      // The shape of the answer is not documented; the record keeps the last
+      // one seen (counts, keys and status fields, never the text).
+      recordProviderOutcome('metricool', { ok: true, message: describeAnswer(raw) });
       cache.set(key, { at: Date.now(), posts });
       for (const [id, p] of posts) out.set(id, p);
     } catch (e) {
