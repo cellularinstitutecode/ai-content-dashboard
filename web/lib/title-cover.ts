@@ -69,7 +69,7 @@ export function coverElement(input: { title: string; photoDataUrl: string; famil
       'div',
       { key: 'title', style: { position: 'absolute', top, left: 80, right: 80, display: 'flex', flexDirection: 'column', alignItems: 'center' } },
       ...lineEls,
-      h('div', { key: 'rule', style: { display: 'flex', width: 120, height: 2, marginTop: rule, background: TITLE_INK, opacity: 0.4 } }),
+      h('div', { key: 'rule', style: { display: 'flex', width: 160, height: 3, marginTop: rule, background: TITLE_INK, opacity: 0.4 } }),
     ),
   );
 }

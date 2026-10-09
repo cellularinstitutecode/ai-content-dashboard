@@ -18,6 +18,8 @@
 // - No new secrets: reuses OPENAI_API_KEY + the Supabase service role.
 import { cleanTopic, familyAt, onTopicCheck, plannerImageFor, plannerPromptLines, scienceOffered, SHOT_COUNT, type PlannerImage } from '@/lib/planner-image';
 import { renderTitleCover } from '@/lib/title-cover';
+import { resolveCoverTitle } from '@/lib/cover-title';
+import { FEED_BASELINE } from '@/lib/planner-image';
 import { briefSource, briefSystemPrompt, briefUserPrompt, parseSceneBrief, type SceneBrief } from '@/lib/image-brief';
 import { COVER_MIN_HEAD_TOP_PCT, ownBucketUrl, photographVerdict, type LibraryProvenance } from './library-cover.ts';
 import { cleanCoverTitle, notesOf, retitleDecision, takesOf } from './cover-edit.ts';
@@ -277,6 +279,7 @@ export function buildImagePrompt(opts: {
     // somebody has said what they want, a composition picked by a counter is
     // noise. Both are kept when there is no direction.
     direction ? `Direction from the team (follow this closely): ${direction}` : variant,
+    FEED_BASELINE,
     visual,
     'Style: warm, quiet, premium editorial photograph; soft directional light; calm, confident, trustworthy mood; photorealistic; shallow depth of field.',
     ...strict,
@@ -309,6 +312,7 @@ export function buildEditPrompt(opts: {
       ? `Direction from the team (follow this closely): ${direction}`
       : 'No specific direction was given: make a subtly refined take of the same scene — natural, photorealistic, nothing added.',
     `The picture illustrates a post for ${brandName} about: ${String(opts.topic || '').trim()}.`,
+    FEED_BASELINE,
     opts.planner ? 'Keep the top third of the frame clear and uncluttered: a title is set there afterwards.' : '',
     'The result is a purely visual, text-free photograph: no words, letters, numbers, typography, signage, labels, logos or watermarks anywhere;',
     'no needles piercing skin, no blood, no graphic medical procedures, nothing that implies a medical claim.',
@@ -859,6 +863,8 @@ export async function generatePackImage(opts: {
   budgetMs?: number | null;
   /** Planner covers: the words to set instead of the planner's own ('' = no title). Null keeps the planner's. */
   title?: string | null;
+  /** Planner covers: the title written for this draft (lib/cover-title.ts) — the planner's own words when absent. Never marks the title custom. */
+  coverTitle?: string | null;
   /**
    * WHAT THIS PICTURE COSTS. `high` (the default) for a post that ships;
    * `medium` for a preview — gpt-image-1 bills roughly four times less for it,
@@ -898,6 +904,7 @@ async function generateBestPackImage(opts: {
   slot?: number | null;
   budgetMs?: number | null;
   title?: string | null;
+  coverTitle?: string | null;
   quality?: ImageQuality;
   maxAttempts?: number;
 }): Promise<PackImage> {
@@ -912,7 +919,7 @@ async function generateBestPackImage(opts: {
   const planner = plannerBase
     ? {
         ...plannerBase,
-        ...(opts.title != null ? { title: cleanCoverTitle(opts.title) } : {}),
+        ...(opts.title != null ? { title: cleanCoverTitle(opts.title) } : opts.coverTitle ? { title: cleanCoverTitle(opts.coverTitle) } : {}),
         ...(direction ? { direction } : {}),
         science: scienceOffered(plannerBase.pillarId, briefSource(opts.pack, 6000) || opts.topic),
       }
@@ -1189,6 +1196,9 @@ export async function ensureDraftImage(draftId: string, ownerId: string, opts: {
     // The team's notes and their title (or "no title") outlive the take.
     direction: notesOf(existing) || null,
     title: existing?.titled?.custom ? existing.titled.title : null,
+    // The words written for this draft, so an auto-made cover wears the same
+    // title a library photo of it would.
+    coverTitle: plannerImageFor(pack) && !existing?.titled?.custom ? (await resolveCoverTitle({ pack, topic: String(row.topic || '') })).title : null,
   });
   const image: PackImage = { ...made, takes: takesOf(existing) + 1 };
   // Same re-read as /api/drafts/image: the pack read before generation is

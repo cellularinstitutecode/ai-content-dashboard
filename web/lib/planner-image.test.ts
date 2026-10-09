@@ -36,7 +36,9 @@ test('a planner draft is pictured in one of the shots, with its objects, craft a
   assert.match(lines, /oranges/);
   assert.match(lines, /TITLE SPACE: the upper third/);
   assert.match(lines, /CRAFT: /);
-  assert.doesNotMatch(lines, /black scrubs/);
+  // The clinic's own feed is the baseline, and its team wears black scrubs.
+  assert.match(lines, /black scrubs/);
+  assert.match(lines, /BASELINE — the clinic's own Instagram feed/);
   assert.match(onTopicCheck(p!), /onTopic/);
   const cancun = plannerPromptLines(plannerImageFor(pack('Cancun and health tourism', 'Recovering in a calm, warm environment'))!, 0).join(' ');
   assert.match(cancun, /turquoise Caribbean sea|Cancún/);

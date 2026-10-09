@@ -7,9 +7,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  CONFIRM_CREDITS_AFTER, NO_CLEAN_PHOTO, cleanCoverTitle, creditConfirmText, creditLabel, currentCoverTitle, fallbackTitles,
-  needsCreditConfirm, notesOf, parseTitleList, retitleDecision, suggestTitlesPrompt, takesOf, titleOff,
+  CONFIRM_CREDITS_AFTER, NO_CLEAN_PHOTO, SUGGEST_TITLES_SYSTEM, TITLE_STYLE_EXAMPLES, cleanCoverTitle, creditConfirmText, creditLabel, currentCoverTitle, fallbackTitles,
+  needsCreditConfirm, notesOf, parseTitleList, retitleDecision, suggestTitlesPrompt, takesOf, titleApplyable, titleOff,
 } from './cover-edit.ts';
+import { titleFontSize } from './title-cover-layout.ts';
 import { MAX_COVER_TITLE } from './planner-image.ts';
 import { coverTitleFor } from './library-cover.ts';
 
@@ -54,6 +55,48 @@ test('a title the team set outlives the picture: the brand-photo path reads it, 
   assert.equal(coverTitleFor({ ...pack, _image: { url: 'u', titled: { title: '', photoUrl: 'p', custom: true } } }, 'topic'), '');
   // A cover the planner titled (not custom) still follows the planner.
   assert.equal(coverTitleFor({ ...pack, _image: { url: 'u', titled: { title: 'Protein and Recovery', photoUrl: 'p' } } }, 'topic'), 'Protein and Recovery');
+});
+
+test('Apply title works on a library photo that has no title yet, not only on changed words', () => {
+  // The field opens pre-filled with the draft's title; the photo has none painted.
+  const lib = { url: 'https://x/lib.jpg', source: 'library' };
+  assert.equal(titleApplyable(lib, 'Fiber First', 'Fiber First'), true, 'same words, nothing painted: applying paints them');
+  assert.equal(titleApplyable(lib, '', ''), false, 'no words, nothing to apply');
+  const titled = { url: 'u', titled: { title: 'Fiber First', photoUrl: 'p' } };
+  assert.equal(titleApplyable(titled, 'Fiber First', 'Fiber First'), false, 'already painted');
+  assert.equal(titleApplyable(titled, 'Start With What You Drink', 'Fiber First'), true);
+  assert.equal(titleApplyable({ url: 'u', titled: { title: '', photoUrl: 'p' } }, 'Fiber First', ''), true, 'title off: putting one on');
+  const panel = src('components/ImageEditPanel.tsx');
+  assert.match(panel, /const titleChanged = titleApplyable\(image, title, shown\);/);
+});
+
+test('titles are written in the feed\'s voice, and one can be asked for', () => {
+  for (const t of TITLE_STYLE_EXAMPLES) assert.match(SUGGEST_TITLES_SYSTEM, new RegExp('"' + t.replace(/[.]/g, '\\.') + '"'));
+  assert.match(SUGGEST_TITLES_SYSTEM, /written from THIS post/);
+  assert.match(suggestTitlesPrompt({ angle: 'a', count: 1 }), /One title, as a JSON array:$/);
+  assert.match(suggestTitlesPrompt({ angle: 'a' }), /3 different titles, as a JSON array:$/);
+});
+
+test('the title written for a draft is kept on the pack and read before the static fallbacks', () => {
+  const pack = { _coverTitle: 'Everyday Habits Shape How You Feel', _autopilot: { template_name: 'Nutrition', angle: { query: 'The role of protein in recovery' } } };
+  assert.equal(coverTitleFor(pack, 'topic'), 'Everyday Habits Shape How You Feel');
+  // Words already painted on the current picture come before the planner's table too.
+  assert.equal(coverTitleFor({ ...pack, _coverTitle: '', _image: { url: 'u', titled: { title: 'Painted Words', photoUrl: 'p' } } }, 'topic'), 'Painted Words');
+  // A person's own words still win.
+  assert.equal(coverTitleFor({ ...pack, _image: { url: 'u', titled: { title: 'Mine', photoUrl: 'p', custom: true } } }, 'topic'), 'Mine');
+  // The route resolves the words once, before a library photo or a planner take, and keeps them.
+  const route = src('app/api/drafts/image/route.ts');
+  assert.match(route, /const resolved = await resolveCoverTitle\(\{ pack, topic \}\);[^]*?titleWords: resolved\.title/);
+  assert.match(route, /coverTitle: coverWords\?\.title \?\? null/);
+  assert.match(route, /\.\.\.\(coverWords\?\.written \? \{ _coverTitle: coverWords\.title \} : \{\}\)/);
+  const hero = src('lib/library-hero.ts');
+  assert.match(hero, /opts\.titleWords != null \? opts\.titleWords : coverTitleFor\(opts\.pack, opts\.topic\)/);
+});
+
+test('cover titles are set large, like the feed\'s own photo posts', () => {
+  assert.ok(titleFontSize(['Fiber First']) >= 140, String(titleFontSize(['Fiber First'])));
+  assert.ok(titleFontSize(['Evening Routines', 'Matter']) >= 120);
+  assert.ok(titleFontSize(['Everyday Habits Shape How You Feel']) >= 78);
 });
 
 test('a typed title is made fit for the cover', () => {

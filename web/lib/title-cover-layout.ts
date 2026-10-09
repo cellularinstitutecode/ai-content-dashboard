@@ -52,10 +52,17 @@ export function splitTitleLines(title: string): string[] {
   return best3!.lines;
 }
 
-/** Font size from the longest line, tuned for the 1080-wide cover. */
+/**
+ * Font size from the longest line, tuned for the 1080-wide cover.
+ *
+ * Sized like the feed's own photo posts ("Organized. Professional. Human."
+ * fills a third of the frame): the title is the picture's headline, not a
+ * caption. Each step keeps the longest line inside the 920px column at the
+ * stand-in serif's width (about 0.42em per character).
+ */
 export function titleFontSize(lines: string[]): number {
   const n = Math.max(0, ...lines.map((l) => l.length));
-  return n <= 12 ? 104 : n <= 16 ? 94 : n <= 20 ? 84 : n <= 24 ? 74 : 64;
+  return n <= 12 ? 148 : n <= 16 ? 128 : n <= 20 ? 108 : n <= 24 ? 88 : 78;
 }
 
 /**
@@ -70,8 +77,8 @@ export function titleFontSize(lines: string[]): number {
  * (a 2:3 photo cropped to 4:5 from the top), so it is converted here.
  */
 export function fitTitle(lines: string[], headTopPct?: number | null): { size: number; top: number; rule: number } {
-  const TOP = 96;
-  const RULE_GAP = 34;
+  const TOP = 110;
+  const RULE_GAP = 38;
   const RULE_H = 2;
   const block = (size: number) => Math.round(lines.length * size * 1.08) + RULE_GAP + RULE_H;
   let size = titleFontSize(lines);
@@ -81,7 +88,8 @@ export function fitTitle(lines: string[], headTopPct?: number | null): { size: n
   // The heads, in cover pixels, minus a margin of breathing room.
   const headPx = Math.max(0, Math.min(COVER.height, (head / 83.3) * COVER.height)) - 90;
   let top = TOP;
-  while (size > 52 && top + block(size) > headPx) size -= 4;
+  // Never below 64: smaller than that reads as a caption, and the band moves up instead.
+  while (size > 64 && top + block(size) > headPx) size -= 4;
   if (top + block(size) > headPx) top = Math.max(44, Math.round(headPx - block(size)));
   return { size, top, rule: RULE_GAP };
 }

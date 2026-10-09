@@ -22,6 +22,7 @@ import { imageUnshippable } from '@/lib/image-verdict';
 import { cleanCoverTitle, notesOf, retitleDecision, takesOf } from '@/lib/cover-edit';
 import { coverTitleFor } from '@/lib/library-cover';
 import { retitleImage } from '@/lib/retitle';
+import { resolveCoverTitle } from '@/lib/cover-title';
 import { suggestCoverTitles } from '@/lib/title-suggest';
 import { briefSource } from '@/lib/image-brief';
 
@@ -215,7 +216,8 @@ export async function POST(req: NextRequest) {
     const setHero = async (image: PackImage) => {
       const { data: freshRow } = await sb.from('drafts').select('pack').eq('id', id).eq('user_id', user.id).maybeSingle();
       const currentPack = (freshRow as { pack?: Record<string, unknown> } | null)?.pack ?? pack;
-      const nextPack = { ...currentPack, _image: image };
+      const keptTitle = (pack as { _coverTitle?: unknown })._coverTitle;
+      const nextPack = { ...currentPack, _image: image, ...(typeof keptTitle === 'string' && keptTitle ? { _coverTitle: keptTitle } : {}) };
       const { error: setErr } = await sb.from('drafts').update({ pack: nextPack }).eq('id', id).eq('user_id', user.id);
       if (setErr) throw new Error(setErr.message);
       await removeSuperseded(currentPack, nextPack);
@@ -252,7 +254,11 @@ export async function POST(req: NextRequest) {
     // titled like a planner cover. No image model, no credits.
     if (brandPhotoUrl) {
       try {
-        const made = await libraryHero({ url: brandPhotoUrl, title: true, pack, topic, brand: await loadBrand(), libraryFileId, libraryName: givenAlt || null });
+        // The words: written from the post once (lib/cover-title.ts), then
+        // kept on the pack so the next picture of this draft wears them too.
+        const resolved = await resolveCoverTitle({ pack, topic });
+        if (resolved.written) (pack as Record<string, unknown>)._coverTitle = resolved.title;
+        const made = await libraryHero({ url: brandPhotoUrl, title: true, pack, topic, brand: await loadBrand(), libraryFileId, libraryName: givenAlt || null, titleWords: resolved.title });
         await setHero(made.image);
         return NextResponse.json({ image: made.image, notes: made.notes, palette: made.decision.verdict });
       } catch (e) {
@@ -360,6 +366,10 @@ export async function POST(req: NextRequest) {
     const brand = await loadBrand();
 
     const baseVariant = advanceVariant ? (existing?.variant ?? 0) + 1 + options.length : 0;
+    // A planner cover's words, written from the post once and kept on the
+    // pack (lib/cover-title.ts); a title the team set outranks them.
+    const coverWords = plannerImageFor(pack) && !existing?.titled?.custom ? await resolveCoverTitle({ pack, topic }) : null;
+    if (coverWords?.written) (pack as Record<string, unknown>)._coverTitle = coverWords.title;
     const makeOne = (slot: number | null, variantOffset: number) => generatePackImage({
       topic,
       pack,
@@ -367,6 +377,7 @@ export async function POST(req: NextRequest) {
       direction: effectiveDirection,
       // The title the team set (or turned off) stays on every new take.
       title: existing?.titled?.custom ? existing.titled.title : null,
+      coverTitle: coverWords?.title ?? null,
       // Fresh generations start at variant 0; each regenerate (explicit, or
       // forced by a text-flagged stored image) advances to the next
       // composition (hero shot → macro lab → lifestyle → still-life → …).
@@ -452,7 +463,12 @@ export async function POST(req: NextRequest) {
     const takes = Math.max(takesOf(priorImage), takesOf(existing)) + madeNow.length;
     nextHero.takes = takes;
     // Owner update passes RLS via the session client.
-    const nextPack = { ...currentPack, _image: nextHero, ...(nextOptions.length ? { _imageOptions: nextOptions } : { _imageOptions: [] }) };
+    const nextPack = {
+      ...currentPack,
+      _image: nextHero,
+      ...(nextOptions.length ? { _imageOptions: nextOptions } : { _imageOptions: [] }),
+      ...(coverWords?.written ? { _coverTitle: coverWords.title } : {}),
+    };
     const { error } = await sb
       .from('drafts')
       .update({ pack: nextPack })

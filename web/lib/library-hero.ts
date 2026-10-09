@@ -99,6 +99,8 @@ export async function libraryHero(opts: {
   brand?: BrandContext | null;
   libraryFileId?: string | null;
   libraryName?: string | null;
+  /** The words to set (lib/cover-title.ts); without them, coverTitleFor's static answer. */
+  titleWords?: string | null;
 }): Promise<LibraryHeroResult> {
   const notes: string[] = [];
   const photo = await fetchPhoto(opts.url);
@@ -147,7 +149,7 @@ export async function libraryHero(opts: {
     const photoUrl = await storeBytes(bytes, contentType, ext, nameHint);
     let url = photoUrl;
     let titled: PackImage['titled'];
-    const title = opts.title ? coverTitleFor(opts.pack, opts.topic) : '';
+    const title = opts.title ? (opts.titleWords != null ? opts.titleWords : coverTitleFor(opts.pack, opts.topic)) : '';
     // Words the team set on the previous picture stay theirs on this one.
     const custom = (opts.pack as { _image?: { titled?: { custom?: unknown } } })._image?.titled?.custom === true;
     if (opts.title && !title) {
