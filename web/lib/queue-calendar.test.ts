@@ -45,7 +45,7 @@ test('the dashboard queue is the month, and keeps every button the list had', ()
   assert.match(page, /<QueueCalendar\n/);
   assert.match(page, /const listPosts: any\[\] = queueSearching \? shownPosts : \(queueByDay\.get\(activeQueueDay\) \?\? \[\]\)/);
   assert.match(page, /\{listPosts\.map\(\(p: any, i: number\) =>/);
-  for (const label of ['>Preview<', "'Approve'", '>Publish now<', '>Continue<', '>Reschedule<', '>Delete<', 'Select several…']) {
+  for (const label of ['>Preview<', "'Approve'", '>Publish now<', '>Continue<', "'Pick a time' : 'Reschedule'", '>Delete<', 'Select several…']) {
     assert.ok(page.includes(label), 'still there: ' + label);
   }
   assert.doesNotMatch(page, /showAllQueue/, 'the six-row cap is gone: a day shows all of its posts');
@@ -54,4 +54,27 @@ test('the dashboard queue is the month, and keeps every button the list had', ()
   const cal = readFileSync(new URL('../components/QueueCalendar.tsx', import.meta.url), 'utf8');
   assert.match(cal, /onApprove\(p\)/);
   assert.match(cal, /onPreview\(id\)/);
+});
+
+test('a post whose time has passed offers Reschedule where Approve would be, and the move is to the next free slot', () => {
+  // Metricool refuses a past date, so Approve on such a post could only fail.
+  // The button reads Reschedule instead and the server picks the slot
+  // (lib/queue-next-slot.ts): the post is moved, not approved.
+  const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /function slotPassed\(p: any\): boolean/);
+  assert.match(page, /slotPassed\(p\) \? \(\n<button[^\n]*onClick=\{\(\) => rescheduleNext\(p\)\}[^\n]*'Reschedule'/, 'the list row');
+  assert.match(page, /slotPassed\(pp\) \? \(\n\s*<button[^\n]*rescheduleNext\(pp\)[^\n]*'Reschedule'/, 'the preview');
+  assert.match(page, /onReschedule=\{\(p: any\) => rescheduleNext\(p\)\}/, 'the month grid');
+  assert.match(page, /action: 'reschedule', publication_date: 'next'/);
+  const cal = readFileSync(new URL('../components/QueueCalendar.tsx', import.meta.url), 'utf8');
+  assert.match(cal, /slotPassed\(p\) \? \(/);
+  assert.match(cal, /onReschedule\(p\)/);
+  assert.match(cal, /'Reschedule'/);
+  const calendar = readFileSync(new URL('../app/calendar/page.tsx', import.meta.url), 'utf8');
+  assert.match(calendar, /waiting && overdueIds\.includes\(String\(p\.id\)\) \? \(\n\s*<button[^\n]*rescheduleNext\(p\)/, 'the day list');
+  assert.match(calendar, /overdueIds\.includes\(String\(previewPost\.id\)\) \? \(\n\s*<button[^\n]*rescheduleNext\(previewPost\)/, 'the preview');
+  assert.doesNotMatch(calendar, /Move to tomorrow/, 'the overdue list moves to the next free slot too');
+  const route = readFileSync(new URL('../app/api/posts/route.ts', import.meta.url), 'utf8');
+  assert.match(route, /if \(publicationDate === NEXT_SLOT\) \{\n[^]*?nextFreeSlotFor\(sb, user\.id, id\)/);
+  assert.match(route, /error: 'date_passed', message: 'That date has already passed\. Press Reschedule/);
 });

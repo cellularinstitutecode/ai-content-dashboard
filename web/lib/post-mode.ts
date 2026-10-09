@@ -78,7 +78,9 @@ export type PostStatusMeta = { label: string; tone: 'green' | 'red' | 'amber' | 
  */
 export function postStatusMeta(status: unknown): PostStatusMeta {
   const s = String(status || '').toLowerCase();
-  if (s === 'published' || s === 'sent' || s === 'live') return { label: 'Published', tone: 'green' };
+  // "Posted", not "Published": the word the planner uses, and the one a
+  // person reads next to a post that has gone out.
+  if (s === 'published' || s === 'sent' || s === 'live') return { label: 'Posted', tone: 'green' };
   if (s === 'failed' || s === 'error' || s === 'rejected') return { label: 'Needs attention', tone: 'red' };
   return isAwaitingApproval(s)
     ? { label: 'Waiting for your approval', tone: 'amber' }

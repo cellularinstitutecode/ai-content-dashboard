@@ -29,6 +29,10 @@ import { isStreamCopyId, mediaVideoUrl, parseStreamCopyId } from '@/lib/media-ur
 import { isMetricoolCopyId } from '@/lib/metricool-upload-parse';
 import { publicBase } from '@/lib/public-base';
 import { modeOfStatus, videoPending, APPROVED_STATUS } from '@/lib/post-mode';
+import { NEXT_SLOT, nextFreeSlotFor } from '@/lib/queue-next-slot';
+import { metricoolQueue } from '@/lib/metricool-queue';
+import { reconcileStatus, remoteStateOf } from '@/lib/metricool-state';
+import { ALLOWED_BLOG_IDS } from '@/lib/access';
 import { tabGid } from '@/lib/google-sources';
 import type { PostSource } from '@/lib/sheet-link';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -148,6 +152,30 @@ export async function GET() {
   // errors are not symmetric and this is the safe side of them — the chip can
   // be missing from a post that cannot go out, never present on one that can.
   const posts = (data ?? []) as Record<string, unknown>[];
+
+  // WHAT METRICOOL SAYS. A post approved in Metricool's own planner, or one
+  // Metricool has already published, used to keep its Approve button here
+  // for ever: nothing read the answer back. Each post Metricool holds is
+  // looked up by id (lib/metricool-queue.ts), its state read
+  // (lib/metricool-state.ts), and our row brought into line — approved,
+  // published or failed — so the queue says "Scheduled" or "Posted" instead
+  // of offering to approve a post that is already out. Best-effort: a
+  // Metricool hiccup leaves every row as it was.
+  if (posts.some((p) => p.metricool_post_id)) {
+    const remote = await metricoolQueue(ALLOWED_BLOG_IDS, new Date(since), new Date(Date.now() + 60 * 24 * 60 * 60 * 1000));
+    const changes: { id: string; status: string }[] = [];
+    for (const p of posts) {
+      const mc = p.metricool_post_id ? remote.get(String(p.metricool_post_id)) : undefined;
+      if (!mc) continue;
+      const next = reconcileStatus(p.status, remoteStateOf(mc));
+      if (next) { p.status = next; changes.push({ id: String(p.id), status: next }); }
+    }
+    if (changes.length) {
+      const results = await Promise.all(changes.map(({ id, status }) => sb.from('posts').update({ status }).eq('id', id).eq('user_id', user.id)));
+      const failed = results.find((r) => r.error);
+      if (failed?.error) reportError('posts:metricool-reconcile', failed.error, { userId: user.id, changed: changes.length });
+    }
+  }
   const draftIds = Array.from(
     new Set(posts.map((p) => String(p.draft_id || '')).filter(Boolean)),
   );
@@ -346,7 +374,7 @@ export async function PATCH(req: Request) {
     if (!publicationDate || typeof publicationDate !== 'string') {
       return NextResponse.json({ error: 'publication_date is required' }, { status: 400 });
     }
-    if (isNaN(new Date(publicationDate).getTime())) {
+    if (publicationDate !== NEXT_SLOT && isNaN(new Date(publicationDate).getTime())) {
       return NextResponse.json({ error: 'publication_date must be a valid ISO date' }, { status: 400 });
     }
   }
@@ -612,7 +640,20 @@ export async function PATCH(req: Request) {
   let mode: 'review' | 'scheduled' = modeOfStatus(existing.status);
 
   if (action === 'reschedule') {
-    nextDate = publicationDate;
+    if (publicationDate === NEXT_SLOT) {
+      // The Reschedule button on a post whose time has passed: the next free
+      // slot (lib/queue-next-slot.ts). The post is moved, not approved.
+      const slot = await nextFreeSlotFor(sb, user.id, id);
+      if (!slot) {
+        return NextResponse.json(
+          { error: 'no_free_slot', message: 'There is no free slot in the next week. Pick a date and time yourself.' },
+          { status: 409 },
+        );
+      }
+      nextDate = slot.toISOString();
+    } else {
+      nextDate = publicationDate;
+    }
   } else if (action === 'fix_citation') {
     // The corrected copy goes to Metricool at the same date, in the same
     // queue. A post Metricool does not have yet is simply saved here.
@@ -678,7 +719,7 @@ export async function PATCH(req: Request) {
       // Metricool refuses a past date, and would say so in its own words.
       // Say it in ours, before spending the call.
       return NextResponse.json(
-        { error: 'date_passed', message: 'That date has already passed. Reschedule the post first, then approve it.' },
+        { error: 'date_passed', message: 'That date has already passed. Press Reschedule to move the post to the next free slot, then approve it.' },
         { status: 409 },
       );
     }

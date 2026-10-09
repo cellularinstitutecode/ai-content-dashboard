@@ -93,6 +93,8 @@ export default function CalendarPage() {
   const [planTemplates, setPlanTemplates] = useState<PlanTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  /** A one-line outcome worth reading (a post moved to its next free slot). */
+  const [notice, setNotice] = useState<string | null>(null);
   // The list could not be read. Kept apart from `err`, which also carries
   // warnings about a list that DID load: "No scheduled posts yet" under a
   // failed load read as "nothing is scheduled", which is the wrong conclusion.
@@ -484,6 +486,37 @@ export default function CalendarPage() {
     }
   }
 
+  /**
+   * The Reschedule button a post past its time shows where Approve would be:
+   * a past date cannot be approved (Metricool refuses it), so the server moves
+   * the post to the next free slot (lib/queue-next-slot.ts), here and in
+   * Metricool. It stays waiting for approval at the new time.
+   */
+  async function rescheduleNext(post: Post) {
+    if (!post.id) return;
+    if (!window.confirm('This post\'s time has passed, so it cannot be approved as it is.\n\nMove it to the next free slot? It stays waiting for your approval at the new time.')) return;
+    setSaving(String(post.id));
+    setErr(null);
+    setNotice(null);
+    try {
+      const r = await fetch('/api/posts', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: post.id, action: 'reschedule', publication_date: 'next' }),
+      });
+      if (!r.ok) throw new Error(await friendlyErrorFromResponse(r, 'We could not move that post.'));
+      const j = await r.json().catch(() => null);
+      setPreviewId(null);
+      await refresh();
+      announce('posts', 'stats', 'insights');
+      setNotice('Moved to ' + (j?.post?.publication_date ? fmtScheduleDateTime(j.post.publication_date) + ' (' + scheduleTzLabel() + ' time)' : 'the next free slot') + '. Press Approve when it is ready to go.');
+    } catch (e: any) {
+      setErr(friendlyError(e, 'We could not move that post.'));
+    } finally {
+      setSaving(null);
+    }
+  }
+
   // The reviewer's yes, from the calendar. Same endpoint and same rules as the
   // dashboard queue: Metricool moves the post to its live queue first, and our
   // row changes only if that succeeded.
@@ -832,6 +865,12 @@ export default function CalendarPage() {
         {err && (
           <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">Error: {err}</div>
         )}
+        {notice && (
+          <div className="mb-3 flex items-start justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800" role="status">
+            <span>{notice}</span>
+            <button type="button" onClick={() => setNotice(null)} className="text-[12px] text-emerald-700 hover:underline">Dismiss</button>
+          </div>
+        )}
 
         {/* cal-month: on a phone the seven columns keep a readable width and the month is swiped sideways (app/globals.css). */}
         <div className="cal-month grid grid-cols-7 gap-2">
@@ -984,7 +1023,7 @@ export default function CalendarPage() {
           {(overdueList.length > 0 || runLists.missed.length > 0) && (
             <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50/70 p-3 text-[12px]">
               <div className="mb-1 font-semibold text-rose-800">{overdueList.length + runLists.missed.length} past {overdueList.length + runLists.missed.length === 1 ? 'its' : 'their'} time, still waiting</div>
-              <p className="mb-2 text-[11px] text-rose-800/80">These were never approved, so they did not go out. Click one to preview it. Tick the ones you don&apos;t need and delete them together, or move one to tomorrow.{runLists.missed.length ? ' A missed Autopilot draft can only be skipped here.' : ''}</p>
+              <p className="mb-2 text-[11px] text-rose-800/80">These were never approved, so they did not go out. Click one to preview it. Tick the ones you don&apos;t need and delete them together, or press Reschedule to move one to the next free slot.{runLists.missed.length ? ' A missed Autopilot draft can only be skipped here.' : ''}</p>
               {overdueIds.length > 0 && (
               <label className="mb-2 flex w-fit cursor-pointer items-center gap-1.5 rounded-lg bg-rose-100/90 px-2 py-1 text-[11px] font-medium text-rose-900">
                 <input type="checkbox" checked={allPastPicked} onChange={() => toggleGroup(overdueIds, allPastPicked)} disabled={Boolean(bulk)} className="h-3.5 w-3.5 accent-rose-600" aria-label="Select all past posts" />
@@ -1034,8 +1073,8 @@ export default function CalendarPage() {
                         </button>
                         <div className="mt-1 flex gap-1.5">
                           <button type="button" onClick={() => setPreviewId(id)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Preview</button>
-                          <button type="button" disabled={saving === p.id || Boolean(bulk)} onClick={() => { const t = new Date(today.getTime() + 86400000); void reschedule(id, t); }} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Move to tomorrow</button>
-                          <button type="button" disabled={saving === p.id || Boolean(bulk)} onClick={() => openReschedule(p)} title="Pick any date and time" className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">Reschedule</button>
+                          <button type="button" disabled={saving === p.id || Boolean(bulk)} onClick={() => void rescheduleNext(p)} title="Move it to the next free slot; it stays waiting for your approval" className="rounded-full bg-amber-600 px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{saving === p.id ? 'Moving…' : 'Reschedule'}</button>
+                          <button type="button" disabled={saving === p.id || Boolean(bulk)} onClick={() => openReschedule(p)} title="Pick any date and time" className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">Pick a time</button>
                           <button type="button" disabled={saving === p.id || Boolean(bulk)} onClick={() => void removePost(p)} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-50">Delete</button>
                         </div>
                       </div>
@@ -1148,6 +1187,8 @@ export default function CalendarPage() {
                       <button type="button" onClick={() => setPreviewId(String(p.id))} className="rounded-full px-2 py-[3px] text-[11px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Preview</button>
                       {pending ? (
                         <button type="button" disabled={saving === p.id} onClick={() => void attachVideo(p)} title="This copy was written from a video and has none attached. Click to attach it." className="rounded-full bg-rose-600 px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{saving === p.id ? 'Attaching…' : 'Attach video'}</button>
+                      ) : waiting && overdueIds.includes(String(p.id)) ? (
+                        <button type="button" disabled={saving === p.id} onClick={() => void rescheduleNext(p)} title="Its time has passed, so it cannot be approved as it is. Move it to the next free slot." className="rounded-full bg-amber-600 px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{saving === p.id ? 'Moving…' : 'Reschedule'}</button>
                       ) : waiting && (
                         <button type="button" disabled={saving === p.id} onClick={() => void approve(p)} className="rounded-full bg-accent px-2.5 py-[3px] text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Approve</button>
                       )}
@@ -1260,11 +1301,11 @@ export default function CalendarPage() {
                 <button type="button" disabled={saving === previewPost.id} onClick={() => void approve(previewPost)} className="rounded-full bg-accent px-3 py-1 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Approve</button>
               ) : null}
               {overdueIds.includes(String(previewPost.id)) ? (
-                <button type="button" disabled={saving === previewPost.id} onClick={() => { const t = new Date(today.getTime() + 86400000); void reschedule(String(previewPost.id), t); setPreviewId(null); }} className="rounded-full bg-accent px-3 py-1 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">Move to tomorrow</button>
+                <button type="button" disabled={saving === previewPost.id} onClick={() => void rescheduleNext(previewPost)} title="Its time has passed, so it cannot be approved as it is. Move it to the next free slot." className="rounded-full bg-amber-600 px-3 py-1 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{saving === previewPost.id ? 'Moving…' : 'Reschedule'}</button>
               ) : (
                 <button type="button" disabled={saving === previewPost.id} onClick={() => { const d = previewPost.publication_date ? new Date(new Date(previewPost.publication_date).getTime() + 86400000) : null; if (d) void reschedule(String(previewPost.id), d); }} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">+1 day</button>
               )}
-              <button type="button" disabled={saving === previewPost.id || Boolean(bulk)} onClick={() => openReschedule(previewPost)} title="Pick any date and time" className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">Reschedule</button>
+              <button type="button" disabled={saving === previewPost.id || Boolean(bulk)} onClick={() => openReschedule(previewPost)} title="Pick any date and time" className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">{overdueIds.includes(String(previewPost.id)) ? 'Pick a time' : 'Reschedule'}</button>
               <button type="button" disabled={saving === previewPost.id || Boolean(bulk)} onClick={() => void removePost(previewPost)} className="rounded-full px-3 py-1 text-[12px] font-medium text-red-600 ring-1 ring-red-200 hover:bg-red-50 disabled:opacity-50">Delete</button>
             </div>
           </div>
