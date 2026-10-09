@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
 import { isAllowedEmail, isAllowedBlogId } from '@/lib/access';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { metricoolDateTime } from '@/lib/metricool-state';
 
 // GET /api/metricool/insights?blogId=123
 // Aggregates several Metricool datasets in one call so the dashboard can show
@@ -82,7 +83,11 @@ export async function GET(request: Request) {
   const range = 'start=' + fmtDate(start) + '&end=' + fmtDate(now);
 
   const [scheduledRaw, postsRaw] = await Promise.all([
-    mcGet('/v2/scheduler/posts?' + q + '&start=' + fmtDate(now) + '&end=' + fmtDate(future), token),
+    // The scheduler refuses a bare date on its range ("Valid format is:
+    // date-time in format yyyy-MM-dd'T'HH:mm:ss"), so this answered
+    // { scheduled: [] } for as long as it existed. The analytics range
+    // below keeps its dates: that call was never the one refused.
+    mcGet('/v2/scheduler/posts?' + q + '&start=' + encodeURIComponent(metricoolDateTime(now)) + '&end=' + encodeURIComponent(metricoolDateTime(future)), token),
     mcGet('/v2/analytics/posts?' + q + '&' + range, token),
   ]);
 

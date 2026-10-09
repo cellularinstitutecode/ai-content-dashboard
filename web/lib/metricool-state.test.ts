@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { describeAnswer, indexByPostId, reconcileStatus, remoteStateOf } from './metricool-state.ts';
+import { describeAnswer, indexByPostId, metricoolDateTime, reconcileStatus, remoteStateOf } from './metricool-state.ts';
 import { postStatusMeta } from './post-mode.ts';
 
 test('the state is read off whichever field Metricool put it in', () => {
@@ -82,4 +82,15 @@ test('wiring: the queue read brings every row into line with Metricool before it
   const cal = src('components/QueueCalendar.tsx');
   assert.match(cal, /postStatusMeta\(p\.status\)/);
   assert.match(cal, /\{meta && <span[^>]*>\{meta\.label\}<\/span>\}/);
+});
+
+test('the list range is sent as the date-time Metricool asks for, not a bare date', () => {
+  // Its 400 on the first read: "Invalid value '2026-09-25'. Valid format is:
+  // date-time in format yyyy-MM-dd'T'HH:mm:ss".
+  const d = new Date(2026, 8, 25, 7, 5, 9);
+  assert.equal(metricoolDateTime(d), '2026-09-25T07:05:09');
+  const queue = readFileSync(new URL('./metricool-queue.ts', import.meta.url), 'utf8');
+  assert.match(queue, /'\?start=' \+ encodeURIComponent\(metricoolDateTime\(start\)\) \+ '&end=' \+ encodeURIComponent\(metricoolDateTime\(end\)\)/);
+  const insights = readFileSync(new URL('../app/api/metricool/insights/route.ts', import.meta.url), 'utf8');
+  assert.match(insights, /'\/v2\/scheduler\/posts\?' \+ q \+ '&start=' \+ encodeURIComponent\(metricoolDateTime\(now\)\)/, 'the insights scheduler range had the same bug');
 });
