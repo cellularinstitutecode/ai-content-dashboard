@@ -63,33 +63,45 @@ export function recordProviderOutcome(
   provider: ProviderName,
   input: { ok: boolean; message?: string },
 ): void {
+  void recordProviderOutcomeNow(provider, input);
+}
+
+/**
+ * The same record, awaited. For a caller inside a serverless request that
+ * will return as soon as it has its answer: on Vercel the function can freeze
+ * the moment the response goes out, and a note left in flight is lost
+ * non-deterministically (the lesson lib/autopilot.ts records for its own
+ * inserts). Still never throws.
+ */
+export async function recordProviderOutcomeNow(
+  provider: ProviderName,
+  input: { ok: boolean; message?: string },
+): Promise<void> {
   const outcome: ProviderOutcome = {
     ok: input.ok,
     reason: input.ok ? null : classifyImageFailure(input.message || ''),
     at: Date.now(),
   };
   lastSeen.set(provider, outcome);
-  void (async () => {
-    try {
-      await supabaseAdmin()
-        .from('provider_status')
-        .upsert(
-          {
-            provider,
-            ok: outcome.ok,
-            reason: outcome.reason,
-            // Redacted: this is a provider's own error text, which is exactly
-            // where a vendor has been seen echoing a live key back.
-            detail: input.message ? redact(String(input.message)).slice(0, 300) : null,
-            updated_at: new Date(outcome.at).toISOString(),
-          },
-          { onConflict: 'provider' },
-        );
-    } catch {
-      // Health degrades to "no record". A call must never fail because we could
-      // not write a note about it.
-    }
-  })();
+  try {
+    await supabaseAdmin()
+      .from('provider_status')
+      .upsert(
+        {
+          provider,
+          ok: outcome.ok,
+          reason: outcome.reason,
+          // Redacted: this is a provider's own error text, which is exactly
+          // where a vendor has been seen echoing a live key back.
+          detail: input.message ? redact(String(input.message)).slice(0, 300) : null,
+          updated_at: new Date(outcome.at).toISOString(),
+        },
+        { onConflict: 'provider' },
+      );
+  } catch {
+    // Health degrades to "no record". A call must never fail because we could
+    // not write a note about it.
+  }
 }
 
 /**
