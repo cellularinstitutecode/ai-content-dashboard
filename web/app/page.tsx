@@ -2761,6 +2761,7 @@ className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose
 <span className={'rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ' + tone}>{meta.label}</span>
 )}
 <span className="text-[11px] tabular-nums text-ink-faint">{fmtDateTime(p?.publication_date)}</span>
+{p?.failReason && <span className="basis-full text-[11px] text-rose-700">Metricool: {p.failReason}</span>}
 </div>
 <button type="button" onClick={() => id && setPreviewPostId(id)} title="Preview this post" className="mt-1.5 line-clamp-2 block w-full text-left text-[13px] text-ink hover:text-ink/80">{p?.text || 'Scheduled post'}</button>
 {/* Which row of which tab wrote this post. The same link the calendar's
@@ -3260,6 +3261,7 @@ className="rounded-full bg-subtle px-5 py-2 text-[13px] font-medium text-ink rin
         </div>
         <div className="flex flex-wrap items-center gap-2 border-t border-line bg-subtle px-5 py-3">
           <span className={'rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ' + (ppMeta.tone === 'amber' ? 'bg-amber-50 text-amber-700 ring-amber-100' : ppMeta.tone === 'green' ? 'bg-emerald-50 text-emerald-700 ring-emerald-100' : 'bg-blue-50 text-blue-700 ring-blue-100')}>{ppPending ? 'Pending video' : ppMeta.label}</span>
+          {pp?.failReason && <span className="text-[11px] text-rose-700">Metricool says: {pp.failReason}</span>}
           <span className="flex-1" />
           {ppCanEdit && (
             <button type="button" onClick={() => { setPreviewEditingId(previewEditing ? null : ppId); if (!previewEditing) setTimeout(() => document.getElementById('queue-preview-edit')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50); }} aria-expanded={previewEditing} title="Remake the picture with AI (with your own notes), change its title, or use a library photo" className={'rounded-full px-3 py-1 text-[12px] font-medium ring-1 ' + (previewEditing ? 'bg-ink text-white ring-ink' : 'text-ink ring-line hover:bg-white')}>{previewEditing ? 'Done editing' : '\u270E Edit'}</button>

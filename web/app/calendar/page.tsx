@@ -35,6 +35,8 @@ type Post = {
   source?: PostSource | null;
   /** Set by GET /api/posts: the video attached to this post, if any. */
   mediaUrl?: string | null;
+  /** Set by GET /api/posts: Metricool's own reason when it reports the post failed. */
+  failReason?: string | null;
   /** Set by GET /api/posts: the linked draft's hero image, if any. */
   imageUrl?: string | null;
   packTitle?: string | null;
@@ -963,7 +965,7 @@ export default function CalendarPage() {
                             Approve
                           </button>
                         ) : (
-                          <span className="text-[9px] font-medium text-emerald-700">{postStatusMeta(p.status).label}</span>
+                          <span className={'text-[9px] font-medium ' + (p.failReason ? 'text-rose-700' : 'text-emerald-700')} title={p.failReason ? 'Metricool: ' + p.failReason : undefined}>{postStatusMeta(p.status).label}</span>
                         )}
                       </div>
                       <div className="truncate">{p.text || 'Untitled post'}</div>
@@ -1172,7 +1174,8 @@ export default function CalendarPage() {
                     <div className="min-w-0 flex-1">
                     <button type="button" onClick={() => setPreviewId(String(p.id))} title="Preview this post" className="flex w-full items-center justify-between gap-2 text-left">
                       <span className="font-semibold text-ink">{d ? d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : '—'} · {timeLabel(p.publication_date)}</span>
-                      <span className={'rounded-full px-2 py-[2px] text-[10px] font-semibold ' + (pending ? 'bg-rose-100 text-rose-700' : waiting ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800')}>{pending ? 'Pending video' : waiting ? 'Waiting for approval' : postStatusMeta(p.status).label}</span>
+                      <span className={'rounded-full px-2 py-[2px] text-[10px] font-semibold ' + (pending ? 'bg-rose-100 text-rose-700' : waiting ? 'bg-amber-100 text-amber-800' : p.failReason ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-800')}>{pending ? 'Pending video' : waiting ? 'Waiting for approval' : postStatusMeta(p.status).label}</span>
+                      {p.failReason && <span className="basis-full text-[10px] text-rose-700">Metricool: {p.failReason}</span>}
                     </button>
                     <button type="button" onClick={() => setPreviewId(String(p.id))} className="mt-1 line-clamp-2 block w-full text-left text-ink/80" title="Preview this post">{p.text || 'Untitled post'}</button>
                     {/* WHICH ROW this post was written from. A two-line caption
@@ -1304,6 +1307,7 @@ export default function CalendarPage() {
                   Select for bulk delete
                 </label>
               )}
+              {previewPost.failReason && <span className="basis-full text-[11px] text-rose-700">Metricool says: {previewPost.failReason}</span>}
               <span className="flex-1" />
               <button type="button" disabled={saving === previewPost.id} onClick={() => void verifyFix(previewPost)} title="Check that the cited study supports this post; replace it with one that does if not" className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5 disabled:opacity-50">{saving === previewPost.id ? 'Checking…' : 'Verify / fix'}</button>
               <button type="button" onClick={() => { jumpTo(previewPost); setPreviewId(null); }} className="rounded-full px-3 py-1 text-[12px] font-medium text-ink/70 ring-1 ring-black/10 hover:bg-black/5">Show on calendar</button>

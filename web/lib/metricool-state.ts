@@ -16,6 +16,7 @@
 // already copied). Unknown shapes answer 'unknown', and 'unknown' changes
 // nothing.
 import { APPROVED_STATUS, isAwaitingApproval } from './post-mode.ts';
+import { SCHEDULE_TZ, zonedTimeToUtc } from './timezone.ts';
 
 export type RemoteState = 'review' | 'scheduled' | 'published' | 'failed' | 'unknown';
 
@@ -165,4 +166,106 @@ export function metricoolDateTime(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
     + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
+const NETWORK_LABEL: Record<string, string> = {
+  instagram: 'Instagram', facebook: 'Facebook', linkedin: 'LinkedIn', tiktok: 'TikTok', youtube: 'YouTube',
+  twitter: 'X', threads: 'Threads', pinterest: 'Pinterest', gmb: 'Google Business', bluesky: 'Bluesky',
+};
+
+/** "ERROR_TOKEN_EXPIRED" → "error token expired"; prose is left as it is. */
+function humanise(code: string): string {
+  const t = code.trim();
+  return /^[A-Z0-9_\- ]+$/.test(t) ? t.toLowerCase().replace(/[_-]+/g, ' ') : t;
+}
+
+/**
+ * Why Metricool says a post failed, in its own words — each failed network's
+ * `detailedStatus` (or error text), labelled with the network. '' when
+ * nothing failed or Metricool gave no words. Shown on the post so "Needs
+ * attention" says what to fix.
+ */
+export function failureReasonOf(raw: unknown): string {
+  const post = unwrapPost(raw);
+  if (!post) return '';
+  const providers = Array.isArray(post.providers) ? post.providers : [];
+  const out: string[] = [];
+  for (const p of providers) {
+    if (!p || typeof p !== 'object') continue;
+    const r = p as Record<string, unknown>;
+    const failed = FAILED.has(word(r.status)) || FAILED.has(word(r.detailedStatus));
+    if (!failed) continue;
+    const detail = [r.detailedStatus, r.error, r.errorMessage, r.message, r.reason]
+      .map((x) => (typeof x === 'string' ? x.trim() : ''))
+      .find((x) => x && !FAILED.has(word(x)));
+    const network = String(r.network || '').toLowerCase();
+    out.push((NETWORK_LABEL[network] || network || 'post') + ': ' + (detail ? humanise(detail) : 'publishing failed'));
+  }
+  if (!out.length && statusWords(post).some((w) => FAILED.has(w))) {
+    const detail = [post.detailedStatus, post.error, post.errorMessage, post.message]
+      .map((x) => (typeof x === 'string' ? x.trim() : ''))
+      .find((x) => x && !FAILED.has(word(x)));
+    out.push(detail ? humanise(detail) : 'publishing failed');
+  }
+  return out.join(' · ').slice(0, 300);
+}
+
+/** Metricool's `publicationDate` ({ dateTime, timezone } or a string) as an ISO instant, or null. */
+export function instantOf(raw: unknown): string | null {
+  const obj = raw && typeof raw === 'object' ? (raw as { dateTime?: unknown; timezone?: unknown }) : null;
+  const text = String((obj ? obj.dateTime : raw) ?? '').trim();
+  if (!text) return null;
+  // An absolute instant already (Z or an offset).
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/.test(text)) {
+    const d = new Date(text);
+    return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+  }
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(text);
+  if (!m) return null;
+  const tz = obj && typeof obj.timezone === 'string' && obj.timezone.trim() ? obj.timezone.trim() : SCHEDULE_TZ;
+  try {
+    return zonedTimeToUtc(Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5]), tz).toISOString();
+  } catch {
+    return null;
+  }
+}
+
+export type AdoptedRow = {
+  user_id: string;
+  draft_id: null;
+  providers: string[];
+  text: string;
+  publication_date: string;
+  metricool_post_id: string;
+  status: string;
+};
+
+/**
+ * The row to keep for a post Metricool holds and the dashboard has no record
+ * of — one the app created but could not save, or one made in Metricool
+ * directly. Its status is what Metricool says it is. Null when the post
+ * cannot be read (no id, no network, no date).
+ */
+export function adoptedRow(raw: unknown, userId: string): AdoptedRow | null {
+  const post = unwrapPost(raw);
+  if (!post) return null;
+  const id = post.id ?? post.postId;
+  if (id == null || id === '') return null;
+  const providers = (Array.isArray(post.providers) ? post.providers : [])
+    .map((p) => (p && typeof p === 'object' ? String((p as { network?: unknown }).network || '') : ''))
+    .map((n) => n.trim().toLowerCase())
+    .filter(Boolean);
+  if (!providers.length) return null;
+  const when = instantOf(post.publicationDate);
+  if (!when) return null;
+  const status = reconcileStatus('pending_review', remoteStateOf(post)) || 'pending_review';
+  return {
+    user_id: userId,
+    draft_id: null,
+    providers: Array.from(new Set(providers)),
+    text: String(post.text ?? ''),
+    publication_date: when,
+    metricool_post_id: String(id),
+    status,
+  };
 }
