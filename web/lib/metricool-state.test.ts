@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { describeAnswer, indexByPostId, metricoolDateTime, reconcileStatus, remoteStateOf } from './metricool-state.ts';
+import { adoptedRow, describeAnswer, failureReasonOf, indexByPostId, instantOf, metricoolDateTime, reconcileStatus, remoteStateOf } from './metricool-state.ts';
 import { postStatusMeta } from './post-mode.ts';
 
 test('the state is read off whichever field Metricool put it in', () => {
@@ -93,4 +93,35 @@ test('the list range is sent as the date-time Metricool asks for, not a bare dat
   assert.match(queue, /'\?start=' \+ encodeURIComponent\(metricoolDateTime\(start\)\) \+ '&end=' \+ encodeURIComponent\(metricoolDateTime\(end\)\)/);
   const insights = readFileSync(new URL('../app/api/metricool/insights/route.ts', import.meta.url), 'utf8');
   assert.match(insights, /'\/v2\/scheduler\/posts\?' \+ q \+ '&start=' \+ encodeURIComponent\(metricoolDateTime\(now\)\)/, 'the insights scheduler range had the same bug');
+});
+
+test('a failed post carries Metricool\'s own reason, per network', () => {
+  assert.equal(failureReasonOf({ id: 1, providers: [{ network: 'instagram', status: 'ERROR', detailedStatus: 'TOKEN_EXPIRED' }, { network: 'facebook', status: 'PUBLISHED' }] }), 'Instagram: token expired');
+  assert.equal(failureReasonOf({ id: 1, providers: [{ network: 'instagram', status: 'ERROR', detailedStatus: 'The Instagram account is not linked to a Facebook page.' }] }), 'Instagram: The Instagram account is not linked to a Facebook page.');
+  // A bare error word is not a reason: say that publishing failed.
+  assert.equal(failureReasonOf({ id: 1, providers: [{ network: 'tiktok', status: 'ERROR', detailedStatus: 'ERROR' }] }), 'TikTok: publishing failed');
+  assert.equal(failureReasonOf({ id: 1, status: 'ERROR', message: 'media too long' }), 'media too long');
+  assert.equal(failureReasonOf({ id: 1, providers: [{ network: 'linkedin', status: 'PUBLISHED' }] }), '');
+});
+
+test('a post Metricool holds without a row here is adopted with the state Metricool reports', () => {
+  // The wall clock Metricool answers, read in its own zone.
+  assert.equal(instantOf({ dateTime: '2026-10-09T14:00:00', timezone: 'America/Cancun' }), '2026-10-09T19:00:00.000Z');
+  assert.equal(instantOf('2026-10-09T19:00:00Z'), '2026-10-09T19:00:00.000Z');
+  assert.equal(instantOf({ dateTime: 'soon' }), null);
+  const row = adoptedRow({ id: 392250640, text: 'Molecular hydrogen…', draft: false, publicationDate: { dateTime: '2026-10-09T14:00:00', timezone: 'America/Cancun' }, providers: [{ network: 'facebook', status: 'PUBLISHED' }] }, 'u1');
+  assert.deepEqual(row, { user_id: 'u1', draft_id: null, providers: ['facebook'], text: 'Molecular hydrogen…', publication_date: '2026-10-09T19:00:00.000Z', metricool_post_id: '392250640', status: 'published' });
+  assert.equal(adoptedRow({ id: 1, draft: true, publicationDate: { dateTime: '2026-10-09T14:00:00' }, providers: [{ network: 'linkedin' }] }, 'u1')!.status, 'pending_review');
+  assert.equal(adoptedRow({ id: 1, draft: false, publicationDate: { dateTime: '2026-10-09T14:00:00' }, providers: [{ network: 'linkedin', status: 'PENDING' }] }, 'u1')!.status, 'approved');
+  assert.equal(adoptedRow({ id: 1, publicationDate: { dateTime: '2026-10-09T14:00:00' }, providers: [] }, 'u1'), null, 'no network: nothing to show');
+  assert.equal(adoptedRow({ text: 'no id', publicationDate: { dateTime: '2026-10-09T14:00:00' }, providers: [{ network: 'x' }] }, 'u1'), null);
+  // The read adopts what it does not know, after checking every account's rows, and says why a post failed.
+  const route = readFileSync(new URL('../app/api/posts/route.ts', import.meta.url), 'utf8');
+  assert.match(route, /const unknown = Array\.from\(remote\.keys\(\)\)\.filter\(\(id\) => !known\.has\(id\)\);/);
+  assert.match(route, /admin\.from\('posts'\)\.select\('metricool_post_id'\)\.in\('metricool_post_id', unknown\)/);
+  assert.match(route, /\.map\(\(id\) => adoptedRow\(remote\.get\(id\), user\.id\)\)/);
+  assert.match(route, /failReason: p\.metricool_post_id \? \(failReasons\.get\(String\(p\.metricool_post_id\)\) \?\? null\) : null/);
+  for (const page of ['app/calendar/page.tsx', 'app/page.tsx']) {
+    assert.match(readFileSync(new URL('../' + page, import.meta.url), 'utf8'), /failReason/, page + ' shows the reason');
+  }
 });

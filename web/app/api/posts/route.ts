@@ -31,7 +31,7 @@ import { publicBase } from '@/lib/public-base';
 import { modeOfStatus, videoPending, APPROVED_STATUS } from '@/lib/post-mode';
 import { NEXT_SLOT, nextFreeSlotFor } from '@/lib/queue-next-slot';
 import { metricoolQueue } from '@/lib/metricool-queue';
-import { reconcileStatus, remoteStateOf } from '@/lib/metricool-state';
+import { adoptedRow, failureReasonOf, reconcileStatus, remoteStateOf } from '@/lib/metricool-state';
 import { ALLOWED_BLOG_IDS } from '@/lib/access';
 import { tabGid } from '@/lib/google-sources';
 import type { PostSource } from '@/lib/sheet-link';
@@ -105,6 +105,9 @@ async function requireClinicUser(sb: Awaited<ReturnType<typeof supabaseServer>>)
   return { ok: true as const, user };
 }
 
+/** How many posts Metricool holds without a row here are adopted per read. */
+const ADOPT_PER_READ = 50;
+
 // GET /api/posts
 // Returns the current user's scheduled posts, most recent publication first.
 export async function GET() {
@@ -161,11 +164,16 @@ export async function GET() {
   // published or failed — so the queue says "Scheduled" or "Posted" instead
   // of offering to approve a post that is already out. Best-effort: a
   // Metricool hiccup leaves every row as it was.
-  if (posts.some((p) => p.metricool_post_id)) {
+  // Why a failed post failed, in Metricool's words, keyed by its id.
+  const failReasons = new Map<string, string>();
+  {
     const remote = await metricoolQueue(ALLOWED_BLOG_IDS, new Date(since), new Date(Date.now() + 60 * 24 * 60 * 60 * 1000));
     const changes: { id: string; status: string }[] = [];
+    const known = new Set<string>();
     for (const p of posts) {
-      const mc = p.metricool_post_id ? remote.get(String(p.metricool_post_id)) : undefined;
+      const mcId = p.metricool_post_id ? String(p.metricool_post_id) : '';
+      if (mcId) known.add(mcId);
+      const mc = mcId ? remote.get(mcId) : undefined;
       if (!mc) continue;
       const next = reconcileStatus(p.status, remoteStateOf(mc));
       if (next) { p.status = next; changes.push({ id: String(p.id), status: next }); }
@@ -174,6 +182,45 @@ export async function GET() {
       const results = await Promise.all(changes.map(({ id, status }) => sb.from('posts').update({ status }).eq('id', id).eq('user_id', user.id)));
       const failed = results.find((r) => r.error);
       if (failed?.error) reportError('posts:metricool-reconcile', failed.error, { userId: user.id, changed: changes.length });
+    }
+
+    // POSTS METRICOOL HOLDS THAT THIS DASHBOARD HAS NO ROW FOR. A post the
+    // app created but could not save (the Facebook post that published with
+    // no record here), or one made in Metricool directly, appeared on no
+    // calendar. Each is adopted as a row with the state Metricool reports, so
+    // the calendar shows what Metricool has. Checked against every user's
+    // rows, not just this one's, so a post another account recorded is not
+    // adopted twice; at most ADOPT_PER_READ a read, the rest next time.
+    const unknown = Array.from(remote.keys()).filter((id) => !known.has(id));
+    if (unknown.length) {
+      try {
+        const admin = supabaseAdmin();
+        const { data: elsewhere } = await admin.from('posts').select('metricool_post_id').in('metricool_post_id', unknown);
+        const taken = new Set(((elsewhere || []) as { metricool_post_id?: string | null }[]).map((r) => String(r.metricool_post_id || '')));
+        const rows = unknown
+          .filter((id) => !taken.has(id))
+          .map((id) => adoptedRow(remote.get(id), user.id))
+          .filter((r): r is NonNullable<typeof r> => r != null)
+          .slice(0, ADOPT_PER_READ);
+        if (rows.length) {
+          const { data: added, error: adoptErr } = await admin.from('posts').insert(rows).select('*');
+          if (adoptErr) reportError('posts:metricool-adopt', adoptErr, { userId: user.id, count: rows.length });
+          for (const r of (added || []) as Record<string, unknown>[]) {
+            posts.push(r);
+            if (r.metricool_post_id) known.add(String(r.metricool_post_id));
+          }
+          // In date order again, as the query answered.
+          posts.sort((a, b) => String(a.publication_date || '').localeCompare(String(b.publication_date || '')));
+        }
+      } catch (e) {
+        reportError('posts:metricool-adopt', e, { userId: user.id });
+      }
+    }
+
+    for (const id of known) {
+      const mc = remote.get(id);
+      const why = mc ? failureReasonOf(mc) : '';
+      if (why) failReasons.set(id, why);
     }
   }
   const draftIds = Array.from(
@@ -295,6 +342,8 @@ export async function GET() {
         : videoPending(p.status, packs[String(p.draft_id || '')] ?? null, Boolean(p.media_drive_file_id)),
       source: sources[String(p.id || '')] ?? null,
       mediaUrl: p.media_drive_file_id ? (copyToMedia[String(p.media_drive_file_id)] ?? null) : null,
+      // Metricool's own reason when it reports the post failed, for the chip to say.
+      failReason: p.metricool_post_id ? (failReasons.get(String(p.metricool_post_id)) ?? null) : null,
       // The draft's own title and the keyword its research settled on.
       //
       // Both are already in the pack that was fetched above for the pending
