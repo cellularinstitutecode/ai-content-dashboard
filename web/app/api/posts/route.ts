@@ -19,6 +19,7 @@ import { wantsBlog } from '@/lib/metricool-networks';
 import { normalizeFailure } from '@/lib/media-normalize-reason';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { tiktokDataFor } from '@/lib/tiktok-meta';
+import { anyVideo, instagramDataFor } from '@/lib/instagram-meta';
 import { cachedPublicCopy } from '@/lib/transcript-cache';
 import { redact, reportError } from '@/lib/report';
 import { deleteDriveFile } from '@/lib/drive';
@@ -682,6 +683,11 @@ export async function PATCH(req: Request) {
   const tiktokData = providersLower.includes('tiktok')
     ? tiktokDataFor({ title: typeof packMeta.title === 'string' ? packMeta.title : null, body: String(existing.text || '') })
     : null;
+  // Instagram's post type travels with every replace too: a video is a Reel
+  // (lib/instagram-meta.ts); re-sent without it, Meta refuses the video.
+  const instagramData = providersLower.includes('instagram')
+    ? instagramDataFor({ hasVideo: Boolean(existing.media_drive_file_id) || anyVideo(media) })
+    : null;
 
   // What the post will look like after this call.
   let nextDate: string = String(existing.publication_date || '');
@@ -837,6 +843,7 @@ export async function PATCH(req: Request) {
         mode,
         youtubeData,
         tiktokData,
+        instagramData,
       });
     } catch (e) {
       reportError(action === 'reschedule' ? 'posts:metricool-reschedule' : action === 'sync_media' ? 'posts:metricool-sync-media' : action === 'fix_citation' ? 'posts:metricool-fix-citation' : 'posts:metricool-approve', e);
@@ -859,6 +866,7 @@ export async function PATCH(req: Request) {
             media: media.map((url) => ({ url })),
             youtubeData,
             tiktokData,
+            instagramData,
           }, mode);
           const newId = readPostId(created);
           if (newId) {

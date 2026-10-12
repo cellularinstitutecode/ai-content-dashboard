@@ -6,6 +6,7 @@ import { formatForMetricool, SCHEDULE_TZ } from '@/lib/timezone';
 import { modeFlags, replacePostBody, type PostMode, type ReplacePostInput } from '@/lib/metricool-post';
 import type { YoutubeData } from '@/lib/youtube-meta';
 import type { TiktokData } from '@/lib/tiktok-meta';
+import type { InstagramData } from '@/lib/instagram-meta';
 import { recordProviderOutcome } from '@/lib/provider-status';
 import { readNormalizedUrl } from '@/lib/metricool-normalize-parse';
 import { metricoolNetworks, type McNetwork } from '@/lib/metricool-networks';
@@ -34,6 +35,8 @@ export interface SchedulePostInput {
   youtubeData?: YoutubeData | null;
   /** TikTok's own settings (public, comments/duet/stitch on). lib/tiktok-meta.ts. */
   tiktokData?: TiktokData | null;
+  /** Instagram's post type: a video is a Reel (lib/instagram-meta.ts). */
+  instagramData?: InstagramData | null;
 }
 
 // Overridable so the end-to-end harness can point the client at a local mock.
@@ -464,6 +467,8 @@ export async function metricoolSchedulePost(input: SchedulePostInput, mode: Post
     // TikTok's own settings, so the draft is a direct publication (public,
     // comments/duet/stitch on) and not Metricool's "finish on your phone" mode.
     ...(input.tiktokData && input.providers.includes('tiktok') ? { tiktokData: input.tiktokData } : {}),
+    // A video to Instagram is a Reel; Meta refuses the feed VIDEO type.
+    ...(input.instagramData && input.providers.includes('instagram') ? { instagramData: input.instagramData } : {}),
     // Publishing is a human decision. The default lands the post in Metricool's
     // review queue; only an explicit `mode: 'scheduled'` — which every caller
     // reaches through a person pressing Approve in the dashboard — puts it in
