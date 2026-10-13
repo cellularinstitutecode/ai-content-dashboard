@@ -15,6 +15,8 @@ import { metricoolCopyIdFromUrl } from '@/lib/metricool-upload-parse';
 import { metricoolRefusal } from '@/lib/metricool-refusal';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { tiktokDataFor } from '@/lib/tiktok-meta';
+import { instagramDataFor } from '@/lib/instagram-meta';
+import { looksLikeVideoUrl } from '@/lib/metricool-normalize-parse';
 import { NextRequest, NextResponse } from 'next/server';
 import { recordApprovalRemarks } from '@/lib/approval-remarks';
 import { supabaseServer } from '@/lib/supabase';
@@ -406,6 +408,12 @@ export async function POST(req: NextRequest) {
   // TikTok: public, comments/duet/stitch on — a direct publication rather than
   // Metricool's "finish on your phone" mode.
   if (provider === 'tiktok') body.tiktokData = tiktokDataFor({ title: postTitle, body: text });
+
+  // Instagram: a video is a Reel. Sent as a feed video, Meta refused it
+  // ("The VIDEO value for media_type is deprecated. Use the REELS media
+  // type") and the post never went out. A video copy is known by its id
+  // (Drive, bucket or stream) or by its file name.
+  if (provider === 'instagram') body.instagramData = instagramDataFor({ hasVideo: Boolean(parseDriveFileId(mediaUrl) || bucketKeyFromUrl(mediaUrl) || streamCopyIdFromUrl(mediaUrl)) || looksLikeVideoUrl(mediaUrl) });
 
   // YouTube alone needs a title, a Short-or-video answer and a stated audience;
   // without them Metricool will not let the draft be saved, let alone approved.

@@ -50,6 +50,8 @@ export type ReplacePostInput = {
   youtubeData?: unknown;
   /** TikTok's own settings. A replace that omits them puts the post back in phone mode. */
   tiktokData?: unknown;
+  /** Instagram's post type. A replace that omits it sends a video back as a feed VIDEO, which Meta refuses. */
+  instagramData?: unknown;
 };
 
 /** The exact body a replace sends — exported so the rule is unit-testable. */
@@ -71,6 +73,7 @@ export function replacePostBody(post: ReplacePostInput) {
     // refuse the very post a person had just approved.
     ...(post.youtubeData && providers.includes('youtube' as Provider) ? { youtubeData: post.youtubeData } : {}),
     ...(post.tiktokData && providers.includes('tiktok' as Provider) ? { tiktokData: post.tiktokData } : {}),
+    ...(post.instagramData && providers.includes('instagram' as Provider) ? { instagramData: post.instagramData } : {}),
     ...modeFlags(post.mode),
   };
 }
