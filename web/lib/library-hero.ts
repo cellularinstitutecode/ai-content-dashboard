@@ -27,7 +27,7 @@ import { resolveFfmpeg } from '@/lib/audio-extract';
 import { IMAGE_BUCKET, storeBytes, verifyLibraryPhoto, type ImageVerification, type PackImage } from '@/lib/images';
 import { measureImage } from '@/lib/palette-measure';
 import { plannerImageFor } from '@/lib/planner-image';
-import { renderTitleCover } from '@/lib/title-cover';
+import { plainTitle, renderTitleCover } from '@/lib/title-cover';
 import { reportError } from '@/lib/report';
 import { coverTitleFor, ffmpegCoverArgs, gradeDecision, headroomPad, libraryProvenance, needsFfmpeg, ownBucketUrl, type GradeDecision } from './library-cover.ts';
 
@@ -158,7 +158,7 @@ export async function libraryHero(opts: {
       titled = { title: '', photoUrl, family: 'none', custom: true };
     } else if (title) {
       try {
-        const cover = await renderTitleCover({ title, photo: { bytes, contentType }, headTopPct: verification?.headTopPct ?? null });
+        const cover = await renderTitleCover({ title, photo: { bytes, contentType }, headTopPct: verification?.headTopPct ?? null, clearSide: verification?.clearSide ?? null });
         url = await storeBytes(cover.png, 'image/png', 'png', nameHint + '-cover');
         titled = { title, photoUrl, family: cover.family, ...(custom ? { custom: true } : {}) };
       } catch (err) {
@@ -172,7 +172,7 @@ export async function libraryHero(opts: {
       url,
       ...(titled ? { titled } : {}),
       prompt: '',
-      alt: (titled ? title + ' — ' : '') + (opts.libraryName || 'Photograph chosen by the clinic'),
+      alt: (titled ? plainTitle(title) + ' — ' : '') + (opts.libraryName || 'Photograph chosen by the clinic'),
       model: 'library',
       createdAt: new Date().toISOString(),
       variant: 0,

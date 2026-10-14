@@ -32,6 +32,8 @@ export type ImageVerdict = {
   brandFit: number | null;
   /** Planner covers: how far down the frame the highest head starts, as a percentage. Null when not measured. */
   headTopPct?: number | null;
+  /** Which side of the frame is quiet background where the title can sit beside the subject. Null when not reported. */
+  clearSide?: 'left' | 'right' | null;
 };
 
 const TEXT_RE = /\btext\b|letter|typograph|caption|\bword|writing|lettering|number|digit|signage|\bsign\b/i;
@@ -173,8 +175,10 @@ export function classifyVerdict(raw: unknown, opts: { requireOnTopic?: boolean; 
   const vetoWithoutReason = obj.approved === false && !blocking.length && !advisory.length && !headOnly;
 
   const flagged = textDetected || blocking.length > 0 || vetoWithoutReason;
+  const side = String(obj.clearSide || '').trim().toLowerCase();
   return {
     headTopPct: headTop,
+    clearSide: side === 'left' || side === 'right' ? side : null,
     status: flagged ? 'flagged' : 'approved',
     score,
     issues: flagged && vetoWithoutReason && !blocking.length ? ['reviewer declined the image without naming a defect'] : blocking,
