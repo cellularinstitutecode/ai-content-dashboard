@@ -10,7 +10,7 @@ import {
   CONFIRM_CREDITS_AFTER, NO_CLEAN_PHOTO, SUGGEST_TITLES_SYSTEM, TITLE_STYLE_EXAMPLES, cleanCoverTitle, creditConfirmText, creditLabel, currentCoverTitle, fallbackTitles,
   needsCreditConfirm, notesOf, parseTitleList, retitleDecision, suggestTitlesPrompt, takesOf, titleApplyable, titleOff,
 } from './cover-edit.ts';
-import { titleFontSize } from './title-cover-layout.ts';
+import { layoutTitle } from './title-cover-layout.ts';
 import { MAX_COVER_TITLE } from './planner-image.ts';
 import { coverTitleFor } from './library-cover.ts';
 
@@ -20,7 +20,9 @@ const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'ut
 
 test('a titled cover is retitled from the clean photograph kept beside it', () => {
   const d = retitleDecision({ url: 'https://x/cover.png', titled: { title: 'Sleep and Recovery', photoUrl: 'https://x/photo.jpg' }, verification: { headTopPct: 41 } });
-  assert.deepEqual(d, { ok: true, photoUrl: 'https://x/photo.jpg', headTopPct: 41 });
+  assert.deepEqual(d, { ok: true, photoUrl: 'https://x/photo.jpg', headTopPct: 41, clearSide: null });
+  // The side the vision check found quiet travels with the retitle, so the words land beside the subject again.
+  assert.equal((retitleDecision({ url: 'u', titled: { title: 'T', photoUrl: 'p' }, verification: { headTopPct: 41, clearSide: 'right' } }) as { clearSide: string }).clearSide, 'right');
 });
 
 test('a picture from before covers existed cannot be retitled, and the button says why', () => {
@@ -34,7 +36,7 @@ test('a picture from before covers existed cannot be retitled, and the button sa
 
 test('an untitled library photo or upload IS the clean photograph, so a title can go on it', () => {
   const lib = retitleDecision({ url: 'https://x/lib.jpg', source: 'library' });
-  assert.deepEqual(lib, { ok: true, photoUrl: 'https://x/lib.jpg', headTopPct: null });
+  assert.deepEqual(lib, { ok: true, photoUrl: 'https://x/lib.jpg', headTopPct: null, clearSide: null });
   assert.equal(retitleDecision({ url: 'https://x/up.jpg', source: 'upload' }).ok, true);
 });
 
@@ -71,8 +73,10 @@ test('Apply title works on a library photo that has no title yet, not only on ch
 });
 
 test('titles are written in the feed\'s voice, and one can be asked for', () => {
-  for (const t of TITLE_STYLE_EXAMPLES) assert.match(SUGGEST_TITLES_SYSTEM, new RegExp('"' + t.replace(/[.]/g, '\\.') + '"'));
+  for (const t of TITLE_STYLE_EXAMPLES) assert.ok(SUGGEST_TITLES_SYSTEM.includes('"' + t + '"'), t);
   assert.match(SUGGEST_TITLES_SYSTEM, /written from THIS post/);
+  assert.match(SUGGEST_TITLES_SYSTEM, /one short, calm sentence in sentence case/);
+  assert.match(SUGGEST_TITLES_SYSTEM, /\*asterisks\*/, 'the words that carry the line are marked');
   assert.match(suggestTitlesPrompt({ angle: 'a', count: 1 }), /One title, as a JSON array:$/);
   assert.match(suggestTitlesPrompt({ angle: 'a' }), /3 different titles, as a JSON array:$/);
 });
@@ -94,13 +98,16 @@ test('the title written for a draft is kept on the pack and read before the stat
 });
 
 test('cover titles are set large, like the feed\'s own photo posts', () => {
-  assert.ok(titleFontSize(['Fiber First']) >= 140, String(titleFontSize(['Fiber First'])));
-  assert.ok(titleFontSize(['Evening Routines', 'Matter']) >= 120);
-  assert.ok(titleFontSize(['Everyday Habits Shape How You Feel']) >= 78);
+  assert.ok(layoutTitle('Fiber first.').size >= 120, String(layoutTitle('Fiber first.').size));
+  assert.ok(layoutTitle('Your nervous system deserves *space to settle*.').size >= 84);
+  assert.ok(layoutTitle('Hydration is *part* of how the body stays *balanced*.').size >= 76);
 });
 
 test('a typed title is made fit for the cover', () => {
-  assert.equal(cleanCoverTitle('  "Eating Well   Before Treatment."  '), 'Eating Well Before Treatment');
+  // A sentence keeps its full stop, as the feed's titles have one; a run of stops becomes one.
+  assert.equal(cleanCoverTitle('  "Eating well   before treatment."  '), 'Eating well before treatment.');
+  assert.equal(cleanCoverTitle('Rest is a daily *health habit*...'), 'Rest is a daily *health habit*.');
+  assert.equal(cleanCoverTitle('Sleep and Recovery'), 'Sleep and Recovery');
   assert.equal(cleanCoverTitle(null), '');
   const long = cleanCoverTitle('A Very Long Title That Goes On And On About Everything Under The Sun, Without Stopping');
   assert.ok(long.length <= MAX_COVER_TITLE, long);
@@ -141,7 +148,8 @@ test('the suggester is briefed on the angle and the copy, and told what is alrea
 
 test('the model’s answer is read as a list, cleaned, deduplicated and never the current title', () => {
   const list = parseTitleList('["Protein for Healing", "Protein and Recovery", "protein for healing", "Why Not Protein?", "Fuel for Repair."]', { avoid: ['Protein and Recovery'] });
-  assert.deepEqual(list, ['Protein for Healing', 'Fuel for Repair']);
+  // A sentence keeps its full stop, as the feed's titles do.
+  assert.deepEqual(list, ['Protein for Healing', 'Fuel for Repair.']);
   assert.deepEqual(parseTitleList('1. Rest and Repair\n2. Building Back Strength\n- Protein at Every Meal\n4. One Too Many'), ['Rest and Repair', 'Building Back Strength', 'Protein at Every Meal']);
   assert.deepEqual(parseTitleList('Sure, here are some titles'), [], 'a preamble is not a title');
   assert.deepEqual(parseTitleList(''), []);

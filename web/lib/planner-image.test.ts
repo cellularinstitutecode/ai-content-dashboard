@@ -34,7 +34,7 @@ test('a planner draft is pictured in one of the shots, with its objects, craft a
   assert.match(lines, /^Subject: a photograph for an educational post titled "Protein and Recovery"/);
   assert.match(lines, /SHOT: /);
   assert.match(lines, /oranges/);
-  assert.match(lines, /TITLE SPACE: the upper third/);
+  assert.match(lines, /TITLE SPACE: the LEFT 45% of the frame/);
   assert.match(lines, /CRAFT: /);
   // The clinic's own feed is the baseline, and its team wears black scrubs.
   assert.match(lines, /black scrubs/);

@@ -17,7 +17,7 @@
 //   image, so retries and concurrent callers don't double-spend.
 // - No new secrets: reuses OPENAI_API_KEY + the Supabase service role.
 import { cleanTopic, familyAt, onTopicCheck, plannerImageFor, plannerPromptLines, scienceOffered, SHOT_COUNT, type PlannerImage } from '@/lib/planner-image';
-import { renderTitleCover } from '@/lib/title-cover';
+import { plainTitle, renderTitleCover } from '@/lib/title-cover';
 import { resolveCoverTitle } from '@/lib/cover-title';
 import { FEED_BASELINE } from '@/lib/planner-image';
 import { briefSource, briefSystemPrompt, briefUserPrompt, parseSceneBrief, type SceneBrief } from '@/lib/image-brief';
@@ -64,6 +64,8 @@ export type ImageVerification = {
   bannedProp?: boolean;
   /** Planner covers: where the highest head starts, as a percentage of the photo's height. */
   headTopPct?: number | null;
+  /** Which side of the frame is quiet background, where the title sits beside the subject (lib/title-cover-layout.ts). */
+  clearSide?: 'left' | 'right' | null;
   // Advisory 0-100 from the same reviewer: does the picture live in the
   // brand's palette, materials and camera (lib/brand-visual.ts)? Shown to the
   // human; breaks ties between two clean candidates; never flags anything.
@@ -313,7 +315,7 @@ export function buildEditPrompt(opts: {
       : 'No specific direction was given: make a subtly refined take of the same scene — natural, photorealistic, nothing added.',
     `The picture illustrates a post for ${brandName} about: ${String(opts.topic || '').trim()}.`,
     FEED_BASELINE,
-    opts.planner ? 'Keep the top third of the frame clear and uncluttered: a title is set there afterwards.' : '',
+    opts.planner ? 'Keep the left 45% of the frame quiet and uncluttered, from a fifth of the way down to four fifths: a large title is set there afterwards, beside the subject.' : '',
     'The result is a purely visual, text-free photograph: no words, letters, numbers, typography, signage, labels, logos or watermarks anywhere;',
     'no needles piercing skin, no blood, no graphic medical procedures, nothing that implies a medical claim.',
     'Photorealistic, natural colour, soft light; no stock-photo poses or forced smiles at the camera.',
@@ -597,7 +599,8 @@ async function fetchOwnPhoto(url: string): Promise<{ bytes: Buffer; contentType:
 // verification must never take down image generation entirely.
 // ---------------------------------------------------------------------------
 
-const HEADROOM_CHECK = 'HEADROOM: measure how far down from the top edge the top of the highest person\'s head is, as a percentage of the image height (0 = top edge, 100 = bottom edge). Report it as "headTopPct". If no head is in frame at all (hands only, objects only, no people), report 100: a head out of frame is plenty of room for the title and is NEVER a defect, so never list it as one.';
+const HEADROOM_CHECK = 'HEADROOM: measure how far down from the top edge the top of the highest person\'s head is, as a percentage of the image height (0 = top edge, 100 = bottom edge). Report it as "headTopPct". If no head is in frame at all (hands only, objects only, no people), report 100: a head out of frame is plenty of room for the title and is NEVER a defect, so never list it as one. '
+  + 'TITLE SIDE: a large title is set BESIDE the subject afterwards. Report as "clearSide" which side of the frame — "left" or "right" — is quiet, plain background (wall, soft bokeh, empty surface) with no face, no hands and no key object in it, across the middle of the frame (from a fifth of the way down to four fifths). If neither side is clear, report "none". A busy side is never a defect.';
 
 /**
  * The reviewer's brief. A planner image adds the on-topic check and the
@@ -608,10 +611,10 @@ const verifySystem = (rubric: string, planner?: PlannerImage | null, headroom = 
   const base = verifySystemBase(rubric);
   const marker = 'Return STRICT JSON only: {"approved": boolean, "textDetected": boolean,';
   if (planner) {
-    return base.replace(marker, '8. ' + onTopicCheck(planner) + '\n9. ' + HEADROOM_CHECK + '\nReturn STRICT JSON only: {"approved": boolean, "textDetected": boolean, "bannedProp": boolean, "onTopic": boolean, "headTopPct": number,');
+    return base.replace(marker, '8. ' + onTopicCheck(planner) + '\n9. ' + HEADROOM_CHECK + '\nReturn STRICT JSON only: {"approved": boolean, "textDetected": boolean, "bannedProp": boolean, "onTopic": boolean, "headTopPct": number, "clearSide": "left" | "right" | "none",');
   }
   if (headroom) {
-    return base.replace(marker, '8. ' + HEADROOM_CHECK + '\nReturn STRICT JSON only: {"approved": boolean, "textDetected": boolean, "bannedProp": boolean, "headTopPct": number,');
+    return base.replace(marker, '8. ' + HEADROOM_CHECK + '\nReturn STRICT JSON only: {"approved": boolean, "textDetected": boolean, "bannedProp": boolean, "headTopPct": number, "clearSide": "left" | "right" | "none",');
   }
   return base;
 };
@@ -743,6 +746,7 @@ async function verifyGeneratedImage(
       status: verdict.status,
       score: verdict.score,
       headTopPct: verdict.headTopPct ?? null,
+      clearSide: verdict.clearSide ?? null,
       issues: verdict.issues,
       advisory: verdict.advisory,
       textDetected: verdict.textDetected,
@@ -1011,7 +1015,7 @@ async function generateBestPackImage(opts: {
   // nothing, and the failure is reported.
   if (planner && planner.title) {
     try {
-      const cover = await renderTitleCover({ title: planner.title, photo: { bytes: best.img.bytes, contentType: best.img.contentType }, headTopPct: best.verification.headTopPct });
+      const cover = await renderTitleCover({ title: planner.title, photo: { bytes: best.img.bytes, contentType: best.img.contentType }, headTopPct: best.verification.headTopPct, clearSide: best.verification.clearSide });
       url = await storeBytes(cover.png, 'image/png', 'png', nameHint + '-cover');
       titled = { title: planner.title, photoUrl, family: cover.family, ...(custom ? { custom: true } : {}) };
     } catch (err) {
@@ -1026,7 +1030,7 @@ async function generateBestPackImage(opts: {
     url,
     ...(titled ? { titled } : {}),
     prompt: best.prompt,
-    alt: `${planner ? (titled?.title ? titled.title + ' — ' : '') + subject : opts.topic} — illustrative image for ${opts.brand?.name || 'Cellular Institute'}`,
+    alt: `${planner ? (titled?.title ? plainTitle(titled.title) + ' — ' : '') + subject : opts.topic} — illustrative image for ${opts.brand?.name || 'Cellular Institute'}`,
     model: best.img.model,
     createdAt: new Date().toISOString(),
     variant: best.variant,
@@ -1110,7 +1114,7 @@ export async function editPackImage(opts: {
     const had = opts.existing.titled;
     if (had && had.title) {
       try {
-        const cover = await renderTitleCover({ title: had.title, photo: { bytes: best.img.bytes, contentType: best.img.contentType }, headTopPct: best.verification.headTopPct });
+        const cover = await renderTitleCover({ title: had.title, photo: { bytes: best.img.bytes, contentType: best.img.contentType }, headTopPct: best.verification.headTopPct, clearSide: best.verification.clearSide });
         url = await storeBytes(cover.png, 'image/png', 'png', nameHint + '-cover');
         titled = { title: had.title, photoUrl, family: cover.family, ...(had.custom ? { custom: true } : {}) };
       } catch (err) {

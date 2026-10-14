@@ -9,7 +9,7 @@
 // lib/cover-edit.ts decides whether a picture CAN be retitled; this assumes
 // it can and throws when it cannot.
 import 'server-only';
-import { renderTitleCover } from '@/lib/title-cover';
+import { plainTitle, renderTitleCover } from '@/lib/title-cover';
 import { storeBytes, type PackImage } from '@/lib/images';
 import { fetchPhoto } from '@/lib/library-hero';
 import { cleanCoverTitle, retitleDecision } from './cover-edit.ts';
@@ -21,7 +21,7 @@ export async function retitleImage(existing: PackImage, title: string, nameHint 
   const words = cleanCoverTitle(title);
   const photo = await fetchPhoto(decision.photoUrl);
   // The alt text carried the old title in front of the subject; put the new one there.
-  const rest = existing.titled?.title ? String(existing.alt || '').replace(existing.titled.title + ' — ', '') : String(existing.alt || '');
+  const rest = existing.titled?.title ? String(existing.alt || '').replace(plainTitle(existing.titled.title) + ' — ', '') : String(existing.alt || '');
   if (!words) {
     // The clean photograph itself is the hero; the record says the title is off
     // on purpose, so nothing gives it a cover later.
@@ -33,12 +33,12 @@ export async function retitleImage(existing: PackImage, title: string, nameHint 
     };
   }
   // The head measurement from the take's own check keeps the title clear of a face.
-  const cover = await renderTitleCover({ title: words, photo: { bytes: photo.bytes, contentType: photo.contentType }, headTopPct: decision.headTopPct });
+  const cover = await renderTitleCover({ title: words, photo: { bytes: photo.bytes, contentType: photo.contentType }, headTopPct: decision.headTopPct, clearSide: decision.clearSide });
   const url = await storeBytes(cover.png, 'image/png', 'png', nameHint + '-cover');
   return {
     ...existing,
     url,
     titled: { title: words, photoUrl: decision.photoUrl, family: cover.family, custom: true },
-    alt: words + ' — ' + rest,
+    alt: plainTitle(words) + ' — ' + rest,
   };
 }

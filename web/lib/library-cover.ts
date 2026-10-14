@@ -29,7 +29,7 @@ export const COVER_HEAD_CLEAR_PCT = 36;
 /** More than this much added sky and the picture is mostly filler; the flag stands instead. */
 export const MAX_PAD_FRACTION = 0.45;
 /** Longer than this is a sentence, not a cover title. */
-export const MAX_COVER_TITLE_CHARS = 60;
+export const MAX_COVER_TITLE_CHARS = 72;
 
 export type GradeDecision = {
   /** 'unmeasured' when ffmpeg could not read the photo: it is used as it is. */

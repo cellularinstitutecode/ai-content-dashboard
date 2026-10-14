@@ -197,7 +197,7 @@ test('the button uses the library photo itself; the AI-description path is gone'
   assert.match(hero, /gradeDecision\(await measureImage\(input\)\)/, 'measured with the palette tool');
   assert.match(hero, /verifyLibraryPhoto\(/, 'checked by the same reviewer as a cover');
   assert.match(hero, /pad = headroomPad\(verification\.headTopPct\)/);
-  assert.match(hero, /renderTitleCover\(\{ title, photo: \{ bytes, contentType \}, headTopPct: verification\?\.headTopPct \?\? null \}\)/, 'the title placed by the same rule');
+  assert.match(hero, /renderTitleCover\(\{ title, photo: \{ bytes, contentType \}, headTopPct: verification\?\.headTopPct \?\? null, clearSide: verification\?\.clearSide \?\? null \}\)/, 'the title placed by the same rule, beside the subject');
   assert.doesNotMatch(hero, /generatePackImage|images\/generations/, 'no image model');
 
   const images = src('lib/images.ts');

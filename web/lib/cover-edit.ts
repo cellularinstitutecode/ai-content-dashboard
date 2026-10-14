@@ -22,14 +22,14 @@ export type EditableImage = {
   titled?: { title: string; photoUrl: string; family?: string; custom?: boolean } | null;
   direction?: string | null;
   takes?: number | null;
-  verification?: { headTopPct?: number | null } | null;
+  verification?: { headTopPct?: number | null; clearSide?: 'left' | 'right' | null } | null;
 };
 
 /** The one line the disabled button shows for a picture with no clean photograph behind it. */
 export const NO_CLEAN_PHOTO = 'This picture was made before retitling existed — make a new image first';
 
 export type RetitleDecision =
-  | { ok: true; photoUrl: string; headTopPct: number | null }
+  | { ok: true; photoUrl: string; headTopPct: number | null; clearSide: 'left' | 'right' | null }
   | { ok: false; reason: string };
 
 /**
@@ -44,22 +44,29 @@ export type RetitleDecision =
 export function retitleDecision(image: EditableImage | null | undefined): RetitleDecision {
   if (!image || !image.url) return { ok: false, reason: 'There is no picture on this draft yet.' };
   const headTopPct = image.verification?.headTopPct ?? null;
+  const side = image.verification?.clearSide;
+  const clearSide = side === 'left' || side === 'right' ? side : null;
   const kept = String(image.titled?.photoUrl || '').trim();
-  if (kept) return { ok: true, photoUrl: kept, headTopPct };
-  if (['library', 'upload'].includes(String(image.source || ''))) return { ok: true, photoUrl: String(image.url), headTopPct };
+  if (kept) return { ok: true, photoUrl: kept, headTopPct, clearSide };
+  if (['library', 'upload'].includes(String(image.source || ''))) return { ok: true, photoUrl: String(image.url), headTopPct, clearSide };
   return { ok: false, reason: NO_CLEAN_PHOTO };
 }
 
-/** A title as typed, made fit for the cover: one line, no quotes, no trailing stop, at most MAX_COVER_TITLE characters. */
+/**
+ * A title as typed, made fit for the cover: one line, no quotes, at most
+ * MAX_COVER_TITLE characters. A single full stop at the end stays — the
+ * feed's titles are sentences ("Your cells shape how your body responds.") —
+ * and so do *emphasis* markers, which the cover sets in rust italic.
+ */
 export function cleanCoverTitle(input: unknown): string {
   const t = String(input ?? '')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^["'“‘]+|["'”’]+$/g, '')
-    .replace(/[.\s]+$/, '')
+    .replace(/[.\s]+$/, (m) => (m.includes('.') ? '.' : ''))
     .trim();
   if (t.length <= MAX_COVER_TITLE) return t;
-  return t.slice(0, MAX_COVER_TITLE).replace(/\s+\S*$/, '').replace(/[,;:\-–—]\s*$/, '').trim();
+  return t.slice(0, MAX_COVER_TITLE).replace(/\s+\S*$/, '').replace(/[,;:\-–—*]\s*$/, '').trim();
 }
 
 /** The words on the cover now: the set title (possibly ''), else the planner's. */
@@ -130,14 +137,19 @@ export function creditLabel(credits: number): string {
  * statement of what the post is about, never a claim. Titles are written in
  * that voice, from the post itself, so no two posts wear the same words.
  */
-export const TITLE_STYLE_EXAMPLES = ['Evening Routines Matter', 'Everyday Habits Shape How You Feel', 'The Connection Between Food and Energy', 'Fiber First', 'Start With What You Drink', 'Organized. Professional. Human.'] as const;
+export const TITLE_STYLE_EXAMPLES = [
+  'Your cells shape how your body responds.',
+  'Hydration is *part* of how the body stays *balanced*.',
+  'Your nervous system deserves *space to settle*.',
+  'Rest is a daily *health habit*.',
+] as const;
 
 export const SUGGEST_TITLES_SYSTEM =
   'You write cover titles for a clinic\'s educational social posts. The title is set in large serif type over a photograph, ' +
-  'in the voice of the clinic\'s own feed — plain, calm statements of what the post is about, like ' + TITLE_STYLE_EXAMPLES.map((t) => '"' + t + '"').join(', ') + '. ' +
-  'Two to seven words in title case, written from THIS post\'s own subject (its first lines carry it). Rules: no claim, ' +
-  'no number, no promise, no outcome; never name a person or a therapy; no question marks, no emoji, no quotation marks, no ' +
-  'trailing full stop; at most ' + MAX_COVER_TITLE + ' characters and ideally under 34. Answer with a JSON array of the titles asked for and nothing else.';
+  'in the voice of the clinic\'s own feed: one short, calm sentence in sentence case that says what the post is about, like ' + TITLE_STYLE_EXAMPLES.map((t) => '"' + t + '"').join(', ') + '. ' +
+  'Four to nine words, ending with a full stop, written from THIS post\'s own subject (its first lines carry it). Mark the one or two words that carry the ' +
+  'sentence with *asterisks* — they are set in italic in the brand\'s rust. Rules: no claim, no number, no promise, no outcome; never name a person or a ' +
+  'therapy; no question marks, no emoji, no quotation marks; at most ' + MAX_COVER_TITLE + ' characters. Answer with a JSON array of the titles asked for and nothing else.';
 
 /** The material the suggester reads: the angle, the pillar, and what the post says. */
 export function suggestTitlesPrompt(input: { angle: string; pillarName?: string | null; copy?: string | null; current?: string | null; avoid?: readonly string[]; count?: number }): string {

@@ -88,7 +88,8 @@ export const FEED_BASELINE = [
   'The team wears plain black scrubs with no visible logos; patients wear neutral athleisure, soft knits or linen.',
   'Expressions are quiet and attentive, mid-moment, eyes usually off-camera; one or two people, never a crowd.',
   'Palette: cream, sand, warm taupe and oak, with terracotta and rust only as small accents — never cool blue, white-and-steel, or neon.',
-  'Composition leaves the top of the frame open and quiet for a large serif title; vertical 4:5 framing.',
+  'Composition: the subject sits in the RIGHT half of the frame; the LEFT 45% is quiet, plain background (wall, soft bokeh, an empty surface)',
+  'from a fifth of the way down to four fifths, because a large serif title is set there afterwards, beside the subject. Vertical 4:5 framing.',
 ].join(' ');
 
 export const PLANNER_PHOTOGRAPHY = [
@@ -358,7 +359,7 @@ export function titleFor(angle: unknown, pillarName: string): string {
 }
 
 /** Longer than this is a sentence, not a cover title (same ceiling as lib/library-cover.ts). */
-export const MAX_COVER_TITLE = 60;
+export const MAX_COVER_TITLE = 72;
 
 /**
  * The framings a repeated title steps through, so the second post on an angle
@@ -528,8 +529,9 @@ const WORLD = 'THE PLACE: a calm, light-filled private practice in Cancún, as i
 
 /** The band the title needs, worded for the shot at hand. */
 const titleBand = (people: boolean) =>
-  'TITLE SPACE: the upper third of the frame is quiet, softly lit wall or empty background with nothing in it — a title is set there afterwards.' +
-  (people ? ' The top of every head sits at least 35% of the way down the frame; pull the camera back rather than crop.' : '');
+  'TITLE SPACE: the LEFT 45% of the frame, from a fifth of the way down to four fifths, is quiet, plain background — softly lit wall, soft bokeh or an empty ' +
+  'surface with nothing of the subject in it — because a large title is set there afterwards, beside the subject. The subject and the key objects sit in the right half.' +
+  (people ? ' The top of every head sits at least 15% of the way down the frame; pull the camera back rather than crop.' : '');
 
 export const SHOTS: Shot[] = [
   {
