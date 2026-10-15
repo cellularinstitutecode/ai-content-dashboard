@@ -14,9 +14,16 @@
 // Mounted in the dashboard composer AND the Calendar scheduler, which had no
 // media control at all — so a video channel there could only ever produce a
 // draft Metricool refuses.
+//
+// Two doors now: "Attach a video" (the shareable copies in the Video Library)
+// and "Attach an image" (the photographs in the Image Library, copied into
+// the app's own store on pick — components/LibraryImagePicker.tsx). A picture
+// post could be written here only if the image had been handed over from
+// somewhere else; there was no way to choose one.
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import LibraryImagePicker from '@/components/LibraryImagePicker';
 import { friendlyErrorFromResponse } from '@/lib/friendly-error';
 import { drivePreviewUrl, previewKindOf } from '@/lib/media-preview';
 import { isMetricoolHostedUrl } from '@/lib/metricool-upload-parse';
@@ -112,7 +119,10 @@ export default function MediaPicker({ value, label, onChange, hint }: {
   /** An extra line under the button — e.g. which channels are waiting on this. */
   hint?: string;
 }) {
-  const [open, setOpen] = useState(false);
+  // Which list is open, if any. One at a time: the two share the space below
+  // the buttons, and a video list under an image grid reads as one list.
+  const [panel, setPanel] = useState<'video' | 'image' | null>(null);
+  const open = panel === 'video';
   const [videos, setVideos] = useState<ShareableVideo[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -148,7 +158,7 @@ export default function MediaPicker({ value, label, onChange, hint }: {
   function retry() {
     setVideos(null);
     setErr(null);
-    setOpen(true);
+    setPanel('video');
     load();
   }
 
@@ -167,7 +177,7 @@ export default function MediaPicker({ value, label, onChange, hint }: {
           </div>
           <button
             type="button"
-            onClick={() => { onChange('', ''); setOpen(false); }}
+            onClick={() => { onChange('', ''); setPanel(null); }}
             className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[12px] font-medium text-ink-muted ring-1 ring-line transition hover:ring-accent"
           >Remove</button>
         </div>
@@ -214,17 +224,34 @@ export default function MediaPicker({ value, label, onChange, hint }: {
     );
   }
 
+  const pill = 'inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[13px] font-medium ring-1 transition ';
   return (
     <div className="mt-2">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-1.5 text-[13px] font-medium text-ink ring-1 ring-line transition hover:ring-accent"
-      >
-        <span aria-hidden>{'\u{1F3AC}'}</span>{open ? 'Close' : 'Attach a video'}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => setPanel((p) => (p === 'video' ? null : 'video'))}
+          aria-expanded={open}
+          className={pill + (open ? 'bg-accent text-white ring-accent' : 'bg-white text-ink ring-line hover:ring-accent')}
+        >
+          <span aria-hidden>{'\u{1F3AC}'}</span>{open ? 'Close' : 'Attach a video'}
+        </button>
+        <button
+          type="button"
+          onClick={() => setPanel((p) => (p === 'image' ? null : 'image'))}
+          aria-expanded={panel === 'image'}
+          className={pill + (panel === 'image' ? 'bg-accent text-white ring-accent' : 'bg-white text-ink ring-line hover:ring-accent')}
+        >
+          <span aria-hidden>{'\u{1F5BC}'}</span>{panel === 'image' ? 'Close' : 'Attach an image'}
+        </button>
+      </div>
       {hint && <p className="mt-1.5 text-[11px] text-ink-faint">{hint}</p>}
+      {panel === 'image' && (
+        <LibraryImagePicker
+          onPick={(url, name) => { onChange(url, name); setPanel(null); }}
+          onClose={() => setPanel(null)}
+        />
+      )}
       {open && (
         <div className="mt-2 rounded-2xl bg-subtle p-2.5 ring-1 ring-line">
           {loading && <p className="px-1 py-2 text-[12px] text-ink-muted">Reading your video library…</p>}
@@ -248,7 +275,7 @@ export default function MediaPicker({ value, label, onChange, hint }: {
                 <li key={v.videoId}>
                   <button
                     type="button"
-                    onClick={() => { onChange(v.url, v.title); setOpen(false); }}
+                    onClick={() => { onChange(v.url, v.title); setPanel(null); }}
                     className="w-full rounded-xl p-1.5 text-left ring-1 ring-transparent transition hover:bg-white hover:ring-line"
                   >
                     <span className="flex items-center gap-2">
