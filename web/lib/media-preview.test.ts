@@ -67,3 +67,17 @@ test('the composer no longer reads a Drive transcode as a missing video', () => 
   // for them: those really are the file itself in the element.
   assert.match(picker, /This is exactly what goes out with the post\. If it plays here, it is attached\./);
 });
+
+test('the attachment panel offers an image from the library, not only a video', () => {
+  // "Also had attach an image not just attach a video": a picture post could
+  // be written in the composer or the Calendar scheduler only if the image had
+  // been handed over from somewhere else. The second door is the Image
+  // Library, copied into the app's own store on pick, as a draft's picture is.
+  const picker = readFileSync(new URL('../components/MediaPicker.tsx', import.meta.url), 'utf8');
+  assert.match(picker, /'Attach a video'/);
+  assert.match(picker, /'Attach an image'/);
+  assert.match(picker, /<LibraryImagePicker[\s\S]*?onPick=\{\(url, name\) => \{ onChange\(url, name\);/, 'a pick lands in the same media state the video picker fills');
+  const lib = readFileSync(new URL('../components/LibraryImagePicker.tsx', import.meta.url), 'utf8');
+  assert.match(lib, /\/api\/sources\?kind=images/, 'the grid is the Image Library');
+  assert.match(lib, /action: 'import_image'/, 'and the photo is copied where a network can fetch it, never sent as a Drive link');
+});
