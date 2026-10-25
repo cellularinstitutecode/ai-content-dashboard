@@ -647,8 +647,8 @@ const [mSent, setMSent] = useState<{ key: string; networks: string[] } | null>(n
     });
     try {
       let res = await doFetch();
-      if (res.status >= 500) {
-        await new Promise((r) => setTimeout(r, 1500));
+      for (let attempt = 0; res.status >= 500 && attempt < 2; attempt++) {
+        await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
         res = await doFetch();
       }
       const j = await res.json().catch(() => ({}));
@@ -1540,10 +1540,15 @@ procAdvanceLater('draft', 4000); // research + drafting happen inside one call; 
 // With a picture on the idea box, the topic is the picture: what it shows leads the keywords, the competition and the copy.
 const topic = ideaImages.length ? topicFromPicture(prompt, ideaImages.map((i) => i.brief)) : prompt;
 try {
-const r = await fetch('/api/generate', {
+const genFetch = () => fetch('/api/generate', {
 method: 'POST', headers: { 'content-type': 'application/json' },
 body: JSON.stringify({ topic, provider, model, type }),
 });
+let r = await genFetch();
+for (let attempt = 0; r.status >= 500 && attempt < 2; attempt++) {
+await new Promise((res) => setTimeout(res, 1200 * (attempt + 1)));
+r = await genFetch();
+}
 const data = await r.json().catch(() => ({}));
 // A 504 is the platform cutting the request off, not the writer refusing: said as such, with what to do.
 if (!r.ok) throw new Error(data?.error || (r.status === 504 || r.status === 502
