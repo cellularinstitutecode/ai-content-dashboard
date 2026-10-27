@@ -11,7 +11,7 @@
 // the invoice.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decideSpend, applyCharge } from './semrush-budget.ts';
+import { decideDraftSpend, decideSpend, applyCharge } from './semrush-budget.ts';
 
 const FLOOR = 5000;
 
@@ -68,4 +68,18 @@ test('charging ignores junk and never goes negative', () => {
   assert.equal(applyCharge(100, Number.NaN), 100);
   assert.equal(applyCharge(100, 500), 0, 'clamped at zero');
   assert.equal(applyCharge(null, 10), null, 'an unknown balance stays unknown');
+});
+
+test('the drafting pot: a month\u2019s spend plus this call must fit the allowance', () => {
+  assert.deepEqual(decideDraftSpend(0, 500, 2500), { allow: true, reason: 'ok' });
+  assert.deepEqual(decideDraftSpend(2000, 500, 2500), { allow: true, reason: 'ok' }, 'exactly to the line is allowed');
+  assert.deepEqual(decideDraftSpend(2001, 500, 2500), { allow: false, reason: 'draft-pot' });
+  assert.deepEqual(decideDraftSpend(2500, 40, 2500), { allow: false, reason: 'draft-pot' });
+});
+
+test('the drafting pot fails closed: an unreadable log or no pot at all refuses', () => {
+  assert.equal(decideDraftSpend(null, 40, 2500).reason, 'draft-pot-unknown');
+  assert.equal(decideDraftSpend(Number.NaN, 40, 2500).reason, 'draft-pot-unknown');
+  assert.equal(decideDraftSpend(0, 40, 0).reason, 'draft-pot', 'SEMRUSH_DRAFT_ALLOWANCE=0 turns drafting research off');
+  assert.equal(decideDraftSpend(0, 40, Number.NaN).reason, 'draft-pot');
 });

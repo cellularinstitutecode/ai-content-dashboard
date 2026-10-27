@@ -16,6 +16,7 @@
 // exist, are in lib/strategy-seed.ts, where they are unit-tested without a
 // database.
 import { NextResponse } from 'next/server';
+import { withDraftSemrush } from '@/lib/semrush-policy';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { normalizeStrategy } from '@/lib/autopilot';
@@ -60,7 +61,9 @@ function updateRow(row: SeedUpdate, now: string): Row {
   return out;
 }
 
-export async function POST() {
+// Drafting: the keyword research inside may spend from the drafting pot (lib/semrush-policy.ts).
+export async function POST() { return withDraftSemrush(() => postDrafting()); }
+async function postDrafting() {
   const auth = await requireAllowlistedUser();
   if (!auth.ok) return auth.response;
   const rl = await checkRateLimit(auth.userId, 'templates');

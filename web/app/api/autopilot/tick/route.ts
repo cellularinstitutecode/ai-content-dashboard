@@ -5,6 +5,7 @@
 //   2. A signed-in user ("Run engine now" button) → same, scoped to that user.
 // Steps are idempotent and resumable, so overlapping or repeated ticks are safe.
 import { NextRequest, NextResponse } from 'next/server';
+import { withDraftSemrush } from '@/lib/semrush-policy';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { advanceRuns, expireStaleFixes, expireStaleRuns, rescueStrandedApprovals, planRuns } from '@/lib/autopilot';
 import { reportError } from '@/lib/report';
@@ -101,10 +102,14 @@ async function handle(req: NextRequest) {
   }
 }
 
-export async function GET(req: NextRequest) {
+// Drafting: the keyword research inside may spend from the drafting pot (lib/semrush-policy.ts).
+export async function GET(req: NextRequest) { return withDraftSemrush(() => getDrafting(req)); }
+async function getDrafting(req: NextRequest) {
   return handle(req);
 }
 
-export async function POST(req: NextRequest) {
+// Drafting: the keyword research inside may spend from the drafting pot (lib/semrush-policy.ts).
+export async function POST(req: NextRequest) { return withDraftSemrush(() => postDrafting(req)); }
+async function postDrafting(req: NextRequest) {
   return handle(req);
 }

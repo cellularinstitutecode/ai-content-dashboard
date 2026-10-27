@@ -5,6 +5,7 @@
 // Approve is the only path toward publishing, and it only ever creates a
 // Metricool DRAFT (autoPublish: false) plus a pending_review posts row.
 import { isAllowedEmail } from '@/lib/access';
+import { withDraftSemrush } from '@/lib/semrush-policy';
 import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse, after } from 'next/server';
 import { supabaseServer } from '@/lib/supabase';
@@ -175,7 +176,9 @@ export async function GET(req: NextRequest) {
   });
 }
 
-export async function POST(req: NextRequest) {
+// Drafting: the keyword research inside may spend from the drafting pot (lib/semrush-policy.ts).
+export async function POST(req: NextRequest) { return withDraftSemrush(() => postDrafting(req)); }
+async function postDrafting(req: NextRequest) {
   const sb = await supabaseServer();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });

@@ -25,8 +25,8 @@
 
 import { pickPrimary, withoutShopping } from '@/lib/keyword-brief';
 import { reportError } from '@/lib/report';
-import { decideSpend, applyCharge, type SpendDecision } from '@/lib/semrush-budget';
-import { liveAllowedByPolicy, liveSemrushAllowed, semrushMode } from '@/lib/semrush-policy';
+import { decideDraftSpend, decideSpend, applyCharge, type SpendDecision } from '@/lib/semrush-budget';
+import { currentSemrushOrigin, liveAllowedByPolicy, liveSemrushAllowed, semrushMode } from '@/lib/semrush-policy';
 import { reasonForCode, reasonForHttpStatus, type SemrushReason } from '@/lib/semrush-reason';
 import { mcpExecuteReport, toMcpCall, toMcpProjectCall, transportFor, type McpCall, type SemrushTransport } from '@/lib/semrush-transport';
 import { supabaseAdmin } from '@/lib/supabase-admin';
@@ -47,7 +47,8 @@ export type SemKeyword = {
 
 export type SerpEntry = { domain: string; url: string };
 
-export type SemSource = 'live' | 'cache' | 'none';
+/** 'draft' is a live call made by drafting (lib/semrush-policy.ts withDraftSemrush): paid, and counted against the drafting pot. */
+export type SemSource = 'live' | 'draft' | 'cache' | 'none';
 
 export type SemReportResult = {
   ok: boolean;
@@ -128,6 +129,23 @@ function unitAllowance(): number {
   const fallback = semrushMode() === 'auto' ? DEFAULT_ALLOWANCE_AUTO : DEFAULT_ALLOWANCE_MANUAL;
   const n = parseInt(process.env.SEMRUSH_UNIT_ALLOWANCE || String(fallback), 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+/**
+ * What DRAFTING may spend in a calendar month (UTC), inside the pot above.
+ *
+ * The research a draft is written to — the video sweep, Prepare, Autopilot,
+ * the Content Generator, a strategy drop — is the one automatic spend worth
+ * paying for, and the one that drained the account when it was unbounded. A
+ * topic costs about 500 units cold (related 8 × 40, questions 3 × 40, organic
+ * 10 × 10) and nothing inside the 30-day cache, so 2,500 is about five new
+ * topics a month. 0 turns drafting's live research off.
+ */
+export const DEFAULT_DRAFT_ALLOWANCE = 2500;
+export function draftAllowance(): number {
+  const raw = process.env.SEMRUSH_DRAFT_ALLOWANCE;
+  if (raw == null || raw.trim() === '') return DEFAULT_DRAFT_ALLOWANCE;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_DRAFT_ALLOWANCE;
 }
 
 /** Which way requests leave the app for the configured key. */
@@ -240,20 +258,50 @@ async function allowanceBalance(): Promise<number | null> {
     // when the count itself is unavailable, a page that is full to the
     // default cap is treated the same way. Both fail closed.
     const POSTGREST_DEFAULT_MAX_ROWS = 1000;
-    const { data, error, count } = await supabaseAdmin()
-      .from('semrush_usage')
-      .select('units', { count: 'exact' })
-      .eq('source', 'live')
-      .gte('created_at', start.toISOString());
-    if (error) return null;
-    const rows = (data as { units: number }[] | null | undefined) ?? [];
-    const truncated = typeof count === 'number' ? count > rows.length : rows.length >= POSTGREST_DEFAULT_MAX_ROWS;
-    if (truncated) return null;
-    const spent = rows.reduce((a, r) => a + (Number(r.units) || 0), 0);
+    const spent = await loggedSpendThisMonth(['live', 'draft']);
+    if (spent == null) return null;
     return Math.max(0, unitAllowance() - spent);
   } catch {
     return null;
   }
+}
+
+/**
+ * Units logged in semrush_usage since the first of the month for these
+ * sources, or null when the log cannot be read in full. Shared by the
+ * allowance balance (every paid call) and the drafting pot ('draft' alone).
+ */
+async function loggedSpendThisMonth(sources: readonly SemSource[]): Promise<number | null> {
+  const start = new Date();
+  start.setUTCDate(1);
+  start.setUTCHours(0, 0, 0, 0);
+  // PostgREST caps a select at the project's max-rows (1,000 by default),
+  // and a capped read here would not fail — it would silently return FEWER
+  // spend rows, making the balance look higher than it is and letting the
+  // guard approve spend it should refuse. An under-count is the one wrong
+  // answer this function must never give. So ask for the exact count
+  // alongside the rows and treat any shortfall as "cannot read the log";
+  // when the count itself is unavailable, a page that is full to the
+  // default cap is treated the same way. Both fail closed.
+  const POSTGREST_DEFAULT_MAX_ROWS = 1000;
+  const { data, error, count } = await supabaseAdmin()
+    .from('semrush_usage')
+    .select('units', { count: 'exact' })
+    .in('source', [...sources])
+    .gte('created_at', start.toISOString());
+  if (error) return null;
+  const rows = (data as { units: number }[] | null | undefined) ?? [];
+  const truncated = typeof count === 'number' ? count > rows.length : rows.length >= POSTGREST_DEFAULT_MAX_ROWS;
+  if (truncated) return null;
+  return rows.reduce((a, r) => a + (Number(r.units) || 0), 0);
+}
+
+/** The drafting pot right now: what it holds, what this month has used, what is left. Null spent = log unreadable. */
+export async function draftPotStatus(): Promise<{ allowance: number; spent: number | null; remaining: number | null }> {
+  const allowance = draftAllowance();
+  let spent: number | null = null;
+  try { spent = await loggedSpendThisMonth(['draft']); } catch { spent = null; }
+  return { allowance, spent, remaining: spent == null ? null : Math.max(0, allowance - spent) };
 }
 
 export async function getUnitsBalance(force = false): Promise<number | null> {
@@ -322,6 +370,17 @@ export async function budgetDecision(estUnits: number): Promise<SpendDecision> {
   // in 'off' mode) never spends, however healthy the pot. Decided first so it
   // does not even cost the balance read.
   if (hasKey && !liveSemrushAllowed()) return { allow: false, reason: 'policy' };
+  // Drafting spends from its own pot first (lib/semrush-budget.ts
+  // decideDraftSpend), and then still has to pass the floor below: the pot
+  // bounds what drafts may take, the floor protects what the account holds.
+  if (hasKey && currentSemrushOrigin() === 'draft') {
+    const pot = await draftPotStatus();
+    const d = decideDraftSpend(pot.spent, estUnits, pot.allowance);
+    if (!d.allow) {
+      if (d.reason === 'draft-pot-unknown') reportError('semrush:draft-pot-closed', new Error('drafting spend refused: usage log unreadable'), { estUnits });
+      return d;
+    }
+  }
   const bal = hasKey ? await getUnitsBalance() : null;
   const decision = decideSpend(bal, estUnits, unitFloor(), hasKey);
   if (!decision.allow && decision.reason === 'balance-unknown') {
@@ -364,9 +423,11 @@ export type KeywordCapability = {
    * person's click (lib/semrush-policy.ts), so a draft — automatic work — reads
    * the cache. Nothing is broken; the panel's buttons still fetch live.
    */
-  reason: 'ok' | 'no_token' | 'budget' | 'balance_unknown' | 'policy';
+  reason: 'ok' | 'no_token' | 'budget' | 'balance_unknown' | 'policy' | 'draft_pot' | 'draft_pot_unknown';
   balance: number | null;
   floor: number;
+  /** The drafting pot (SEMRUSH_DRAFT_ALLOWANCE): what a draft may still spend this month. */
+  draftPot?: { allowance: number; spent: number | null; remaining: number | null };
   /** How requests leave the app: direct v3, or Semrush's MCP server. */
   transport: SemrushTransport;
 };
@@ -396,15 +457,24 @@ export async function keywordCapability(): Promise<KeywordCapability> {
   // panel's own Analyze click included — so the policy is read for the
   // automatic origin, not the current one. Decided before the floor: in
   // manual mode the pot's health does not change the answer for drafts.
-  if (!liveAllowedByPolicy(semrushMode(), 'auto')) return { ok: false, reason: 'policy', balance, floor, transport };
+  if (!liveAllowedByPolicy(semrushMode(), 'draft')) return { ok: false, reason: 'policy', balance, floor, transport };
+  // In manual mode a draft spends from its own pot (lib/semrush-policy.ts
+  // withDraftSemrush), so the pot is part of the answer; in auto mode the
+  // pot is not consulted and the floor alone decides, as it always did.
+  const draftPot = semrushMode() === 'manual' ? await draftPotStatus() : undefined;
+  if (draftPot) {
+    const d = decideDraftSpend(draftPot.spent, UNIT_COST.phrase_related, draftPot.allowance);
+    if (!d.allow) return { ok: false, reason: d.reason === 'draft-pot-unknown' ? 'draft_pot_unknown' : 'draft_pot', balance, floor, transport, draftPot };
+  }
   const decision = decideSpend(balance, UNIT_COST.phrase_related, floor, hasKey);
-  if (decision.allow) return { ok: true, reason: 'ok', balance, floor, transport };
+  if (decision.allow) return { ok: true, reason: 'ok', balance, floor, transport, draftPot };
   return {
     ok: false,
     reason: decision.reason === 'balance-unknown' ? 'balance_unknown' : 'budget',
     balance,
     floor,
     transport,
+    draftPot,
   };
 }
 
@@ -456,11 +526,14 @@ export async function cachePut(report: string, database: string, phrase: string,
 }
 
 export async function logUsage(report: string, phrase: string, units: number, source: SemSource): Promise<void> {
+  // A live call made by drafting is logged as 'draft', so the drafting pot can
+  // be read back from the same log the allowance balance reads.
+  const src: SemSource = source === 'live' && currentSemrushOrigin() === 'draft' ? 'draft' : source;
   // Every live spend flows through here, so this is the one place that can keep
   // the cached balance moving in the right direction between reads.
-  if (source === 'live') chargeUnits(units);
+  if (src === 'live' || src === 'draft') chargeUnits(units);
   try {
-    await supabaseAdmin().from('semrush_usage').insert({ report, phrase, units, source });
+    await supabaseAdmin().from('semrush_usage').insert({ report, phrase, units, source: src });
   } catch {
     // ignore
   }

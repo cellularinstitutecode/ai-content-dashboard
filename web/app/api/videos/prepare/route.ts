@@ -12,6 +12,7 @@
 // The route never posts anything: sending to Metricool is a separate, explicit
 // step from the Video Library, and Approve is still a person.
 import { NextRequest, NextResponse } from 'next/server';
+import { withDraftSemrush } from '@/lib/semrush-policy';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { isDriveUrl, parseDriveFileId } from '@/lib/drive-url';
 import { parseVideoUrl } from '@/lib/composer';
@@ -70,7 +71,9 @@ function sheetWriteAdvice(e: unknown): string {
   return e.message + (e.detail ? ' Google said: “' + e.detail.slice(0, 200) + '”' : '');
 }
 
-export async function POST(req: NextRequest) {
+// Drafting: the keyword research inside may spend from the drafting pot (lib/semrush-policy.ts).
+export async function POST(req: NextRequest) { return withDraftSemrush(() => postDrafting(req)); }
+async function postDrafting(req: NextRequest) {
   const auth = await requireAllowlistedUser();
   if (!auth.ok) return auth.response;
   const rl = await checkRateLimit(auth.userId, 'video-prepare');

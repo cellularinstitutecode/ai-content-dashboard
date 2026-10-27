@@ -14,17 +14,28 @@
 //
 //   manual  (default) Only a request a person started on purpose — the SEO
 //           panel's Analyze / Inspect / Advisor / Rankings buttons, the
-//           Keyword Intelligence hub — may make a live call. Every automatic
-//           path reads the cache (fresh or stale) and otherwise falls back to
-//           the model's own keywords, exactly as it already does when the
-//           unit floor is reached.
+//           Keyword Intelligence hub — may make a live call, and DRAFTING may
+//           too, inside its own monthly pot (SEMRUSH_DRAFT_ALLOWANCE, see
+//           lib/semrush.ts). Every other automatic path — the panel opening on
+//           page load, scheduled refreshes, the voice warm-up — reads the cache
+//           (fresh or stale) and otherwise falls back to the model's own
+//           keywords, exactly as it already does when the unit floor is reached.
 //   off     No live calls from anywhere. Cache-only.
 //   auto    The old behaviour: anything inside the budget may spend.
 //
 // A request is "started on purpose" when its route handler wrapped the work in
-// `withUserSemrush()`. Nothing else has to be threaded through the call tree:
-// the origin rides on AsyncLocalStorage, and the default — no wrapper — is the
-// safe answer, so a new caller cannot spend by forgetting to opt out.
+// `withUserSemrush()`; it is drafting when wrapped in `withDraftSemrush()` —
+// the video sweep and Prepare, Autopilot, the Content Generator, a strategy
+// drop, the assistant's research and the post research panel. Nothing else has
+// to be threaded through the call tree: the origin rides on AsyncLocalStorage,
+// and the default — no wrapper — is the safe answer, so a new caller cannot
+// spend by forgetting to opt out.
+//
+// Why drafting got its own door (October): with every automatic path on the
+// cache, no draft written since late September carried a real Semrush volume —
+// a new topic is never in the cache, so the writer fell back to estimates every
+// time, and the keyword brief the whole pipeline is built on was the one piece
+// no longer Semrush-backed. The pot keeps that spend bounded instead of off.
 //
 // The pure decision is kept apart from the storage so it can be unit-tested
 // without a server.
@@ -32,7 +43,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 export type SemrushMode = 'auto' | 'manual' | 'off';
-export type SemrushOrigin = 'user' | 'auto';
+export type SemrushOrigin = 'user' | 'draft' | 'auto';
 
 export const DEFAULT_SEMRUSH_MODE: SemrushMode = 'manual';
 
@@ -51,7 +62,7 @@ export function semrushMode(): SemrushMode {
 export function liveAllowedByPolicy(mode: SemrushMode, origin: SemrushOrigin): boolean {
   if (mode === 'off') return false;
   if (mode === 'auto') return true;
-  return origin === 'user';
+  return origin === 'user' || origin === 'draft';
 }
 
 const originStore = new AsyncLocalStorage<{ origin: SemrushOrigin }>();
@@ -68,6 +79,15 @@ export function currentSemrushOrigin(): SemrushOrigin {
  */
 export function withUserSemrush<T>(fn: () => Promise<T>): Promise<T> {
   return originStore.run({ origin: 'user' }, fn);
+}
+
+/**
+ * Run `fn` as drafting: the keyword research a draft is written to. May spend
+ * in manual mode, but only from the drafting pot (lib/semrush.ts
+ * draftAllowance), and its spend is logged apart so the pot can be read back.
+ */
+export function withDraftSemrush<T>(fn: () => Promise<T>): Promise<T> {
+  return originStore.run({ origin: 'draft' }, fn);
 }
 
 /** The live decision for the code that is running right now. */
