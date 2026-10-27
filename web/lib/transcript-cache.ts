@@ -151,6 +151,36 @@ export async function cachedPublicCopy(videoId: string): Promise<{ id: string; u
 }
 
 /**
+ * The copy a post carries, found by the COPY's own id.
+ *
+ * posts.media_drive_file_id holds the copy's id — a Drive copy's id, a bucket
+ * key, 'stream:<id>' or 'metricool:<key>' — never the source video's. The
+ * approve / move / fix door was handing that marker to cachedPublicCopy, which
+ * looks a copy up by the SOURCE id, found nothing, and sent the replace with
+ * no video: Metricool refused the Reel, and a move of row 224 went nowhere.
+ * The list already read this table by public_copy_id; this is the same read
+ * for one post. Null when the copy is not recorded.
+ */
+export async function publicCopyById(copyId: string): Promise<{ videoId: string; id: string; url: string } | null> {
+  const key = String(copyId || '').trim();
+  if (!key) return null;
+  const r = await supabaseAdmin()
+    .from('video_transcripts')
+    .select('video_id, public_copy_id, public_copy_url')
+    .eq('public_copy_id', key)
+    .limit(1)
+    .maybeSingle()
+    .then((x) => x, (e: unknown) => ({ data: null, error: e as { message?: string } }));
+  if (r.error) {
+    reportError('transcript-cache:copy-by-id', r.error, { copyId: key });
+    return null;
+  }
+  const row = r.data as { video_id?: string | null; public_copy_id?: string | null; public_copy_url?: string | null } | null;
+  const url = String(row?.public_copy_url || '').trim();
+  return row?.public_copy_id && url ? { videoId: String(row.video_id || ''), id: String(row.public_copy_id), url } : null;
+}
+
+/**
  * Remember the copy, or forget it once it has been deleted.
  *
  * UPDATE first, and INSERT only when the video has no row yet. This used to be

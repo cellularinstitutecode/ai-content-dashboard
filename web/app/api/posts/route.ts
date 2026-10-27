@@ -20,7 +20,7 @@ import { normalizeFailure } from '@/lib/media-normalize-reason';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { tiktokDataFor } from '@/lib/tiktok-meta';
 import { anyVideo, instagramDataFor } from '@/lib/instagram-meta';
-import { cachedPublicCopy } from '@/lib/transcript-cache';
+import { cachedPublicCopy, publicCopyById } from '@/lib/transcript-cache';
 import { redact, reportError } from '@/lib/report';
 import { deleteDriveFile } from '@/lib/drive';
 import { deleteBucketVideo, isBucketVideoKey } from '@/lib/video-bucket';
@@ -624,8 +624,20 @@ export async function PATCH(req: Request) {
       // source video's own Drive id, and the URL is derived from that. Fresh
       // by construction, so an approve weeks after the draft was written can
       // never hand Metricool an expired link.
-      const streamed = parseStreamCopyId(String(existing.media_drive_file_id));
-      const url = streamed ? mediaVideoUrl(streamed, publicBase()) : (await cachedPublicCopy(String(existing.media_drive_file_id)))?.url;
+      const copyId = String(existing.media_drive_file_id);
+      const streamed = parseStreamCopyId(copyId);
+      let url: string | null = streamed ? mediaVideoUrl(streamed, publicBase()) : null;
+      if (!url) {
+        // By the COPY's id, as the list reads it (publicCopyById): the column
+        // holds the copy's marker — a Metricool-hosted key since the direct
+        // upload, a bucket key or a Drive copy before it — and never the
+        // source video's id. Looking it up as a source id found nothing, so
+        // every approve, move and fix of such a post sent the replace with no
+        // video, and Metricool refused the Reel. cachedPublicCopy stays as the
+        // fallback for an old row that recorded the source id here.
+        const byCopy = await publicCopyById(copyId);
+        url = byCopy ? freshCopyUrl(byCopy.id, byCopy.url, byCopy.videoId) : ((await cachedPublicCopy(copyId))?.url ?? null);
+      }
       if (url) {
         media = [url];
         videoAttached = true;
