@@ -69,15 +69,12 @@ export async function POST(req: NextRequest) {
   // two posts at slots nobody chose and left the panel nothing to schedule.
   // The box says where; the dashboard's Prepare checked boxes says when.
   // VIDEO_TICK_INSTANT=on restores the old send-at-the-next-free-slot.
-  if (!publishAt && !instantTicksEnabled()) {
-    return NextResponse.json({
-      ok: true, action: 'needs_time', tab, row,
-      message: 'Row ' + row + ' is ticked. Pick the day and time in the dashboard’s Video Library → Prepare checked boxes, and it is sent then.',
-    }, { headers: { 'cache-control': 'no-store' } });
-  }
+  // The hold reads the row and writes a `ticked` line so the panel lists it
+  // first (lib/video-ticks.ts hold); it never writes copy or a post.
+  const hold = !publishAt && !instantTicksEnabled();
 
   try {
-    const out = await addTickedNetworks({ userId, tab, row, publishAt, budgetMs: 270_000 - (Date.now() - started) });
+    const out = await addTickedNetworks({ userId, tab, row, publishAt, hold, budgetMs: 270_000 - (Date.now() - started) });
     return NextResponse.json({ ok: true, ...out }, { headers: { 'cache-control': 'no-store' } });
   } catch (e) {
     // A failure here must LOOK like one in the script's execution log, for the

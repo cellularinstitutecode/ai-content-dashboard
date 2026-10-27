@@ -61,6 +61,8 @@ export type TickAddResult =
     }
   /** The time asked for has already gone, could not be read, or the calendar is full after it. */
   | { action: 'bad_time'; tab: string; row: number; title: string; reason: 'past' | 'full' | 'unreadable'; message: string }
+  /** Held (`hold`): the row is ticked and owed these networks; the dashboard's panel is where its time is picked. */
+  | { action: 'needs_time'; tab: string; row: number; title: string; networks: string[]; message: string }
   /** Every ticked network already has its draft. */
   | { action: 'nothing_new'; tab: string; row: number; title: string; have: string[] }
   /** Nothing is ticked on the row. */
@@ -87,6 +89,12 @@ export async function addTickedNetworks(opts: {
    * next free slot, as a tick from the edit trigger always has.
    */
   publishAt?: string | null;
+  /**
+   * Hold rather than send: read the row, record a `ticked` line in the register
+   * so the dashboard's Prepare checked boxes lists it first, and answer
+   * `needs_time`. What the sheet's edit trigger gets for a tick with no time.
+   */
+  hold?: boolean;
 }): Promise<TickAddResult> {
   const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
   const { tab, row } = opts;
@@ -121,6 +129,25 @@ export async function addTickedNetworks(opts: {
   if (!ticked.length) return { action: 'nothing_ticked', tab, row, title: label };
   const priorOutcomes: PublishOutcome[] = Array.isArray(prior.metricool) ? (prior.metricool as PublishOutcome[]) : [];
   const networks = networksToAdd(ticked, priorOutcomes as PriorOutcome[]);
+  if (opts.hold) {
+    // Remembered, not sent. Written whether or not anything is owed: a row
+    // whose every tick already has its post is still the row the person just
+    // ticked, and the panel offers to move those posts to the time chosen.
+    void recordVideoEvent({
+      userId: opts.userId,
+      videoKey: videoKeyFor(spreadsheetId, tab, rowKey),
+      event: 'ticked',
+      actor: 'sheet',
+      title: title || null,
+      link: videoLink,
+      detail: { tab, row, gid: await tabGid(spreadsheetId, tab), ticked: ticked.filter((n) => n !== 'email'), owed: networks },
+    });
+    if (!networks.length) return { action: 'nothing_new', tab, row, title: label, have: ticked.filter((n) => n !== 'email') };
+    return {
+      action: 'needs_time', tab, row, title: label, networks,
+      message: 'Row ' + row + ' is ticked for ' + networks.join(', ') + '. Pick the day and time in the dashboard’s Video Library → Prepare checked boxes, and it is sent then.',
+    };
+  }
   if (!networks.length) {
     return { action: 'nothing_new', tab, row, title: label, have: ticked.filter((n) => n !== 'email') };
   }

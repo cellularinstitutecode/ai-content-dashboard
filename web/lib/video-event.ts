@@ -32,6 +32,12 @@ export const VIDEO_EVENTS = [
   'copy_failed',
   /** One or more Metricool drafts were created for this video. */
   'queued',
+  /**
+   * A box was ticked in the sheet and the row is HELD for a time: the
+   * dashboard's Prepare checked boxes lists these first. `detail.owed` names
+   * the networks still without a post; a later `queued` line closes it.
+   */
+  'ticked',
   /** Drafts that were waiting for this video now carry it. `detail.attached` says how many. */
   'video_attached',
   /** Somebody or something put a stopped row back in the queue. */
@@ -189,6 +195,12 @@ export function describeEntry(e: { event: string; actor?: string; detail?: Recor
       return 'A shareable copy was made, so this can carry its video.';
     case 'copy_failed':
       return 'No shareable copy could be made, so a post from this row would go out with no video' + because;
+    case 'ticked': {
+      const owed = Array.isArray(d.owed) ? (d.owed as unknown[]).map(String) : [];
+      return owed.length
+        ? 'Ticked in the sheet for ' + owed.join(', ') + '; waiting for a day and time in Prepare checked boxes.'
+        : 'Ticked in the sheet; every ticked network already has its post. Choosing a time in Prepare checked boxes moves them.';
+    }
     case 'queued': {
       const nets = Array.isArray(d.networks) ? (d.networks as unknown[]).map(String) : [];
       // NAME THE ONES THAT DID NOT GO.

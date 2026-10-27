@@ -211,3 +211,31 @@ test('without a time the hand-off still picks the next free slot, as the edit tr
   assert.equal(out.scheduledFor, undefined);
   assert.ok(publish.__sent()[0].publicationDate);
 });
+
+// The sheet's edit trigger: a tick with no time is HELD for the panel.
+test('held: a tick with no time records a ticked line with what is owed, sends nothing, and writes no copy', async () => {
+  sheet.__sheet(tab(['youtube', 'linkedin', 'tiktok', 'facebook', 'instagram']));
+  db.__db({ runs: [run([sent('youtube'), sent('linkedin'), sent('tiktok')])], drafts: [draft()] });
+  const out = await addTickedNetworks({ userId: 'u1', tab: 'Videos', row: ROW, hold: true });
+  assert.equal(out.action, 'needs_time');
+  assert.deepEqual(out.networks, ['facebook', 'instagram']);
+  assert.deepEqual(sentNetworks(), []);
+  assert.deepEqual(ai.__asked(), []);
+  const ev = register.__events();
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].event, 'ticked');
+  assert.equal(ev[0].actor, 'sheet');
+  assert.deepEqual(ev[0].detail.owed, ['facebook', 'instagram']);
+  assert.deepEqual(ev[0].detail.ticked, ['youtube', 'linkedin', 'tiktok', 'facebook', 'instagram']);
+  assert.equal(ev[0].detail.row, ROW);
+});
+
+test('held: a row whose every tick already has its post is still recorded as ticked, so the panel can offer to move them', async () => {
+  sheet.__sheet(tab(['youtube', 'linkedin', 'tiktok']));
+  db.__db({ runs: [run([sent('youtube'), sent('linkedin'), sent('tiktok')])], drafts: [draft()] });
+  const out = await addTickedNetworks({ userId: 'u1', tab: 'Videos', row: ROW, hold: true });
+  assert.equal(out.action, 'nothing_new');
+  assert.equal(register.__events()[0].event, 'ticked');
+  assert.deepEqual(register.__events()[0].detail.owed, []);
+  assert.deepEqual(sentNetworks(), []);
+});
