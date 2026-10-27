@@ -35,7 +35,7 @@ export async function GET() {
       readVideos(spreadsheetId),
       supabaseAdmin()
         .from('video_runs')
-        .select('tab,row_key,state,metricool')
+        .select('tab,row_key,state,metricool,draft_id')
         .eq('spreadsheet_id', spreadsheetId)
         .eq('state', 'prepared')
         .limit(2000)
@@ -46,6 +46,24 @@ export async function GET() {
       entries.map((e) => ({ tab: e.tab, row: e.row, title: e.title, videoLink: e.videoLink, networks: e.networks })),
       (runs.data || []) as TickRun[],
     );
+    // When each row's existing posts go out, from the posts table, so a row
+    // answered "already has" says Facebook Fri 7 Nov 17:00 rather than only
+    // "already has Facebook" — the first question a person asks next.
+    const draftIds = Array.from(new Set(rows.map((r) => r.draftId).filter((id): id is string => Boolean(id))));
+    const have = new Map<string, { network: string; at: string; status: string }[]>();
+    if (draftIds.length) {
+      const posts = await supabaseAdmin()
+        .from('posts')
+        .select('draft_id,providers,publication_date,status')
+        .in('draft_id', draftIds)
+        .limit(2000)
+        .then((x) => x, () => ({ data: null, error: null }));
+      for (const p of (posts.data || []) as { draft_id: string; providers: string[] | null; publication_date: string | null; status: string | null }[]) {
+        const list = have.get(p.draft_id) || [];
+        for (const n of p.providers || []) list.push({ network: String(n).toLowerCase(), at: String(p.publication_date || ''), status: String(p.status || '') });
+        have.set(p.draft_id, list);
+      }
+    }
     const now = new Date();
     const w = wallClockInTz(now, SCHEDULE_TZ);
     const p = (n: number) => String(n).padStart(2, '0');
@@ -54,7 +72,10 @@ export async function GET() {
       // Ready first, newest row first; the rows already done follow so a
       // person sees them answered rather than missing. Old rows where a tick
       // is a record of something published by hand are a count.
-      rows: rows.filter((r) => r.state !== 'not_prepared').sort((a, b) => (a.state === b.state ? b.row - a.row : a.state === 'ready' ? -1 : 1)),
+      rows: rows
+        .filter((r) => r.state !== 'not_prepared')
+        .sort((a, b) => (a.state === b.state ? b.row - a.row : a.state === 'ready' ? -1 : 1))
+        .map((r) => ({ ...r, have: (r.draftId && have.get(r.draftId)) || [] })),
       notPrepared: rows.filter((r) => r.state === 'not_prepared').length,
       slotTimes: postTimes(),
       timezone: SCHEDULE_TZ,

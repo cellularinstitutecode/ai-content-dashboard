@@ -25,6 +25,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { reportError } from '@/lib/report';
 import { resolveOwner } from '@/lib/sweep-owner';
 import { addTickedNetworks } from '@/lib/video-ticks';
+import { instantTicksEnabled } from '@/lib/tick-add';
 
 export const runtime = 'nodejs';
 // The hand-off may have to copy a video into Metricool before a draft that
@@ -63,6 +64,17 @@ export async function POST(req: NextRequest) {
   // clock. The sheet's "Prepare checked boxes" panel sends it; the edit trigger
   // does not, and the hand-off then picks the next free slot.
   const publishAt = typeof body.publishAt === 'string' && body.publishAt.trim() ? body.publishAt.trim() : null;
+  // No time named: held, not sent. The sheet's edit trigger calls this the
+  // moment a box is ticked; the first time the clinic used the ticks that put
+  // two posts at slots nobody chose and left the panel nothing to schedule.
+  // The box says where; the dashboard's Prepare checked boxes says when.
+  // VIDEO_TICK_INSTANT=on restores the old send-at-the-next-free-slot.
+  if (!publishAt && !instantTicksEnabled()) {
+    return NextResponse.json({
+      ok: true, action: 'needs_time', tab, row,
+      message: 'Row ' + row + ' is ticked. Pick the day and time in the dashboard’s Video Library → Prepare checked boxes, and it is sent then.',
+    }, { headers: { 'cache-control': 'no-store' } });
+  }
 
   try {
     const out = await addTickedNetworks({ userId, tab, row, publishAt, budgetMs: 270_000 - (Date.now() - started) });
