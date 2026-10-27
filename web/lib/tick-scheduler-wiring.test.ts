@@ -32,7 +32,11 @@ test('a tick that names no time is held by the route, unless VIDEO_TICK_INSTANT 
 test('the panel pre-selects only the rows just ticked in the sheet, and can move a finished row’s posts', () => {
   const c = src('components/TickScheduler.tsx');
   assert.match(c, /setChosen\(new Set\(j\.rows\.filter\(\(x\) => x\.pending && /);
-  assert.match(c, /action: 'reschedule', publication_date: iso/);
+  // PATCH, the method the posts route's reschedule handler answers to; it has no POST.
+  assert.match(c, /fetch\('\/api\/posts', \{ method: 'PATCH'[^\n]*action: 'reschedule', publication_date: iso/);
+  const posts = src('app/api/posts/route.ts');
+  assert.match(posts, /export async function PATCH/);
+  assert.doesNotMatch(posts, /export async function POST/);
   // Published posts are never moved.
   assert.match(c, /p\.status !== 'published'/);
   const route = src('app/api/videos/ticks/route.ts');
