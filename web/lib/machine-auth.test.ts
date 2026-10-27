@@ -156,6 +156,7 @@ test('the machine-path list is exactly the routes middleware exempts', () => {
     '/api/metricool/sync',
     '/api/autopilot/tick',
     '/api/videos/watch',
+    '/api/videos/row',
   ]);
   assert.equal(isMachinePath('/api/drafts'), false);
   assert.equal(isMachinePath('/api/autopilot/tick'), true);
@@ -163,6 +164,14 @@ test('the machine-path list is exactly the routes middleware exempts', () => {
 
 test('the video sweep needs the real cron secret, not merely a bearer header', () => {
   const path = '/api/videos/watch';
+  assert.equal(isMachineRequest(path, headers({ authorization: 'Bearer s3cret' }), 's3cret'), true);
+  assert.equal(isMachineRequest(path, headers({ authorization: 'Bearer guess' }), 's3cret'), false);
+  assert.equal(isMachineRequest(path, headers({ authorization: 'Bearer s3cret' }), undefined), false);
+  assert.equal(isMachineRequest(path, headers({}), 's3cret'), false);
+});
+
+test('the sheet\u2019s per-row trigger is held to the same bearer as the sweep', () => {
+  const path = '/api/videos/row';
   assert.equal(isMachineRequest(path, headers({ authorization: 'Bearer s3cret' }), 's3cret'), true);
   assert.equal(isMachineRequest(path, headers({ authorization: 'Bearer guess' }), 's3cret'), false);
   assert.equal(isMachineRequest(path, headers({ authorization: 'Bearer s3cret' }), undefined), false);

@@ -70,7 +70,7 @@ export type VideoEvent = (typeof VIDEO_EVENTS)[number];
  * "a video was prepared" and "the assistant re-prepared a video a person had
  * already given up on".
  */
-export const VIDEO_ACTORS = ['sweep', 'button', 'batch', 'assistant', 'revive', 'picker', 'unknown'] as const;
+export const VIDEO_ACTORS = ['sweep', 'button', 'batch', 'assistant', 'revive', 'picker', 'sheet', 'unknown'] as const;
 
 export type VideoActor = (typeof VIDEO_ACTORS)[number];
 
@@ -161,6 +161,8 @@ const ACTOR_WORDS: Record<VideoActor, string> = {
   assistant: 'the assistant',
   revive: 'the automatic retry',
   picker: 'attaching it to a post',
+  /** A box ticked in the sheet after the row was prepared (lib/video-ticks.ts). */
+  sheet: 'a tick in the sheet',
   unknown: 'something',
 };
 
