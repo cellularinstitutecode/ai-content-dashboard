@@ -27,6 +27,7 @@ import type { EvidenceItem } from '@/lib/evidence-parse';
 import { TITLE_SYSTEM, readTitle, titlePrompt } from '@/lib/title-writer';
 import { CLAIMS_SYSTEM, claimsPrompt, parseClaims, type CheckableClaim } from '@/lib/claim-extract';
 import { CLAIM_REWRITE_STRICT_SYSTEM, CLAIM_REWRITE_SYSTEM, NO_CLAIM_SYSTEM, RELEVANCE_SYSTEM, acceptNoClaim, acceptRewrite, claimRewritePrompt, noClaimPrompt, parseRelevance, relevancePrompt, type StudyForRewrite } from '@/lib/claim-rewrite';
+import { TAILOR_SYSTEM, acceptTailored, tailorPrompt } from '@/lib/network-copy';
 import { CAN_DO_RULE, COMMAND_ONLY_RULES, CONVERSATION_RULE, NEXT_STEP_RULE } from '@/lib/assistant-standby';
 import { KEYWORDS_SYSTEM, derivedKeywords, fallbackBriefPrompt, fallbackStamp, hasKeywords, keywordsPrompt, parseKeywords } from '@/lib/keyword-fallback';
 
@@ -1065,6 +1066,19 @@ export async function rewriteWithoutClaims(text: string, flagged: readonly strin
   if (!copy) return { text: null, flagged: [] };
   const raw = await editWithModel(NO_CLAIM_SYSTEM, noClaimPrompt(copy, flagged, sentences), 4000, timeoutMs, 'ai:rewrite-no-claim');
   return raw == null ? { text: null, flagged: [] } : acceptNoClaim(copy, raw);
+}
+
+/**
+ * A prepared video's copy, adapted for one network it has no copy of its own
+ * for (lib/network-copy.ts): Facebook, X or YouTube. Never throws; null when
+ * no model answered or the answer is not one to take, and the caller then
+ * sends the feed what it always sent.
+ */
+export async function tailorCopy(args: { network: string; source: string; title?: string | null; timeoutMs?: number }): Promise<string | null> {
+  const source = String(args.source || '').trim();
+  if (!source) return null;
+  const raw = await editWithModel(TAILOR_SYSTEM, tailorPrompt(args.network, source, args.title), 1200, args.timeoutMs ?? 20_000, 'ai:tailor-copy');
+  return raw == null ? null : acceptTailored(args.network, source, raw);
 }
 
 export async function extractCheckableClaims(text: string, timeoutMs = 15000): Promise<CheckableClaim[]> {

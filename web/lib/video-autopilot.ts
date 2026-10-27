@@ -43,8 +43,11 @@ import { megabytes, routeFor } from '@/lib/media-route';
 import { canWriteCopy } from '@/lib/prepare-budget';
 import { isMissingSchema } from '@/lib/schema-probe';
 import { columnFor, pick, tableFromRows } from '@/lib/sheet-table';
-import { VIDEO_NETWORK_COLUMNS, publishedNetworks } from '@/lib/sheet-ticks';
-import { prepareVideo, saveVideoDraft, type PrepareOk, stampDraftVideoMeta } from '@/lib/video-prepare';
+import { VIDEO_NETWORK_COLUMNS, publishedNetworks, tickedNetworks } from '@/lib/sheet-ticks';
+import { prepareVideo, saveVideoDraft, type PrepareOk, stampDraftTailored, stampDraftVideoMeta } from '@/lib/video-prepare';
+import { copyForNetwork, networksToTailor } from '@/lib/network-copy';
+import { tailorForNetworks } from '@/lib/video-tailor';
+import { avisoForUser } from '@/lib/compliance-gate';
 import { EXISTING_COPY_PER_RUN, existingCopyText, isExistingCopyRow, queueExistingEnabled } from '@/lib/existing-copy';
 import { CITE_EXISTING_BUDGET_MS, citeExistingCopy, type CitedCopy } from '@/lib/existing-copy-cite';
 import { attachPendingVideos, pendingVideoPosts } from '@/lib/video-attach';
@@ -419,7 +422,7 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
       }
       // Where the clinic has said this video goes. Ticks only — a FALSE
       // checkbox is Google's default, not a destination.
-      const rowNetworks = VIDEO_NETWORKS.filter(([col]) => YES_TICK.test(pick(rec, col))).map(([, n]) => n);
+      const rowNetworks = tickedNetworks(VIDEO_NETWORK_COLUMNS, (col: string) => pick(rec, col));
 
       // Has this row been dealt with before? A prepared row is done. A failed
       // one is retried a few times and then left alone, so a video that simply
@@ -490,15 +493,18 @@ async function sweepVideosInner(opts: SweepOptions): Promise<SweepResult> {
           const copyNow = await cachedPublicCopy(owedFileId);
           if (copyNow) {
             const { data: d } = await admin.from('drafts').select('pack').eq('id', prior.draft_id).maybeSingle().then((x) => x, () => ({ data: null }));
-            const pack = ((d as { pack?: Record<string, unknown> | null } | null)?.pack || {}) as { linkedin?: unknown; tiktok?: unknown; title?: unknown };
+            const pack = ((d as { pack?: Record<string, unknown> | null } | null)?.pack || {}) as { linkedin?: unknown; tiktok?: unknown; title?: unknown; tailored?: unknown };
             const sheetCopy = existingCopyText(pick(rec, 'copy', 'caption'));
             const linkedin = typeof pack.linkedin === 'string' && pack.linkedin.trim() ? pack.linkedin : sheetCopy;
             const tiktok = typeof pack.tiktok === 'string' && pack.tiktok.trim() ? pack.tiktok : sheetCopy;
+            // The per-network copy the first pass wrote, so the owed draft
+            // carries the same text it would have carried then.
+            const tailored = pack.tailored && typeof pack.tailored === 'object' ? (pack.tailored as Partial<Record<string, string>>) : null;
             if (linkedin || tiktok) {
               attachedThisRun++;
               const made = await handOffToMetricool({
                 userId: opts.userId,
-                prepared: { linkedin: linkedin || tiktok, tiktok: tiktok || linkedin, draftId: prior.draft_id, title: typeof pack.title === 'string' ? pack.title : null },
+                prepared: { linkedin: linkedin || tiktok, tiktok: tiktok || linkedin, draftId: prior.draft_id, title: typeof pack.title === 'string' ? pack.title : null, tailored },
                 networks: owedNets,
                 videoLink,
                 title: title || videoLink,
@@ -993,7 +999,7 @@ async function queueExistingCopyRow(a: QueueRowArgs): Promise<{ draftId: string 
   const text = cited.text;
   const citation: QueueCitation = { outcome: cited.outcome, ref: cited.ref, note: cited.note };
   const fileId = parseDriveFileId(a.videoLink);
-  const rowNetworks = VIDEO_NETWORKS.filter(([col]) => YES_TICK.test(pick(a.rec, col))).map(([, n]) => n);
+  const rowNetworks = tickedNetworks(VIDEO_NETWORK_COLUMNS, (col: string) => pick(a.rec, col));
 
   let draftId: string | null = null;
   try {
@@ -1203,7 +1209,7 @@ export async function completeRow(opts: {
   const usedWidth = rows.reduce((w, r) => Math.max(w, (r || []).length), 0);
   const columns = await ensureAiColumns(spreadsheetId, opts.tab, headerRow, header, usedWidth);
   const copyCol = columnFor(header, 'copy', 'caption');
-  const rowNetworks = VIDEO_NETWORKS.filter(([col]) => YES_TICK.test(pick(found.rec, col))).map(([, n]) => n);
+  const rowNetworks = tickedNetworks(VIDEO_NETWORK_COLUMNS, (col: string) => pick(found.rec, col));
 
   const wrote = await writeRowBack(spreadsheetId, opts.tab, opts.row, {
     ...columns,
@@ -1326,20 +1332,21 @@ export async function completeRow(opts: {
   return { wrote, metricool, status };
 }
 
-/** The sheet's own network columns, and what a tick in one means. */
-const VIDEO_NETWORKS: [string, string][] = [
-  ['linkedin', 'linkedin'], ['tiktok', 'tiktok'], ['x', 'twitter'],
-  ['facebook', 'facebook'], ['instagram', 'instagram'],
-];
-/** A ticked box. Never FALSE — Google writes that into every untouched checkbox. */
-const YES_TICK = /^(x|✓|✔|yes|si|sí|true|posted|done)$/i;
+// The sheet's network columns are read through lib/sheet-ticks.ts, the same
+// seven the published-link rule reads. A local five-column copy lived here
+// until October and left YouTube out of it, so a row ticked YouTube + LinkedIn
+// + TikTok — the sheet's commonest shape — was read as asking for two networks
+// and never got its YouTube draft.
 
 /**
  * Hand the finished copy to Metricool as drafts awaiting approval.
  *
- * LinkedIn and X take the long, insight-led post; the short caption with the
- * hashtags, REF and AVISO is what TikTok, Instagram and Facebook get — the
- * same split the Video Library's two boxes have always had.
+ * Each network gets the copy written for it (lib/network-copy.ts): LinkedIn
+ * the long, insight-led post; TikTok and Instagram the short caption with the
+ * hashtags, REF and AVISO — the Video Library's two boxes — and Facebook, X
+ * and YouTube an adaptation of those written at this hand-off, for the
+ * networks the row is actually going to (lib/video-tailor.ts). When no
+ * adaptation can be made, the network is sent what it always was.
  *
  * A network that needs a video only gets a draft when there is a URL Metricool
  * can actually fetch, which means copying the reel into the app's own Drive
@@ -1354,6 +1361,8 @@ export async function handOffToMetricool(args: {
     draftId: string | null;
     /** The drafted public title (lib/video-prepare.ts). Absent for a row whose copy a person wrote. */
     title?: string | null;
+    /** Copy already written for one network on an earlier pass (the draft pack's `tailored`), so it is not written twice. */
+    tailored?: Partial<Record<string, string>> | null;
   };
   networks: string[];
   videoLink: string;
@@ -1373,6 +1382,7 @@ export async function handOffToMetricool(args: {
   budgetMs?: number;
 }): Promise<PublishOutcome[]> {
   const { userId, prepared, networks, videoLink, title: sheetTitle, format, sheetYoutube, published = [] } = args;
+  const enteredAt = Date.now();
   // The drafted title when there is one, else the sheet cell. Two of the three
   // callers already pass the drafted title as `title` too, so for them this is
   // a no-op; it makes the rule hold for any caller rather than for the ones
@@ -1473,6 +1483,33 @@ export async function handOffToMetricool(args: {
     const message = e instanceof Error ? e.message : 'The posting calendar could not be read.';
     return [...out, ...chosen.map((network) => ({ network, ok: false as const, reason: 'metricool_error' as const, message }))];
   }
+  // Copy for the networks that have none of their own — only the ones a draft
+  // is about to be made for, so a row ticked LinkedIn and TikTok costs nothing
+  // here. Written once and kept on the draft; a later pass reads it back
+  // through `prepared.tailored`. Fail-open: a network this could not write
+  // for is sent what it always was.
+  let tailored: Partial<Record<string, string>> = { ...(prepared.tailored || {}) };
+  const owedCopy = networksToTailor(chosen, tailored);
+  if (owedCopy.length) {
+    try {
+      const made = await tailorForNetworks({
+        networks: owedCopy,
+        linkedin: prepared.linkedin,
+        tiktok: prepared.tiktok,
+        title,
+        aviso: await avisoForUser(userId),
+        // What is left after the video copy above, when the caller is keeping a clock.
+        budgetMs: typeof args.budgetMs === 'number' ? args.budgetMs - (Date.now() - enteredAt) : undefined,
+      });
+      if (Object.keys(made).length) {
+        tailored = { ...tailored, ...made };
+        void stampDraftTailored(prepared.draftId, made);
+      }
+    } catch (e) {
+      reportError('video-sweep:tailor', e, { networks: owedCopy.join(',') });
+    }
+  }
+
   const reserved = args.publicationDate ? new Date(args.publicationDate) : null;
   for (const network of chosen) {
     const slot = reserved && Number.isFinite(reserved.getTime()) ? reserved : nextFreeSlot(taken, now);
@@ -1483,7 +1520,7 @@ export async function handOffToMetricool(args: {
     // Claim the slot locally too, so two networks in the same run do not both
     // take it — takenSlots was read once, before any of this was written.
     taken.add(slot.toISOString());
-    const text = network === 'linkedin' || network === 'twitter' ? prepared.linkedin : prepared.tiktok;
+    const text = copyForNetwork(network, { linkedin: prepared.linkedin, tiktok: prepared.tiktok, tailored });
 
     // Too long for this network? Say so instead of sending it. Metricool would
     // reject it anyway, and trimming to fit would cut the REF and AVISO lines,

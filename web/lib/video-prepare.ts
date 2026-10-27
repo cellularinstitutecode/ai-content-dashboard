@@ -111,6 +111,32 @@ export async function stampDraftVideoMeta(draftId: string | null | undefined, me
   if (upErr) reportError('videos:stamp-meta-write', upErr, { draftId: id });
 }
 
+/**
+ * Keep the copy written for one network on the draft's pack, under `tailored`.
+ *
+ * Written when the hand-off makes it (lib/video-tailor.ts), so a later pass —
+ * the sweep attaching a video that landed after the row was prepared — sends
+ * the same Facebook or YouTube text rather than writing it again, and so the
+ * library shows what each network was actually sent. Merged, never replaced:
+ * a pass that wrote only X must not lose the YouTube text an earlier one
+ * wrote. Best-effort; never throws.
+ */
+export async function stampDraftTailored(draftId: string | null | undefined, tailored: Partial<Record<string, string>>): Promise<void> {
+  const id = String(draftId || '').trim();
+  const entries = Object.entries(tailored || {}).filter(([, v]) => typeof v === 'string' && v.trim());
+  if (!id || !entries.length) return;
+  const admin = supabaseAdmin();
+  const { data, error } = await admin.from('drafts').select('pack').eq('id', id).maybeSingle()
+    .then((x) => x, (e: unknown) => ({ data: null, error: e as { message?: string } }));
+  if (error || !data) { if (error) reportError('videos:stamp-tailored-read', error, { draftId: id }); return; }
+  const pack = ((data as { pack?: Record<string, unknown> | null }).pack || {}) as Record<string, unknown>;
+  const prior = (pack.tailored && typeof pack.tailored === 'object' ? pack.tailored : {}) as Record<string, unknown>;
+  const next = { ...pack, tailored: { ...prior, ...Object.fromEntries(entries) } };
+  const { error: upErr } = await admin.from('drafts').update({ pack: next, updated_at: new Date().toISOString() }).eq('id', id)
+    .then((x) => x, (e: unknown) => ({ error: e as { message?: string } }));
+  if (upErr) reportError('videos:stamp-tailored-write', upErr, { draftId: id });
+}
+
 export type PrepareOk = {
   ok: true;
   draftId: string | null;
