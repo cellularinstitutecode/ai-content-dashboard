@@ -266,6 +266,20 @@ done
 Runs are idempotent, so stopping and restarting this costs nothing: a row
 already prepared is skipped on sight.
 
+## Prepare checked boxes, from the dashboard
+
+The Video Library has a **Prepare checked boxes** button, above the videos
+table. It needs nothing installed in the sheet. Tick the network boxes on a
+row in the sheet — FACEBOOK, INSTAGRAM, YOUTUBE, LINKEDIN, TIKTOK, X — then
+press the button: the panel lists every ticked row that is still owed a post
+(`/api/videos/ticks`), shows the month and the clinic's slot times, and sends
+the rows you choose at the day and time you pick (`/api/videos/row` with
+`publishAt`, the same door as the sheet's script below). The first row gets
+the time as picked; a row after it, or a slot already taken, moves to the next
+free slot and the answer says so. A network the row already has is left alone.
+Rows must be prepared (they have COPY); ticks on rows outside the pipeline are
+counted, not listed.
+
 ## Making it instant
 
 The cron is the safety net. Three things should happen from inside the sheet,
@@ -449,5 +463,6 @@ whole diagnosis: copy the **service_role** key from Supabase → Project Setting
 | `web/app/api/videos/watch/route.ts` | The trigger: cron, Apps Script, or a person |
 | `web/app/api/videos/row/route.ts` | A row's ticked networks sent from the sheet, at the time the panel chose (`lib/video-ticks.ts`; which networks and which slot in `lib/tick-add.ts`) |
 | `web/scripts/sheet-apps-script/` | The sheet's script: the Dashboard menu, the "Prepare checked boxes" panel, the edit trigger |
+| `web/components/TickScheduler.tsx` | The same panel in the dashboard's Video Library, listing rows from `app/api/videos/ticks` (rule in `lib/tick-rows.ts`) |
 | `web/lib/video-slot.ts` | Which networks, and which posting slot (unit-tested) |
 | `web/lib/video-publish.ts` | Puts one post into Metricool's review queue |
