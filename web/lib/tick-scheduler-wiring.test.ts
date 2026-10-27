@@ -40,3 +40,11 @@ test('the panel pre-selects only the rows just ticked in the sheet, and can move
   assert.match(route, /pendingTicks\(lines\)/);
 });
 
+
+test('after a Send the answer stays on screen: a Success / Not done banner with Open Metricool, and the re-read keeps the lines', () => {
+  const c = src('components/TickScheduler.tsx');
+  assert.match(c, /void load\(\{ keepResults: true \}\);/);
+  assert.match(c, /if \(!opts\.keepResults\) \{ setResults\(\[\]\); setOutcome\(null\); \}/);
+  assert.match(c, /href=\{metricoolPlannerUrl\(\)\}/);
+  assert.match(c, /'✓ Success'/);
+});

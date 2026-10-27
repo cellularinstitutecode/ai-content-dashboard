@@ -21,11 +21,21 @@ import { useState } from 'react';
 import { announce } from '@/components/refreshBus';
 import { friendlyErrorFromResponse } from '@/lib/friendly-error';
 import { scheduleInstantFromInput } from '@/lib/schedule-clock';
+import { metricoolPlannerUrl } from '@/lib/metricool-links';
 
 type Post = { id: string; network: string; at: string; status: string };
 type Row = { tab: string; row: number; title: string; ticked: string[]; owed: string[]; state: 'ready' | 'nothing_new'; have: Post[]; pending: boolean; tickedAt: string | null };
 type Listing = { rows: Row[]; notPrepared: number; slotTimes: string[]; timezone: string; today: string; now: string };
 type Result = { key: string; ok: boolean; text: string };
+/** The last Send, summed up: shown as one green or red banner above the per-row lines. */
+export type Outcome = { ok: boolean; done: number; failed: number; when: string };
+
+/** One line for the banner. `done` counts rows that went or moved; `failed`, rows that did not. */
+export function summarise(results: readonly { ok: boolean }[], when: string): Outcome {
+  const done = results.filter((r) => r.ok).length;
+  const failed = results.length - done;
+  return { ok: results.length > 0 && failed === 0, done, failed, when };
+}
 
 const LABEL: Record<string, string> = { youtube: 'YouTube', linkedin: 'LinkedIn', tiktok: 'TikTok', twitter: 'X', x: 'X', facebook: 'Facebook', instagram: 'Instagram' };
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -82,9 +92,14 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
   const [view, setView] = useState<{ y: number; m: number } | null>(null);
   const [sending, setSending] = useState(false);
   const [results, setResults] = useState<Result[]>([]);
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
 
-  async function load() {
-    setLoading(true); setErr(null); setResults([]);
+  async function load(opts: { keepResults?: boolean } = {}) {
+    setLoading(true); setErr(null);
+    // The re-read after a Send used to clear the Send's own answer, so the
+    // lines saying what went and what was refused vanished before anybody
+    // could read them — "there's no way to know if it was a success".
+    if (!opts.keepResults) { setResults([]); setOutcome(null); }
     try {
       const r = await fetch('/api/videos/ticks');
       if (!r.ok) throw new Error(await friendlyErrorFromResponse(r));
@@ -118,7 +133,7 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
 
   async function send() {
     if (!listing || !day) return;
-    setSending(true); setResults([]);
+    setSending(true); setResults([]); setOutcome(null);
     const publishAt = day + 'T' + time;
     const out: Result[] = [];
     // New posts first, so the time picked is theirs; moved posts follow.
@@ -151,8 +166,10 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
       setResults([...out]);
     }
     setSending(false);
+    setOutcome(summarise(out, fmt(scheduleInstantFromInput(publishAt) || '', listing.timezone) || (day + ' ' + time)));
     announce('posts', 'drafts');
-    void load();
+    // Re-read so a row just sent shows as done — keeping the answer on screen.
+    void load({ keepResults: true });
   }
 
   function shift(n: number) {
@@ -275,6 +292,20 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
                 </button>
                 {sending && <span style={{ fontSize: 12, opacity: .7 }}>A row whose video still has to be copied into Metricool can take a minute.</span>}
               </div>
+              {outcome && (
+                <div role="status" style={{ marginTop: 12, padding: '10px 12px', borderRadius: 10, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', background: outcome.ok ? '#1e8e3e' : outcome.done ? '#f9ab00' : '#d93025', color: '#fff' }}>
+                  <strong style={{ fontSize: 14 }}>
+                    {outcome.ok ? '✓ Success' : outcome.done ? 'Partly done' : '✗ Not done'}
+                  </strong>
+                  <span style={{ fontSize: 13 }}>
+                    {outcome.done ? outcome.done + (outcome.done === 1 ? ' row is' : ' rows are') + ' in Metricool for ' + outcome.when + '.' : 'Nothing changed in Metricool.'}
+                    {outcome.failed ? ' ' + outcome.failed + (outcome.failed === 1 ? ' row was' : ' rows were') + ' refused — the reason is below.' : ''}
+                  </span>
+                  <a href={metricoolPlannerUrl()} target="_blank" rel="noreferrer" style={{ ...btn, background: '#fff', color: outcome.ok ? '#1e8e3e' : '#1d1d1f', textDecoration: 'none', marginLeft: 'auto' }}>
+                    Open Metricool
+                  </a>
+                </div>
+              )}
               {results.length > 0 && (
                 <div style={{ marginTop: 10, display: 'grid', gap: 4 }}>
                   {results.map((r) => <div key={r.key} style={{ padding: '6px 8px', borderRadius: 6, fontSize: 13, background: r.ok ? '#e6f4ea' : '#fce8e6' }}>{r.text}</div>)}
