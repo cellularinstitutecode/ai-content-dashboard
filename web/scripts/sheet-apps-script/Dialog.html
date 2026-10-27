@@ -1,0 +1,175 @@
+<!doctype html>
+<!-- The "Prepare checked boxes" panel: a month to pick the day, a time on the
+     clinic's clock, the selected rows and what each is ticked for, and the
+     dashboard's answer per row. Served by Code.gs prepareCheckedBoxes(). -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px 18px; font: 13px/1.4 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: #202124; background: #fff; }
+  h2 { font-size: 14px; margin: 0 0 4px; }
+  .muted { color: #5f6368; }
+  .rows { border: 1px solid #dadce0; border-radius: 8px; padding: 8px 10px; margin: 10px 0 14px; max-height: 120px; overflow: auto; }
+  .row { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; }
+  .row b { white-space: nowrap; }
+  .row .nets { color: #1a73e8; white-space: nowrap; }
+  .row .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .cal { border: 1px solid #dadce0; border-radius: 8px; padding: 8px; }
+  .cal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .cal-head button { border: 0; background: #f1f3f4; border-radius: 6px; width: 28px; height: 28px; cursor: pointer; font-size: 14px; }
+  .days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+  .days span { text-align: center; font-size: 11px; color: #5f6368; padding: 2px 0; }
+  .days button { border: 0; background: transparent; border-radius: 6px; height: 30px; cursor: pointer; font-size: 12px; }
+  .days button:hover { background: #f1f3f4; }
+  .days button:disabled { color: #bdc1c6; cursor: default; background: transparent; }
+  .days button.today { font-weight: 700; }
+  .days button.picked { background: #1a73e8; color: #fff; }
+  .time { border: 1px solid #dadce0; border-radius: 8px; padding: 10px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 10px; }
+  .chips button { border: 1px solid #dadce0; background: #fff; border-radius: 16px; padding: 4px 12px; cursor: pointer; }
+  .chips button.picked { background: #1a73e8; border-color: #1a73e8; color: #fff; }
+  input[type=time] { font: inherit; padding: 5px 8px; border: 1px solid #dadce0; border-radius: 6px; }
+  .summary { margin: 14px 0 10px; font-size: 13px; }
+  .actions { display: flex; gap: 10px; align-items: center; }
+  .send { background: #1a73e8; color: #fff; border: 0; border-radius: 6px; padding: 9px 18px; font: inherit; font-weight: 600; cursor: pointer; }
+  .send:disabled { background: #a8c7fa; cursor: default; }
+  .results { margin-top: 12px; }
+  .results div { padding: 6px 8px; border-radius: 6px; margin-bottom: 4px; background: #f1f3f4; }
+  .results .ok { background: #e6f4ea; }
+  .results .bad { background: #fce8e6; }
+</style>
+</head>
+<body>
+  <h2>Prepare checked boxes</h2>
+  <div class="muted" id="intro">Reading the selected rows…</div>
+  <div class="rows" id="rows"></div>
+
+  <div class="grid">
+    <div class="cal">
+      <div class="cal-head">
+        <button id="prev" title="Previous month">‹</button>
+        <b id="month"></b>
+        <button id="next" title="Next month">›</button>
+      </div>
+      <div class="days" id="days"></div>
+    </div>
+    <div class="time">
+      <div><b>Time</b> <span class="muted" id="tz"></span></div>
+      <div class="chips" id="chips"></div>
+      <label class="muted">Or any time: <input type="time" id="custom" step="300"></label>
+    </div>
+  </div>
+
+  <div class="summary" id="summary"></div>
+  <div class="actions">
+    <button class="send" id="send" disabled>Send to Metricool</button>
+    <span class="muted" id="busy"></span>
+  </div>
+  <div class="results" id="results"></div>
+
+<script>
+  var state = { tab: '', rows: [], day: null, time: null, view: null, today: '', now: '' };
+  var MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var DOW = ['Su','Mo','Tu','We','Th','Fr','Sa'];
+  var $ = function (id) { return document.getElementById(id); };
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  var key = function (y, m, d) { return y + '-' + pad(m + 1) + '-' + pad(d); };
+
+  google.script.run.withSuccessHandler(init).withFailureHandler(fail).checkedRowsInSelection();
+
+  function fail(err) { $('intro').textContent = 'Could not read the sheet: ' + (err && err.message || err); }
+
+  function init(data) {
+    if (data.error) { $('intro').textContent = data.error; return; }
+    state.tab = data.tab; state.rows = data.rows; state.today = data.today; state.now = data.now;
+    var t = data.today.split('-');
+    state.view = { y: Number(t[0]), m: Number(t[1]) - 1 };
+    $('tz').textContent = '(' + data.tz + ')';
+    if (!state.rows.length) {
+      $('intro').textContent = 'No ticked rows in the selection. Tick the network boxes on a row, select that row (click its number), then open this again.';
+      $('rows').style.display = 'none';
+    } else {
+      $('intro').textContent = state.rows.length + (state.rows.length === 1 ? ' row' : ' rows') + ' selected on “' + state.tab + '”. Each goes to the networks it is ticked for; a network the row already has is left alone.';
+      $('rows').innerHTML = state.rows.map(function (r) {
+        return '<div class="row"><b>Row ' + r.row + '</b><span class="title">' + esc(r.title || '(no title)') + '</span><span class="nets">' + r.networks.map(labelOf).join(', ') + '</span></div>';
+      }).join('');
+    }
+    data.slotTimes.forEach(function (tm) {
+      var b = document.createElement('button'); b.textContent = tm; b.onclick = function () { pickTime(tm, b); }; $('chips').appendChild(b);
+    });
+    $('custom').onchange = function () { pickTime($('custom').value, null); };
+    $('prev').onclick = function () { shift(-1); };
+    $('next').onclick = function () { shift(1); };
+    $('send').onclick = send;
+    render();
+  }
+
+  function shift(n) {
+    var m = state.view.m + n, y = state.view.y;
+    if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; }
+    state.view = { y: y, m: m }; render();
+  }
+
+  function render() {
+    var y = state.view.y, m = state.view.m;
+    $('month').textContent = MONTHS[m] + ' ' + y;
+    var first = new Date(y, m, 1).getDay();
+    var count = new Date(y, m + 1, 0).getDate();
+    var html = DOW.map(function (d) { return '<span>' + d + '</span>'; }).join('');
+    for (var i = 0; i < first; i++) html += '<i></i>';
+    for (var d = 1; d <= count; d++) {
+      var k = key(y, m, d);
+      var past = k < state.today;
+      html += '<button data-k="' + k + '"' + (past ? ' disabled' : '') + ' class="' + (k === state.today ? 'today ' : '') + (k === state.day ? 'picked' : '') + '">' + d + '</button>';
+    }
+    $('days').innerHTML = html;
+    Array.prototype.forEach.call($('days').querySelectorAll('button'), function (b) {
+      b.onclick = function () { state.day = b.getAttribute('data-k'); render(); };
+    });
+    summary();
+  }
+
+  function pickTime(tm, chip) {
+    if (!/^\d{2}:\d{2}$/.test(tm || '')) return;
+    state.time = tm;
+    Array.prototype.forEach.call($('chips').querySelectorAll('button'), function (b) { b.className = b === chip ? 'picked' : ''; });
+    if (!chip) { /* a custom time */ } else { $('custom').value = ''; }
+    summary();
+  }
+
+  function summary() {
+    var ready = state.day && state.time && state.rows.length;
+    var inPast = state.day === state.today && state.time && state.time <= state.now;
+    if (!state.rows.length) $('summary').textContent = '';
+    else if (!state.day) $('summary').textContent = 'Pick a day.';
+    else if (!state.time) $('summary').textContent = 'Pick a time.';
+    else if (inPast) $('summary').textContent = 'That time has already gone today. Pick a later one.';
+    else $('summary').innerHTML = 'Posts go out <b>' + pretty(state.day) + ' at ' + state.time + '</b>' + (state.rows.length > 1 ? ', the first row at that time and each next row at the following free slot' : '') + '.';
+    $('send').disabled = !ready || inPast;
+  }
+
+  function send() {
+    $('send').disabled = true; $('busy').textContent = 'Sending… the video may need copying into Metricool, which can take a minute per row.';
+    $('results').innerHTML = '';
+    var publishAt = state.day + 'T' + state.time;
+    google.script.run.withSuccessHandler(done).withFailureHandler(function (e) { $('busy').textContent = ''; $('results').innerHTML = '<div class="bad">' + esc(e && e.message || String(e)) + '</div>'; $('send').disabled = false; })
+      .sendCheckedRows(state.tab, state.rows.map(function (r) { return r.row; }), publishAt);
+  }
+
+  function done(out) {
+    $('busy').textContent = '';
+    if (out.error) { $('results').innerHTML = '<div class="bad">' + esc(out.error) + '</div>'; $('send').disabled = false; return; }
+    $('results').innerHTML = out.results.map(function (r) {
+      return '<div class="' + (r.ok ? 'ok' : (r.action === 'nothing_new' ? '' : 'bad')) + '">' + esc(r.text) + '</div>';
+    }).join('');
+    $('busy').textContent = 'Done. The posts are on the dashboard calendar and in Metricool.';
+  }
+
+  function pretty(k) { var p = k.split('-'); return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])).toDateString(); }
+  function labelOf(n) { return { youtube: 'YouTube', linkedin: 'LinkedIn', tiktok: 'TikTok', x: 'X', facebook: 'Facebook', instagram: 'Instagram' }[n] || n; }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+</script>
+</body>
+</html>

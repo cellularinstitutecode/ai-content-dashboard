@@ -62,16 +62,18 @@ published something.
   LinkedIn and TikTok. EMAIL is a column, not a network. A column holding the
   live URL counts as *already posted there*, not as a tick. TikTok is skipped
   for a landscape video (FORMATO); the other five go whatever the shape.
-- **A box ticked after the row was prepared still counts — the moment it is
-  clicked.** The sweep reads the ticks once, when it prepares the row, and
-  never again; so the sheet's edit trigger (below) sends every edit in a
-  network column to `/api/videos/row`, which gives each ticked network that has
-  no draft yet one, from the copy already on the row's draft
-  (`lib/video-ticks.ts`). No duplicates: a network the row's record says was
-  sent, or that Metricool already holds for this video, is left alone. Nothing
-  is deleted — an unticked box changes nothing; withdraw a draft on the
-  dashboard. A row that has not been prepared yet is left to the link trigger
-  and the sweep, which own transcription and copy.
+- **A box ticked after the row was prepared still counts.** The sweep reads
+  the ticks once, when it prepares the row, and never again; so the sheet's
+  own **Prepare checked boxes** panel (below) sends the selected rows to
+  `/api/videos/row` with the day and time you pick, and each ticked network
+  that has no draft yet gets one, from the copy already on the row's draft
+  (`lib/video-ticks.ts`). With `INSTANT_TICKS=on` the edit trigger sends a
+  tick the moment it is clicked instead, at the next free slot. No duplicates:
+  a network the row's record says was sent, or that Metricool already holds
+  for this video, is left alone. Nothing is deleted — an unticked box changes
+  nothing; withdraw a draft on the dashboard. A row that has not been prepared
+  yet is left to the link trigger and the sweep, which own transcription and
+  copy.
 - **Each network gets copy written for it** (`lib/network-copy.ts`): LinkedIn
   the long, insight-led post; TikTok and Instagram the short caption with the
   hashtags, REF and AVISO; Facebook, X and YouTube an adaptation of those,
@@ -266,128 +268,76 @@ already prepared is skipped on sight.
 
 ## Making it instant
 
-The cron is the safety net. Two things should happen the moment somebody acts
-in the sheet, and one script does both:
+The cron is the safety net. Three things should happen from inside the sheet,
+and one script project does all three (`web/scripts/sheet-apps-script/`,
+two files: `Code.gs` and `Dialog.html`):
 
 - **a link pasted** → the sweep runs, and the row is prepared within a minute;
-- **a box ticked** in a network column (YOUTUBE, LINKEDIN, TIKTOK, X, FACEBOOK,
-  INSTAGRAM) on a row that is already prepared → that network gets its draft,
-  right then, with no duplicates (`/api/videos/row`).
+- **boxes ticked, then "Prepare checked boxes"** → a panel opens with a month
+  and a time; the rows you selected go to Metricool for the networks they are
+  ticked for, at the day and time you picked (`/api/videos/row` with
+  `publishAt`). The first row gets the time as picked; when that slot is
+  already taken — a second row sent from the same panel, or a post already
+  there — the next free slot after it is used, and the answer says so. A
+  network the row already has is left alone, so pressing it twice sends
+  nothing twice. A time already gone is refused before any copy is written.
+- **a box ticked, sent at once** (optional, `INSTANT_TICKS=on`) → the edit
+  trigger sends that row the moment the box is clicked, at the next free slot,
+  without the panel. Off by default, so a tick waits for the button.
 
-Add it to the sheet: **Extensions → Apps Script**, paste, save, then
-**Triggers → Add Trigger → `onSheetEdit` → From spreadsheet → On edit**. It has
-to be an *installable* trigger made that way, not a function merely named
-`onEdit`: a simple trigger is not allowed to call out to the dashboard.
+### Set it up
 
-```javascript
-// Distribución RRSS CHI → the dashboard, as the sheet is edited.
-// Script properties (Project Settings → Script properties):
-//   DASHBOARD_URL  https://YOUR_DOMAIN      (no trailing slash)
-//   CRON_SECRET    the same secret the dashboard uses
-var NETWORK_COLUMNS = ['youtube', 'linkedin', 'tiktok', 'x', 'facebook', 'instagram'];
-var LINK = /^https:\/\/(drive\.google\.com|www\.youtube\.com|youtu\.be)\//;
+1. **Extensions → Apps Script.** Paste `Code.gs` over the default file. Then
+   **File → New → HTML file**, name it `Dialog`, and paste `Dialog.html` into
+   it. Save.
+2. **Project Settings → Script properties:**
 
-function onSheetEdit(e) {
-  if (!e || !e.range) return;
-  var props = PropertiesService.getScriptProperties();
-  var url = props.getProperty('DASHBOARD_URL');
-  var secret = props.getProperty('CRON_SECRET');
-  if (!url || !secret) return;
+   | Property | Value |
+   | --- | --- |
+   | `DASHBOARD_URL` | `https://YOUR_DOMAIN` (no trailing slash) |
+   | `CRON_SECRET` | the same secret the dashboard uses |
+   | `SLOT_TIMES` | optional, `13:00,17:00` — the panel's quick-pick times; keep equal to `VIDEO_AUTOPILOT_TIMES` |
+   | `INSTANT_TICKS` | optional, `on` — send a tick the moment it is clicked |
 
-  var sheet = e.range.getSheet();
-  var header = headerRowOf(sheet);
-  if (!header) return; // not a video tab
+   Keep `CRON_SECRET` in Script properties, never typed into the script body —
+   anyone with view access to the sheet can read the script.
+3. **Triggers → Add Trigger → `onSheetEdit` → From spreadsheet → On edit.** It
+   has to be an *installable* trigger made that way, not a function merely
+   named `onEdit`: a simple trigger is not allowed to call out to the dashboard.
+4. **Reload the sheet.** A **Dashboard** menu appears with **Prepare checked
+   boxes…**. The first use asks you to authorise the script (it reads the sheet
+   and calls the dashboard).
+5. **A button in the corner, if you want one.** Insert → Drawing, draw a button
+   that says *Prepare checked boxes*, place it where you like; then click it,
+   open its ⋮ menu → **Assign script** → type `prepareCheckedBoxes`. It does
+   the same as the menu item.
 
-  // Read the RANGE, not e.value: a pasted row or a dragged fill is how rows
-  // actually get added, and e.value is only set for a single-cell edit.
-  var values = e.range.getValues();
-  var firstCol = e.range.getColumn();
-  var firstRow = e.range.getRow();
-  var pastedLink = false;
-  var tickedRows = {};
-  for (var r = 0; r < values.length; r++) {
-    var row = firstRow + r;
-    if (row <= header.row) continue;
-    for (var c = 0; c < values[r].length; c++) {
-      var v = String(values[r][c] || '');
-      if (LINK.test(v)) pastedLink = true;
-      var name = header.names[firstCol + c - 1];
-      // A tick, not an untick: the dashboard only ever adds.
-      if (name && NETWORK_COLUMNS.indexOf(name) >= 0 && /^(true|x|✓|✔|yes|si|sí)$/i.test(v.trim())) tickedRows[row] = true;
-    }
-  }
-  var rows = Object.keys(tickedRows);
-  if (!pastedLink && !rows.length) return;
+### Using it
 
-  // One at a time: two boxes ticked a second apart must not race each other
-  // into the same row. The dashboard dedupes as well; this keeps it simple.
-  var lock = LockService.getScriptLock();
-  lock.waitLock(120000);
-  try {
-    if (pastedLink) {
-      // Fire and forget: the sweep is idempotent, a duplicate call is harmless
-      // and a dropped one is caught by the cron.
-      report('sweep', UrlFetchApp.fetch(url + '/api/videos/watch', {
-        method: 'post', headers: { Authorization: 'Bearer ' + secret }, muteHttpExceptions: true,
-      }));
-    }
-    for (var i = 0; i < rows.length; i++) {
-      var res = UrlFetchApp.fetch(url + '/api/videos/row', {
-        method: 'post', contentType: 'application/json',
-        headers: { Authorization: 'Bearer ' + secret },
-        payload: JSON.stringify({ tab: sheet.getName(), row: Number(rows[i]) }),
-        muteHttpExceptions: true,
-      });
-      report('row ' + rows[i], res);
-      toast(sheet, Number(rows[i]), res);
-    }
-  } finally {
-    lock.releaseLock();
-  }
-}
+1. Tick the network boxes on the row — FACEBOOK, INSTAGRAM, YOUTUBE, LINKEDIN,
+   TIKTOK, X. The row must already be prepared (it has COPY, written by the
+   sweep or by Prepare); a row that is not answers *not prepared yet*.
+2. Select the row (click its number), or several rows.
+3. **Dashboard → Prepare checked boxes…** (or the button). The panel lists the
+   rows and their networks, shows the month, and the times. Pick a day and a
+   time — on the clinic's clock, whatever your computer's is — and press
+   **Send to Metricool**.
+4. Each row's answer appears in the panel and as a toast in the corner:
+   *sent to Metricool for Tue 3 Nov, 13:00 — Facebook, Instagram*, or why a
+   network was not sent (copy too long for X, no video for TikTok, already
+   there). The posts are on the dashboard calendar and in Metricool, scheduled
+   — the same posts the sweep makes, by the same path (`lib/video-ticks.ts` →
+   `handOffToMetricool` → `lib/video-publish.ts`).
 
-// The header row: the first of the top twenty rows with a LINK VIDEO cell.
-// Returns its 1-based row and the lower-cased names by column index.
-function headerRowOf(sheet) {
-  var top = sheet.getRange(1, 1, Math.min(20, sheet.getLastRow()), sheet.getLastColumn()).getValues();
-  for (var r = 0; r < top.length; r++) {
-    var names = top[r].map(function (h) { return String(h || '').trim().toLowerCase(); });
-    if (names.indexOf('link video') >= 0) return { row: r + 1, names: names };
-  }
-  return null;
-}
+Sending can take up to a minute per row when the video still has to be copied
+into Metricool; a row whose video is already there answers in seconds.
 
-// Say so in the execution log rather than failing silently forever — a wrong
-// URL or a mismatched secret looks exactly like "nothing happened".
-function report(what, res) {
-  if (res.getResponseCode() >= 300) Logger.log(what + ' failed: ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200));
-}
-
-// A line in the corner of the sheet, so the click is seen to have done something.
-function toast(sheet, row, res) {
-  var msg;
-  try {
-    var j = JSON.parse(res.getContentText());
-    if (!j.ok) msg = 'Row ' + row + ': ' + (j.message || j.error || 'failed');
-    else if (j.action === 'added') msg = 'Row ' + row + ': ' + (j.sent.length ? 'drafted for ' + j.sent.join(', ') : 'nothing sent') + (j.refused.length ? ' — not ' + j.refused.map(function (x) { return x.network + ' (' + (x.reason || 'refused') + ')'; }).join(', ') : '');
-    else if (j.action === 'nothing_new') msg = 'Row ' + row + ': every ticked network already has its draft';
-    else if (j.action === 'not_prepared') msg = 'Row ' + row + ': not prepared yet — the ticks are read when it is';
-    else msg = 'Row ' + row + ': ' + j.action.replace(/_/g, ' ');
-  } catch (err) {
-    msg = 'Row ' + row + ': the dashboard answered ' + res.getResponseCode();
-  }
-  SpreadsheetApp.getActive().toast(msg, 'Dashboard', 8);
-}
-```
-
-Keep `CRON_SECRET` in Script properties, never typed into the script body —
-anyone with view access to the sheet can read the script.
-
-To try it without the sheet, the same call from a terminal:
+To try it without the sheet, the same call from a terminal — `publishAt` is
+optional, "YYYY-MM-DDTHH:mm" on the clinic's clock:
 
 ```
 curl -X POST -H "Authorization: Bearer $CRON_SECRET" -H "Content-Type: application/json" \
-     -d '{"tab":"TAB NAME","row":205}' "https://YOUR_DOMAIN/api/videos/row"
+     -d '{"tab":"TAB NAME","row":224,"publishAt":"2026-11-03T13:00"}' "https://YOUR_DOMAIN/api/videos/row"
 ```
 
 ## Costs
@@ -497,6 +447,7 @@ whole diagnosis: copy the **service_role** key from Supabase → Project Setting
 | `web/lib/media-transcript.ts` | Speech-to-text on a Drive file |
 | `web/lib/audio-extract.ts` | Lifts the audio track out of the video first |
 | `web/app/api/videos/watch/route.ts` | The trigger: cron, Apps Script, or a person |
-| `web/app/api/videos/row/route.ts` | A box ticked after the row was prepared: that network's draft, now (`lib/video-ticks.ts`, rule in `lib/tick-add.ts`) |
+| `web/app/api/videos/row/route.ts` | A row's ticked networks sent from the sheet, at the time the panel chose (`lib/video-ticks.ts`; which networks and which slot in `lib/tick-add.ts`) |
+| `web/scripts/sheet-apps-script/` | The sheet's script: the Dashboard menu, the "Prepare checked boxes" panel, the edit trigger |
 | `web/lib/video-slot.ts` | Which networks, and which posting slot (unit-tested) |
 | `web/lib/video-publish.ts` | Puts one post into Metricool's review queue |

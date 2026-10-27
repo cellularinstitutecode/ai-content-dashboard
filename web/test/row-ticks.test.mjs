@@ -162,3 +162,52 @@ test('a row whose copy a person wrote sends that copy when the draft has no text
   assert.deepEqual(out.sent, ['instagram']);
   assert.match(publish.__sent()[0].text, /^Copy a person wrote\./);
 });
+
+// The sheet's "Prepare checked boxes" panel: the same row, with a day and a
+// time on the clinic's clock.
+test('a time chosen in the panel is the time every network of the row is scheduled for', async () => {
+  sheet.__sheet(tab(['youtube', 'linkedin', 'tiktok', 'facebook', 'instagram']));
+  db.__db({ runs: [run([sent('youtube'), sent('linkedin'), sent('tiktok')])], drafts: [draft()] });
+  const out = await addTickedNetworks({ userId: 'u1', tab: 'Videos', row: ROW, publishAt: '2099-11-03T13:00' });
+  assert.equal(out.action, 'added');
+  assert.deepEqual(out.sent.sort(), ['facebook', 'instagram']);
+  // 13:00 in Cancún (UTC-5, no DST) is 18:00Z.
+  assert.equal(out.scheduledFor, '2099-11-03T18:00:00.000Z');
+  assert.equal(out.moved, false);
+  assert.deepEqual(publish.__sent().map((p) => p.publicationDate), ['2099-11-03T18:00:00.000Z', '2099-11-03T18:00:00.000Z']);
+  const ev = register.__events();
+  assert.equal(ev[0].detail.scheduledFor, '2099-11-03T18:00:00.000Z');
+});
+
+test('a chosen time already taken moves to the next free slot after it, and the answer says so', async () => {
+  sheet.__sheet(tab(['youtube', 'linkedin', 'tiktok', 'facebook']));
+  db.__db({ runs: [run([sent('youtube'), sent('linkedin'), sent('tiktok')])], drafts: [draft()] });
+  publish.__taken(['2099-11-03T18:00:00.000Z']);
+  const out = await addTickedNetworks({ userId: 'u1', tab: 'Videos', row: ROW, publishAt: '2099-11-03T13:00' });
+  assert.equal(out.action, 'added');
+  assert.equal(out.moved, true);
+  assert.equal(out.scheduledFor, '2099-11-03T22:00:00.000Z');
+  assert.equal(publish.__sent()[0].publicationDate, '2099-11-03T22:00:00.000Z');
+});
+
+test('a time already gone, or one that cannot be read, is refused before anything is written', async () => {
+  sheet.__sheet(tab(['youtube', 'linkedin', 'tiktok', 'facebook']));
+  db.__db({ runs: [run([sent('youtube'), sent('linkedin'), sent('tiktok')])], drafts: [draft()] });
+  const past = await addTickedNetworks({ userId: 'u1', tab: 'Videos', row: ROW, publishAt: '2020-01-01T13:00' });
+  assert.equal(past.action, 'bad_time');
+  assert.equal(past.reason, 'past');
+  const junk = await addTickedNetworks({ userId: 'u1', tab: 'Videos', row: ROW, publishAt: 'tomorrow' });
+  assert.equal(junk.action, 'bad_time');
+  assert.equal(junk.reason, 'unreadable');
+  assert.deepEqual(sentNetworks(), []);
+  assert.deepEqual(ai.__asked(), [], 'no copy written for a refused time');
+});
+
+test('without a time the hand-off still picks the next free slot, as the edit trigger always has', async () => {
+  sheet.__sheet(tab(['youtube', 'linkedin', 'tiktok', 'facebook']));
+  db.__db({ runs: [run([sent('youtube'), sent('linkedin'), sent('tiktok')])], drafts: [draft()] });
+  const out = await click();
+  assert.equal(out.action, 'added');
+  assert.equal(out.scheduledFor, undefined);
+  assert.ok(publish.__sent()[0].publicationDate);
+});

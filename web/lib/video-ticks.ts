@@ -15,6 +15,13 @@
 //      Facebook text is the one that was written for Facebook, not a rewrite;
 //   4. record the answers next to the old ones, and a register line.
 //
+// Two callers: the sheet's edit trigger, which sends a row as a box is ticked
+// and lets the hand-off pick the next free slot; and the sheet's "Prepare
+// checked boxes" panel (scripts/sheet-apps-script), which sends the rows a
+// person selected with the day and time they chose on the clinic's clock
+// (`publishAt`). Both end in the same hand-off, so a post made from the panel
+// is the same post the sweep would have made, at the time the person picked.
+//
 // It only ADDS. An unticked box deletes nothing: a draft waiting in Metricool
 // is somebody's work, and the dashboard is where it is withdrawn. A row that
 // has not been prepared yet is left to the link trigger and the sweep, which
@@ -32,10 +39,11 @@ import { reportError } from '@/lib/report';
 import { columnFor, pick, tableFromRows } from '@/lib/sheet-table';
 import { VIDEO_NETWORK_COLUMNS, publishedNetworks, tickedNetworks } from '@/lib/sheet-ticks';
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { mergeOutcomes, networksToAdd, type PriorOutcome } from '@/lib/tick-add';
+import { chosenSlot, mergeOutcomes, networksToAdd, type PriorOutcome } from '@/lib/tick-add';
+import { scheduleInstantFromInput } from '@/lib/schedule-clock';
 import { handOffToMetricool } from '@/lib/video-autopilot';
 import { videoKeyFor } from '@/lib/video-event';
-import { type PublishOutcome } from '@/lib/video-publish';
+import { takenSlots, type PublishOutcome } from '@/lib/video-publish';
 import { recordVideoEvent } from '@/lib/video-register';
 import { firstLinkIn, rowKeyFor } from '@/lib/video-row';
 
@@ -44,7 +52,15 @@ const WANTED_HEADERS = ['tipo de video', 'título del video', 'titulo del video'
 
 export type TickAddResult =
   /** Drafts were asked for: `made` holds one answer per network, sent or refused. */
-  | { action: 'added'; tab: string; row: number; title: string; networks: string[]; sent: string[]; refused: { network: string; reason?: string; message?: string }[]; made: PublishOutcome[] }
+  | {
+      action: 'added'; tab: string; row: number; title: string; networks: string[]; sent: string[]; refused: { network: string; reason?: string; message?: string }[]; made: PublishOutcome[];
+      /** The instant the posts were scheduled for, when the caller asked for one (UTC, ISO). */
+      scheduledFor?: string;
+      /** True when the time asked for was already taken and the next free slot was used instead. */
+      moved?: boolean;
+    }
+  /** The time asked for has already gone, could not be read, or the calendar is full after it. */
+  | { action: 'bad_time'; tab: string; row: number; title: string; reason: 'past' | 'full' | 'unreadable'; message: string }
   /** Every ticked network already has its draft. */
   | { action: 'nothing_new'; tab: string; row: number; title: string; have: string[] }
   /** Nothing is ticked on the row. */
@@ -65,6 +81,12 @@ export async function addTickedNetworks(opts: {
   spreadsheetId?: string;
   /** What is left of the request's clock; the hand-off stops starting work in time to answer. */
   budgetMs?: number;
+  /**
+   * When the posts should go out, as the sheet's panel sends it: "YYYY-MM-DDTHH:mm"
+   * on the clinic's clock (lib/schedule-clock.ts). Without it the hand-off picks the
+   * next free slot, as a tick from the edit trigger always has.
+   */
+  publishAt?: string | null;
 }): Promise<TickAddResult> {
   const spreadsheetId = opts.spreadsheetId || SOURCE_IDS.videosSheet();
   const { tab, row } = opts;
@@ -103,6 +125,27 @@ export async function addTickedNetworks(opts: {
     return { action: 'nothing_new', tab, row, title: label, have: ticked.filter((n) => n !== 'email') };
   }
 
+  // The time the panel asked for, checked against the calendar (lib/tick-add.ts
+  // chosenSlot): as given when free, the next grid slot after it when taken,
+  // refused when gone. Decided before any copy is written, so a bad time costs
+  // nothing. The shape is a datetime-local value on the clinic's clock, which
+  // is what the sheet's panel and the dashboard's composer both send.
+  let publicationDate: string | undefined;
+  let moved = false;
+  if (typeof opts.publishAt === 'string' && opts.publishAt.trim()) {
+    const iso = scheduleInstantFromInput(opts.publishAt);
+    if (!iso) return { action: 'bad_time', tab, row, title: label, reason: 'unreadable', message: 'The time could not be read: ' + opts.publishAt + '. Send YYYY-MM-DDTHH:mm on the clinic’s clock.' };
+    const now = new Date();
+    const choice = chosenSlot(new Date(iso), await takenSlots(opts.userId, now.toISOString()), now);
+    if (!choice.ok) {
+      return choice.reason === 'past'
+        ? { action: 'bad_time', tab, row, title: label, reason: 'past', message: 'That time has already gone. Pick a later one.' }
+        : { action: 'bad_time', tab, row, title: label, reason: 'full', message: 'Every posting slot after that time is taken inside the scheduling horizon.' };
+    }
+    publicationDate = choice.at.toISOString();
+    moved = choice.moved;
+  }
+
   // The copy already on the draft — the long post, the caption, the title and
   // any text written for one network — so this pass sends what the first one
   // would have. The sheet's COPY cell is the fallback for a row whose copy a
@@ -136,6 +179,8 @@ export async function addTickedNetworks(opts: {
     published: publishedNetworks(VIDEO_NETWORK_COLUMNS, (col: string) => pick(rec, col)),
     rowLabel: tab + ' · row ' + row,
     budgetMs: opts.budgetMs,
+    // The panel's time, when there is one; every network of the row shares it.
+    publicationDate,
   });
 
   // The record: this pass's answers beside the old ones, so the next tick sees
@@ -156,7 +201,7 @@ export async function addTickedNetworks(opts: {
     actor: 'sheet',
     title: draftTitle || title || null,
     link: videoLink,
-    detail: { tab, row, gid: await tabGid(spreadsheetId, tab), ticked: networks, networks: sent, refused },
+    detail: { tab, row, gid: await tabGid(spreadsheetId, tab), ticked: networks, networks: sent, refused, ...(publicationDate ? { scheduledFor: publicationDate, moved } : {}) },
   });
-  return { action: 'added', tab, row, title: label, networks, sent, refused, made };
+  return { action: 'added', tab, row, title: label, networks, sent, refused, made, ...(publicationDate ? { scheduledFor: publicationDate, moved } : {}) };
 }

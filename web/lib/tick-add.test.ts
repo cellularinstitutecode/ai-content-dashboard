@@ -1,7 +1,7 @@
 // Unit tests for the tick-after-prepare rule. Run with: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeOutcomes, networksToAdd } from './tick-add.ts';
+import { chosenSlot, mergeOutcomes, networksToAdd } from './tick-add.ts';
 
 const sent = (network: string) => ({ network, ok: true });
 const refused = (network: string, reason: string) => ({ network, ok: false, reason });
@@ -38,4 +38,30 @@ test('this pass’s answers replace the old ones for the same networks and keep 
   const made = [sent('facebook'), refused('twitter', 'too_long')];
   assert.deepEqual(mergeOutcomes(prior, made), [sent('linkedin'), sent('facebook'), refused('twitter', 'too_long')]);
   assert.deepEqual(mergeOutcomes(null, made), made);
+});
+
+test('a requested time is used as given when nothing is scheduled on it', () => {
+  process.env.VIDEO_POST_DAYS = 'all';
+  const now = new Date('2026-10-27T15:00:00Z');
+  const asked = new Date('2026-11-03T18:00:00Z');
+  const c = chosenSlot(asked, ['2026-11-03T22:00:00Z'], now);
+  assert.equal(c.ok, true);
+  if (c.ok) { assert.equal(c.at.toISOString(), asked.toISOString()); assert.equal(c.moved, false); }
+});
+
+test('a requested time already taken moves to the next free grid slot after it, and says so', () => {
+  process.env.VIDEO_POST_DAYS = 'all';
+  delete process.env.VIDEO_AUTOPILOT_TIMES;
+  const now = new Date('2026-10-27T15:00:00Z');
+  // 13:00 Cancún (18:00Z) is taken; the next grid slot is 17:00 Cancún (22:00Z) the same day.
+  const c = chosenSlot(new Date('2026-11-03T18:00:00Z'), ['2026-11-03T18:00:00Z'], now);
+  assert.equal(c.ok, true);
+  if (c.ok) { assert.equal(c.at.toISOString(), '2026-11-03T22:00:00.000Z'); assert.equal(c.moved, true); }
+});
+
+test('a time already gone, or no time at all, is refused as past', () => {
+  const now = new Date('2026-10-27T15:00:00Z');
+  assert.deepEqual(chosenSlot(new Date('2026-10-27T14:59:00Z'), [], now), { ok: false, reason: 'past' });
+  assert.deepEqual(chosenSlot(new Date('2026-10-27T15:00:00Z'), [], now), { ok: false, reason: 'past' });
+  assert.deepEqual(chosenSlot(new Date('not a date'), [], now), { ok: false, reason: 'past' });
 });

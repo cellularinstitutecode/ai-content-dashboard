@@ -1,11 +1,13 @@
 // POST /api/videos/row  { tab, row }
 //
-// One row of the video sheet, acted on the moment a box is ticked. The sheet's
-// Apps Script edit trigger (docs/video-autopilot.md, "Making it instant") calls
-// this for every edit in a network column — YOUTUBE, LINKEDIN, TIKTOK, X,
-// FACEBOOK, INSTAGRAM — and lib/video-ticks.ts gives each ticked network that
-// has no draft yet one, from the copy already on the row's draft. Nothing is
-// deleted; an unticked box is left to the dashboard.
+// One row of the video sheet, acted on from the sheet. Two things in the sheet
+// call this (docs/video-autopilot.md, "Making it instant"; the script is in
+// scripts/sheet-apps-script): the "Prepare checked boxes" panel, with the day
+// and time the person chose (`publishAt`), and — when INSTANT_TICKS is on —
+// the edit trigger, for every box ticked in a network column. Either way
+// lib/video-ticks.ts gives each ticked network that has no draft yet one, from
+// the copy already on the row's draft. Nothing is deleted; an unticked box is
+// left to the dashboard.
 //
 // Two callers, the same two the sweep has:
 //   1. The Apps Script, with Authorization: Bearer CRON_SECRET — the same
@@ -50,16 +52,20 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  let body: { tab?: unknown; row?: unknown } = {};
+  let body: { tab?: unknown; row?: unknown; publishAt?: unknown } = {};
   try { body = (await req.json()) as typeof body; } catch { body = {}; }
   const tab = String(body.tab || '').trim();
   const row = Number(body.row);
   if (!tab || !Number.isInteger(row) || row < 2) {
     return NextResponse.json({ ok: false, error: 'bad_request', message: 'Send { tab, row }: the tab name and the 1-based row number of the edited row.' }, { status: 400 });
   }
+  // Optional: when the posts should go out, "YYYY-MM-DDTHH:mm" on the clinic's
+  // clock. The sheet's "Prepare checked boxes" panel sends it; the edit trigger
+  // does not, and the hand-off then picks the next free slot.
+  const publishAt = typeof body.publishAt === 'string' && body.publishAt.trim() ? body.publishAt.trim() : null;
 
   try {
-    const out = await addTickedNetworks({ userId, tab, row, budgetMs: 270_000 - (Date.now() - started) });
+    const out = await addTickedNetworks({ userId, tab, row, publishAt, budgetMs: 270_000 - (Date.now() - started) });
     return NextResponse.json({ ok: true, ...out }, { headers: { 'cache-control': 'no-store' } });
   } catch (e) {
     // A failure here must LOOK like one in the script's execution log, for the

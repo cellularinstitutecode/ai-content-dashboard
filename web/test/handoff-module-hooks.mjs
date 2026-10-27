@@ -56,8 +56,10 @@ const STUBS = {
   '@/lib/video-publish': `
     const sent = [];
     export function __sent() { return sent; }
-    export function __reset() { sent.length = 0; }
-    export async function takenSlots() { return []; }
+    export function __reset() { sent.length = 0; taken = []; }
+    let taken = [];
+    export function __taken(list) { taken = Array.isArray(list) ? list : []; }
+    export async function takenSlots() { return taken; }
     export async function publishVideoDraft(input) {
       sent.push(input);
       return { network: input.network, ok: true, metricoolPostId: 'mc-' + sent.length, recorded: true };

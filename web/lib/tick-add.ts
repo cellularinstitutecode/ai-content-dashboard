@@ -17,6 +17,7 @@
 // cannot see — one made by hand in the dashboard — is still not made twice.
 //
 // Pure, so it is unit-tested; the server half is lib/video-ticks.ts.
+import { nextFreeSlot } from './video-slot.ts';
 
 /** The slice of a recorded outcome this rule reads. */
 export type PriorOutcome = { network: string; ok: boolean; reason?: string | null };
@@ -47,4 +48,32 @@ export function mergeOutcomes<T extends PriorOutcome>(prior: readonly T[] | null
   const replaced = new Set(made.map((m) => String(m.network || '').toLowerCase()));
   const kept = (prior || []).filter((p) => !replaced.has(String(p.network || '').toLowerCase()));
   return [...kept, ...made];
+}
+
+/**
+ * The instant a row asked for from the sheet's "Prepare checked boxes" panel,
+ * checked against the calendar.
+ *
+ * A person picks a day and a time on the clinic's clock; this decides what
+ * that becomes. The time as given, when nothing is scheduled on it. The next
+ * free grid slot after it (lib/video-slot.ts) when something is — two videos
+ * sent from the same panel both ask for the same instant, and one post per
+ * slot is the rule that keeps a backlog from stacking. A time already gone is
+ * refused here, before any copy is written, rather than by the preflight on
+ * every network.
+ */
+export type SlotChoice =
+  | { ok: true; at: Date; moved: boolean }
+  | { ok: false; reason: 'past' | 'full' };
+
+export function chosenSlot(requested: Date, taken: Iterable<string>, now: Date = new Date()): SlotChoice {
+  if (!(requested instanceof Date) || !Number.isFinite(requested.getTime()) || requested.getTime() <= now.getTime()) return { ok: false, reason: 'past' };
+  const used = new Set<number>();
+  for (const t of taken) {
+    const at = Date.parse(String(t));
+    if (Number.isFinite(at)) used.add(at);
+  }
+  if (!used.has(requested.getTime())) return { ok: true, at: requested, moved: false };
+  const next = nextFreeSlot(Array.from(used, (n) => new Date(n).toISOString()), requested);
+  return next ? { ok: true, at: next, moved: true } : { ok: false, reason: 'full' };
 }
