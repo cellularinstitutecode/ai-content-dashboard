@@ -28,6 +28,7 @@ import { preflightPost } from '@/lib/post-preflight';
 import type { PackLike } from '@/lib/video-required';
 import { youtubeDataFor } from '@/lib/youtube-meta';
 import { tiktokDataFor } from '@/lib/tiktok-meta';
+import { instagramDataFor } from '@/lib/instagram-meta';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { reportError } from '@/lib/report';
 
@@ -140,6 +141,12 @@ export async function publishVideoDraft(input: PublishOne): Promise<PublishOutco
       // TikTok: public, comments/duet/stitch on — a direct publication rather
       // than Metricool's "finish on your phone" mode.
       tiktokData: network === 'tiktok' ? tiktokDataFor({ title: input.title, body: text }) : null,
+      // Instagram: a video is a Reel (lib/instagram-meta.ts). The composer's Send
+      // and the approve/move/fix replace already said so; this door — the sweep,
+      // Prepare, and a box ticked in the sheet — did not, so a video reached
+      // Metricool as a feed VIDEO and Meta refused it. The media here is always
+      // the row's video, so its presence is the whole question.
+      instagramData: network === 'instagram' ? instagramDataFor({ hasVideo: Boolean(String(input.mediaUrl || '').trim()) }) : null,
     }, publishMode());
     const metricoolPostId = readPostId(created);
 
