@@ -27,4 +27,8 @@ test('wiring: every Metricool call for an Instagram post carries instagramData',
   assert.match(client, /\.\.\.\(input\.instagramData && input\.providers\.includes\('instagram'\) \? \{ instagramData: input\.instagramData \} : \{\}\)/);
   const body = src('lib/metricool-post.ts');
   assert.match(body, /\.\.\.\(post\.instagramData && providers\.includes\('instagram' as Provider\) \? \{ instagramData: post\.instagramData \} : \{\}\)/);
+  // The video hand-off: the sweep, Prepare, and a box ticked in the sheet
+  // (lib/video-ticks.ts) all create their posts through publishVideoDraft.
+  const video = src('lib/video-publish.ts');
+  assert.match(video, /instagramData: network === 'instagram' \? instagramDataFor\(\{ hasVideo: Boolean\(String\(input\.mediaUrl \|\| ''\)\.trim\(\)\) \}\) : null,/);
 });
