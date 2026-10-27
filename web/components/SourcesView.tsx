@@ -23,6 +23,7 @@ import { metricoolPlannerUrl } from '@/lib/metricool-links';
 import VideoRegister from '@/components/VideoRegister';
 import PreparedBoard from '@/components/PreparedBoard';
 import VideoPrepare, { type Prepared } from '@/components/VideoPrepare';
+import TickScheduler from '@/components/TickScheduler';
 import { ensureVideoAttachable, fetchShareableVideos } from '@/components/MediaPicker';
 import { runPrepare } from '@/lib/prepare-request';
 import { mapLimit } from '@/lib/map-limit';
@@ -1386,6 +1387,20 @@ export default function SourcesView({ kind }: { kind: Tab }) {
                   <button type="button" style={ghost} disabled={running} onClick={() => load('videos', true)}>Refresh</button>
                 </div>
               </div>
+
+              {/*
+                WHEN the ticked networks go out. The boxes in the sheet say where a
+                video goes; this button lists the rows still owed a post, shows the
+                month and the slot times, and sends them at the time picked — through
+                /api/videos/row, the same door the sheet's own script uses, so the
+                posts are the sweep's posts at a chosen time. Nothing to install in
+                the sheet. (components/TickScheduler.tsx)
+              */}
+              {videos && (
+                <div style={{ marginTop: 12 }}>
+                  <TickScheduler disabled={running} />
+                </div>
+              )}
 
               {/*
                 "From row N to the end": one press ticks a whole section of the
