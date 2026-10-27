@@ -32,6 +32,8 @@ export type TickRow = {
   state: 'ready' | 'nothing_new' | 'not_prepared';
   /** The draft the row's posts hang off, so the caller can say when each goes out. */
   draftId?: string | null;
+  /** The row's content key (lib/video-row.ts), so the caller can find its register lines. */
+  rowKey: string;
 };
 
 /** The ticked rows, each with what it is still owed. Rows with nothing ticked are not rows here. */
@@ -43,14 +45,15 @@ export function tickRows(entries: readonly TickEntry[], runs: readonly TickRun[]
     const ticked = (e.networks || []).map((n) => String(n || '').toLowerCase()).filter((n) => n && n !== 'email');
     if (!ticked.length) continue;
     const link = firstLinkIn(e.videoLink || '');
-    const run = byKey.get(e.tab + '\u0000' + rowKeyFor(e.title, link));
+    const rowKey = rowKeyFor(e.title, link);
+    const run = byKey.get(e.tab + '\u0000' + rowKey);
     if (!run || run.state !== 'prepared') {
-      out.push({ tab: e.tab, row: e.row, title: e.title || link, ticked, owed: [], state: 'not_prepared' });
+      out.push({ tab: e.tab, row: e.row, title: e.title || link, ticked, owed: [], state: 'not_prepared', rowKey });
       continue;
     }
     const prior = Array.isArray(run.metricool) ? (run.metricool as PriorOutcome[]) : [];
     const owed = networksToAdd(ticked, prior);
-    out.push({ tab: e.tab, row: e.row, title: e.title || link, ticked, owed, state: owed.length ? 'ready' : 'nothing_new', draftId: run.draft_id || null });
+    out.push({ tab: e.tab, row: e.row, title: e.title || link, ticked, owed, state: owed.length ? 'ready' : 'nothing_new', draftId: run.draft_id || null, rowKey });
   }
   return out;
 }

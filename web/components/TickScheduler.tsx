@@ -2,22 +2,28 @@
 // The dashboard's "Prepare checked boxes" button and panel.
 //
 // The sheet's boxes say WHERE a video goes; this is where a person says WHEN.
-// Press the button, and the panel lists every row with a box ticked that is
-// still owed a post (GET /api/videos/ticks), shows the month and the clinic's
-// slot times, and sends each chosen row to POST /api/videos/row with the day
-// and time picked (`publishAt`, on the clinic's clock). That is the same door
-// the sheet's own script uses, so the posts are the ones the sweep makes, by
-// the same path, at the time chosen — and nothing has to be installed in the
-// sheet for it.
+// Tick the network boxes on a row in the sheet: the sheet's edit trigger tells
+// the dashboard, which holds the row (a `ticked` line in the register) rather
+// than sending it. Press the button here, and the panel lists those rows
+// first — "Just ticked in the sheet", pre-selected — with the month and the
+// clinic's slot times. Send posts each chosen row to POST /api/videos/row with
+// the day and time picked (`publishAt`, on the clinic's clock), the same door
+// the sweep's posts go through, so they are the same posts at the time chosen.
+//
+// A row whose every ticked network already has its post can still be chosen:
+// Send then MOVES those posts to the time picked (POST /api/posts reschedule),
+// which is what ticking a finished row and picking a time means.
 //
 // Rows go one at a time: the dashboard gives the first the time as picked and
 // moves the next to the following free slot, so two rows sent together land
-// two slots apart. A network the row already has is answered, never sent twice.
+// two slots apart. A network the row already has is never sent twice.
 import { useState } from 'react';
 import { announce } from '@/components/refreshBus';
 import { friendlyErrorFromResponse } from '@/lib/friendly-error';
+import { scheduleInstantFromInput } from '@/lib/schedule-clock';
 
-type Row = { tab: string; row: number; title: string; ticked: string[]; owed: string[]; state: 'ready' | 'nothing_new'; have?: { network: string; at: string; status: string }[] };
+type Post = { id: string; network: string; at: string; status: string };
+type Row = { tab: string; row: number; title: string; ticked: string[]; owed: string[]; state: 'ready' | 'nothing_new'; have: Post[]; pending: boolean; tickedAt: string | null };
 type Listing = { rows: Row[]; notPrepared: number; slotTimes: string[]; timezone: string; today: string; now: string };
 type Result = { key: string; ok: boolean; text: string };
 
@@ -34,6 +40,15 @@ const pad = (n: number) => (n < 10 ? '0' : '') + n;
 const dayKey = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
 const label = (n: string) => LABEL[n] || n;
 const keyOf = (r: { tab: string; row: number }) => r.tab + ':' + r.row;
+const fmt = (iso: string, tz: string) => {
+  const at = new Date(iso);
+  return Number.isFinite(at.getTime()) ? at.toLocaleString('en-GB', { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+};
+
+/** The posts of a finished row that can still be moved: a published one cannot. */
+export function movablePosts(r: Pick<Row, 'have'>): Post[] {
+  return (r.have || []).filter((p) => p.id && p.status !== 'published' && p.status !== 'failed');
+}
 
 /** The server's answer for one row, as a sentence. */
 export function describeRowAnswer(row: number, j: Record<string, unknown>, tz: string): { ok: boolean; text: string } {
@@ -41,9 +56,7 @@ export function describeRowAnswer(row: number, j: Record<string, unknown>, tz: s
   const sent = Array.isArray(j.sent) ? (j.sent as string[]) : [];
   const refused = Array.isArray(j.refused) ? (j.refused as { network: string; message?: string; reason?: string }[]) : [];
   if (j.action === 'added') {
-    const when = typeof j.scheduledFor === 'string'
-      ? ' for ' + new Date(j.scheduledFor).toLocaleString('en-GB', { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + (j.moved ? ' (that slot was taken; moved to the next free one)' : '')
-      : '';
+    const when = typeof j.scheduledFor === 'string' ? ' for ' + fmt(j.scheduledFor, tz) + (j.moved ? ' (that slot was taken; moved to the next free one)' : '') : '';
     return {
       ok: sent.length > 0,
       text: 'Row ' + row + ': ' + (sent.length ? 'sent to Metricool' + when + ' — ' + sent.map(label).join(', ') : 'nothing sent')
@@ -56,22 +69,14 @@ export function describeRowAnswer(row: number, j: Record<string, unknown>, tz: s
   return { ok: false, text: 'Row ' + row + ': ' + String(j.action || 'no answer').replace(/_/g, ' ') };
 }
 
-/** " (Fri 7 Nov, 17:00)" for a network the row already has a post on, or nothing when the time is unknown. */
-function whenIs(r: Row, network: string, tz: string): string {
-  const n = network === 'x' ? 'twitter' : network;
-  const p = (r.have || []).find((h) => h.network === n && h.at);
-  if (!p) return '';
-  const at = new Date(p.at);
-  if (!Number.isFinite(at.getTime())) return '';
-  return ' (' + at.toLocaleString('en-GB', { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ')';
-}
-
 export default function TickScheduler({ disabled }: { disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [listing, setListing] = useState<Listing | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
+  const [showRest, setShowRest] = useState(false);
+  const [find, setFind] = useState('');
   const [day, setDay] = useState<string | null>(null);
   const [time, setTime] = useState<string>('');
   const [view, setView] = useState<{ y: number; m: number } | null>(null);
@@ -85,10 +90,10 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
       if (!r.ok) throw new Error(await friendlyErrorFromResponse(r));
       const j = (await r.json()) as Listing & { ok: boolean };
       setListing(j);
-      // Nothing pre-selected. The list holds EVERY ticked row still owed a post,
-      // and some of those are old; the first time the panel opened it offered
-      // to send seven rows nobody had in mind. The person ticks the ones meant.
-      setChosen(new Set());
+      // What the person just ticked in the sheet is pre-selected; nothing else.
+      // The rest of the list is the sheet's ticked history, and the first time
+      // this opened it offered seven old rows nobody had in mind.
+      setChosen(new Set(j.rows.filter((x) => x.pending && (x.state === 'ready' || movablePosts(x).length > 0)).map(keyOf)));
       const [y, m] = j.today.split('-').map(Number);
       setView((v) => v || { y, m: m - 1 });
       if (!time && j.slotTimes[0]) setTime(j.slotTimes[0]);
@@ -99,9 +104,15 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
     }
   }
 
-
-  const ready = listing ? listing.rows.filter((r) => r.state === 'ready') : [];
-  const picked = ready.filter((r) => chosen.has(keyOf(r)));
+  const rows = listing ? listing.rows : [];
+  const q = find.trim().toLowerCase();
+  const matches = (r: Row) => !q || String(r.row) === q || r.title.toLowerCase().includes(q) || r.tab.toLowerCase().includes(q);
+  const justTicked = rows.filter((r) => r.pending);
+  const rest = rows.filter((r) => !r.pending);
+  const selectable = (r: Row) => r.state === 'ready' || movablePosts(r).length > 0;
+  const picked = rows.filter((r) => chosen.has(keyOf(r)) && selectable(r));
+  const toSend = picked.filter((r) => r.state === 'ready');
+  const toMove = picked.filter((r) => r.state !== 'ready');
   const inPast = Boolean(listing && day === listing.today && time && time <= listing.now);
   const canSend = picked.length > 0 && Boolean(day) && /^\d{2}:\d{2}$/.test(time) && !inPast && !sending;
 
@@ -110,21 +121,37 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
     setSending(true); setResults([]);
     const publishAt = day + 'T' + time;
     const out: Result[] = [];
-    for (const r of picked) {
+    // New posts first, so the time picked is theirs; moved posts follow.
+    for (const r of toSend) {
       try {
         const res = await fetch('/api/videos/row', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tab: r.tab, row: r.row, publishAt }) });
         const j = (await res.json().catch(() => ({ ok: false, error: 'HTTP ' + res.status }))) as Record<string, unknown>;
-        const d = describeRowAnswer(r.row, j, listing.timezone);
-        out.push({ key: keyOf(r), ...d });
+        out.push({ key: keyOf(r), ...describeRowAnswer(r.row, j, listing.timezone) });
       } catch (e) {
         out.push({ key: keyOf(r), ok: false, text: 'Row ' + r.row + ': ' + (e instanceof Error ? e.message : 'the dashboard did not answer') });
       }
       setResults([...out]);
     }
+    const iso = scheduleInstantFromInput(publishAt);
+    for (const r of toMove) {
+      const posts = movablePosts(r);
+      const moved: string[] = []; const failed: string[] = [];
+      for (const p of posts) {
+        try {
+          const res = await fetch('/api/posts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: p.id, action: 'reschedule', publication_date: iso }) });
+          if (res.ok) moved.push(label(p.network)); else failed.push(label(p.network) + ' (' + (await friendlyErrorFromResponse(res)) + ')');
+        } catch (e) {
+          failed.push(label(p.network) + ' (' + (e instanceof Error ? e.message : 'no answer') + ')');
+        }
+      }
+      out.push({
+        key: keyOf(r), ok: moved.length > 0 && !failed.length,
+        text: 'Row ' + r.row + ': ' + (moved.length ? 'moved ' + moved.join(', ') + ' to ' + fmt(iso || '', listing.timezone) : 'nothing moved') + (failed.length ? ' — not ' + failed.join(', ') : ''),
+      });
+      setResults([...out]);
+    }
     setSending(false);
-    // The calendar and the queue now hold these posts.
     announce('posts', 'drafts');
-    // Re-read, so a row just sent shows as done rather than still ready.
     void load();
   }
 
@@ -133,6 +160,24 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
     let m = view.m + n; let y = view.y;
     if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; }
     setView({ y, m });
+  }
+
+  function rowLine(r: Row) {
+    const k = keyOf(r);
+    const on = chosen.has(k);
+    const can = selectable(r);
+    return (
+      <label key={k} style={{ display: 'flex', gap: 8, alignItems: 'baseline', padding: '4px 0', fontSize: 13, opacity: can ? 1 : .55 }}>
+        <input type="checkbox" disabled={!can || sending} checked={on} onChange={(e) => { const next = new Set(chosen); if (e.target.checked) next.add(k); else next.delete(k); setChosen(next); }} />
+        <strong style={{ whiteSpace: 'nowrap' }}>{r.tab} · row {r.row}</strong>
+        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</span>
+        <span style={{ color: '#1d4ed8', whiteSpace: 'nowrap' }} title={r.state === 'ready' ? 'Still to send' : 'Already in Metricool; choosing a time moves them'}>
+          {r.state === 'ready'
+            ? r.owed.map(label).join(', ')
+            : (on ? 'will move ' : 'already has ') + r.ticked.map((n) => { const p = r.have.find((h) => h.network === (n === 'x' ? 'twitter' : n) && h.at); return label(n) + (p ? ' (' + fmt(p.at, listing!.timezone) + ')' : ''); }).join(', ')}
+        </span>
+      </label>
+    );
   }
 
   return (
@@ -148,46 +193,34 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
         <div style={panel}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
             <h3 style={{ margin: 0, fontSize: 14 }}>Prepare checked boxes</h3>
-            <button type="button" style={ghost} disabled={loading || sending} onClick={() => void load()}>{loading ? 'Reading the sheet…' : 'Re-read the sheet'}</button>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input value={find} onChange={(e) => setFind(e.target.value)} placeholder="Find a row: 224, or a title" aria-label="Find a ticked row by number or title" style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.12)', fontSize: 12, minWidth: 200 }} />
+              <button type="button" style={ghost} disabled={loading || sending} onClick={() => void load()}>{loading ? 'Reading the sheet…' : 'Re-read the sheet'}</button>
+            </div>
           </div>
           {err && <p style={{ color: '#d70015', fontSize: 13 }}>{err}</p>}
           {loading && !listing && <p style={{ fontSize: 13, opacity: .7 }}>Reading the sheet’s ticks and what each row already has…</p>}
 
           {listing && (
             <>
-              <p style={{ fontSize: 12, opacity: .75, margin: '8px 0' }}>
-                {ready.length
-                  ? ready.length + (ready.length === 1 ? ' row has' : ' rows have') + ' a ticked network with no post yet. Each goes to the networks it is ticked for; a network the row already has is left alone.'
-                  : 'No ticked row is owed a post. Tick a network box on a prepared row in the sheet, then re-read.'}
-                {listing.notPrepared > 0 && ' ' + listing.notPrepared + ' ticked ' + (listing.notPrepared === 1 ? 'row is' : 'rows are') + ' not in the pipeline (ticks from before it, or rows not prepared yet) and are not listed.'}
-              </p>
+              <div style={{ margin: '10px 0 4px', fontSize: 12, fontWeight: 600 }}>Just ticked in the sheet</div>
+              {justTicked.filter(matches).length
+                ? <div style={{ ...box, maxHeight: 180, overflow: 'auto' }}>{justTicked.filter(matches).map(rowLine)}</div>
+                : <p style={{ fontSize: 12, opacity: .7, margin: '2px 0 8px' }}>{q ? 'No just-ticked row matches.' : 'Nothing yet. Tick a network box on a row in the sheet and it appears here within a few seconds; press Re-read the sheet if it does not.'}</p>}
 
-              {ready.length > 1 && (
-                <div style={{ display: 'flex', gap: 10, fontSize: 12, margin: '0 0 6px' }}>
-                  <button type="button" style={{ ...ghost, padding: '3px 10px' }} disabled={sending} onClick={() => setChosen(new Set(ready.map(keyOf)))}>Select all {ready.length}</button>
-                  <button type="button" style={{ ...ghost, padding: '3px 10px' }} disabled={sending || !chosen.size} onClick={() => setChosen(new Set())}>Select none</button>
+              {rest.length > 0 && (
+                <div style={{ margin: '10px 0 4px', fontSize: 12 }}>
+                  <button type="button" style={{ ...ghost, padding: '3px 10px' }} onClick={() => setShowRest(!showRest)}>
+                    {showRest ? 'Hide' : 'Show'} {rest.length} other ticked {rest.length === 1 ? 'row' : 'rows'} in the sheet
+                  </button>
+                  <span style={{ opacity: .65, marginLeft: 8 }}>ticked earlier, {rest.filter((r) => r.state === 'ready').length} still owed a post{listing.notPrepared > 0 ? '; ' + listing.notPrepared + ' more ticked rows are not in the pipeline and are not listed' : ''}</span>
                 </div>
               )}
-              {listing.rows.length > 0 && (
-                <div style={{ ...box, maxHeight: 220, overflow: 'auto', marginBottom: 12 }}>
-                  {listing.rows.map((r) => {
-                    const k = keyOf(r);
-                    const on = chosen.has(k);
-                    return (
-                      <label key={k} style={{ display: 'flex', gap: 8, alignItems: 'baseline', padding: '4px 0', fontSize: 13, opacity: r.state === 'ready' ? 1 : .55 }}>
-                        <input type="checkbox" disabled={r.state !== 'ready' || sending} checked={on} onChange={(e) => { const next = new Set(chosen); if (e.target.checked) next.add(k); else next.delete(k); setChosen(next); }} />
-                        <strong style={{ whiteSpace: 'nowrap' }}>{r.tab} · row {r.row}</strong>
-                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</span>
-                        <span style={{ color: '#1d4ed8', whiteSpace: 'nowrap' }} title={r.state === 'ready' ? 'Still to send' : 'Already in Metricool'}>
-                          {r.state === 'ready' ? r.owed.map(label).join(', ') : 'already has ' + r.ticked.map((n) => label(n) + whenIs(r, n, listing.timezone)).join(', ')}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
+              {(showRest || q) && rest.filter(matches).length > 0 && (
+                <div style={{ ...box, maxHeight: 200, overflow: 'auto' }}>{rest.filter(matches).map(rowLine)}</div>
               )}
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 1fr) minmax(220px, 1fr)', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 1fr) minmax(220px, 1fr)', gap: 12, marginTop: 12 }}>
                 <div style={box}>
                   {view && (
                     <>
@@ -204,13 +237,8 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
                           const past = k < listing.today;
                           const on = k === day;
                           return (
-                            <button
-                              key={k}
-                              type="button"
-                              disabled={past || sending}
-                              onClick={() => setDay(k)}
-                              style={{ border: 0, borderRadius: 6, height: 30, cursor: past ? 'default' : 'pointer', fontSize: 12, background: on ? '#0071e3' : 'transparent', color: on ? '#fff' : past ? '#bdc1c6' : '#1d1d1f', fontWeight: k === listing.today ? 700 : 400 }}
-                            >
+                            <button key={k} type="button" disabled={past || sending} onClick={() => setDay(k)}
+                              style={{ border: 0, borderRadius: 6, height: 30, cursor: past ? 'default' : 'pointer', fontSize: 12, background: on ? '#0071e3' : 'transparent', color: on ? '#fff' : past ? '#bdc1c6' : '#1d1d1f', fontWeight: k === listing.today ? 700 : 400 }}>
                               {i + 1}
                             </button>
                           );
@@ -222,9 +250,7 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
                 <div style={box}>
                   <div style={{ fontSize: 13 }}><strong>Time</strong> <span style={{ opacity: .6 }}>({listing.timezone})</span></div>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0 10px' }}>
-                    {listing.slotTimes.map((t) => (
-                      <button key={t} type="button" disabled={sending} onClick={() => setTime(t)} style={time === t ? btn : ghost}>{t}</button>
-                    ))}
+                    {listing.slotTimes.map((t) => <button key={t} type="button" disabled={sending} onClick={() => setTime(t)} style={time === t ? btn : ghost}>{t}</button>)}
                   </div>
                   <label style={{ fontSize: 12, opacity: .8, display: 'flex', gap: 8, alignItems: 'center' }}>
                     Or any time
@@ -238,11 +264,14 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
                   : !day ? 'Pick a day.'
                   : !/^\d{2}:\d{2}$/.test(time) ? 'Pick a time.'
                   : inPast ? 'That time has already gone today. Pick a later one.'
-                  : <>Posts go out <strong>{new Date(day + 'T12:00:00').toDateString()} at {time}</strong>{picked.length > 1 ? ', the first row at that time and each next row at the following free slot' : ''}.</>}
+                  : <>
+                      {toSend.length > 0 && <>{toSend.length === 1 ? 'Row ' + toSend[0].row + ' goes' : toSend.length + ' rows go'} to Metricool <strong>{new Date(day + 'T12:00:00').toDateString()} at {time}</strong>{toSend.length > 1 ? ', the first at that time and each next at the following free slot' : ''}. </>}
+                      {toMove.length > 0 && <>{toMove.length === 1 ? 'Row ' + toMove[0].row + '’s ' + movablePosts(toMove[0]).length + ' existing posts move' : toMove.length + ' rows’ existing posts move'} to <strong>{new Date(day + 'T12:00:00').toDateString()} at {time}</strong>.</>}
+                    </>}
               </p>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                 <button type="button" style={{ ...btn, opacity: canSend ? 1 : .5 }} disabled={!canSend} onClick={() => void send()}>
-                  {sending ? 'Sending…' : 'Send ' + picked.length + (picked.length === 1 ? ' row' : ' rows') + ' to Metricool'}
+                  {sending ? 'Sending…' : (toSend.length && toMove.length ? 'Send and move' : toMove.length ? 'Move' : 'Send') + ' ' + picked.length + (picked.length === 1 ? ' row' : ' rows')}
                 </button>
                 {sending && <span style={{ fontSize: 12, opacity: .7 }}>A row whose video still has to be copied into Metricool can take a minute.</span>}
               </div>

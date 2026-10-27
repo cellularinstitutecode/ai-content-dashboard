@@ -15,6 +15,10 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { reportError } from '@/lib/report';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { tickRows, type TickRun } from '@/lib/tick-rows';
+import { pendingTicks } from '@/lib/tick-pending';
+import { readRegister, type RegisterRow } from '@/lib/video-register';
+import { videoKeyFor } from '@/lib/video-event';
+import { resolveOwner } from '@/lib/sweep-owner';
 import { SCHEDULE_TZ, wallClockInTz } from '@/lib/timezone';
 import { postTimes } from '@/lib/video-slot';
 
@@ -50,20 +54,32 @@ export async function GET() {
     // answered "already has" says Facebook Fri 7 Nov 17:00 rather than only
     // "already has Facebook" — the first question a person asks next.
     const draftIds = Array.from(new Set(rows.map((r) => r.draftId).filter((id): id is string => Boolean(id))));
-    const have = new Map<string, { network: string; at: string; status: string }[]>();
+    const have = new Map<string, { id: string; network: string; at: string; status: string }[]>();
     if (draftIds.length) {
       const posts = await supabaseAdmin()
         .from('posts')
-        .select('draft_id,providers,publication_date,status')
+        .select('id,draft_id,providers,publication_date,status')
         .in('draft_id', draftIds)
         .limit(2000)
         .then((x) => x, () => ({ data: null, error: null }));
-      for (const p of (posts.data || []) as { draft_id: string; providers: string[] | null; publication_date: string | null; status: string | null }[]) {
+      for (const p of (posts.data || []) as { id: string; draft_id: string; providers: string[] | null; publication_date: string | null; status: string | null }[]) {
         const list = have.get(p.draft_id) || [];
-        for (const n of p.providers || []) list.push({ network: String(n).toLowerCase(), at: String(p.publication_date || ''), status: String(p.status || '') });
+        for (const n of p.providers || []) list.push({ id: String(p.id), network: String(n).toLowerCase(), at: String(p.publication_date || ''), status: String(p.status || '') });
         have.set(p.draft_id, list);
       }
     }
+
+    // The ticks the sheet sent that are still waiting for a time
+    // (lib/tick-pending.ts): the rows the person just ticked, listed first and
+    // pre-selected. The sheet's trigger writes as the sweep owner, which on a
+    // one-clinic deployment is the signed-in person; both are read in case not.
+    const lines: RegisterRow[] = [];
+    const owner = await resolveOwner().catch(() => null);
+    for (const uid of Array.from(new Set([auth.userId, owner && owner.ok ? owner.userId : ''].filter(Boolean)))) {
+      const reg = await readRegister(uid, { limit: 200, only: ['ticked', 'queued'] }).catch(() => ({ off: true as const }));
+      if (!reg.off) lines.push(...reg.rows);
+    }
+    const pending = new Map(pendingTicks(lines).map((p) => [p.videoKey, p.at]));
     const now = new Date();
     const w = wallClockInTz(now, SCHEDULE_TZ);
     const p = (n: number) => String(n).padStart(2, '0');
@@ -74,8 +90,18 @@ export async function GET() {
       // is a record of something published by hand are a count.
       rows: rows
         .filter((r) => r.state !== 'not_prepared')
-        .sort((a, b) => (a.state === b.state ? b.row - a.row : a.state === 'ready' ? -1 : 1))
-        .map((r) => ({ ...r, have: (r.draftId && have.get(r.draftId)) || [] })),
+        .map((r) => {
+          const tickedAt = pending.get(videoKeyFor(spreadsheetId, r.tab, r.rowKey)) || null;
+          return { ...r, have: (r.draftId && have.get(r.draftId)) || [], pending: Boolean(tickedAt), tickedAt };
+        })
+        // Just ticked first, newest tick first; then the rest, ready before
+        // done, newest row first.
+        .sort((a, b) => {
+          if (a.pending !== b.pending) return a.pending ? -1 : 1;
+          if (a.pending && b.pending) return Date.parse(b.tickedAt || '') - Date.parse(a.tickedAt || '');
+          if (a.state !== b.state) return a.state === 'ready' ? -1 : 1;
+          return b.row - a.row;
+        }),
       notPrepared: rows.filter((r) => r.state === 'not_prepared').length,
       slotTimes: postTimes(),
       timezone: SCHEDULE_TZ,

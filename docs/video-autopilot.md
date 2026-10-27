@@ -278,9 +278,16 @@ the rows you choose at the day and time you pick (`/api/videos/row` with
 the time as picked; a row after it, or a slot already taken, moves to the next
 free slot and the answer says so. A network the row already has is left alone.
 Rows must be prepared (they have COPY); ticks on rows outside the pipeline are
-counted, not listed. Nothing is pre-selected: the list holds every ticked row
-still owed a post, old ones included, so tick the rows you mean. A row that
-already has its posts shows when each goes out.
+counted, not listed.
+
+The panel opens on **Just ticked in the sheet**: the rows whose boxes were
+ticked since they were last sent, pre-selected. The sheet's edit trigger sends
+every tick to the dashboard, which holds the row and writes a `ticked` line in
+the register (`lib/video-ticks.ts` hold, `lib/tick-pending.ts`); the line is
+closed by the `queued` line the send writes. The sheet's whole ticked history
+is behind "Show N other ticked rows", unselected, with a box to find a row by
+number. A row whose every tick already has its post shows when each goes out,
+and choosing it with a day and time **moves** those posts there instead.
 
 ## Making it instant
 

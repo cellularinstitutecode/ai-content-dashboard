@@ -13,7 +13,7 @@ test('the panel lists rows from /api/videos/ticks and sends each through /api/vi
   assert.match(c, /fetch\('\/api\/videos\/ticks'\)/);
   assert.match(c, /fetch\('\/api\/videos\/row', \{ method: 'POST'[\s\S]*publishAt \}\)/);
   // One row at a time, so the dashboard can move the second to the next free slot.
-  assert.match(c, /for \(const r of picked\) \{[\s\S]*await fetch\('\/api\/videos\/row'/);
+  assert.match(c, /for \(const r of toSend\) \{[\s\S]*await fetch\('\/api\/videos\/row'/);
 });
 
 test('the Video Library draws the button, and the listing route applies the tested rule', () => {
@@ -23,15 +23,20 @@ test('the Video Library draws the button, and the listing route applies the test
   assert.match(route, /\.eq\('state', 'prepared'\)/);
 });
 
-test('a tick that names no time is answered needs_time by the route, unless VIDEO_TICK_INSTANT is on', () => {
+test('a tick that names no time is held by the route, unless VIDEO_TICK_INSTANT is on', () => {
   const route = src('app/api/videos/row/route.ts');
-  assert.match(route, /if \(!publishAt && !instantTicksEnabled\(\)\) \{[\s\S]*action: 'needs_time'/);
-  // The hold comes BEFORE the hand-off, so a held tick costs no read and no copy.
-  assert.ok(route.indexOf("action: 'needs_time'") < route.indexOf('await addTickedNetworks('));
+  assert.match(route, /const hold = !publishAt && !instantTicksEnabled\(\);/);
+  assert.match(route, /addTickedNetworks\(\{ userId, tab, row, publishAt, hold,/);
 });
 
-test('the panel pre-selects no row: the person ticks the ones meant', () => {
+test('the panel pre-selects only the rows just ticked in the sheet, and can move a finished row’s posts', () => {
   const c = src('components/TickScheduler.tsx');
-  assert.match(c, /setListing\(j\);[\s\S]{0,600}setChosen\(new Set\(\)\);/);
-  assert.doesNotMatch(c, /setChosen\(new Set\(j\.rows/);
+  assert.match(c, /setChosen\(new Set\(j\.rows\.filter\(\(x\) => x\.pending && /);
+  assert.match(c, /action: 'reschedule', publication_date: iso/);
+  // Published posts are never moved.
+  assert.match(c, /p\.status !== 'published'/);
+  const route = src('app/api/videos/ticks/route.ts');
+  assert.match(route, /only: \['ticked', 'queued'\]/);
+  assert.match(route, /pendingTicks\(lines\)/);
 });
+
