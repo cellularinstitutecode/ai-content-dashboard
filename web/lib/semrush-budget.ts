@@ -22,8 +22,24 @@ export type SpendDecision = {
    * lib/semrush.ts before the balance is even read: the request is automatic
    * and SEMRUSH_MODE reserves live spend for people (lib/semrush-policy.ts).
    */
-  reason: 'no-key' | 'balance-unknown' | 'below-floor' | 'policy' | 'ok';
+  reason: 'no-key' | 'balance-unknown' | 'below-floor' | 'policy' | 'draft-pot' | 'draft-pot-unknown' | 'ok';
 };
+
+/**
+ * May DRAFTING spend `estUnits` more this month?
+ *
+ * Drafting has a pot of its own (SEMRUSH_DRAFT_ALLOWANCE, 2,500 a month by
+ * default): the research a draft is written to is worth paying for, but not
+ * without a ceiling, because the hourly Autopilot and the 15-minute video
+ * watcher are exactly the jobs that once spent 22,000 units in a week. The
+ * same shape as decideSpend: an unreadable log closes the gate.
+ */
+export function decideDraftSpend(spentThisMonth: number | null, estUnits: number, allowance: number): SpendDecision {
+  if (spentThisMonth == null || !Number.isFinite(spentThisMonth)) return { allow: false, reason: 'draft-pot-unknown' };
+  if (!Number.isFinite(allowance) || allowance <= 0) return { allow: false, reason: 'draft-pot' };
+  if (spentThisMonth + estUnits > allowance) return { allow: false, reason: 'draft-pot' };
+  return { allow: true, reason: 'ok' };
+}
 
 /**
  * May we spend `estUnits` right now?

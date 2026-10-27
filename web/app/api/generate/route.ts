@@ -1,6 +1,7 @@
 // web/app/api/generate/route.ts
 // Thin route — delegates to lib/ai.ts so we can swap providers.
 import { isAllowedEmail } from '@/lib/access';
+import { withDraftSemrush } from '@/lib/semrush-policy';
 import { NextRequest, NextResponse } from 'next/server';
 import { generateContentPack, NoKeywordsError, type Provider, type ContentType } from '@/lib/ai';
 import { loadBrandContext } from '@/lib/brand-context';
@@ -29,7 +30,9 @@ const ALLOWED_MODELS: Record<Provider, string[]> = {
   openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
 };
 
-export async function POST(req: NextRequest) {
+// Drafting: the keyword research inside may spend from the drafting pot (lib/semrush-policy.ts).
+export async function POST(req: NextRequest) { return withDraftSemrush(() => postDrafting(req)); }
+async function postDrafting(req: NextRequest) {
   try {
     const body = await req.json();
     // Accept both { topic } and the dashboard's { prompt } naming.

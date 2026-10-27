@@ -12,6 +12,7 @@
 // template, and it cannot publish anything: the new slots write drafts that
 // wait in the review queue like every other Autopilot post.
 import { NextResponse } from 'next/server';
+import { withDraftSemrush } from '@/lib/semrush-policy';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { normalizeStrategy } from '@/lib/autopilot';
@@ -137,7 +138,9 @@ async function existingTemplates(userId: string) {
   return { sb, rows: (data || []) as ExistingRow[], error };
 }
 
-export async function POST(req: Request) {
+// Drafting: the keyword research inside may spend from the drafting pot (lib/semrush-policy.ts).
+export async function POST(req: Request) { return withDraftSemrush(() => postDrafting(req)); }
+async function postDrafting(req: Request) {
   const auth = await requireAllowlistedUser();
   if (!auth.ok) return auth.response;
 

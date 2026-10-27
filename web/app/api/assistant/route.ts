@@ -1,4 +1,5 @@
 import { focusBlock, type AiFocus } from '@/components/aiFocus';
+import { withDraftSemrush } from "@/lib/semrush-policy";
 import { complianceGate } from '@/lib/compliance-gate';
 import {reportError, redact} from '@/lib/report';
 import { NextResponse } from "next/server";
@@ -1425,7 +1426,9 @@ async function runAgent(session: Session, input: string, userId: string | null, 
     : undefined;
   return { message: finalMessage, options: options as any };}
 
-export async function POST(req: Request) {
+// Drafting: the keyword research inside may spend from the drafting pot (lib/semrush-policy.ts).
+export async function POST(req: Request) { return withDraftSemrush(() => postDrafting(req)); }
+async function postDrafting(req: Request) {
   // Guarded like every other route in the repo: an unparseable body used to
   // throw above the handler's try block and surface as an opaque 500 that the
   // assistant widget rendered as "unexpected response (status 500)".

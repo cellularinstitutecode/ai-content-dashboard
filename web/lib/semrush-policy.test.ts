@@ -13,6 +13,7 @@ import {
   currentSemrushOrigin,
   liveAllowedByPolicy,
   parseSemrushMode,
+  withDraftSemrush,
   withUserSemrush,
 } from './semrush-policy.ts';
 
@@ -67,4 +68,23 @@ test('a user-origin wrapper does not mark unrelated concurrent work', async () =
   ]);
   assert.equal(inside, 'user');
   assert.equal(outside, 'auto');
+});
+
+test('manual: drafting may spend too — from its own pot — and nothing else automatic may', () => {
+  assert.equal(liveAllowedByPolicy('manual', 'draft'), true);
+  assert.equal(liveAllowedByPolicy('manual', 'auto'), false);
+  assert.equal(liveAllowedByPolicy('off', 'draft'), false);
+  assert.equal(liveAllowedByPolicy('auto', 'draft'), true);
+});
+
+test('work is drafting only inside withDraftSemrush(), and the origin does not leak', async () => {
+  const seen = await withDraftSemrush(async () => {
+    await new Promise((r) => setTimeout(r, 1));
+    return currentSemrushOrigin();
+  });
+  assert.equal(seen, 'draft');
+  assert.equal(currentSemrushOrigin(), 'auto');
+  // A person's click inside drafting stays a person's click: the inner wrapper wins.
+  const inner = await withDraftSemrush(() => withUserSemrush(async () => currentSemrushOrigin()));
+  assert.equal(inner, 'user');
 });

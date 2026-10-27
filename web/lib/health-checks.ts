@@ -366,17 +366,31 @@ export async function runHealthChecks(): Promise<HealthReport> {
       // 'policy' is the configured default (SEMRUSH_MODE=manual): drafts read
       // stored keyword data on purpose and the SEO panel still fetches live.
       // That is the app working as set, so it is not reported as a fault.
-      ok: keywords.ok || keywords.reason === 'policy',
+      // 'draft_pot' is the drafting budget doing its job: the month's
+      // SEMRUSH_DRAFT_ALLOWANCE is spent, and drafts read stored data until
+      // the first of next month. Working as set, so not a fault either.
+      ok: keywords.ok || keywords.reason === 'policy' || keywords.reason === 'draft_pot',
       code: keywords.reason,
       severity: 'optional',
       detail: keywords.ok
         ? 'Live keyword research is running over ' +
           (keywords.transport === 'mcp' ? 'the Semrush MCP server (v4 key)' : 'the Standard API (v3 key)') +
-          '. Balance ' + keywords.balance + ' units, floor ' + keywords.floor + '.'
+          '. Balance ' + keywords.balance + ' units, floor ' + keywords.floor + '.' +
+          (keywords.draftPot
+            ? ' Drafting pot (SEMRUSH_DRAFT_ALLOWANCE): ' + keywords.draftPot.allowance + ' units a month, ' +
+              (keywords.draftPot.spent ?? '?') + ' used, ' + (keywords.draftPot.remaining ?? '?') + ' left.'
+            : '')
         : keywords.reason === 'policy'
           ? 'Live keyword lookups are reserved for the SEO panel and Keyword Intelligence (SEMRUSH_MODE=' +
             semrushMode() + '); drafts, Autopilot and the assistant use stored keyword data. Balance ' +
             keywords.balance + ' units, floor ' + keywords.floor + '.'
+        : keywords.reason === 'draft_pot'
+          ? 'Drafting has used its month\u2019s Semrush pot (SEMRUSH_DRAFT_ALLOWANCE=' + (keywords.draftPot?.allowance ?? '?') +
+            ', ' + (keywords.draftPot?.spent ?? '?') + ' spent), so drafts, Autopilot and the assistant read stored keyword data ' +
+            'until the first of next month. The SEO panel still fetches live. Balance ' + keywords.balance + ' units.'
+        : keywords.reason === 'draft_pot_unknown'
+          ? 'The drafting pot cannot be measured: this month\u2019s spend in semrush_usage could not be read in full, so ' +
+            'drafting\u2019s live research fails closed. The SEO panel is unaffected. This clears once the log is readable.'
         : keywords.reason === 'no_token'
           ? 'SEMRUSH_API_KEY is unset: the keyword layer degrades to cache-or-link-out — the Semrush ' +
             'panel, the assistant’s live grounding and Autopilot’s angle selection all lose their data.'

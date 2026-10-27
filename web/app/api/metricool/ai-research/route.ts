@@ -5,6 +5,7 @@
 // reuses the same Anthropic/OpenAI providers as the content generator.
 // Auth + rate limiting mirror /api/generate since this spends AI credits.
 import { isAllowedEmail } from '@/lib/access';
+import { withDraftSemrush } from '@/lib/semrush-policy';
 import { reportError } from '@/lib/report';
 import { NextRequest, NextResponse } from 'next/server';
 import { researchTopic, type Provider, type BrandContext } from '@/lib/ai';
@@ -18,7 +19,9 @@ export const maxDuration = 60;
 
 const ALLOWED_PROVIDERS: Provider[] = ['anthropic', 'openai'];
 
-export async function POST(req: NextRequest) {
+// Drafting: the keyword research inside may spend from the drafting pot (lib/semrush-policy.ts).
+export async function POST(req: NextRequest) { return withDraftSemrush(() => postDrafting(req)); }
+async function postDrafting(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
     const topic: string = String(body?.topic ?? body?.prompt ?? '').trim();

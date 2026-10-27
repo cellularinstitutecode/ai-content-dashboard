@@ -18,6 +18,7 @@
 // ?dry=1 reports what WOULD be prepared and writes nothing — the safe way to
 // point this at the sheet for the first time.
 import { NextRequest, NextResponse } from 'next/server';
+import { withDraftSemrush } from '@/lib/semrush-policy';
 import { requireAllowlistedUser } from '@/lib/auth';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { resolveOwner, sweepVideos } from '@/lib/video-autopilot';
@@ -98,5 +99,9 @@ async function handle(req: NextRequest) {
   }
 }
 
-export async function GET(req: NextRequest) { return handle(req); }
-export async function POST(req: NextRequest) { return handle(req); }
+// Drafting: the keyword research inside may spend from the drafting pot (lib/semrush-policy.ts).
+export async function GET(req: NextRequest) { return withDraftSemrush(() => getDrafting(req)); }
+async function getDrafting(req: NextRequest) { return handle(req); }
+// Drafting: the keyword research inside may spend from the drafting pot (lib/semrush-policy.ts).
+export async function POST(req: NextRequest) { return withDraftSemrush(() => postDrafting(req)); }
+async function postDrafting(req: NextRequest) { return handle(req); }
