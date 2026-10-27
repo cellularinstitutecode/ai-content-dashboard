@@ -153,7 +153,10 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
       const moved: string[] = []; const failed: string[] = [];
       for (const p of posts) {
         try {
-          const res = await fetch('/api/posts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: p.id, action: 'reschedule', publication_date: iso }) });
+          // PATCH: the posts route's reschedule handler. It was sent as POST,
+          // which the route has no handler for, so every move was answered
+          // 405 with no body and the panel said "something went wrong".
+          const res = await fetch('/api/posts', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: p.id, action: 'reschedule', publication_date: iso }) });
           if (res.ok) moved.push(label(p.network)); else failed.push(label(p.network) + ' (' + (await friendlyErrorFromResponse(res)) + ')');
         } catch (e) {
           failed.push(label(p.network) + ' (' + (e instanceof Error ? e.message : 'no answer') + ')');
