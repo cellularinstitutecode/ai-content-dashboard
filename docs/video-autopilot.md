@@ -278,7 +278,9 @@ the rows you choose at the day and time you pick (`/api/videos/row` with
 the time as picked; a row after it, or a slot already taken, moves to the next
 free slot and the answer says so. A network the row already has is left alone.
 Rows must be prepared (they have COPY); ticks on rows outside the pipeline are
-counted, not listed.
+counted, not listed. Nothing is pre-selected: the list holds every ticked row
+still owed a post, old ones included, so tick the rows you mean. A row that
+already has its posts shows when each goes out.
 
 ## Making it instant
 
@@ -295,9 +297,13 @@ two files: `Code.gs` and `Dialog.html`):
   there — the next free slot after it is used, and the answer says so. A
   network the row already has is left alone, so pressing it twice sends
   nothing twice. A time already gone is refused before any copy is written.
-- **a box ticked, sent at once** (optional, `INSTANT_TICKS=on`) → the edit
-  trigger sends that row the moment the box is clicked, at the next free slot,
-  without the panel. Off by default, so a tick waits for the button.
+- **a box ticked, sent at once** (optional) → the edit trigger sends that row
+  the moment the box is clicked, at the next free slot, without any panel.
+  Off by default, twice: the script's `INSTANT_TICKS` property must be `on`,
+  **and** the dashboard's `VIDEO_TICK_INSTANT` must be `on`. Otherwise the
+  dashboard answers a time-less tick with `needs_time` and holds it for the
+  panel — which is what an older copy of the script, still installed in the
+  sheet, gets as well, so nothing has to be changed there.
 
 ### Set it up
 

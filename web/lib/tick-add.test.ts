@@ -1,7 +1,7 @@
 // Unit tests for the tick-after-prepare rule. Run with: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chosenSlot, mergeOutcomes, networksToAdd } from './tick-add.ts';
+import { chosenSlot, instantTicksEnabled, mergeOutcomes, networksToAdd } from './tick-add.ts';
 
 const sent = (network: string) => ({ network, ok: true });
 const refused = (network: string, reason: string) => ({ network, ok: false, reason });
@@ -64,4 +64,11 @@ test('a time already gone, or no time at all, is refused as past', () => {
   assert.deepEqual(chosenSlot(new Date('2026-10-27T14:59:00Z'), [], now), { ok: false, reason: 'past' });
   assert.deepEqual(chosenSlot(new Date('2026-10-27T15:00:00Z'), [], now), { ok: false, reason: 'past' });
   assert.deepEqual(chosenSlot(new Date('not a date'), [], now), { ok: false, reason: 'past' });
+});
+
+test('a tick with no time is held unless VIDEO_TICK_INSTANT says to send it at once', () => {
+  assert.equal(instantTicksEnabled({}), false);
+  assert.equal(instantTicksEnabled({ VIDEO_TICK_INSTANT: 'off' }), false);
+  assert.equal(instantTicksEnabled({ VIDEO_TICK_INSTANT: 'on' }), true);
+  assert.equal(instantTicksEnabled({ VIDEO_TICK_INSTANT: 'true' }), true);
 });

@@ -17,7 +17,7 @@ import { useState } from 'react';
 import { announce } from '@/components/refreshBus';
 import { friendlyErrorFromResponse } from '@/lib/friendly-error';
 
-type Row = { tab: string; row: number; title: string; ticked: string[]; owed: string[]; state: 'ready' | 'nothing_new' };
+type Row = { tab: string; row: number; title: string; ticked: string[]; owed: string[]; state: 'ready' | 'nothing_new'; have?: { network: string; at: string; status: string }[] };
 type Listing = { rows: Row[]; notPrepared: number; slotTimes: string[]; timezone: string; today: string; now: string };
 type Result = { key: string; ok: boolean; text: string };
 
@@ -56,6 +56,16 @@ export function describeRowAnswer(row: number, j: Record<string, unknown>, tz: s
   return { ok: false, text: 'Row ' + row + ': ' + String(j.action || 'no answer').replace(/_/g, ' ') };
 }
 
+/** " (Fri 7 Nov, 17:00)" for a network the row already has a post on, or nothing when the time is unknown. */
+function whenIs(r: Row, network: string, tz: string): string {
+  const n = network === 'x' ? 'twitter' : network;
+  const p = (r.have || []).find((h) => h.network === n && h.at);
+  if (!p) return '';
+  const at = new Date(p.at);
+  if (!Number.isFinite(at.getTime())) return '';
+  return ' (' + at.toLocaleString('en-GB', { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ')';
+}
+
 export default function TickScheduler({ disabled }: { disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -75,7 +85,10 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
       if (!r.ok) throw new Error(await friendlyErrorFromResponse(r));
       const j = (await r.json()) as Listing & { ok: boolean };
       setListing(j);
-      setChosen(new Set(j.rows.filter((x) => x.state === 'ready').map(keyOf)));
+      // Nothing pre-selected. The list holds EVERY ticked row still owed a post,
+      // and some of those are old; the first time the panel opened it offered
+      // to send seven rows nobody had in mind. The person ticks the ones meant.
+      setChosen(new Set());
       const [y, m] = j.today.split('-').map(Number);
       setView((v) => v || { y, m: m - 1 });
       if (!time && j.slotTimes[0]) setTime(j.slotTimes[0]);
@@ -149,6 +162,12 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
                 {listing.notPrepared > 0 && ' ' + listing.notPrepared + ' ticked ' + (listing.notPrepared === 1 ? 'row is' : 'rows are') + ' not in the pipeline (ticks from before it, or rows not prepared yet) and are not listed.'}
               </p>
 
+              {ready.length > 1 && (
+                <div style={{ display: 'flex', gap: 10, fontSize: 12, margin: '0 0 6px' }}>
+                  <button type="button" style={{ ...ghost, padding: '3px 10px' }} disabled={sending} onClick={() => setChosen(new Set(ready.map(keyOf)))}>Select all {ready.length}</button>
+                  <button type="button" style={{ ...ghost, padding: '3px 10px' }} disabled={sending || !chosen.size} onClick={() => setChosen(new Set())}>Select none</button>
+                </div>
+              )}
               {listing.rows.length > 0 && (
                 <div style={{ ...box, maxHeight: 220, overflow: 'auto', marginBottom: 12 }}>
                   {listing.rows.map((r) => {
@@ -159,8 +178,8 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
                         <input type="checkbox" disabled={r.state !== 'ready' || sending} checked={on} onChange={(e) => { const next = new Set(chosen); if (e.target.checked) next.add(k); else next.delete(k); setChosen(next); }} />
                         <strong style={{ whiteSpace: 'nowrap' }}>{r.tab} · row {r.row}</strong>
                         <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</span>
-                        <span style={{ color: '#1d4ed8', whiteSpace: 'nowrap' }}>
-                          {r.state === 'ready' ? r.owed.map(label).join(', ') : 'already has ' + r.ticked.map(label).join(', ')}
+                        <span style={{ color: '#1d4ed8', whiteSpace: 'nowrap' }} title={r.state === 'ready' ? 'Still to send' : 'Already in Metricool'}>
+                          {r.state === 'ready' ? r.owed.map(label).join(', ') : 'already has ' + r.ticked.map((n) => label(n) + whenIs(r, n, listing.timezone)).join(', ')}
                         </span>
                       </label>
                     );
@@ -215,7 +234,7 @@ export default function TickScheduler({ disabled }: { disabled?: boolean }) {
               </div>
 
               <p style={{ fontSize: 13, margin: '12px 0 8px' }}>
-                {!picked.length ? 'Choose at least one row.'
+                {!picked.length ? 'Tick the rows to send.'
                   : !day ? 'Pick a day.'
                   : !/^\d{2}:\d{2}$/.test(time) ? 'Pick a time.'
                   : inPast ? 'That time has already gone today. Pick a later one.'

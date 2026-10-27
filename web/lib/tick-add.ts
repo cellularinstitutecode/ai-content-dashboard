@@ -77,3 +77,17 @@ export function chosenSlot(requested: Date, taken: Iterable<string>, now: Date =
   const next = nextFreeSlot(Array.from(used, (n) => new Date(n).toISOString()), requested);
   return next ? { ok: true, at: next, moved: true } : { ok: false, reason: 'full' };
 }
+
+/**
+ * May a tick that names no time be sent at the next free slot?
+ *
+ * No, unless the deployment says so. The sheet's edit trigger sends a row the
+ * moment a box is ticked, with no time; the first time the clinic used the
+ * ticks it got two posts at slots nobody chose, and then found the panel had
+ * nothing left to schedule. A tick now means "this network, at a time I will
+ * pick in the dashboard's Prepare checked boxes", and the trigger's request
+ * is answered `needs_time`. VIDEO_TICK_INSTANT=on restores the instant send.
+ */
+export function instantTicksEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return /^(on|true|1|yes)$/i.test(String(env.VIDEO_TICK_INSTANT || '').trim());
+}

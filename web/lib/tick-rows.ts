@@ -21,7 +21,7 @@ import { networksToAdd, type PriorOutcome } from './tick-add.ts';
 import { firstLinkIn, rowKeyFor } from './video-row.ts';
 
 export type TickEntry = { tab: string; row: number; title: string; videoLink: string; networks: string[] };
-export type TickRun = { tab: string; row_key: string; state?: string | null; metricool?: unknown };
+export type TickRun = { tab: string; row_key: string; state?: string | null; metricool?: unknown; draft_id?: string | null };
 
 export type TickRow = {
   tab: string;
@@ -30,6 +30,8 @@ export type TickRow = {
   ticked: string[];
   owed: string[];
   state: 'ready' | 'nothing_new' | 'not_prepared';
+  /** The draft the row's posts hang off, so the caller can say when each goes out. */
+  draftId?: string | null;
 };
 
 /** The ticked rows, each with what it is still owed. Rows with nothing ticked are not rows here. */
@@ -48,7 +50,7 @@ export function tickRows(entries: readonly TickEntry[], runs: readonly TickRun[]
     }
     const prior = Array.isArray(run.metricool) ? (run.metricool as PriorOutcome[]) : [];
     const owed = networksToAdd(ticked, prior);
-    out.push({ tab: e.tab, row: e.row, title: e.title || link, ticked, owed, state: owed.length ? 'ready' : 'nothing_new' });
+    out.push({ tab: e.tab, row: e.row, title: e.title || link, ticked, owed, state: owed.length ? 'ready' : 'nothing_new', draftId: run.draft_id || null });
   }
   return out;
 }

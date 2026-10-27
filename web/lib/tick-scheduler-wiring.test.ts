@@ -22,3 +22,16 @@ test('the Video Library draws the button, and the listing route applies the test
   assert.match(route, /tickRows\(/);
   assert.match(route, /\.eq\('state', 'prepared'\)/);
 });
+
+test('a tick that names no time is answered needs_time by the route, unless VIDEO_TICK_INSTANT is on', () => {
+  const route = src('app/api/videos/row/route.ts');
+  assert.match(route, /if \(!publishAt && !instantTicksEnabled\(\)\) \{[\s\S]*action: 'needs_time'/);
+  // The hold comes BEFORE the hand-off, so a held tick costs no read and no copy.
+  assert.ok(route.indexOf("action: 'needs_time'") < route.indexOf('await addTickedNetworks('));
+});
+
+test('the panel pre-selects no row: the person ticks the ones meant', () => {
+  const c = src('components/TickScheduler.tsx');
+  assert.match(c, /setListing\(j\);[\s\S]{0,600}setChosen\(new Set\(\)\);/);
+  assert.doesNotMatch(c, /setChosen\(new Set\(j\.rows/);
+});
