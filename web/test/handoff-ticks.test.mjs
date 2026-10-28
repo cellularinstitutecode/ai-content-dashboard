@@ -77,7 +77,8 @@ test('the sheet’s commonest row — YouTube + LinkedIn + TikTok ticked — get
   assert.match(yt, /^What one bag of removed plasma reveals\n/, 'the description opens with the written first line');
   assert.match(yt, /REF: Smith J/, 'the verified citation is put back');
   assert.equal((yt.match(/AVISO DE PUBLICIDAD/g) || []).length, 1, 'exactly one notice');
-  assert.ok(yt.trim().endsWith('#tpe #plasmaexchange'), 'hashtags last');
+  // The writer's tags, then the clinic's own (lib/hashtags.ts CLINIC_HASHTAGS), last.
+  assert.ok(yt.trim().endsWith('#tpe #plasmaexchange #stemcellsclinicincancun #stemcellclinicinmexico #beststemcellsclinicincancun'), 'hashtags last: ' + yt.slice(-160));
   // Only YouTube was written for; LinkedIn and TikTok cost nothing.
   assert.deepEqual(ai.__asked().map((a) => a.network), ['youtube']);
   assert.equal(ai.__asked()[0].source, LINKEDIN, 'YouTube is written from the long post');
