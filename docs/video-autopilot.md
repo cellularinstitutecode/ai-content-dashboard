@@ -132,6 +132,10 @@ published something.
   spreads across days instead of stacking thirty posts on one, which would read
   as spam on every network. Change the grid with `VIDEO_AUTOPILOT_TIMES`
   (e.g. `08:00,13:00,17:00`); `VIDEO_POST_DAYS=weekdays` limits it to Monday–Friday.
+- **Every post ends with the clinic's own hashtags** — `#stemcellsclinicincancun
+  #stemcellclinicinmexico #beststemcellsclinicincancun` (`lib/hashtags.ts`
+  CLINIC_HASHTAGS), after the tags the writer chose, once each, on every
+  network except X, whose 280 characters cannot hold them.
 - **Every post carries the AVISO line and the REF citation** — LinkedIn
   included. `lib/compliance.ts` scopes the advertising rule to Instagram and
   Facebook, so the writer is only asked for a citation on those two; the

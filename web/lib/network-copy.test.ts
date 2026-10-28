@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { acceptTailored, assembleGatedPost, assembleXPost, copyForNetwork, networksToTailor, tailorPrompt, tailorSource } from './network-copy.ts';
+import { CLINIC_HASHTAGS } from './hashtags.ts';
 import { NETWORK_LIMITS } from './composer.ts';
 
 const AVISO = '2623022002A00090';
@@ -75,6 +76,8 @@ test('the X post fits in 280 with the permit, and keeps the citation only when t
   assert.doesNotMatch(noRef!, /REF:/);
 
   assert.equal(assembleXPost('x'.repeat(300), REF, AVISO), null, 'a body that cannot fit with the permit is not sent');
+  // X carries none of the clinic's tags: 280 characters cannot hold them.
+  assert.doesNotMatch(assembleXPost('One plain sentence.', REF, AVISO) || '', /#stemcell/);
   assert.equal(assembleXPost('', REF, AVISO), null);
 });
 
@@ -85,7 +88,7 @@ test('a Facebook or YouTube post carries exactly one notice and the verified cit
   assert.match(out, /AVISO DE PUBLICIDAD: 2623022002A00090/);
   assert.match(out, /REF: Smith J/);
   assert.doesNotMatch(out, /some other paper/);
-  assert.ok(out.trim().endsWith('#one #two'), 'hashtags last');
+  assert.ok(out.trim().endsWith('#one #two ' + CLINIC_HASHTAGS.join(' ')), 'hashtags last, the clinic’s after the writer’s');
   // No citation at all: the notice alone, as a claim-free post is sent.
   assert.doesNotMatch(assembleGatedPost('Adapted text.', '', AVISO)!, /REF:/);
 });

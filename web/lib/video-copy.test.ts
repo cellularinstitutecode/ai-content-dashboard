@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { composeCaption, forbiddenNames, houseStyleHint, keywordGrounding, namesLeaked, topicFromTranscript, transcriptExcerpt, videoSubject } from './video-copy.ts';
+import { composeCaption, forbiddenNames, houseStyleHint, keywordGrounding, namesLeaked, topicFromTranscript, transcriptExcerpt, videoSubject, withCitation } from './video-copy.ts';
+import { CLINIC_HASHTAGS } from './hashtags.ts';
 
 const AVISO = '2623022002A00090';
 
@@ -73,13 +74,29 @@ test('the house order: body, REF, AVISO, hashtags last', () => {
   const iTags = out.indexOf('#One');
   assert.ok(iRef < iAviso, 'REF before the notice');
   assert.ok(iAviso < iTags, 'the notice before the hashtags');
-  assert.ok(out.trim().endsWith('#One #Two'), 'hashtags last:\n' + out);
+  assert.ok(out.trim().endsWith('#One #Two ' + CLINIC_HASHTAGS.join(' ')), 'hashtags last, the clinic’s after the writer’s:\n' + out);
+});
+
+test('the clinic’s own tags go on every caption, once, after the writer’s, and never twice', () => {
+  const out = composeCaption('Body.\n\n#one #stemcellsclinicincancun', AVISO);
+  assert.ok(out.trim().endsWith('#one #stemcellsclinicincancun #stemcellclinicinmexico #beststemcellsclinicincancun'), out);
+  assert.equal((out.match(/#stemcellsclinicincancun/g) || []).length, 1);
+  // A caption the writer left without tags still gets the clinic's.
+  const bare = composeCaption('Body only.', AVISO);
+  assert.ok(bare.trim().endsWith(CLINIC_HASHTAGS.join(' ')), bare);
+  assert.ok(bare.indexOf('AVISO DE PUBLICIDAD') < bare.indexOf('#stemcellsclinicincancun'), 'the notice before the tags');
+  // And withCitation keeps them, after the replaced REF.
+  const cited = withCitation(bare, 'Smith J. 2021. doi:10.1/x', AVISO);
+  assert.match(cited, /REF: Smith J/);
+  assert.ok(cited.trim().endsWith(CLINIC_HASHTAGS.join(' ')));
+  // Opt out, for a network that cannot carry them.
+  assert.doesNotMatch(composeCaption('Body.', AVISO, { tags: [] }), /#/);
 });
 
 test('copy with no notice at all still gets exactly one', () => {
   const out = composeCaption('Just a body.\n\n#Tag', AVISO);
   assert.equal((out.match(/AVISO DE PUBLICIDAD/gi) || []).length, 1);
-  assert.ok(out.trim().endsWith('#Tag'));
+  assert.ok(out.trim().endsWith('#Tag ' + CLINIC_HASHTAGS.join(' ')));
 });
 
 test('the topic comes from what was said, not what the file was called', () => {

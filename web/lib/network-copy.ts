@@ -147,10 +147,12 @@ export function assembleXPost(body: string, ref: string | null | undefined, avis
   const limit = NETWORK_LIMITS.twitter ?? 280;
   const text = String(body || '').trim();
   if (!text) return null;
-  const cited = withCitation(text, ref, aviso);
+  // No clinic tags on X: 280 characters cannot hold a sentence, a permit and
+  // three long hashtags, and the brief asks the writer for none either.
+  const cited = withCitation(text, ref, aviso, { tags: [] });
   if (cited.length <= limit) return cited;
   // withCitation with no reference strips the REF line and re-stamps the notice.
-  const bare = withCitation(text, '', aviso);
+  const bare = withCitation(text, '', aviso, { tags: [] });
   return bare.length <= limit ? bare : null;
 }
 

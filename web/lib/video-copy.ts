@@ -5,6 +5,7 @@
 // Both existed as bugs before they existed as functions, and both were
 // invisible from inside the code — they only showed up in the output.
 import { avisoLine } from './compliance.ts';
+import { CLINIC_HASHTAGS } from './hashtags.ts';
 import { pickSeed } from './topic-seed.ts';
 
 // ---------------------------------------------------------------------------
@@ -361,11 +362,11 @@ export function captionBody(text: string): string {
  * the clinic's own permit number, with the hashtags last as the house style
  * has always had them.
  */
-export function composeCaption(text: string, avisoNumber?: string | null): string {
+export function composeCaption(text: string, avisoNumber?: string | null, opts: CaptionOptions = {}): string {
   const raw = String(text || '').replace(/\r\n/g, '\n');
 
   const refs = raw.match(REF_LINE) || [];
-  const tags = raw.match(HASHTAG_LINE) || [];
+  const tagLines = raw.match(HASHTAG_LINE) || [];
 
   const body = captionBody(raw);
 
@@ -374,10 +375,24 @@ export function composeCaption(text: string, avisoNumber?: string | null): strin
   const firstRef = refs[0];
   if (firstRef) parts.push(firstRef.trim());
   parts.push(avisoLine(avisoNumber));
-  if (tags.length) parts.push(tags.map((t) => t.trim()).join(' ').replace(/\s+/g, ' ').trim());
+  // The writer's tags, then the clinic's own (lib/hashtags.ts CLINIC_HASHTAGS),
+  // each once: a writer who already used one of the clinic's is not doubled.
+  const tags = tagLines.join(' ').split(/\s+/).filter(Boolean);
+  const seen = new Set(tags.map((t) => t.toLowerCase()));
+  for (const t of opts.tags ?? CLINIC_HASHTAGS) {
+    if (seen.has(t.toLowerCase())) continue;
+    seen.add(t.toLowerCase());
+    tags.push(t);
+  }
+  if (tags.length) parts.push(tags.join(' '));
 
   return parts.filter(Boolean).join('\n\n');
 }
+
+export type CaptionOptions = {
+  /** The fixed tags appended after the writer's. Default CLINIC_HASHTAGS; [] for a network that cannot carry them. */
+  tags?: readonly string[];
+};
 
 /**
  * The caption carrying EXACTLY this citation — replacing one already there.
@@ -394,9 +409,9 @@ export function composeCaption(text: string, avisoNumber?: string | null): strin
  * The hashtags survive, because they are stripped and re-appended by
  * composeCaption rather than removed here.
  */
-export function withCitation(text: string, ref: string | null | undefined, avisoNumber?: string | null): string {
+export function withCitation(text: string, ref: string | null | undefined, avisoNumber?: string | null, opts: CaptionOptions = {}): string {
   const line = String(ref || '').trim().replace(/^REF(?:ERENCIA)?\s*[.:：]\s*/i, '').trim();
   const stripped = String(text || '').replace(/\r\n/g, '\n').replace(REF_LINE, '');
-  if (!line) return composeCaption(stripped, avisoNumber);
-  return composeCaption(stripped.replace(/\s+$/, '') + '\n\nREF: ' + line, avisoNumber);
+  if (!line) return composeCaption(stripped, avisoNumber, opts);
+  return composeCaption(stripped.replace(/\s+$/, '') + '\n\nREF: ' + line, avisoNumber, opts);
 }

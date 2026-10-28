@@ -17,6 +17,19 @@ export const HOUSE_HASHTAG = '#cellularinstitute';
 export const MAX_HASHTAGS = 10;
 
 /**
+ * The clinic's own search tags, on every video post.
+ *
+ * Asked for in the clinic's words — "Stem cells clinic in Cancun", "stemcell
+ * clinic in Mexico", "beststemcellsclinicincancun", "best stem cells clinic in
+ * cancun" — and written the way every other tag here is (lowercase, folded):
+ * the last two phrases fold to the same tag, so there are three. Appended by
+ * the caption assembly (lib/video-copy.ts composeCaption), after the tags the
+ * writer chose, on every network that carries hashtags; X, whose 280
+ * characters cannot hold them, is the one exception (lib/network-copy.ts).
+ */
+export const CLINIC_HASHTAGS: readonly string[] = ['#stemcellsclinicincancun', '#stemcellclinicinmexico', '#beststemcellsclinicincancun'];
+
+/**
  * One phrase as one hashtag, or '' when it cannot be one.
  *
  * Accents are folded rather than stripped — "cirugía" must become #cirugia and
