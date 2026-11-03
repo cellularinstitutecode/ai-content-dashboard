@@ -38,8 +38,11 @@ test('a cool fluorescent clinic photo is graded, not refused', () => {
   const cb = g.filters[0];
   assert.match(cb, /^colorbalance=rm=0\.\d+:gm=0:bm=-0\.\d+$/, cb);
   // And easing the phone's contrast while lifting exposure.
-  assert.match(g.filters[1], /contrast=0\.940/);
+  assert.match(g.filters[1], /contrast=0\.970/);
   assert.match(g.filters[1], /brightness=0\.0\d+/);
+  // A dark photo is lifted only a little: the lift is what washed the covers.
+  const dark = gradeFor({ r: 90, g: 84, b: 76, warm: 30, sat: 24, lum: 105 });
+  assert.match(dark.filters[1], /brightness=0\.080/, dark.filters[1]);
 });
 
 test('the magenta LED therapy room is refused rather than pushed', () => {

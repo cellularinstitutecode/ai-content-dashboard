@@ -4,12 +4,18 @@
 // lib/title-cover.ts paints.
 //
 // THE BASELINE IS THE CLINIC'S INSTAGRAM. Its photo posts carry a short
-// sentence in large serif type — "Your cells shape how your body responds.",
-// "Hydration is *part* of how the body stays *balanced*.", "Your nervous
-// system deserves space to settle." — set LEFT-ALIGNED in the quiet side of
-// the photograph beside the subject, never pinned small and centred at the
-// top. The words that carry the line are in the brand's rust, in italic; the
-// rest in the dark brown; a short rule beneath. These rules reproduce that.
+// sentence in large serif type — "Meet Our Team", "Decoding Your Health
+// Data", "The Science of Consistent *Sleep*" — set CENTRED, in the clear
+// band of the photograph: ABOVE the people when the frame has room over
+// their heads, otherwise at the BOTTOM, where a soft darkening carries the
+// words. The words that carry the line are in the brand's rust, in italic;
+// the rest in the dark brown on a light wall, in cream on the darkened
+// bottom; a short rule beneath. Never across a face, never behind a wash.
+//
+// The earlier rule — a column "beside the subject" on the side a vision
+// check called quiet — put the words on the people in four covers out of
+// four, behind a cream wash of fading columns the clinic called a white
+// hue. Both are gone: the side hint is still accepted and ignored.
 //
 // Pure: no imports.
 
@@ -35,6 +41,10 @@ export type TitleLayout = {
   height: number;
   side: Side;
   band: Band;
+  /** Centred across the frame, or kept to the quiet side of the band, aligned to it. */
+  align: 'center' | 'left' | 'right';
+  /** The ink the band calls for: dark brown on the light top of a picture, cream on the darkened bottom. */
+  tone: 'ink' | 'cream';
   /** The short rule under the block: its width and the gap above it, px. */
   rule: { width: number; gap: number };
 };
@@ -43,18 +53,33 @@ export type TitleLayout = {
 export const TITLE_INK = '#2E2620';
 /** The accent: the brand's rust, for the words that carry the line. */
 export const TITLE_ACCENT = '#9F4D27';
-/** The cream the wash behind the words is made of (r,g,b). */
-export const TITLE_WASH_RGB = '247,242,235';
+/** The ink on the darkened bottom band: the feed's cream. */
+export const TITLE_CREAM = '#F6F1EA';
+/** The accent on the darkened bottom band: the rust, lifted so it reads on dark. */
+export const TITLE_ACCENT_ON_DARK = '#D4845A';
 
-/** The column the title wraps in: a little over half the frame, so it sits beside the subject. */
-export const TITLE_COLUMN = 620;
 /** The side margin the block keeps from the edge. */
 export const TITLE_MARGIN = 72;
-/** Sizes tried, largest first; the first that wraps into at most MAX_LINES and under MAX_BLOCK wins. */
+/** The column the title wraps in: the frame less its margins, the lines centred in it. */
+export const TITLE_COLUMN = COVER.width - 2 * TITLE_MARGIN;
+/**
+ * The highest head must start at least this far down the photograph for the
+ * title to go above it. High on purpose: the vision check that measures it
+ * has called a head at a fifth of the way down "50", and a title set above a
+ * head that is not there lands on a face. Below this the bottom band is used,
+ * where faces rarely are.
+ */
+export const TOP_BAND_MIN_HEAD_PCT = 55;
+/** Sizes tried, largest first; the first that wraps into few enough lines and under MAX_BLOCK wins. */
 const SIZES = [132, 120, 110, 100, 92, 84, 76, 70, 64];
-const MAX_LINES = 4;
+/**
+ * Two lines when they can be had, as the feed's titles are ("Meet Our Team",
+ * "Decoding Your Health Data"); three, then four, only when no size wraps
+ * shorter. A compact block is what keeps the words off the people.
+ */
+const LINE_BUDGETS = [2, 3, 4];
 /** The block never takes more than this much of the frame's height: the picture stays the picture. */
-const MAX_BLOCK = Math.round(COVER.height * 0.44);
+const MAX_BLOCK = Math.round(COVER.height * 0.3);
 /** The stand-in serif's average glyph width and word gap, as a fraction of the size. */
 const GLYPH = 0.47;
 const SPACE = 0.26;
@@ -113,11 +138,13 @@ export function wrapWords(words: readonly TitleWord[], size: number, width = TIT
   return lines;
 }
 
-/** The largest size whose wrap fits the column in at most MAX_LINES lines and under MAX_BLOCK tall. */
+/** The largest size whose wrap fits the column in the fewest lines possible (two, then three, then four) under MAX_BLOCK tall. */
 export function fitSize(words: readonly TitleWord[], width = TITLE_COLUMN): { size: number; lines: TitleWord[][] } {
-  for (const size of SIZES) {
-    const lines = wrapWords(words, size, width);
-    if (lines && lines.length <= MAX_LINES && lines.length * size * LINE_HEIGHT <= MAX_BLOCK) return { size, lines };
+  for (const budget of LINE_BUDGETS) {
+    for (const size of SIZES) {
+      const lines = wrapWords(words, size, width);
+      if (lines && lines.length <= budget && lines.length * size * LINE_HEIGHT <= MAX_BLOCK) return { size, lines };
+    }
   }
   const size = SIZES[SIZES.length - 1];
   return { size, lines: wrapWords(words, size, width) || [words.slice()] };
@@ -126,63 +153,82 @@ export function fitSize(words: readonly TitleWord[], width = TITLE_COLUMN): { si
 export type LayoutHints = {
   /** Where the highest head starts, as a percentage of the photograph's height (vision check). */
   headTopPct?: number | null;
-  /** The side of the frame the vision check found quiet, where the title can sit beside the subject. */
+  /** Accepted for the callers that still pass it; no longer used — the side placement put words on people. */
   clearSide?: Side | null;
+  /** The band the picture itself is quiet in (lib/cover-bands.ts quietBand), when one clearly is. */
+  quiet?: 'top' | 'bottom' | null;
+  /** Within the chosen band, the half without the person (lib/cover-bands.ts quietSide), when one clearly is. */
+  quietSide?: Side | null;
 };
+
+/** The column when the block keeps to one side of the band: a little under two thirds of the frame. */
+export const SIDE_COLUMN = Math.round(COVER.width * 0.62) - TITLE_MARGIN;
+
+/** With the picture's quiet band known, a head this far down is enough room for the title above it. */
+export const TOP_BAND_MIN_HEAD_PCT_WHEN_QUIET = 30;
 
 /**
  * Where the block goes.
  *
- *   a clear side reported  → beside the subject, in the middle of that side
- *                            (the feed's "Hydration is part of…").
- *   heads low in the frame → above them, top-left.
- *   otherwise              → bottom-left, over the lower part of the picture
- *                            (the feed's "Your nervous system…").
+ *   plenty of room above the heads      → the top band, centred (the feed's
+ *                                         "Meet Our Team", "Decoding Your
+ *                                         Health Data").
+ *   some room, and the top is the quiet → the top band: a plain ceiling over
+ *   band of the picture                   a team standing in the lower half.
+ *   otherwise                           → the bottom band, centred, on a soft
+ *                                         darkening (the feed's "The Science
+ *                                         of Consistent Sleep").
  *
- * `headTopPct` is measured on the photograph; the cover shows its top 83.3%
- * (a 2:3 photo cropped to 4:5 from the top), so it is converted here.
+ * No head measured means no room can be assumed: the bottom. `headTopPct` is
+ * measured on the photograph; the cover shows its top 83.3% (a 2:3 photo
+ * cropped to 4:5 from the top), so it is converted where the block is set.
  */
 export function placeTitle(hints: LayoutHints): { side: Side; band: Band } {
-  if (hints.clearSide === 'left' || hints.clearSide === 'right') return { side: hints.clearSide, band: 'middle' };
   const head = typeof hints.headTopPct === 'number' && Number.isFinite(hints.headTopPct) ? hints.headTopPct : null;
-  if (head != null && head >= 40) return { side: 'left', band: 'top' };
+  if (head != null && head >= TOP_BAND_MIN_HEAD_PCT) return { side: 'left', band: 'top' };
+  if (head != null && head >= TOP_BAND_MIN_HEAD_PCT_WHEN_QUIET && hints.quiet === 'top') return { side: 'left', band: 'top' };
   return { side: 'left', band: 'bottom' };
 }
 
 /** The whole layout for a title on a cover. */
 export function layoutTitle(title: string, hints: LayoutHints = {}): TitleLayout {
   const words = parseEmphasis(title);
-  const { side, band } = placeTitle(hints);
-  let { size, lines } = fitSize(words);
+  const { band } = placeTitle(hints);
+  // A person standing on one side of the band: the block keeps to the other,
+  // in a narrower column, aligned to that edge (the feed's "if regenerative
+  // medicine is already on your radar", bottom-left of a desk).
+  const align: TitleLayout['align'] = hints.quietSide === 'left' || hints.quietSide === 'right' ? hints.quietSide : 'center';
+  const side: Side = align === 'right' ? 'right' : 'left';
+  const column = align === 'center' ? TITLE_COLUMN : SIDE_COLUMN;
+  let { size, lines } = fitSize(words, column);
   // No markers: the opening line carries the sentence.
   if (words.length && !words.some((w) => w.accent)) lines = lines.map((line, i) => line.map((w) => ({ ...w, accent: i === 0, italic: false })));
   const rule = { width: 110, gap: 34 };
   const blockHeight = (n: number, s: number) => Math.round(n * s * LINE_HEIGHT) + rule.gap + 3;
   let height = blockHeight(lines.length, size);
-  const TOP = 120;
-  const BOTTOM = 150;
+  const TOP = 110;
+  const BOTTOM = 110;
   let y: number;
   if (band === 'top') {
-    // Above the heads: step the size down, then move up, until it clears them.
+    // Above the heads: step the size down, then move up, until it clears them
+    // — and never below a third of the frame, whatever the check measured.
     const head = typeof hints.headTopPct === 'number' ? hints.headTopPct : 100;
-    const headPx = Math.max(0, Math.min(COVER.height, (head / 83.3) * COVER.height)) - 80;
+    const headPx = Math.min(Math.max(0, Math.min(COVER.height, (head / 83.3) * COVER.height)) - 60, Math.round(COVER.height * 0.36));
     y = TOP;
     while (y + height > headPx && size > 64) {
       const next = SIZES[SIZES.indexOf(size) + 1] ?? 64;
       if (next === size) break;
       size = next;
-      lines = fitSize(words, TITLE_COLUMN).size >= size ? (wrapWords(words, size) || lines) : lines;
+      lines = fitSize(words, column).size >= size ? (wrapWords(words, size, column) || lines) : lines;
       if (words.length && !words.some((w) => w.accent)) lines = lines.map((line, i) => line.map((w) => ({ ...w, accent: i === 0, italic: false })));
       height = blockHeight(lines.length, size);
     }
     if (y + height > headPx) y = Math.max(60, Math.round(headPx - height));
-  } else if (band === 'middle') {
-    y = Math.round(COVER.height * 0.46 - height / 2);
   } else {
     y = COVER.height - BOTTOM - height;
   }
-  const x = side === 'left' ? TITLE_MARGIN : COVER.width - TITLE_MARGIN - TITLE_COLUMN;
-  return { lines, size, x, y, width: TITLE_COLUMN, height, side, band, rule };
+  const x = align === 'right' ? COVER.width - TITLE_MARGIN - column : TITLE_MARGIN;
+  return { lines, size, x, y, width: column, height, side, band, align, tone: band === 'bottom' ? 'cream' : 'ink', rule };
 }
 
 // --- kept for callers of the earlier, centred cover ------------------------

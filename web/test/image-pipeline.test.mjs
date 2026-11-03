@@ -205,16 +205,19 @@ test('IMAGE_GEN=off disables generation with a clear error and spends nothing', 
   assert.equal(calls.length, 0, 'no API call was made');
 });
 
-test('a library photo about to carry a title is checked for headroom, and read as a photograph', async () => {
+test('a library photo about to carry a title is measured for headroom, read as a photograph, and a high head is no defect', async () => {
   script = [verifierSays('verify', { approved: false, textDetected: true, bannedProp: false, headTopPct: 12, score: 80, blocking: ['sign on the wall'], advisory: [] })];
   const v = await verifyLibraryPhoto({ bytes: Buffer.from(PNG_B64, 'base64'), contentType: 'image/png' }, { subject: 'joint recovery' });
   const sent = calls[0].body;
   assert.match(sent.messages[0].content, /8\. HEADROOM: measure how far down/, 'the reviewer is asked where the highest head starts');
   assert.doesNotMatch(sent.messages[0].content, /ON-TOPIC/, 'no planner: the subject is the clinic\'s own choice');
   assert.match(sent.messages[1].content[0].text, /Verify this photograph now\./);
-  assert.equal(v.headTopPct, 12);
-  assert.equal(v.status, 'flagged', 'the head reaches into the title band');
-  assert.match(v.issues[0], /head reaches into the title area/);
+  assert.equal(v.headTopPct, 12, 'the measurement is kept: the title goes to the bottom band on it');
+  // A head high in the frame used to flag the photo for the title band at the
+  // top. The title now goes ABOVE the people only when there is room and to
+  // the BOTTOM otherwise (lib/title-cover-layout.ts), so this is not a defect.
+  assert.equal(v.status, 'approved');
+  assert.ok(!v.issues.some((i) => /head reaches into the title area/.test(i)));
   assert.equal(v.textDetected, false, 'a real sign is a note, not a defect');
   assert.ok(v.advisory.some((i) => /sign on the wall/.test(i)));
   assert.equal(__uploads().length, 0, 'nothing is generated or stored by the check');
