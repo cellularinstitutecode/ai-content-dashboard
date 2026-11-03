@@ -12,7 +12,8 @@ import ProcessTracker, { makeSteps, stepActive, stepError, stepsDone, type Proce
 import { announce, onRefresh, fetchDrafts } from '@/components/refreshBus';
 import { useWorkspace } from '@/components/workspace';
 import { PanelLoader } from '@/components/LoadingScreen';
-import { friendlyError, friendlyImageError } from '@/lib/friendly-error';
+import { friendlyError, friendlyErrorFromResponse, friendlyImageError } from '@/lib/friendly-error';
+import RedoCovers from '@/components/RedoCovers';
 
 // The visible pipeline a standalone image walks through — each step lights up
 // as the real call behind it starts/finishes.
@@ -302,6 +303,12 @@ export default function ImageStudio() {
       </div>
 
       <div className="p-6 sm:p-8">
+        {/*
+          Covers made before the cover rule of 3 November 2026 keep the old
+          look until they are re-rendered; this redoes them in one press
+          (components/RedoCovers.tsx) and syncs the posts that carry them.
+        */}
+        <RedoCovers onDone={() => { void load({ quiet: true }); }} fetchErr={friendlyErrorFromResponse} />
         {err && <div role="alert" className="mb-4 rounded-xl bg-red-50 px-4 py-2.5 text-[13px] text-red-700 ring-1 ring-red-100">{err}</div>}
         {proc && (
           <div className="mb-4">
