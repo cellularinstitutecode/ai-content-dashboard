@@ -14,7 +14,8 @@ test('the route lists old covers by the tested rule, redoes each with retitleIma
   assert.match(route, /await retitleImage\(existing, title, d\.topic \|\| 'cover'\)/);
   assert.match(route, /coverRedone: true/);
   assert.match(route, /withoutHeadFlag\(made\.verification\)/);
-  // Published posts are never touched.
+  // A draft with a published post is not redone at all; a published post is never touched.
+  assert.match(route, /return unpublishedOnly\(old, /);
   assert.match(route, /p\.status !== 'published'/);
   // The user's own drafts only.
   assert.match(route, /\.eq\('user_id', userId\)/);

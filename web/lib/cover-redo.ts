@@ -49,3 +49,17 @@ export function withoutHeadFlag<T extends { status?: string; issues?: string[] }
   if (issues.length === v.issues.length) return v;
   return { ...v, issues, status: issues.length ? v.status : (v.status === 'flagged' ? 'approved' : v.status) };
 }
+
+/**
+ * The drafts still worth redoing: those with nothing published yet.
+ *
+ * A cover that has gone out is history — the profile already shows it, and
+ * redoing it changes nothing anyone will see. What the clinic wants to look
+ * like the profile is everything still to come: drafts with no post yet, and
+ * drafts whose posts are scheduled or waiting. One published post on a draft
+ * and it is left as it is.
+ */
+export function unpublishedOnly<T extends { id: string }>(drafts: readonly T[], posts: readonly { draft_id: string | null; status: string | null }[]): T[] {
+  const published = new Set(posts.filter((p) => p.draft_id && String(p.status || '') === 'published').map((p) => String(p.draft_id)));
+  return drafts.filter((d) => !published.has(d.id));
+}
