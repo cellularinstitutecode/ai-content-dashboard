@@ -18,10 +18,12 @@
 // - No new secrets: reuses OPENAI_API_KEY + the Supabase service role.
 import { cleanTopic, familyAt, onTopicCheck, plannerImageFor, plannerPromptLines, scienceOffered, SHOT_COUNT, type PlannerImage } from '@/lib/planner-image';
 import { plainTitle, renderTitleCover } from '@/lib/title-cover';
+import { measureBands } from '@/lib/palette-measure';
+import { quietHints } from '@/lib/cover-bands';
 import { resolveCoverTitle } from '@/lib/cover-title';
 import { FEED_BASELINE } from '@/lib/planner-image';
 import { briefSource, briefSystemPrompt, briefUserPrompt, parseSceneBrief, type SceneBrief } from '@/lib/image-brief';
-import { COVER_MIN_HEAD_TOP_PCT, ownBucketUrl, photographVerdict, type LibraryProvenance } from './library-cover.ts';
+import { ownBucketUrl, photographVerdict, type LibraryProvenance } from './library-cover.ts';
 import { cleanCoverTitle, notesOf, retitleDecision, takesOf } from './cover-edit.ts';
 import { setStoredFontReader } from '@/lib/brand-card';
 import { readStoredFonts } from '@/lib/brand-fonts';
@@ -167,7 +169,6 @@ const FALLBACK_AFTER_TIMEOUT_MIN_MS = 45_000;
 // The title band covers roughly the top quarter of the cover; the photo is
 // cropped from the top (lib/title-cover.ts), so heads must start below this.
 // One number for planner covers and titled library photos.
-const PLANNER_MIN_HEAD_TOP_PCT = COVER_MIN_HEAD_TOP_PCT;
 // A retry that cannot finish before the caller's deadline is not started:
 // FIX runs inside a 300 s function, and a planner take (brief + generation +
 // check) needs about this long; the Images call itself is shortened to fit.
@@ -735,9 +736,13 @@ async function verifyGeneratedImage(
     const raw = String(data?.choices?.[0]?.message?.content ?? '{}');
     // Defects flag; opinions are notes. The split (and the text hard rule)
     // lives in lib/image-verdict.ts where it is unit-tested.
+    // The head's height is still measured (the title is set above the people
+    // when there is room and at the bottom when there is not —
+    // lib/title-cover-layout.ts), but a head high in the frame is no longer a
+    // defect: no cover puts its title over one. minHeadTopPct is therefore not
+    // passed; classifyVerdict keeps the rule for a caller that wants it.
     const measured = classifyVerdict(JSON.parse(raw), {
       ...(planner ? { requireOnTopic: true } : {}),
-      ...(planner || mode.headroom ? { minHeadTopPct: PLANNER_MIN_HEAD_TOP_PCT } : {}),
     });
     const verdict = mode.photograph ? photographVerdict(measured) : measured;
     // The account answered: a stale "out of credit" on record is cleared.
@@ -1015,7 +1020,7 @@ async function generateBestPackImage(opts: {
   // nothing, and the failure is reported.
   if (planner && planner.title) {
     try {
-      const cover = await renderTitleCover({ title: planner.title, photo: { bytes: best.img.bytes, contentType: best.img.contentType }, headTopPct: best.verification.headTopPct, clearSide: best.verification.clearSide });
+      const cover = await renderTitleCover({ title: planner.title, photo: { bytes: best.img.bytes, contentType: best.img.contentType }, headTopPct: best.verification.headTopPct, clearSide: best.verification.clearSide, ...quietHints(await measureBands(best.img.bytes), best.verification.headTopPct) });
       url = await storeBytes(cover.png, 'image/png', 'png', nameHint + '-cover');
       titled = { title: planner.title, photoUrl, family: cover.family, ...(custom ? { custom: true } : {}) };
     } catch (err) {
@@ -1114,7 +1119,7 @@ export async function editPackImage(opts: {
     const had = opts.existing.titled;
     if (had && had.title) {
       try {
-        const cover = await renderTitleCover({ title: had.title, photo: { bytes: best.img.bytes, contentType: best.img.contentType }, headTopPct: best.verification.headTopPct, clearSide: best.verification.clearSide });
+        const cover = await renderTitleCover({ title: had.title, photo: { bytes: best.img.bytes, contentType: best.img.contentType }, headTopPct: best.verification.headTopPct, clearSide: best.verification.clearSide, ...quietHints(await measureBands(best.img.bytes), best.verification.headTopPct) });
         url = await storeBytes(cover.png, 'image/png', 'png', nameHint + '-cover');
         titled = { title: had.title, photoUrl, family: cover.family, ...(had.custom ? { custom: true } : {}) };
       } catch (err) {

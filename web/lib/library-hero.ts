@@ -25,11 +25,12 @@ import { promisify } from 'node:util';
 import type { BrandContext } from '@/lib/ai';
 import { resolveFfmpeg } from '@/lib/audio-extract';
 import { IMAGE_BUCKET, storeBytes, verifyLibraryPhoto, type ImageVerification, type PackImage } from '@/lib/images';
-import { measureImage } from '@/lib/palette-measure';
+import { measureBands, measureImage } from '@/lib/palette-measure';
 import { plannerImageFor } from '@/lib/planner-image';
 import { plainTitle, renderTitleCover } from '@/lib/title-cover';
 import { reportError } from '@/lib/report';
-import { coverTitleFor, ffmpegCoverArgs, gradeDecision, headroomPad, libraryProvenance, needsFfmpeg, ownBucketUrl, type GradeDecision } from './library-cover.ts';
+import { coverTitleFor, ffmpegCoverArgs, gradeDecision, libraryProvenance, needsFfmpeg, ownBucketUrl, type GradeDecision } from './library-cover.ts';
+import { quietBand, quietSideFor } from './cover-bands.ts';
 
 const run = promisify(execFile);
 
@@ -122,7 +123,12 @@ export async function libraryHero(opts: {
     let pad = 0;
     if (opts.title) {
       verification = await verifyLibraryPhoto({ bytes: photo.bytes, contentType: photo.contentType }, { subject, brand: opts.brand, planner });
-      pad = headroomPad(verification.headTopPct);
+      // No sky is added any more. The title goes ABOVE the people when the
+      // frame has room and to the BOTTOM when it does not
+      // (lib/title-cover-layout.ts placeTitle), so a head high in the frame
+      // costs nothing; the blurred mirror of the top edge that used to be
+      // padded on was one more thing in the picture that was not the picture.
+      pad = 0;
     }
 
     // 3. ffmpeg: the filter, and the sky the title needs.
@@ -158,7 +164,12 @@ export async function libraryHero(opts: {
       titled = { title: '', photoUrl, family: 'none', custom: true };
     } else if (title) {
       try {
-        const cover = await renderTitleCover({ title, photo: { bytes, contentType }, headTopPct: verification?.headTopPct ?? null, clearSide: verification?.clearSide ?? null });
+        // The picture's own quiet band, beside the head the check reported
+        // (lib/cover-bands.ts): the two together decide top or bottom.
+        const bands = await measureBands(bytes);
+        const quiet = quietBand(bands);
+        const quietSide = quietSideFor(bands, { headTopPct: verification?.headTopPct ?? null, quiet });
+        const cover = await renderTitleCover({ title, photo: { bytes, contentType }, headTopPct: verification?.headTopPct ?? null, clearSide: verification?.clearSide ?? null, quiet, quietSide });
         url = await storeBytes(cover.png, 'image/png', 'png', nameHint + '-cover');
         titled = { title, photoUrl, family: cover.family, ...(custom ? { custom: true } : {}) };
       } catch (err) {

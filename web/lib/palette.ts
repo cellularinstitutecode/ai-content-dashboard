@@ -138,10 +138,13 @@ export function gradeFor(s: PaletteStats, target: PaletteStats = BRAND_TARGET): 
   const bGain = clamp((-dWarm * REACH) / 255 / 2, -0.3, 0.3);
   // eq takes saturation as a multiplier and brightness as a -1..1 offset.
   const satMul = clamp(s.sat > 1 ? 1 + ((target.sat / s.sat) - 1) * REACH : 1, 0.5, 1.6);
-  const bright = clamp((dLum * REACH) / 255, -0.3, 0.3);
-  // Phone cameras carry more contrast than the covers do; easing it is what
-  // makes a real photograph sit beside a generated one.
-  const contrast = 0.94;
+  // A lift is capped low: lifting a photograph towards the palette's
+  // luminance is what left the covers looking washed, and the clinic asked for
+  // the white hue to go. A cut keeps its range — a bright photo may be brought down.
+  const bright = clamp((dLum * REACH) / 255, -0.3, 0.08);
+  // Phone cameras carry a touch more contrast than the covers do; eased only
+  // a little, so the picture keeps its depth.
+  const contrast = 0.97;
 
   const f = (v: number) => (Math.round(v * 1000) / 1000).toFixed(3);
   return {

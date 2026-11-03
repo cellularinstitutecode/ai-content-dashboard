@@ -10,6 +10,8 @@
 // it can and throws when it cannot.
 import 'server-only';
 import { plainTitle, renderTitleCover } from '@/lib/title-cover';
+import { measureBands } from '@/lib/palette-measure';
+import { quietBand, quietSideFor } from '@/lib/cover-bands';
 import { storeBytes, type PackImage } from '@/lib/images';
 import { fetchPhoto } from '@/lib/library-hero';
 import { cleanCoverTitle, retitleDecision } from './cover-edit.ts';
@@ -33,7 +35,10 @@ export async function retitleImage(existing: PackImage, title: string, nameHint 
     };
   }
   // The head measurement from the take's own check keeps the title clear of a face.
-  const cover = await renderTitleCover({ title: words, photo: { bytes: photo.bytes, contentType: photo.contentType }, headTopPct: decision.headTopPct, clearSide: decision.clearSide });
+  const bands = await measureBands(photo.bytes);
+  const quiet = quietBand(bands);
+  const quietSide = quietSideFor(bands, { headTopPct: decision.headTopPct, quiet });
+  const cover = await renderTitleCover({ title: words, photo: { bytes: photo.bytes, contentType: photo.contentType }, headTopPct: decision.headTopPct, clearSide: decision.clearSide, quiet, quietSide });
   const url = await storeBytes(cover.png, 'image/png', 'png', nameHint + '-cover');
   return {
     ...existing,
