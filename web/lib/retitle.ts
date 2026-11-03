@@ -14,6 +14,9 @@ import { measureBands } from '@/lib/palette-measure';
 import { quietBand, quietSideFor } from '@/lib/cover-bands';
 import { storeBytes, type PackImage } from '@/lib/images';
 import { fetchPhoto } from '@/lib/library-hero';
+import { supabaseAdmin } from '@/lib/supabase-admin';
+import { ownBucketUrl } from './library-cover.ts';
+import { IMAGE_BUCKET } from '@/lib/images';
 import { cleanCoverTitle, retitleDecision } from './cover-edit.ts';
 
 /** The picture with `title` set on its clean photograph ('' takes the title off). */
@@ -21,7 +24,7 @@ export async function retitleImage(existing: PackImage, title: string, nameHint 
   const decision = retitleDecision(existing);
   if (!decision.ok) throw new Error(decision.reason);
   const words = cleanCoverTitle(title);
-  const photo = await fetchPhoto(decision.photoUrl);
+  const photo = await fetchPhoto(await cleanPhotoUrl(existing, decision.photoUrl));
   // The alt text carried the old title in front of the subject; put the new one there.
   const rest = existing.titled?.title ? String(existing.alt || '').replace(plainTitle(existing.titled.title) + ' — ', '') : String(existing.alt || '');
   if (!words) {
@@ -46,4 +49,28 @@ export async function retitleImage(existing: PackImage, title: string, nameHint 
     titled: { title: words, photoUrl: decision.photoUrl, family: cover.family, custom: true },
     alt: plainTitle(words) + ' — ' + rest,
   };
+}
+
+/**
+ * The photograph to paint on: the draft's kept copy, unless that copy carries
+ * the sky the earlier pipeline padded onto it. Covers made before the title
+ * learned to go to the bottom had a blurred mirror of the top edge added so
+ * the title could sit above the people; that copy is what those drafts keep,
+ * and a title set on it again keeps the blur. For such a draft the library's
+ * own copy of the original is used instead, when the library still has it in
+ * the app's bucket. The grade the copy carried is not re-applied: the
+ * original goes as the clinic shot it.
+ */
+async function cleanPhotoUrl(existing: PackImage, kept: string): Promise<string> {
+  const padded = Number((existing as { padded?: unknown }).padded || 0);
+  const fileId = String((existing as { libraryFileId?: unknown }).libraryFileId || '').trim();
+  if (!(padded > 0) || !fileId) return kept;
+  const { data } = await supabaseAdmin()
+    .from('library_photos')
+    .select('url')
+    .eq('file_id', fileId)
+    .maybeSingle()
+    .then((x) => x, () => ({ data: null }));
+  const url = String((data as { url?: string | null } | null)?.url || '').trim();
+  return url && ownBucketUrl(url, process.env.NEXT_PUBLIC_SUPABASE_URL, IMAGE_BUCKET) ? url : kept;
 }

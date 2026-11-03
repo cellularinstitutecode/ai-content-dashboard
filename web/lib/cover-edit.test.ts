@@ -190,7 +190,12 @@ test('the route retitles from the clean photo, keeps the notes, counts takes —
 
   const retitle = src('lib/retitle.ts');
   assert.match(retitle, /renderTitleCover\(/, 'the cover is re-rendered by the app’s own renderer');
-  assert.match(retitle, /fetchPhoto\(decision\.photoUrl\)/, 'from the clean photograph');
+  // A draft whose kept copy carries the sky the earlier pipeline padded on is
+  // retitled on the library's original instead, so the blur does not come back.
+  assert.match(retitle, /fetchPhoto\(await cleanPhotoUrl\(existing, decision\.photoUrl\)\)/);
+  assert.match(retitle, /\.from\('library_photos'\)[\s\S]*\.eq\('file_id', fileId\)/);
+  assert.match(retitle, /ownBucketUrl\(url, process\.env\.NEXT_PUBLIC_SUPABASE_URL, IMAGE_BUCKET\)/, 'only a photo the dashboard stored is fetched');
+  assert.match(retitle, /const decision = retitleDecision\(existing\);/, 'from the clean photograph the decision names');
   assert.match(retitle, /headTopPct: decision\.headTopPct/, 'with the take’s head measurement');
   assert.doesNotMatch(retitle, /generateImageBytes|images\/generations|generatePackImage/, 'no image model');
   assert.match(retitle, /custom: true/);
