@@ -1,5 +1,6 @@
 // GET  /api/drafts/covers → how many titled covers were made before the new
-//                            cover rule and are not yet redone, with their titles.
+//                            cover rule, are not yet redone, and are not yet
+//                            posted, with their titles.
 // POST /api/drafts/covers → redo up to `limit` of them: each is re-rendered on
 //                            its clean photograph with lib/title-cover.ts (no
 //                            image model, no credits), its record stamped, and
@@ -14,7 +15,7 @@ import { supabaseServer } from '@/lib/supabase';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { reportError } from '@/lib/report';
 import { retitleImage } from '@/lib/retitle';
-import { isOldCover, withoutHeadFlag } from '@/lib/cover-redo';
+import { isOldCover, unpublishedOnly, withoutHeadFlag } from '@/lib/cover-redo';
 import type { PackImage } from '@/lib/images';
 
 export const runtime = 'nodejs';
@@ -37,7 +38,18 @@ async function oldCovers(sb: Awaited<ReturnType<typeof supabaseServer>>, userId:
     .order('created_at', { ascending: false })
     .limit(400);
   if (error) throw new Error(error.message);
-  return ((data || []) as DraftRow[]).filter((d) => isOldCover((d.pack as { _image?: PackImage } | null)?._image));
+  const old = ((data || []) as DraftRow[]).filter((d) => isOldCover((d.pack as { _image?: PackImage } | null)?._image));
+  if (!old.length) return old;
+  // Only what is still to come. A cover already posted is history, and the
+  // clinic's instruction is that everything NOT yet posted looks like the
+  // profile — a draft with a published post is left exactly as it is.
+  const { data: posts, error: postsErr } = await sb
+    .from('posts')
+    .select('draft_id, status')
+    .eq('user_id', userId)
+    .in('draft_id', old.map((d) => d.id));
+  if (postsErr) throw new Error(postsErr.message);
+  return unpublishedOnly(old, (posts || []) as { draft_id: string | null; status: string | null }[]);
 }
 
 export async function GET() {

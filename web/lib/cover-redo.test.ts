@@ -1,7 +1,7 @@
 // Which covers the "Redo old covers" button redoes. Run with: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { COVER_RULE_SINCE, isOldCover, withoutHeadFlag } from './cover-redo.ts';
+import { COVER_RULE_SINCE, isOldCover, unpublishedOnly, withoutHeadFlag } from './cover-redo.ts';
 
 const old = { url: 'https://x/c.png', createdAt: '2026-10-20T19:12:00Z', titled: { title: 'Habits for Better *Sleep*', photoUrl: 'https://x/p.jpg' } };
 
@@ -25,4 +25,17 @@ test('the head flag is dropped from a redone cover’s record, and the status fo
   const clean = { status: 'approved', issues: [] };
   assert.equal(withoutHeadFlag(clean), clean, 'untouched when there is nothing to drop');
   assert.equal(withoutHeadFlag(null), null);
+});
+
+test('a draft with a published post is left as it is; one with no post, or only scheduled posts, is redone', () => {
+  const drafts = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  const posts = [
+    { draft_id: 'a', status: 'published' },
+    { draft_id: 'a', status: 'approved' },
+    { draft_id: 'b', status: 'approved' },
+    { draft_id: 'b', status: 'pending_review' },
+    { draft_id: null, status: 'published' },
+  ];
+  assert.deepEqual(unpublishedOnly(drafts, posts).map((d) => d.id), ['b', 'c']);
+  assert.deepEqual(unpublishedOnly(drafts, []).map((d) => d.id), ['a', 'b', 'c']);
 });

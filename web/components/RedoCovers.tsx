@@ -7,8 +7,9 @@
 // its clean photograph — no image model, no credits), then sends every post
 // in Metricool that still carries an old picture through the posts route's
 // sync_media, the same action the calendar's "Sync picture" uses, so the
-// scheduled post shows the new cover too. Published posts are left alone.
-// Shown only while there is something to redo.
+// scheduled post shows the new cover too. A draft with a published post is
+// not in the count at all: what has gone out is history. Shown only while
+// there is something to redo.
 import { useEffect, useState } from 'react';
 import { announce } from '@/components/refreshBus';
 
@@ -77,8 +78,8 @@ export default function RedoCovers({ onDone, fetchErr }: { onDone?: () => void; 
     <div className="mb-4 rounded-2xl bg-accent/5 px-4 py-3 ring-1 ring-accent/20">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0 text-[13px] text-ink">
-          <strong>{n ? n + (n === 1 ? ' cover was' : ' covers were') + ' made before the new cover rule.' : 'Every cover is on the new rule.'}</strong>
-          {n > 0 && <span className="text-ink-muted"> Redo them now: no wash, the title above the people or at the bottom, never on a face. No credits are spent, and the posts in Metricool get the new picture.</span>}
+          <strong>{n ? n + (n === 1 ? ' cover not yet posted was' : ' covers not yet posted were') + ' made before the new cover rule.' : 'Every cover still to go out is on the new rule.'}</strong>
+          {n > 0 && <span className="text-ink-muted"> Redo them now: no wash, the title above the people or at the bottom, never on a face. No credits are spent, the scheduled posts in Metricool get the new picture, and anything already posted is left as it is.</span>}
         </div>
         {n > 0 && (
           <button type="button" disabled={busy} onClick={() => void redo()} className="shrink-0 rounded-full bg-accent px-4 py-2 text-[13px] font-medium text-white shadow-soft transition hover:opacity-90 disabled:opacity-50">
