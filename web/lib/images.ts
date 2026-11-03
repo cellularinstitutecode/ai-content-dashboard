@@ -112,6 +112,8 @@ export type PackImage = {
   direction?: string;
   /** How many image generations this draft has had, across takes; the panel asks before a credit once it is 3+. */
   takes?: number;
+  /** A titled cover from before the cover rule of 3 November 2026, redone under it by "Redo old covers" (lib/cover-redo.ts). */
+  coverRedone?: boolean;
   /** Older takes only: the library photo an AI image was styled after. That path is gone. */
   styledAfter?: string;
   /**
